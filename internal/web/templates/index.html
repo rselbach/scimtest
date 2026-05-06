@@ -1,0 +1,1303 @@
+{{define "index.html"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>scimtest</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #ffffff;
+      --bg-soft: #f9fafb;
+      --sidebar-bg: #f4f5f7;
+      --card: #ffffff;
+      --line: #e5e7eb;
+      --line-soft: #eef0f3;
+      --line-strong: #d1d5db;
+      --text: #1f2328;
+      --text-strong: #0c0c0d;
+      --muted: #6b7280;
+      --muted-2: #9ca3af;
+      --accent: #1563ff;
+      --accent-strong: #1051d8;
+      --accent-soft: #e7eeff;
+      --success: #00853e;
+      --success-soft: #dcefe2;
+      --warn-text: #92400e;
+      --warn-soft: #fef6e6;
+      --danger: #c73444;
+      --danger-soft: #fdecec;
+      --topbar-bg: #0c0c0d;
+      --topbar-fg: #ffffff;
+      --topbar-muted: #9ca3af;
+      --topbar-pill: #1c1d22;
+      --topbar-pill-line: #2a2c33;
+      --topbar-pill-hover: #25262c;
+      --radius: 6px;
+      --radius-lg: 8px;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+      --shadow: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.03);
+      --shadow-lg: 0 20px 50px rgba(15, 23, 42, 0.18);
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+      font: 13.5px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    button, input, textarea, select { font: inherit; color: inherit; }
+
+    /* Topbar (black) */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      height: 52px;
+      padding: 0 16px;
+      background: var(--topbar-bg);
+      color: var(--topbar-fg);
+      border-bottom: 1px solid #16171b;
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      color: var(--topbar-fg);
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      font-size: 14px;
+    }
+    .brand:hover { text-decoration: none; }
+    .brand-glyph {
+      width: 26px;
+      height: 26px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--topbar-fg);
+    }
+    .topbar-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      height: 30px;
+      padding: 0 10px;
+      border-radius: var(--radius);
+      background: var(--topbar-pill);
+      border: 1px solid var(--topbar-pill-line);
+      color: var(--topbar-fg);
+      font-size: 12.5px;
+      max-width: 320px;
+    }
+    .topbar-pill .k {
+      color: var(--topbar-muted);
+      font-size: 11.5px;
+      letter-spacing: 0.02em;
+    }
+    .topbar-pill .v {
+      font-family: var(--mono);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .topbar-pill .icon { color: var(--topbar-muted); }
+    .topbar-spacer { flex: 1; }
+    .topbar-meta {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--topbar-muted);
+      font-size: 12px;
+    }
+    .topbar-meta b { color: var(--topbar-fg); font-weight: 500; }
+
+    /* App grid */
+    .app {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 240px minmax(0, 1fr);
+      align-items: stretch;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      border-right: 1px solid var(--line);
+      padding: 14px 8px;
+      background: var(--sidebar-bg);
+    }
+    .side-section + .side-section { margin-top: 14px; }
+    .side-label {
+      padding: 6px 10px 4px;
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .side-item {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 6px 10px;
+      border-radius: 5px;
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1;
+      min-height: 30px;
+    }
+    .side-item:hover { background: rgba(15, 23, 42, 0.05); text-decoration: none; }
+    .side-item.active {
+      color: var(--accent);
+      background: var(--accent-soft);
+      font-weight: 500;
+    }
+    .side-item.active .icon { color: var(--accent); }
+    .side-item.is-disabled { color: var(--muted-2); pointer-events: none; }
+    .side-item .icon { width: 16px; height: 16px; color: var(--muted); flex: 0 0 auto; }
+    .side-item .badge {
+      margin-left: auto;
+      font-size: 11px;
+      padding: 1px 7px;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.08);
+      color: var(--muted);
+      font-weight: 500;
+    }
+    .side-item.active .badge { background: rgba(21, 99, 255, 0.16); color: var(--accent); }
+    .side-item .badge.dirty { background: rgba(180, 83, 9, 0.12); color: var(--warn-text); }
+
+    /* Main content */
+    .content {
+      padding: 28px 32px;
+      max-width: 1280px;
+      width: 100%;
+    }
+
+    /* Flash toast: pulled out of document flow so it never reflows the page */
+    .flash {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      z-index: 50;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      max-width: min(420px, calc(100vw - 40px));
+      padding: 10px 12px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: var(--card);
+      color: var(--text);
+      font-size: 13px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12), 0 1px 3px rgba(15, 23, 42, 0.08);
+      animation: flash-in 200ms ease-out;
+    }
+    .flash.success {
+      border-color: rgba(0, 133, 62, 0.3);
+      background: var(--success-soft);
+      color: #0e5b32;
+    }
+    .flash.error {
+      border-color: rgba(199, 52, 68, 0.3);
+      background: var(--danger-soft);
+      color: #8b1f2c;
+    }
+    .flash.is-leaving { animation: flash-out 220ms ease-in forwards; }
+    .flash-close {
+      flex: 0 0 auto;
+      width: 22px;
+      height: 22px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: 0;
+      color: inherit;
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+      opacity: 0.55;
+      border-radius: 4px;
+      padding: 0;
+    }
+    .flash-close:hover { opacity: 1; background: rgba(0, 0, 0, 0.06); }
+    @keyframes flash-in {
+      from { transform: translateY(8px); opacity: 0; }
+      to { transform: none; opacity: 1; }
+    }
+    @keyframes flash-out {
+      to { transform: translateY(8px); opacity: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .flash, .flash.is-leaving { animation: none; }
+    }
+    .errors {
+      margin-bottom: 14px;
+      border: 1px solid rgba(199, 52, 68, 0.28);
+      background: var(--danger-soft);
+      border-radius: var(--radius);
+      padding: 10px 14px;
+    }
+    .errors-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--danger);
+      margin-bottom: 4px;
+    }
+    .errors-head::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--danger);
+    }
+    .errors ul { margin: 0; padding: 0 0 0 16px; }
+    .errors li { font-size: 12.5px; color: #4d1419; padding: 2px 0; }
+
+    /* Page header */
+    .page-header {
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      margin-bottom: 20px;
+    }
+    .page-icon {
+      width: 40px;
+      height: 40px;
+      flex: 0 0 auto;
+      border-radius: 8px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-strong);
+      box-shadow: var(--shadow-sm);
+    }
+    .page-header-text { flex: 1; min-width: 0; }
+    .page-header h1 {
+      margin: 0 0 4px;
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: -0.015em;
+      color: var(--text-strong);
+      line-height: 1.15;
+    }
+    .page-header .lede {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13.5px;
+      max-width: 70ch;
+    }
+    .page-header .actions { flex: 0 0 auto; }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      height: 32px;
+      padding: 0 12px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line-strong);
+      background: var(--card);
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background-color 80ms, border-color 80ms;
+    }
+    .btn:hover { background: var(--bg-soft); text-decoration: none; }
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .btn-primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); color: #fff; }
+    .btn-danger {
+      color: var(--danger);
+      border-color: rgba(199, 52, 68, 0.35);
+      background: var(--card);
+    }
+    .btn-danger:hover { background: var(--danger-soft); }
+    .btn-ghost {
+      background: transparent;
+      border-color: transparent;
+      color: var(--text);
+    }
+    .btn-ghost:hover { background: rgba(15, 23, 42, 0.06); }
+    .btn-sm { height: 28px; padding: 0 10px; font-size: 12.5px; }
+    .btn[disabled], .btn.is-disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+    .btn .plus { font-weight: 400; font-size: 14px; line-height: 1; margin-right: 1px; }
+
+    /* Action toolbar (Sync / Import / Reset + meta) */
+    .actionbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+    .actionbar form { margin: 0; }
+    .actionbar-meta {
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 12.5px;
+    }
+    .actionbar-meta b { color: var(--text-strong); font-weight: 600; }
+    .actionbar-meta .dirty { color: var(--warn-text); font-weight: 500; }
+    .actionbar-meta .sep { margin: 0 6px; color: var(--muted-2); }
+
+    /* Card + table */
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-sm);
+      overflow: hidden;
+    }
+    .table-wrap { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    /* Groups table: let columns size to content (no Remote ID floor, etc.).
+       Stability across state changes is preserved by min-widths on the
+       Status pill and Active toggle elsewhere in this stylesheet. */
+    table.groups-table { table-layout: auto; }
+    thead th {
+      background: var(--bg-soft);
+      text-align: left;
+      padding: 10px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-strong);
+      border-bottom: 1px solid var(--line);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    tbody td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line-soft);
+      font-size: 13px;
+      color: var(--text);
+      vertical-align: middle;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr:hover td { background: #fafbfc; }
+    .row-title {
+      font-weight: 500;
+      color: var(--text-strong);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    tr.is-deleted .row-title {
+      text-decoration: line-through;
+      color: var(--muted);
+      font-weight: 400;
+    }
+    td.mono, .mono {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .col-actions { text-align: right; }
+    /* Cells that contain inline-flex widgets shouldn't ellipsis-clip the widget */
+    td.cell-widget { overflow: visible; }
+
+    /* Status pills */
+    .status {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11.5px;
+      font-weight: 500;
+      background: rgba(15, 23, 42, 0.05);
+      color: var(--muted);
+      white-space: nowrap;
+      min-width: 92px;
+    }
+    .status::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+      opacity: 0.85;
+    }
+    .status.synced { background: var(--success-soft); color: var(--success); }
+    .status.error { background: var(--danger-soft); color: var(--danger); }
+    .status.deleted { background: rgba(15, 23, 42, 0.05); color: var(--muted-2); }
+    .status.pending { background: var(--warn-soft); color: var(--warn-text); }
+
+    /* Active toggle */
+    .active-toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 2px 9px;
+      border-radius: 999px;
+      border: 1px solid var(--line-strong);
+      background: var(--card);
+      color: var(--muted);
+      font-size: 11.5px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background-color 80ms, border-color 80ms;
+      min-width: 78px;
+    }
+    .active-toggle::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--muted-2);
+    }
+    .active-toggle.is-active {
+      color: var(--success);
+      background: var(--success-soft);
+      border-color: rgba(0, 133, 62, 0.25);
+    }
+    .active-toggle.is-active::before { background: #16a34a; }
+    .active-toggle:hover { background: var(--bg-soft); }
+    .active-toggle.is-readonly { cursor: default; pointer-events: none; }
+
+    /* Row icon actions */
+    .row-actions {
+      display: inline-flex;
+      gap: 4px;
+      justify-content: flex-end;
+    }
+    .row-actions form { margin: 0; }
+    .icon-btn {
+      width: 28px;
+      height: 28px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 5px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 0;
+    }
+    .icon-btn:hover {
+      color: var(--text-strong);
+      background: var(--bg-soft);
+      border-color: var(--line);
+      text-decoration: none;
+    }
+    .icon-btn.danger:hover {
+      color: var(--danger);
+      border-color: rgba(199, 52, 68, 0.35);
+      background: var(--danger-soft);
+    }
+    .icon-btn.success:hover {
+      color: var(--success);
+      border-color: rgba(0, 133, 62, 0.3);
+      background: var(--success-soft);
+    }
+    .icon-btn svg { width: 14px; height: 14px; display: block; }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    /* Empty state */
+    .card-empty {
+      padding: 48px 16px;
+      text-align: center;
+      color: var(--muted);
+    }
+    .card-empty .h {
+      color: var(--text-strong);
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    /* Footer */
+    .footer {
+      border-top: 1px solid var(--line);
+      padding: 12px 32px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-size: 12.5px;
+      color: var(--muted);
+      background: var(--bg);
+      flex-wrap: wrap;
+    }
+    .footer .ok {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text);
+    }
+    .footer .ok::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #16a34a;
+      box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.18);
+    }
+    .footer a { color: var(--text); }
+    .footer a:hover { color: var(--accent); }
+    .footer .copy { margin-left: auto; color: var(--muted); }
+
+    /* Modal overlay + dialog */
+    .overlay {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 16px;
+      background: rgba(15, 23, 42, 0.4);
+      z-index: 30;
+    }
+    .modal {
+      width: min(640px, 100%);
+      max-height: calc(100vh - 32px);
+      overflow: auto;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-lg);
+    }
+    .modal.wide { width: min(880px, 100%); }
+    .modal.history-modal { width: min(960px, 100%); }
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line);
+    }
+    .modal-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-strong);
+    }
+    .modal-sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+    .modal-body { padding: 18px; }
+
+    /* Forms */
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .field { display: grid; gap: 5px; }
+    .field.full { grid-column: 1 / -1; }
+    .field label, .label {
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .field input:not([type="checkbox"]) {
+      width: 100%;
+      height: 34px;
+      padding: 0 10px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line-strong);
+      background: var(--card);
+      color: var(--text);
+      transition: border-color 80ms, box-shadow 80ms;
+    }
+    .field input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(21, 99, 255, 0.18);
+    }
+    .checkbox-row {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 11px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: var(--card);
+      font-size: 13px;
+    }
+    .form-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 18px;
+      flex-wrap: wrap;
+    }
+    .form-actions .spacer { flex: 1; }
+
+    .members-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      max-height: 320px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 6px;
+      background: var(--bg-soft);
+    }
+    .member-option {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      padding: 8px 10px;
+      border-radius: 5px;
+      cursor: pointer;
+      background: var(--card);
+      border: 1px solid var(--line-soft);
+    }
+    .member-option:hover { border-color: var(--line-strong); }
+    .member-option input { margin-top: 3px; }
+    .member-copy strong { font-size: 12.5px; font-weight: 500; color: var(--text-strong); display: block; }
+    .member-copy span { font-size: 11.5px; color: var(--muted); }
+    .members-empty {
+      grid-column: 1 / -1;
+      padding: 18px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 12.5px;
+    }
+
+    /* History */
+    .history-list { display: grid; gap: 10px; }
+    .history-item {
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--card);
+    }
+    .history-meta {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 11.5px;
+      margin-bottom: 4px;
+    }
+    .history-kind {
+      padding: 1px 7px;
+      border-radius: 3px;
+      background: var(--bg-soft);
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 10.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .history-summary { font-size: 13px; color: var(--text-strong); }
+    details summary {
+      cursor: pointer;
+      color: var(--accent);
+      font-size: 12.5px;
+      margin-top: 6px;
+    }
+    pre {
+      margin: 8px 0 0;
+      max-height: 360px;
+      overflow: auto;
+      padding: 12px 14px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      background: var(--bg-soft);
+      white-space: pre-wrap;
+      word-break: break-word;
+      font: 12px/1.55 var(--mono);
+      color: var(--text);
+    }
+
+    @media (max-width: 880px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+        padding: 10px;
+      }
+      .side-section + .side-section { margin-top: 8px; }
+      .content { padding: 18px; }
+      .form-grid, .members-grid { grid-template-columns: 1fr; }
+      .topbar-pill { max-width: 200px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{.UsersURL}}">
+      <span class="brand-glyph" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3.5 10a8 8 0 0 1 13.6-5.5L19 7"/>
+          <polyline points="19 3 19 7 15 7"/>
+          <path d="M20.5 14a8 8 0 0 1-13.6 5.5L5 17"/>
+          <polyline points="5 21 5 17 9 17"/>
+        </svg>
+      </span>
+      scimtest
+    </a>
+    <span class="topbar-pill" title="Configured SCIM endpoint">
+      <span class="icon" aria-hidden="true">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="4" rx="1"/><rect x="2.5" y="9" width="11" height="4" rx="1"/><circle cx="5" cy="5" r="0.6" fill="currentColor"/><circle cx="5" cy="11" r="0.6" fill="currentColor"/></svg>
+      </span>
+      <span class="k">SCIM</span>
+      <span class="v">{{if .BaseURL}}{{.BaseURL}}{{else}}not configured{{end}}</span>
+    </span>
+    <span class="topbar-spacer"></span>
+    <span class="topbar-meta">Trace <b>{{if .TracePopupEnabled}}auto{{else}}manual{{end}}</b></span>
+  </header>
+
+  <div class="app">
+    <aside class="sidebar">
+      <nav class="side-section" aria-label="Resources">
+        <div class="side-label">Resources</div>
+        <a class="side-item {{if eq .Tab "users"}}active{{end}}" href="{{.UsersURL}}">
+          <span class="icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="6" r="2.6"/><path d="M3 14c0-2.4 2.2-4 5-4s5 1.6 5 4"/></svg>
+          </span>
+          Users
+          <span class="badge {{if .Stats.DirtyUsers}}dirty{{end}}">{{.Stats.Users}}{{if .Stats.DirtyUsers}}·{{.Stats.DirtyUsers}}{{end}}</span>
+        </a>
+        <a class="side-item {{if eq .Tab "groups"}}active{{end}}" href="{{.GroupsURL}}">
+          <span class="icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2.2"/><circle cx="11" cy="6" r="1.9"/><path d="M1.5 13c0-2 1.6-3.2 3.5-3.2s3.5 1.2 3.5 3.2"/><path d="M9 13c0-1.4 1-2.4 2.5-2.4s2.5 1 2.5 2.4"/></svg>
+          </span>
+          Groups
+          <span class="badge {{if .Stats.DirtyGroups}}dirty{{end}}">{{.Stats.Groups}}{{if .Stats.DirtyGroups}}·{{.Stats.DirtyGroups}}{{end}}</span>
+        </a>
+      </nav>
+
+      <nav class="side-section" aria-label="Settings">
+        <div class="side-label">Settings</div>
+        <a class="side-item" href="{{.ConfigURL}}">
+          <span class="icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8L3.4 3.4"/></svg>
+          </span>
+          Config
+        </a>
+        <a class="side-item {{if not .HasTrace}}is-disabled{{end}}" href="{{.TraceURL}}" {{if not .HasTrace}}aria-disabled="true" tabindex="-1"{{end}}>
+          <span class="icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h7l3 3v7H3z"/><path d="M9.5 3v3.5h3.5"/><path d="M5.5 9h5M5.5 11h3.5"/></svg>
+          </span>
+          Trace
+        </a>
+      </nav>
+    </aside>
+
+    <main class="content" id="app-shell">
+      {{if .Flash.Message}}
+      <div class="flash {{.Flash.Kind}}" role="status" aria-live="polite" data-flash>
+        <span>{{.Flash.Message}}</span>
+        <button class="flash-close" type="button" aria-label="Dismiss">&times;</button>
+      </div>
+      {{end}}
+
+      {{if .Errors}}
+      <div class="errors">
+        <div class="errors-head">Sync errors ({{len .Errors}})</div>
+        <ul>
+          {{range .Errors}}<li>{{.}}</li>{{end}}
+        </ul>
+      </div>
+      {{end}}
+
+      <header class="page-header">
+        <div class="page-icon" aria-hidden="true">
+          {{if eq .Tab "groups"}}
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="6.5" cy="7.5" r="2.6"/><circle cx="13.5" cy="7.5" r="2.2"/><path d="M2 16c0-2.3 2-3.7 4.5-3.7s4.5 1.4 4.5 3.7"/><path d="M11 16c0-1.6 1.3-2.7 3-2.7s3 1.1 3 2.7"/></svg>
+          {{else}}
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="7" r="3.4"/><path d="M3.5 17c0-3.1 2.9-5.2 6.5-5.2s6.5 2.1 6.5 5.2"/></svg>
+          {{end}}
+        </div>
+        <div class="page-header-text">
+          <h1>{{if eq .Tab "groups"}}Groups{{else}}Users{{end}}</h1>
+          <p class="lede">{{if eq .Tab "groups"}}Local groups, with sync state and history kept against the configured SCIM endpoint.{{else}}Local users, with sync state and history kept against the configured SCIM endpoint.{{end}}</p>
+        </div>
+        <div class="actions">
+          {{if eq .Tab "groups"}}
+          <a class="btn btn-primary" href="{{.NewGroupURL}}"><span class="plus">+</span> Add group</a>
+          {{else}}
+          <a class="btn btn-primary" href="{{.NewUserURL}}"><span class="plus">+</span> Add user</a>
+          {{end}}
+        </div>
+      </header>
+
+      <div class="actionbar">
+        <form method="post" action="/sync">
+          <input type="hidden" name="tab" value="{{.Tab}}">
+          <button class="btn" type="submit">Sync</button>
+        </form>
+        <form method="post" action="/import" onsubmit="return confirm('This replaces local users, groups, and operation history with the SCIM server state. Continue?')">
+          <input type="hidden" name="tab" value="{{.Tab}}">
+          <button class="btn" type="submit">Import</button>
+        </form>
+        <form method="post" action="/reset" onsubmit="return confirm('This clears all remote IDs and marks everything dirty. Continue?')">
+          <input type="hidden" name="tab" value="{{.Tab}}">
+          <button class="btn btn-danger" type="submit">Reset</button>
+        </form>
+        <span class="actionbar-meta">
+          <b>{{.Stats.Users}}</b> users{{if .Stats.DirtyUsers}} <span class="sep">·</span> <span class="dirty">{{.Stats.DirtyUsers}} dirty</span>{{end}}
+          <span class="sep">·</span>
+          <b>{{.Stats.Groups}}</b> groups{{if .Stats.DirtyGroups}} <span class="sep">·</span> <span class="dirty">{{.Stats.DirtyGroups}} dirty</span>{{end}}
+        </span>
+      </div>
+
+      <section class="card">
+        <div class="table-wrap">
+          {{if eq .Tab "groups"}}
+          <table class="groups-table">
+            <thead>
+              <tr>
+                <th>Group</th>
+                <th>Members</th>
+                <th>Status</th>
+                <th>Remote ID</th>
+                <th class="col-actions">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range .Groups}}
+              <tr {{if .Deleted}}class="is-deleted"{{end}}>
+                <td>
+                  <div class="row-title" {{if .Deleted}}title="marked for deletion"{{end}}>{{.Name}}</div>
+                </td>
+                <td title="{{.MembersSummary}}">{{.MemberCount}}</td>
+                <td class="cell-widget">
+                  <span class="status {{if eq .Status "synced"}}synced{{else if eq .Status "sync error"}}error{{else if eq .Status "deleted"}}deleted{{else}}pending{{end}}">{{.Status}}</span>
+                </td>
+                <td class="mono" title="{{.RemoteID}}">{{.RemoteID}}</td>
+                <td class="col-actions cell-widget">
+                  <div class="row-actions">
+                    <a class="icon-btn" href="{{.EditURL}}" title="Edit group" aria-label="Edit group">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M10 4l2 2"/></svg>
+                    </a>
+                    <a class="icon-btn" href="{{.HistoryURL}}" title="Group history" aria-label="Group history">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2 1.5"/></svg>
+                    </a>
+                    {{if .Deleted}}
+                    <form method="post" action="/groups/{{.ID}}/restore">
+                      <input type="hidden" name="tab" value="groups">
+                      <button class="icon-btn success" type="submit" title="Restore group" aria-label="Restore group">
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a5 5 0 1 0 1.5-3.5"/><path d="M3 3v3h3"/></svg>
+                      </button>
+                    </form>
+                    {{else}}
+                    <form method="post" action="/groups/{{.ID}}/delete">
+                      <input type="hidden" name="tab" value="groups">
+                      <button class="icon-btn danger" type="submit" title="Delete group" aria-label="Delete group">
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10"/><path d="M5.5 4.5V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.5"/><path d="M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>
+                      </button>
+                    </form>
+                    {{end}}
+                  </div>
+                </td>
+              </tr>
+              {{else}}
+              <tr><td colspan="5">
+                <div class="card-empty">
+                  <div class="h">No groups yet</div>
+                  <div>Add one with the button above, or import from your SCIM server.</div>
+                </div>
+              </td></tr>
+              {{end}}
+            </tbody>
+          </table>
+          {{else}}
+          <table>
+            <colgroup>
+              <col>
+              <col>
+              <col>
+              <col style="width: 100px">
+              <col style="width: 120px">
+              <col style="width: 200px">
+              <col style="width: 124px">
+            </colgroup>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Username</th>
+                <th>Email</th>
+                <th>Active</th>
+                <th>Status</th>
+                <th>Remote ID</th>
+                <th class="col-actions">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range .Users}}
+              <tr {{if .Deleted}}class="is-deleted"{{end}}>
+                <td>
+                  <div class="row-title" {{if .Deleted}}title="marked for deletion"{{end}}>{{.Name}}</div>
+                </td>
+                <td title="{{.Username}}">{{.Username}}</td>
+                <td title="{{.Email}}">{{.Email}}</td>
+                <td class="cell-widget">
+                  {{if .Deleted}}
+                  <span class="active-toggle is-readonly {{if eq .Active "active"}}is-active{{end}}">{{.Active}}</span>
+                  {{else}}
+                  <form method="post" action="/users/{{.ID}}/toggle-active" style="display:inline;margin:0">
+                    <input type="hidden" name="tab" value="users">
+                    <button class="active-toggle {{if eq .Active "active"}}is-active{{end}}" type="submit">{{.Active}}</button>
+                  </form>
+                  {{end}}
+                </td>
+                <td class="cell-widget">
+                  <span class="status {{if eq .Status "synced"}}synced{{else if eq .Status "sync error"}}error{{else if eq .Status "deleted"}}deleted{{else}}pending{{end}}">{{.Status}}</span>
+                </td>
+                <td class="mono" title="{{.RemoteID}}">{{.RemoteID}}</td>
+                <td class="col-actions cell-widget">
+                  <div class="row-actions">
+                    <a class="icon-btn" href="{{.EditURL}}" title="Edit user" aria-label="Edit user">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M10 4l2 2"/></svg>
+                    </a>
+                    <a class="icon-btn" href="{{.HistoryURL}}" title="User history" aria-label="User history">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2 1.5"/></svg>
+                    </a>
+                    {{if .Deleted}}
+                    <form method="post" action="/users/{{.ID}}/restore">
+                      <input type="hidden" name="tab" value="users">
+                      <button class="icon-btn success" type="submit" title="Restore user" aria-label="Restore user">
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a5 5 0 1 0 1.5-3.5"/><path d="M3 3v3h3"/></svg>
+                      </button>
+                    </form>
+                    {{else}}
+                    <form method="post" action="/users/{{.ID}}/delete">
+                      <input type="hidden" name="tab" value="users">
+                      <button class="icon-btn danger" type="submit" title="Delete user" aria-label="Delete user">
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10"/><path d="M5.5 4.5V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.5"/><path d="M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>
+                      </button>
+                    </form>
+                    {{end}}
+                  </div>
+                </td>
+              </tr>
+              {{else}}
+              <tr><td colspan="7">
+                <div class="card-empty">
+                  <div class="h">No users yet</div>
+                  <div>Add one with the button above, or import from your SCIM server.</div>
+                </div>
+              </td></tr>
+              {{end}}
+            </tbody>
+          </table>
+          {{end}}
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="footer">
+    <span class="ok">scimtest</span>
+    <span class="copy">SCIM endpoint: {{if .BaseURL}}{{.BaseURL}}{{else}}not configured{{end}}</span>
+  </footer>
+
+  {{if .History}}
+  <div class="overlay" data-overlay>
+    <div class="modal wide history-modal" role="dialog" aria-modal="true" tabindex="-1">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">{{.History.Title}}</div>
+          <div class="modal-sub">Newest first</div>
+        </div>
+        <a class="btn btn-sm btn-ghost" href="{{.History.Close}}" data-autofocus>Close</a>
+      </div>
+      <div class="modal-body">
+        <div class="history-list">
+          {{range .History.Items}}
+          <div class="history-item">
+            <div class="history-meta">
+              <span>{{.Timestamp}}</span>
+              {{if .Kind}}<span class="history-kind">{{.Kind}}</span>{{end}}
+            </div>
+            <div class="history-summary">{{.Summary}}</div>
+            {{if .HasDetail}}
+            <details>
+              <summary>Show request and response</summary>
+              <pre>{{.Detail}}</pre>
+            </details>
+            {{end}}
+          </div>
+          {{end}}
+        </div>
+      </div>
+    </div>
+  </div>
+  {{end}}
+
+  {{if .ShowTrace}}
+  <div class="overlay" data-overlay>
+    <div class="modal wide" role="dialog" aria-modal="true" tabindex="-1">
+      <div class="modal-header">
+        <div class="modal-title">Last sync trace</div>
+        <a class="btn btn-sm btn-ghost" href="{{.TraceCloseURL}}" data-autofocus>Close</a>
+      </div>
+      <div class="modal-body">
+        <pre>{{.TraceContent}}</pre>
+      </div>
+    </div>
+  </div>
+  {{end}}
+
+  {{if .UserForm}}
+  <div class="overlay" data-overlay>
+    <div class="modal" role="dialog" aria-modal="true" tabindex="-1">
+      <div class="modal-header">
+        <div class="modal-title">{{.UserForm.Title}}</div>
+        <a class="btn btn-sm btn-ghost" href="{{.UserForm.Close}}" data-autofocus>Close</a>
+      </div>
+      <form method="post" action="/users/save">
+        <input type="hidden" name="tab" value="users">
+        <input type="hidden" name="id" value="{{.UserForm.ID}}">
+        <div class="modal-body">
+          <div class="form-grid">
+            <label class="field">
+              <span class="label">Username</span>
+              <input name="username" value="{{.UserForm.User.Username}}" autocomplete="off">
+            </label>
+            <label class="field">
+              <span class="label">Email</span>
+              <input name="email" type="email" value="{{.UserForm.User.Email}}" autocomplete="off">
+            </label>
+            <label class="field">
+              <span class="label">Given name</span>
+              <input name="given_name" value="{{.UserForm.User.GivenName}}" autocomplete="off">
+            </label>
+            <label class="field">
+              <span class="label">Family name</span>
+              <input name="family_name" value="{{.UserForm.User.FamilyName}}" autocomplete="off">
+            </label>
+          </div>
+          <div class="form-actions">
+            <a class="btn btn-ghost" href="{{.UserForm.Close}}">Cancel</a>
+            <button class="btn btn-primary" type="submit">Save user</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+  {{end}}
+
+  {{if .GroupForm}}
+  <div class="overlay" data-overlay>
+    <div class="modal wide" role="dialog" aria-modal="true" tabindex="-1">
+      <div class="modal-header">
+        <div class="modal-title">{{.GroupForm.Title}}</div>
+        <a class="btn btn-sm btn-ghost" href="{{.GroupForm.Close}}" data-autofocus>Close</a>
+      </div>
+      <form method="post" action="/groups/save">
+        <input type="hidden" name="tab" value="groups">
+        <input type="hidden" name="id" value="{{.GroupForm.ID}}">
+        <div class="modal-body">
+          <div class="form-grid">
+            <label class="field full">
+              <span class="label">Group name</span>
+              <input name="display_name" value="{{.GroupForm.Group.DisplayName}}" autocomplete="off">
+            </label>
+            <div class="field full">
+              <span class="label">Members</span>
+              <div class="members-grid">
+                {{range .GroupForm.Members}}
+                <label class="member-option">
+                  <input type="checkbox" name="member_ids" value="{{.ID}}" {{if .Checked}}checked{{end}}>
+                  <span class="member-copy">
+                    <strong>{{.Label}}</strong>
+                    <span>{{.Meta}}</span>
+                  </span>
+                </label>
+                {{else}}
+                <div class="members-empty">No users available — create one first.</div>
+                {{end}}
+              </div>
+            </div>
+          </div>
+          <div class="form-actions">
+            <a class="btn btn-ghost" href="{{.GroupForm.Close}}">Cancel</a>
+            <button class="btn btn-primary" type="submit">Save group</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+  {{end}}
+
+  {{if .ConfigForm}}
+  <div class="overlay" data-overlay>
+    <div class="modal" role="dialog" aria-modal="true" tabindex="-1">
+      <div class="modal-header">
+        <div class="modal-title">SCIM config</div>
+        <a class="btn btn-sm btn-ghost" href="{{.ConfigForm.Close}}" data-autofocus>Close</a>
+      </div>
+      <form method="post" action="/config/save">
+        <input type="hidden" name="tab" value="{{.Tab}}">
+        <div class="modal-body">
+          <div class="form-grid">
+            <label class="field full">
+              <span class="label">SCIM base URL</span>
+              <input name="base_url" value="{{.ConfigForm.Config.BaseURL}}" autocomplete="off">
+            </label>
+            <label class="field full">
+              <span class="label">Bearer token</span>
+              <input name="bearer_token" value="{{.ConfigForm.Config.BearerToken}}" autocomplete="off">
+            </label>
+            <label class="field full">
+              <span class="label">Sync trace</span>
+              <span class="checkbox-row">
+                <input type="checkbox" name="auto_open_sync_trace" {{if .ConfigForm.Config.AutoOpenSyncTrace}}checked{{end}}>
+                Auto-open the last trace after sync and import
+              </span>
+            </label>
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-danger" type="submit" form="config-clear-form">Clear saved config</button>
+            <span class="spacer"></span>
+            <a class="btn btn-ghost" href="{{.ConfigForm.Close}}">Cancel</a>
+            <button class="btn btn-primary" type="submit">Save config</button>
+          </div>
+        </div>
+      </form>
+      <form id="config-clear-form" method="post" action="/config/clear" style="margin:0">
+        <input type="hidden" name="tab" value="{{.Tab}}">
+      </form>
+    </div>
+  </div>
+  {{end}}
+
+  <script>
+    // Flash toast: auto-dismiss + click-to-dismiss.
+    (function () {
+      const flash = document.querySelector('[data-flash]');
+      if (!flash) return;
+      let dismissed = false;
+      const dismiss = () => {
+        if (dismissed) return;
+        dismissed = true;
+        flash.classList.add('is-leaving');
+        const cleanup = () => flash.remove();
+        flash.addEventListener('animationend', cleanup, { once: true });
+        // Fallback in case the animation is suppressed (reduced-motion, etc.).
+        setTimeout(cleanup, 400);
+      };
+      const closeBtn = flash.querySelector('.flash-close');
+      if (closeBtn) closeBtn.addEventListener('click', dismiss);
+      setTimeout(dismiss, 4000);
+    })();
+
+    const overlays = Array.from(document.querySelectorAll('[data-overlay]'));
+    const activeOverlay = overlays[overlays.length - 1];
+
+    function closeActiveOverlay() {
+      if (!activeOverlay) return;
+      const closeLink = activeOverlay.querySelector('a[href]');
+      if (closeLink) {
+        window.location.href = closeLink.href;
+      }
+    }
+
+    if (activeOverlay) {
+      const shell = document.getElementById('app-shell');
+      const modal = activeOverlay.querySelector('[role="dialog"]');
+      const focusableSelectors = [
+        '[data-autofocus]',
+        'button:not([disabled])',
+        '[href]',
+        'input:not([disabled])',
+        'select:not([disabled])',
+        'textarea:not([disabled])',
+        '[tabindex]:not([tabindex="-1"])'
+      ].join(',');
+      const focusableElements = Array.from(activeOverlay.querySelectorAll(focusableSelectors));
+
+      if (shell) {
+        shell.setAttribute('inert', '');
+        shell.setAttribute('aria-hidden', 'true');
+      }
+
+      const initialFocus = focusableElements[0] || modal;
+      if (initialFocus) {
+        initialFocus.focus();
+      }
+
+      activeOverlay.addEventListener('keydown', function (event) {
+        if (event.key !== 'Tab' || focusableElements.length === 0) {
+          return;
+        }
+
+        const first = focusableElements[0];
+        const last = focusableElements[focusableElements.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+          return;
+        }
+
+        if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      });
+
+      // Click on the backdrop (not on the modal itself) closes the overlay.
+      // Track mousedown so a drag starting inside the modal that releases on
+      // the backdrop (e.g. text-selection overshoot) does not trigger close.
+      let mouseDownOnBackdrop = false;
+      activeOverlay.addEventListener('mousedown', function (event) {
+        mouseDownOnBackdrop = event.target === activeOverlay;
+      });
+      activeOverlay.addEventListener('mouseup', function (event) {
+        if (mouseDownOnBackdrop && event.target === activeOverlay) {
+          closeActiveOverlay();
+        }
+        mouseDownOnBackdrop = false;
+      });
+    }
+
+    document.addEventListener('keydown', function (event) {
+      if (event.key !== 'Escape') return;
+      closeActiveOverlay();
+    });
+  </script>
+</body>
+</html>
+{{end}}

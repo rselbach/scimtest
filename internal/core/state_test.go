@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"database/sql"
@@ -15,13 +15,13 @@ func TestSaveAndLoadState(t *testing.T) {
 	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
 	r := require.New(t)
 
-	want := appState{
-		Config: config{
+	want := AppState{
+		Config: Config{
 			BaseURL:           "https://example.com/scim/v2",
 			BearerToken:       "secret",
 			AutoOpenSyncTrace: true,
 		},
-		Users: []user{{
+		Users: []User{{
 			ID:         "local-1",
 			GivenName:  "Troy",
 			FamilyName: "Barnes",
@@ -31,14 +31,14 @@ func TestSaveAndLoadState(t *testing.T) {
 			RemoteID:   "remote-1",
 			Dirty:      true,
 		}},
-		Groups: []group{{
+		Groups: []Group{{
 			ID:          "group-1",
 			DisplayName: "Study Group",
 			MemberIDs:   []string{"local-1"},
 			RemoteID:    "remote-group-1",
 			Dirty:       true,
 		}},
-		UserOperations: map[string][]operationLog{
+		UserOperations: map[string][]OperationLog{
 			"local-1": {{
 				Kind:         "sync",
 				Summary:      "Created",
@@ -51,7 +51,7 @@ func TestSaveAndLoadState(t *testing.T) {
 				CreatedAt:    "2026-05-01T10:00:00Z",
 			}},
 		},
-		GroupOperations: map[string][]operationLog{
+		GroupOperations: map[string][]OperationLog{
 			"group-1": {{
 				Kind:         "sync",
 				Summary:      "Synced",
@@ -66,9 +66,9 @@ func TestSaveAndLoadState(t *testing.T) {
 		},
 	}
 
-	r.NoError(saveState(want))
+	r.NoError(SaveState(want))
 
-	got, err := loadState()
+	got, err := LoadState()
 	r.NoError(err)
 	r.Equal(want, got)
 
@@ -100,7 +100,7 @@ func TestLoadStateMigratesNameFromUsername(t *testing.T) {
 }`)
 	r.NoError(os.WriteFile(path, legacyJSON, 0o600))
 
-	got, err := loadState()
+	got, err := LoadState()
 	r.NoError(err)
 	r.Len(got.Users, 1)
 	r.Equal("Britta", got.Users[0].GivenName)
@@ -112,7 +112,7 @@ func TestLoadStateMigratesNameFromUsername(t *testing.T) {
 func TestValidateUserAllowsEmptyUsername(t *testing.T) {
 	r := require.New(t)
 
-	err := validateUser("Jeff", "Winger", "jeff@greendale.edu", "")
+	err := ValidateUser("Jeff", "Winger", "jeff@greendale.edu", "")
 	r.NoError(err)
 }
 
@@ -137,7 +137,7 @@ func TestLoadStateDefaultsActiveToTrue(t *testing.T) {
 }`)
 	r.NoError(os.WriteFile(path, legacyJSON, 0o600))
 
-	got, err := loadState()
+	got, err := LoadState()
 	r.NoError(err)
 	r.Len(got.Users, 1)
 	r.True(got.Users[0].Active)
@@ -165,7 +165,7 @@ func TestLoadStatePreservesInactiveUser(t *testing.T) {
 }`)
 	r.NoError(os.WriteFile(path, legacyJSON, 0o600))
 
-	got, err := loadState()
+	got, err := LoadState()
 	r.NoError(err)
 	r.Len(got.Users, 1)
 	r.False(got.Users[0].Active)
@@ -216,7 +216,7 @@ func TestLoadStateMigratesLegacyOperationLogsTable(t *testing.T) {
 	r.NoError(err)
 	r.NoError(db.Close())
 
-	state, err := loadState()
+	state, err := LoadState()
 	r.NoError(err)
 	r.Len(state.UserOperations["local-1"], 1)
 	r.Equal("sync", state.UserOperations["local-1"][0].Kind)
@@ -233,15 +233,15 @@ func TestAppendLocalOperationLogPrependsEntry(t *testing.T) {
 		currentTime = previousTime
 	}()
 
-	state := appState{
-		UserOperations: map[string][]operationLog{
+	state := AppState{
+		UserOperations: map[string][]OperationLog{
 			"user-1": {
 				{Kind: "sync", Summary: "Synced", CreatedAt: "2026-05-01T11:00:00Z"},
 			},
 		},
 	}
 
-	appendLocalOperationLog(&state, "user", "user-1", "Updated email")
+	AppendLocalOperationLog(&state, "user", "user-1", "Updated email")
 
 	r.Len(state.UserOperations["user-1"], 2)
 	r.Equal("local", state.UserOperations["user-1"][0].Kind)

@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"bytes"
@@ -7,89 +7,79 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 	"time"
-	"unicode"
 )
 
 const scimUserSchema = "urn:ietf:params:scim:schemas:core:2.0:User"
 const scimGroupSchema = "urn:ietf:params:scim:schemas:core:2.0:Group"
 
-const ansiReset = "\x1b[0m"
-const ansiJSONKey = "\x1b[38;5;12m"
-const ansiJSONString = "\x1b[38;5;10m"
-const ansiJSONNumber = "\x1b[38;5;14m"
-const ansiJSONBool = "\x1b[1;38;5;13m"
-const ansiJSONNull = "\x1b[38;5;8m"
-const ansiJSONPunct = "\x1b[38;5;241m"
-
-type scimClient struct {
+type SCIMClient struct {
 	baseURL string
 	token   string
 	client  *http.Client
-	traces  []syncTraceEntry
+	traces  []SyncTraceEntry
 }
 
-type traceTarget struct {
+type TraceTarget struct {
 	ResourceType string
 	ResourceID   string
 	Label        string
 	Operation    string
 }
 
-type scimEmail struct {
+type SCIMEmail struct {
 	Value   string `json:"value"`
 	Type    string `json:"type,omitempty"`
 	Primary bool   `json:"primary,omitempty"`
 }
 
-type scimName struct {
+type SCIMName struct {
 	GivenName  string `json:"givenName,omitempty"`
 	FamilyName string `json:"familyName,omitempty"`
 	Formatted  string `json:"formatted,omitempty"`
 }
 
-type scimUserResource struct {
+type SCIMUserResource struct {
 	Schemas     []string    `json:"schemas"`
 	ID          string      `json:"id,omitempty"`
 	ExternalID  string      `json:"externalId,omitempty"`
 	UserName    string      `json:"userName"`
 	DisplayName string      `json:"displayName,omitempty"`
 	Active      *bool       `json:"active,omitempty"`
-	Name        *scimName   `json:"name,omitempty"`
-	Emails      []scimEmail `json:"emails,omitempty"`
+	Name        *SCIMName   `json:"name,omitempty"`
+	Emails      []SCIMEmail `json:"emails,omitempty"`
 }
 
-type scimMember struct {
+type SCIMMember struct {
 	Value string `json:"value"`
 	Type  string `json:"type,omitempty"`
 }
 
-type scimGroupResource struct {
+type SCIMGroupResource struct {
 	Schemas     []string     `json:"schemas"`
 	ID          string       `json:"id,omitempty"`
 	ExternalID  string       `json:"externalId,omitempty"`
 	DisplayName string       `json:"displayName"`
-	Members     []scimMember `json:"members,omitempty"`
+	Members     []SCIMMember `json:"members,omitempty"`
 }
 
-type syncResult struct {
-	state   appState
-	status  string
-	fatal   error
-	changed bool
-	traces  []syncTraceEntry
+type SyncResult struct {
+	State   AppState
+	Status  string
+	Fatal   error
+	Changed bool
+	Traces  []SyncTraceEntry
 }
 
-type importResult struct {
-	state  appState
-	status string
-	fatal  error
-	traces []syncTraceEntry
+type ImportResult struct {
+	State  AppState
+	Status string
+	Fatal  error
+	Traces []SyncTraceEntry
 }
 
-type syncTraceEntry struct {
+type SyncTraceEntry struct {
 	ResourceType string
 	ResourceID   string
 	Label        string
@@ -103,14 +93,14 @@ type syncTraceEntry struct {
 	CreatedAt    string
 }
 
-type scimListResponse[T any] struct {
+type SCIMListResponse[T any] struct {
 	TotalResults int `json:"totalResults"`
 	StartIndex   int `json:"startIndex"`
 	ItemsPerPage int `json:"itemsPerPage"`
 	Resources    []T `json:"Resources"`
 }
 
-func newSCIMClient(cfg config) (*scimClient, error) {
+func NewSCIMClient(cfg Config) (*SCIMClient, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
 	token := strings.TrimSpace(cfg.BearerToken)
 
@@ -125,20 +115,20 @@ func newSCIMClient(cfg config) (*scimClient, error) {
 		return nil, fmt.Errorf("parse SCIM base URL %q: %w", baseURL, err)
 	}
 
-	return &scimClient{
+	return &SCIMClient{
 		baseURL: baseURL,
 		token:   token,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
-		traces: make([]syncTraceEntry, 0, 16),
+		traces: make([]SyncTraceEntry, 0, 16),
 	}, nil
 }
 
-func syncDirtyState(state appState) syncResult {
-	client, err := newSCIMClient(state.Config)
+func SyncDirtyState(state AppState) SyncResult {
+	client, err := NewSCIMClient(state.Config)
 	if err != nil {
-		return syncResult{fatal: err}
+		return SyncResult{Fatal: err}
 	}
 
 	state, userCounts := syncDirtyUsers(client, state)
@@ -155,39 +145,39 @@ func syncDirtyState(state appState) syncResult {
 		groupCounts.failed,
 	)
 
-	return syncResult{
-		state:   state,
-		status:  status,
-		changed: userCounts.total()+groupCounts.total() > 0,
-		traces:  client.traces,
+	return SyncResult{
+		State:   state,
+		Status:  status,
+		Changed: userCounts.total()+groupCounts.total() > 0,
+		Traces:  client.traces,
 	}
 }
 
-func importStateFromSCIM(state appState) importResult {
-	client, err := newSCIMClient(state.Config)
+func ImportStateFromSCIM(state AppState) ImportResult {
+	client, err := NewSCIMClient(state.Config)
 	if err != nil {
-		return importResult{fatal: err}
+		return ImportResult{Fatal: err}
 	}
 
 	userResources, err := client.listUsers()
 	if err != nil {
-		return importResult{fatal: err, traces: client.traces}
+		return ImportResult{Fatal: err, Traces: client.traces}
 	}
 
 	groupResources, err := client.listGroups()
 	if err != nil {
-		return importResult{fatal: err, traces: client.traces}
+		return ImportResult{Fatal: err, Traces: client.traces}
 	}
 
 	updatedState, err := replaceStateFromSCIM(state, userResources, groupResources)
 	if err != nil {
-		return importResult{fatal: err, traces: client.traces}
+		return ImportResult{Fatal: err, Traces: client.traces}
 	}
 
-	return importResult{
-		state:  updatedState,
-		status: fmt.Sprintf("imported %d users and %d groups from SCIM", len(updatedState.Users), len(updatedState.Groups)),
-		traces: client.traces,
+	return ImportResult{
+		State:  updatedState,
+		Status: fmt.Sprintf("imported %d users and %d groups from SCIM", len(updatedState.Users), len(updatedState.Groups)),
+		Traces: client.traces,
 	}
 }
 
@@ -202,9 +192,9 @@ func (c syncCounts) total() int {
 	return c.created + c.updated + c.deleted + c.failed
 }
 
-func syncDirtyUsers(client *scimClient, state appState) (appState, syncCounts) {
+func syncDirtyUsers(client *SCIMClient, state AppState) (AppState, syncCounts) {
 
-	nextUsers := make([]user, 0, len(state.Users))
+	nextUsers := make([]User, 0, len(state.Users))
 	counts := syncCounts{}
 
 	for _, u := range state.Users {
@@ -259,8 +249,8 @@ func syncDirtyUsers(client *scimClient, state appState) (appState, syncCounts) {
 	return state, counts
 }
 
-func syncDirtyGroups(client *scimClient, state appState) (appState, syncCounts) {
-	nextGroups := make([]group, 0, len(state.Groups))
+func syncDirtyGroups(client *SCIMClient, state AppState) (AppState, syncCounts) {
+	nextGroups := make([]Group, 0, len(state.Groups))
 	counts := syncCounts{}
 
 	for _, g := range state.Groups {
@@ -315,10 +305,10 @@ func syncDirtyGroups(client *scimClient, state appState) (appState, syncCounts) 
 	return state, counts
 }
 
-func (c *scimClient) createUser(u user) (string, error) {
+func (c *SCIMClient) createUser(u User) (string, error) {
 	resource := newSCIMUserResource(u)
 
-	var response scimUserResource
+	var response SCIMUserResource
 	if err := c.doJSON(http.MethodPost, "/Users", resource, &response, traceTargetForUser(u, "create")); err != nil {
 		return "", err
 	}
@@ -330,15 +320,15 @@ func (c *scimClient) createUser(u user) (string, error) {
 	return response.ID, nil
 }
 
-func (c *scimClient) listUsers() ([]scimUserResource, error) {
-	resources := make([]scimUserResource, 0, 32)
+func (c *SCIMClient) listUsers() ([]SCIMUserResource, error) {
+	resources := make([]SCIMUserResource, 0, 32)
 	startIndex := 1
 	count := 100
 
 	for {
 		path := fmt.Sprintf("/Users?startIndex=%d&count=%d", startIndex, count)
-		var response scimListResponse[scimUserResource]
-		if err := c.doJSON(http.MethodGet, path, nil, &response, traceTarget{
+		var response SCIMListResponse[SCIMUserResource]
+		if err := c.doJSON(http.MethodGet, path, nil, &response, TraceTarget{
 			ResourceType: "user",
 			Label:        "SCIM /Users",
 			Operation:    "import",
@@ -369,15 +359,15 @@ func (c *scimClient) listUsers() ([]scimUserResource, error) {
 	}
 }
 
-func (c *scimClient) listGroups() ([]scimGroupResource, error) {
-	resources := make([]scimGroupResource, 0, 32)
+func (c *SCIMClient) listGroups() ([]SCIMGroupResource, error) {
+	resources := make([]SCIMGroupResource, 0, 32)
 	startIndex := 1
 	count := 100
 
 	for {
 		path := fmt.Sprintf("/Groups?startIndex=%d&count=%d", startIndex, count)
-		var response scimListResponse[scimGroupResource]
-		if err := c.doJSON(http.MethodGet, path, nil, &response, traceTarget{
+		var response SCIMListResponse[SCIMGroupResource]
+		if err := c.doJSON(http.MethodGet, path, nil, &response, TraceTarget{
 			ResourceType: "group",
 			Label:        "SCIM /Groups",
 			Operation:    "import",
@@ -408,30 +398,30 @@ func (c *scimClient) listGroups() ([]scimGroupResource, error) {
 	}
 }
 
-func (c *scimClient) replaceUser(u user) error {
+func (c *SCIMClient) replaceUser(u User) error {
 	resource := newSCIMUserResource(u)
 	resource.ID = u.RemoteID
 
 	return c.doJSON(http.MethodPut, "/Users/"+url.PathEscape(u.RemoteID), resource, nil, traceTargetForUser(u, "update"))
 }
 
-func newSCIMUserResource(u user) scimUserResource {
+func newSCIMUserResource(u User) SCIMUserResource {
 	active := u.Active
-	formattedName := fullName(u)
-	resource := scimUserResource{
+	formattedName := FullName(u)
+	resource := SCIMUserResource{
 		Schemas:     []string{scimUserSchema},
 		ExternalID:  u.ID,
 		UserName:    strings.TrimSpace(u.Username),
 		DisplayName: formattedName,
 		Active:      &active,
-		Emails: []scimEmail{{
+		Emails: []SCIMEmail{{
 			Value:   strings.TrimSpace(u.Email),
 			Type:    "work",
 			Primary: true,
 		}},
 	}
 
-	resource.Name = &scimName{
+	resource.Name = &SCIMName{
 		GivenName:  strings.TrimSpace(u.GivenName),
 		FamilyName: strings.TrimSpace(u.FamilyName),
 		Formatted:  formattedName,
@@ -440,17 +430,17 @@ func newSCIMUserResource(u user) scimUserResource {
 	return resource
 }
 
-func (c *scimClient) deleteUser(u user, operation string) error {
+func (c *SCIMClient) deleteUser(u User, operation string) error {
 	return c.doJSON(http.MethodDelete, "/Users/"+url.PathEscape(u.RemoteID), nil, nil, traceTargetForUser(u, operation))
 }
 
-func (c *scimClient) createGroup(g group, users []user) (string, error) {
+func (c *SCIMClient) createGroup(g Group, users []User) (string, error) {
 	resource, err := newSCIMGroupResource(g, users)
 	if err != nil {
 		return "", err
 	}
 
-	var response scimGroupResource
+	var response SCIMGroupResource
 	if err := c.doJSON(http.MethodPost, "/Groups", resource, &response, traceTargetForGroup(g, "create")); err != nil {
 		return "", err
 	}
@@ -462,7 +452,7 @@ func (c *scimClient) createGroup(g group, users []user) (string, error) {
 	return response.ID, nil
 }
 
-func (c *scimClient) replaceGroup(g group, users []user) error {
+func (c *SCIMClient) replaceGroup(g Group, users []User) error {
 	resource, err := newSCIMGroupResource(g, users)
 	if err != nil {
 		return err
@@ -472,25 +462,25 @@ func (c *scimClient) replaceGroup(g group, users []user) error {
 	return c.doJSON(http.MethodPut, "/Groups/"+url.PathEscape(g.RemoteID), resource, nil, traceTargetForGroup(g, "update"))
 }
 
-func (c *scimClient) deleteGroup(g group, operation string) error {
+func (c *SCIMClient) deleteGroup(g Group, operation string) error {
 	return c.doJSON(http.MethodDelete, "/Groups/"+url.PathEscape(g.RemoteID), nil, nil, traceTargetForGroup(g, operation))
 }
 
-func newSCIMGroupResource(g group, users []user) (scimGroupResource, error) {
-	members := make([]scimMember, 0, len(g.MemberIDs))
+func newSCIMGroupResource(g Group, users []User) (SCIMGroupResource, error) {
+	members := make([]SCIMMember, 0, len(g.MemberIDs))
 	for _, memberID := range g.MemberIDs {
-		user, ok := userByID(users, memberID)
+		u, ok := UserByID(users, memberID)
 		if !ok {
-			return scimGroupResource{}, fmt.Errorf("group %q references unknown user %q", g.DisplayName, memberID)
+			return SCIMGroupResource{}, fmt.Errorf("group %q references unknown user %q", g.DisplayName, memberID)
 		}
-		if strings.TrimSpace(user.RemoteID) == "" {
-			return scimGroupResource{}, fmt.Errorf("group %q member %q has not been synced yet", g.DisplayName, userLabel(user))
+		if strings.TrimSpace(u.RemoteID) == "" {
+			return SCIMGroupResource{}, fmt.Errorf("group %q member %q has not been synced yet", g.DisplayName, UserLabel(u))
 		}
 
-		members = append(members, scimMember{Value: user.RemoteID, Type: "User"})
+		members = append(members, SCIMMember{Value: u.RemoteID, Type: "User"})
 	}
 
-	return scimGroupResource{
+	return SCIMGroupResource{
 		Schemas:     []string{scimGroupSchema},
 		ExternalID:  g.ID,
 		DisplayName: strings.TrimSpace(g.DisplayName),
@@ -498,17 +488,7 @@ func newSCIMGroupResource(g group, users []user) (scimGroupResource, error) {
 	}, nil
 }
 
-func userByID(users []user, id string) (user, bool) {
-	for _, u := range users {
-		if u.ID == id {
-			return u, true
-		}
-	}
-
-	return user{}, false
-}
-
-func (c *scimClient) doJSON(method string, path string, body any, out any, target traceTarget) error {
+func (c *SCIMClient) doJSON(method string, path string, body any, out any, target TraceTarget) error {
 	var reader io.Reader
 	requestBody := ""
 	if body != nil {
@@ -532,7 +512,7 @@ func (c *scimClient) doJSON(method string, path string, body any, out any, targe
 		req.Header.Set("Content-Type", "application/scim+json")
 	}
 
-	trace := syncTraceEntry{
+	trace := SyncTraceEntry{
 		ResourceType: target.ResourceType,
 		ResourceID:   target.ResourceID,
 		Label:        target.Label,
@@ -594,17 +574,17 @@ func (c *scimClient) doJSON(method string, path string, body any, out any, targe
 	return nil
 }
 
-func traceTargetForUser(u user, operation string) traceTarget {
-	return traceTarget{
+func traceTargetForUser(u User, operation string) TraceTarget {
+	return TraceTarget{
 		ResourceType: "user",
 		ResourceID:   u.ID,
-		Label:        userLabel(u),
+		Label:        UserLabel(u),
 		Operation:    operation,
 	}
 }
 
-func traceTargetForGroup(g group, operation string) traceTarget {
-	return traceTarget{
+func traceTargetForGroup(g Group, operation string) TraceTarget {
+	return TraceTarget{
 		ResourceType: "group",
 		ResourceID:   g.ID,
 		Label:        g.DisplayName,
@@ -612,14 +592,14 @@ func traceTargetForGroup(g group, operation string) traceTarget {
 	}
 }
 
-func replaceStateFromSCIM(state appState, userResources []scimUserResource, groupResources []scimGroupResource) (appState, error) {
-	importedUsers := make([]user, 0, len(userResources))
+func replaceStateFromSCIM(state AppState, userResources []SCIMUserResource, groupResources []SCIMGroupResource) (AppState, error) {
+	importedUsers := make([]User, 0, len(userResources))
 	remoteToLocalUserID := make(map[string]string, len(userResources))
 
 	for _, resource := range userResources {
 		importedUser, err := importedUserFromSCIM(nil, resource)
 		if err != nil {
-			return appState{}, err
+			return AppState{}, err
 		}
 		importedUsers = append(importedUsers, importedUser)
 		if importedUser.RemoteID != "" {
@@ -627,40 +607,40 @@ func replaceStateFromSCIM(state appState, userResources []scimUserResource, grou
 		}
 	}
 
-	importedGroups := make([]group, 0, len(groupResources))
+	importedGroups := make([]Group, 0, len(groupResources))
 	for _, resource := range groupResources {
 		importedGroup, err := importedGroupFromSCIM(resource, remoteToLocalUserID)
 		if err != nil {
-			return appState{}, err
+			return AppState{}, err
 		}
 		importedGroups = append(importedGroups, importedGroup)
 	}
 
 	state.Users = importedUsers
 	state.Groups = importedGroups
-	state.UserOperations = make(map[string][]operationLog, len(importedUsers))
-	state.GroupOperations = make(map[string][]operationLog, len(importedGroups))
+	state.UserOperations = make(map[string][]OperationLog, len(importedUsers))
+	state.GroupOperations = make(map[string][]OperationLog, len(importedGroups))
 
 	for _, importedUser := range importedUsers {
-		appendLocalOperationLog(&state, "user", importedUser.ID, "Imported from SCIM")
+		AppendLocalOperationLog(&state, "user", importedUser.ID, "Imported from SCIM")
 	}
 	for _, importedGroup := range importedGroups {
-		appendLocalOperationLog(&state, "group", importedGroup.ID, "Imported from SCIM")
+		AppendLocalOperationLog(&state, "group", importedGroup.ID, "Imported from SCIM")
 	}
 
 	return state, nil
 }
 
-func importedUserFromSCIM(existingUsers []user, resource scimUserResource) (user, error) {
+func importedUserFromSCIM(existingUsers []User, resource SCIMUserResource) (User, error) {
 	localID := strings.TrimSpace(resource.ExternalID)
 	if localID == "" {
 		if matched, ok := importedUserMatch(existingUsers, resource); ok {
 			localID = matched.ID
 		} else {
 			var err error
-			localID, err = newUserID()
+			localID, err = NewUserID()
 			if err != nil {
-				return user{}, err
+				return User{}, err
 			}
 		}
 	}
@@ -683,7 +663,7 @@ func importedUserFromSCIM(existingUsers []user, resource scimUserResource) (user
 		familyName = strings.TrimSpace(resource.Name.FamilyName)
 	}
 	if givenName == "" || familyName == "" {
-		fallbackGiven, fallbackFamily := splitName(firstNonEmpty(resource.DisplayName, username))
+		fallbackGiven, fallbackFamily := SplitName(firstNonEmpty(resource.DisplayName, username))
 		if givenName == "" {
 			givenName = fallbackGiven
 		}
@@ -692,7 +672,7 @@ func importedUserFromSCIM(existingUsers []user, resource scimUserResource) (user
 		}
 	}
 
-	return user{
+	return User{
 		ID:         localID,
 		GivenName:  givenName,
 		FamilyName: familyName,
@@ -706,13 +686,13 @@ func importedUserFromSCIM(existingUsers []user, resource scimUserResource) (user
 	}, nil
 }
 
-func importedGroupFromSCIM(resource scimGroupResource, remoteToLocalUserID map[string]string) (group, error) {
+func importedGroupFromSCIM(resource SCIMGroupResource, remoteToLocalUserID map[string]string) (Group, error) {
 	localID := strings.TrimSpace(resource.ExternalID)
 	if localID == "" {
 		var err error
-		localID, err = newGroupID()
+		localID, err = NewGroupID()
 		if err != nil {
-			return group{}, err
+			return Group{}, err
 		}
 	}
 
@@ -720,12 +700,12 @@ func importedGroupFromSCIM(resource scimGroupResource, remoteToLocalUserID map[s
 	for _, member := range resource.Members {
 		localUserID, ok := remoteToLocalUserID[strings.TrimSpace(member.Value)]
 		if !ok {
-			return group{}, fmt.Errorf("group %q references unknown imported user %q", strings.TrimSpace(resource.DisplayName), strings.TrimSpace(member.Value))
+			return Group{}, fmt.Errorf("group %q references unknown imported user %q", strings.TrimSpace(resource.DisplayName), strings.TrimSpace(member.Value))
 		}
 		memberIDs = append(memberIDs, localUserID)
 	}
 
-	return group{
+	return Group{
 		ID:          localID,
 		DisplayName: strings.TrimSpace(resource.DisplayName),
 		MemberIDs:   memberIDs,
@@ -736,7 +716,7 @@ func importedGroupFromSCIM(resource scimGroupResource, remoteToLocalUserID map[s
 	}, nil
 }
 
-func importedUserIndex(users []user, resource scimUserResource, localID string) (int, bool) {
+func importedUserIndex(users []User, resource SCIMUserResource, localID string) (int, bool) {
 	if localID != "" {
 		for i, existing := range users {
 			if existing.ID == localID {
@@ -757,15 +737,15 @@ func importedUserIndex(users []user, resource scimUserResource, localID string) 
 	return 0, false
 }
 
-func importedUserMatch(users []user, resource scimUserResource) (user, bool) {
+func importedUserMatch(users []User, resource SCIMUserResource) (User, bool) {
 	if index, ok := importedUserIndex(users, resource, strings.TrimSpace(resource.ExternalID)); ok {
 		return users[index], true
 	}
 
-	return user{}, false
+	return User{}, false
 }
 
-func firstSCIMEmail(emails []scimEmail) string {
+func firstSCIMEmail(emails []SCIMEmail) string {
 	for _, email := range emails {
 		value := strings.TrimSpace(email.Value)
 		if value != "" {
@@ -785,188 +765,4 @@ func firstNonEmpty(values ...string) string {
 	}
 
 	return ""
-}
-
-func formatSyncTraces(traces []syncTraceEntry) string {
-	if len(traces) == 0 {
-		return "No sync requests were made."
-	}
-
-	lines := make([]string, 0, len(traces)*8)
-	for i, trace := range traces {
-		lines = append(lines, fmt.Sprintf("[%d] %s %s %s", i+1, trace.CreatedAt, trace.Method, trace.Path))
-		if trace.Operation != "" || trace.Label != "" {
-			lines = append(lines, fmt.Sprintf("Target: %s %s (%s)", trace.ResourceType, trace.Label, trace.Operation))
-		}
-		if trace.RequestBody != "" {
-			lines = append(lines, "Request:")
-			lines = append(lines, indentBlock(prettyJSON(trace.RequestBody), "  "))
-		}
-		if trace.Status != "" {
-			lines = append(lines, "Response Status: "+trace.Status)
-		}
-		if trace.ResponseBody != "" {
-			lines = append(lines, "Response Body:")
-			lines = append(lines, indentBlock(prettyJSON(trace.ResponseBody), "  "))
-		}
-		if trace.Err != "" {
-			lines = append(lines, "Error: "+trace.Err)
-		}
-		if i < len(traces)-1 {
-			lines = append(lines, strings.Repeat("-", 48))
-		}
-	}
-
-	return strings.Join(lines, "\n")
-}
-
-func prettyJSON(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return raw
-	}
-
-	var decoded any
-	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
-		return raw
-	}
-
-	canonical := normalizeJSON(decoded)
-	formatted, err := json.MarshalIndent(canonical, "", "  ")
-	if err != nil {
-		return raw
-	}
-
-	return highlightJSON(string(formatted))
-}
-
-func highlightJSON(formatted string) string {
-	var out strings.Builder
-	for i := 0; i < len(formatted); {
-		switch ch := formatted[i]; {
-		case ch == '"':
-			end := scanJSONString(formatted, i)
-			token := formatted[i:end]
-			next := nextNonSpaceByte(formatted, end)
-			if next == ':' {
-				out.WriteString(colorizeANSI(token, ansiJSONKey))
-			} else {
-				out.WriteString(colorizeANSI(token, ansiJSONString))
-			}
-			i = end
-		case isJSONPunctuation(ch):
-			out.WriteString(colorizeANSI(string(ch), ansiJSONPunct))
-			i++
-		case isJSONNumberStart(ch):
-			end := scanJSONLiteral(formatted, i)
-			out.WriteString(colorizeANSI(formatted[i:end], ansiJSONNumber))
-			i = end
-		case strings.HasPrefix(formatted[i:], "true") || strings.HasPrefix(formatted[i:], "false"):
-			end := scanJSONLiteral(formatted, i)
-			out.WriteString(colorizeANSI(formatted[i:end], ansiJSONBool))
-			i = end
-		case strings.HasPrefix(formatted[i:], "null"):
-			end := scanJSONLiteral(formatted, i)
-			out.WriteString(colorizeANSI(formatted[i:end], ansiJSONNull))
-			i = end
-		default:
-			out.WriteByte(ch)
-			i++
-		}
-	}
-
-	return out.String()
-}
-
-func scanJSONString(s string, start int) int {
-	escaped := false
-	for i := start + 1; i < len(s); i++ {
-		switch {
-		case escaped:
-			escaped = false
-		case s[i] == '\\':
-			escaped = true
-		case s[i] == '"':
-			return i + 1
-		}
-	}
-
-	return len(s)
-}
-
-func scanJSONLiteral(s string, start int) int {
-	for i := start; i < len(s); i++ {
-		if unicode.IsSpace(rune(s[i])) || isJSONPunctuation(s[i]) {
-			return i
-		}
-	}
-
-	return len(s)
-}
-
-func nextNonSpaceByte(s string, start int) byte {
-	for i := start; i < len(s); i++ {
-		if !unicode.IsSpace(rune(s[i])) {
-			return s[i]
-		}
-	}
-
-	return 0
-}
-
-func isJSONNumberStart(ch byte) bool {
-	return ch == '-' || (ch >= '0' && ch <= '9')
-}
-
-func isJSONPunctuation(ch byte) bool {
-	switch ch {
-	case '{', '}', '[', ']', ':', ',':
-		return true
-	default:
-		return false
-	}
-}
-
-func colorizeANSI(text string, code string) string {
-	return code + text + ansiReset
-}
-
-func normalizeJSON(v any) any {
-	switch value := v.(type) {
-	case map[string]any:
-		keys := make([]string, 0, len(value))
-		for key := range value {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-
-		normalized := make(map[string]any, len(value))
-		for _, key := range keys {
-			normalized[key] = normalizeJSON(value[key])
-		}
-
-		return normalized
-	case []any:
-		normalized := make([]any, 0, len(value))
-		for _, item := range value {
-			normalized = append(normalized, normalizeJSON(item))
-		}
-
-		return normalized
-	default:
-		return value
-	}
-}
-
-func indentBlock(text string, prefix string) string {
-	if text == "" {
-		return prefix
-	}
-
-	parts := strings.Split(text, "\n")
-	for i, part := range parts {
-		parts[i] = prefix + part
-	}
-
-	return strings.Join(parts, "\n")
 }

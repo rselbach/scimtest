@@ -1,4 +1,4 @@
-package main
+package core
 
 import (
 	"crypto/rand"
@@ -16,13 +16,13 @@ import (
 
 var currentTime = time.Now
 
-type config struct {
+type Config struct {
 	BaseURL           string `json:"base_url"`
 	BearerToken       string `json:"bearer_token"`
 	AutoOpenSyncTrace bool   `json:"auto_open_sync_trace"`
 }
 
-type user struct {
+type User struct {
 	ID         string `json:"id"`
 	GivenName  string `json:"given_name,omitempty"`
 	FamilyName string `json:"family_name,omitempty"`
@@ -35,8 +35,8 @@ type user struct {
 	LastError  string `json:"last_error,omitempty"`
 }
 
-func (u *user) UnmarshalJSON(data []byte) error {
-	type alias user
+func (u *User) UnmarshalJSON(data []byte) error {
+	type alias User
 	aux := struct {
 		alias
 		LegacyName string `json:"name,omitempty"`
@@ -47,7 +47,7 @@ func (u *user) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	*u = user(aux.alias)
+	*u = User(aux.alias)
 	if aux.Active != nil {
 		u.Active = *aux.Active
 	}
@@ -60,7 +60,7 @@ func (u *user) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 
-	givenName, familyName := splitName(aux.LegacyName)
+	givenName, familyName := SplitName(aux.LegacyName)
 	if strings.TrimSpace(u.GivenName) == "" {
 		u.GivenName = givenName
 	}
@@ -74,15 +74,15 @@ func (u *user) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type appState struct {
-	Config          config                    `json:"config"`
-	Users           []user                    `json:"users"`
-	Groups          []group                   `json:"groups"`
-	UserOperations  map[string][]operationLog `json:"-"`
-	GroupOperations map[string][]operationLog `json:"-"`
+type AppState struct {
+	Config          Config                    `json:"config"`
+	Users           []User                    `json:"users"`
+	Groups          []Group                   `json:"groups"`
+	UserOperations  map[string][]OperationLog `json:"-"`
+	GroupOperations map[string][]OperationLog `json:"-"`
 }
 
-type operationLog struct {
+type OperationLog struct {
 	Kind         string
 	Summary      string
 	Operation    string
@@ -95,7 +95,7 @@ type operationLog struct {
 	CreatedAt    string
 }
 
-type group struct {
+type Group struct {
 	ID          string   `json:"id"`
 	DisplayName string   `json:"display_name"`
 	MemberIDs   []string `json:"member_ids,omitempty"`
@@ -105,42 +105,42 @@ type group struct {
 	LastError   string   `json:"last_error,omitempty"`
 }
 
-func loadState() (appState, error) {
+func LoadState() (AppState, error) {
 	db, err := openStateDB()
 	if err != nil {
-		return appState{}, err
+		return AppState{}, err
 	}
 	defer closeDB(db)
 
 	state, err := loadStateFromDB(db)
 	if err != nil {
-		return appState{}, err
+		return AppState{}, err
 	}
-	if !stateEmpty(state) {
+	if !StateEmpty(state) {
 		return state, nil
 	}
 
 	legacyPath, err := legacyStateFilePath()
 	if err != nil {
-		return appState{}, err
+		return AppState{}, err
 	}
 
 	legacyState, ok, err := loadLegacyJSONState(legacyPath)
 	if err != nil {
-		return appState{}, err
+		return AppState{}, err
 	}
 	if !ok {
 		return state, nil
 	}
 
 	if err := saveStateToDB(db, legacyState); err != nil {
-		return appState{}, err
+		return AppState{}, err
 	}
 
 	return loadStateFromDB(db)
 }
 
-func saveState(state appState) error {
+func SaveState(state AppState) error {
 	db, err := openStateDB()
 	if err != nil {
 		return err
@@ -242,14 +242,14 @@ func initStateDB(db *sql.DB) error {
 	return nil
 }
 
-func loadStateFromDB(db *sql.DB) (appState, error) {
-	state := appState{}
-	state.UserOperations = make(map[string][]operationLog)
-	state.GroupOperations = make(map[string][]operationLog)
+func loadStateFromDB(db *sql.DB) (AppState, error) {
+	state := AppState{}
+	state.UserOperations = make(map[string][]OperationLog)
+	state.GroupOperations = make(map[string][]OperationLog)
 
 	configRows, err := db.Query(`SELECT key, value FROM config`)
 	if err != nil {
-		return appState{}, fmt.Errorf("load config from sqlite: %w", err)
+		return AppState{}, fmt.Errorf("load config from sqlite: %w", err)
 	}
 	defer closeRows(configRows)
 
@@ -257,7 +257,7 @@ func loadStateFromDB(db *sql.DB) (appState, error) {
 		var key string
 		var value string
 		if err := configRows.Scan(&key, &value); err != nil {
-			return appState{}, fmt.Errorf("scan sqlite config row: %w", err)
+			return AppState{}, fmt.Errorf("scan sqlite config row: %w", err)
 		}
 
 		switch key {
@@ -270,22 +270,22 @@ func loadStateFromDB(db *sql.DB) (appState, error) {
 		}
 	}
 	if err := configRows.Err(); err != nil {
-		return appState{}, fmt.Errorf("iterate sqlite config rows: %w", err)
+		return AppState{}, fmt.Errorf("iterate sqlite config rows: %w", err)
 	}
 
 	userRows, err := db.Query(`SELECT id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error FROM users ORDER BY rowid`)
 	if err != nil {
-		return appState{}, fmt.Errorf("load users from sqlite: %w", err)
+		return AppState{}, fmt.Errorf("load users from sqlite: %w", err)
 	}
 	defer closeRows(userRows)
 
 	for userRows.Next() {
-		var u user
+		var u User
 		var active int
 		var dirty int
 		var deleted int
 		if err := userRows.Scan(&u.ID, &u.GivenName, &u.FamilyName, &u.Email, &u.Username, &active, &u.RemoteID, &dirty, &deleted, &u.LastError); err != nil {
-			return appState{}, fmt.Errorf("scan sqlite user row: %w", err)
+			return AppState{}, fmt.Errorf("scan sqlite user row: %w", err)
 		}
 		u.Active = active != 0
 		u.Dirty = dirty != 0
@@ -293,22 +293,22 @@ func loadStateFromDB(db *sql.DB) (appState, error) {
 		state.Users = append(state.Users, u)
 	}
 	if err := userRows.Err(); err != nil {
-		return appState{}, fmt.Errorf("iterate sqlite user rows: %w", err)
+		return AppState{}, fmt.Errorf("iterate sqlite user rows: %w", err)
 	}
 
 	groupRows, err := db.Query(`SELECT id, display_name, remote_id, dirty, deleted, last_error FROM groups ORDER BY rowid`)
 	if err != nil {
-		return appState{}, fmt.Errorf("load groups from sqlite: %w", err)
+		return AppState{}, fmt.Errorf("load groups from sqlite: %w", err)
 	}
 	defer closeRows(groupRows)
 
 	groupIndex := make(map[string]int)
 	for groupRows.Next() {
-		var g group
+		var g Group
 		var dirty int
 		var deleted int
 		if err := groupRows.Scan(&g.ID, &g.DisplayName, &g.RemoteID, &dirty, &deleted, &g.LastError); err != nil {
-			return appState{}, fmt.Errorf("scan sqlite group row: %w", err)
+			return AppState{}, fmt.Errorf("scan sqlite group row: %w", err)
 		}
 		g.Dirty = dirty != 0
 		g.Deleted = deleted != 0
@@ -316,12 +316,12 @@ func loadStateFromDB(db *sql.DB) (appState, error) {
 		state.Groups = append(state.Groups, g)
 	}
 	if err := groupRows.Err(); err != nil {
-		return appState{}, fmt.Errorf("iterate sqlite group rows: %w", err)
+		return AppState{}, fmt.Errorf("iterate sqlite group rows: %w", err)
 	}
 
 	memberRows, err := db.Query(`SELECT group_id, user_id FROM group_members ORDER BY group_id, position`)
 	if err != nil {
-		return appState{}, fmt.Errorf("load group members from sqlite: %w", err)
+		return AppState{}, fmt.Errorf("load group members from sqlite: %w", err)
 	}
 	defer closeRows(memberRows)
 
@@ -329,7 +329,7 @@ func loadStateFromDB(db *sql.DB) (appState, error) {
 		var groupID string
 		var userID string
 		if err := memberRows.Scan(&groupID, &userID); err != nil {
-			return appState{}, fmt.Errorf("scan sqlite group member row: %w", err)
+			return AppState{}, fmt.Errorf("scan sqlite group member row: %w", err)
 		}
 
 		index, ok := groupIndex[groupID]
@@ -339,21 +339,21 @@ func loadStateFromDB(db *sql.DB) (appState, error) {
 		state.Groups[index].MemberIDs = append(state.Groups[index].MemberIDs, userID)
 	}
 	if err := memberRows.Err(); err != nil {
-		return appState{}, fmt.Errorf("iterate sqlite group member rows: %w", err)
+		return AppState{}, fmt.Errorf("iterate sqlite group member rows: %w", err)
 	}
 
 	logRows, err := db.Query(`SELECT resource_type, resource_id, kind, summary, operation, method, path, request_body, status, response_body, error_text, created_at FROM operation_logs ORDER BY id DESC`)
 	if err != nil {
-		return appState{}, fmt.Errorf("load operation logs from sqlite: %w", err)
+		return AppState{}, fmt.Errorf("load operation logs from sqlite: %w", err)
 	}
 	defer closeRows(logRows)
 
 	for logRows.Next() {
 		var resourceType string
 		var resourceID string
-		var entry operationLog
+		var entry OperationLog
 		if err := logRows.Scan(&resourceType, &resourceID, &entry.Kind, &entry.Summary, &entry.Operation, &entry.Method, &entry.Path, &entry.RequestBody, &entry.Status, &entry.ResponseBody, &entry.Err, &entry.CreatedAt); err != nil {
-			return appState{}, fmt.Errorf("scan sqlite operation log row: %w", err)
+			return AppState{}, fmt.Errorf("scan sqlite operation log row: %w", err)
 		}
 
 		switch resourceType {
@@ -364,13 +364,13 @@ func loadStateFromDB(db *sql.DB) (appState, error) {
 		}
 	}
 	if err := logRows.Err(); err != nil {
-		return appState{}, fmt.Errorf("iterate sqlite operation log rows: %w", err)
+		return AppState{}, fmt.Errorf("iterate sqlite operation log rows: %w", err)
 	}
 
 	return state, nil
 }
 
-func saveStateToDB(db *sql.DB, state appState) error {
+func saveStateToDB(db *sql.DB, state AppState) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin sqlite state transaction: %w", err)
@@ -403,7 +403,7 @@ func saveStateToDB(db *sql.DB, state appState) error {
 	configEntries := map[string]string{
 		"base_url":             state.Config.BaseURL,
 		"bearer_token":         state.Config.BearerToken,
-		"auto_open_sync_trace": boolString(state.Config.AutoOpenSyncTrace),
+		"auto_open_sync_trace": BoolString(state.Config.AutoOpenSyncTrace),
 	}
 	for key, value := range configEntries {
 		if _, err := configStmt.Exec(key, value); err != nil {
@@ -455,8 +455,8 @@ func saveStateToDB(db *sql.DB, state appState) error {
 
 	for resourceID, entries := range state.UserOperations {
 		label := resourceID
-		if user, ok := userByID(state.Users, resourceID); ok {
-			label = userLabel(user)
+		if User, ok := UserByID(state.Users, resourceID); ok {
+			label = UserLabel(User)
 		}
 		for _, entry := range entries {
 			if _, err := logStmt.Exec("user", resourceID, label, entry.Kind, entry.Summary, entry.Operation, entry.Method, entry.Path, entry.RequestBody, entry.Status, entry.ResponseBody, entry.Err, entry.CreatedAt); err != nil {
@@ -467,8 +467,8 @@ func saveStateToDB(db *sql.DB, state appState) error {
 
 	for resourceID, entries := range state.GroupOperations {
 		label := resourceID
-		if group, ok := groupByID(state.Groups, resourceID); ok {
-			label = group.DisplayName
+		if Group, ok := GroupByID(state.Groups, resourceID); ok {
+			label = Group.DisplayName
 		}
 		for _, entry := range entries {
 			if _, err := logStmt.Exec("group", resourceID, label, entry.Kind, entry.Summary, entry.Operation, entry.Method, entry.Path, entry.RequestBody, entry.Status, entry.ResponseBody, entry.Err, entry.CreatedAt); err != nil {
@@ -538,19 +538,19 @@ func legacyStateFilePath() (string, error) {
 	return path + ".json", nil
 }
 
-func loadLegacyJSONState(path string) (appState, bool, error) {
+func loadLegacyJSONState(path string) (AppState, bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return appState{}, false, nil
+			return AppState{}, false, nil
 		}
 
-		return appState{}, false, fmt.Errorf("read legacy state %s: %w", path, err)
+		return AppState{}, false, fmt.Errorf("read legacy state %s: %w", path, err)
 	}
 
-	var state appState
+	var state AppState
 	if err := json.Unmarshal(data, &state); err != nil {
-		return appState{}, false, fmt.Errorf("decode legacy state %s: %w", path, err)
+		return AppState{}, false, fmt.Errorf("decode legacy state %s: %w", path, err)
 	}
 
 	for i := range state.Users {
@@ -560,20 +560,20 @@ func loadLegacyJSONState(path string) (appState, bool, error) {
 	return state, true, nil
 }
 
-func stateEmpty(state appState) bool {
-	return state.Config == (config{}) && len(state.Users) == 0 && len(state.Groups) == 0
+func StateEmpty(state AppState) bool {
+	return state.Config == (Config{}) && len(state.Users) == 0 && len(state.Groups) == 0
 }
 
-func appendOperationLogs(state *appState, traces []syncTraceEntry) {
+func AppendOperationLogs(state *AppState, traces []SyncTraceEntry) {
 	if state.UserOperations == nil {
-		state.UserOperations = make(map[string][]operationLog)
+		state.UserOperations = make(map[string][]OperationLog)
 	}
 	if state.GroupOperations == nil {
-		state.GroupOperations = make(map[string][]operationLog)
+		state.GroupOperations = make(map[string][]OperationLog)
 	}
 
 	for _, trace := range traces {
-		entry := operationLog{
+		entry := OperationLog{
 			Kind:         "sync",
 			Summary:      summarizeSyncTrace(trace),
 			Operation:    trace.Operation,
@@ -588,36 +588,36 @@ func appendOperationLogs(state *appState, traces []syncTraceEntry) {
 
 		switch trace.ResourceType {
 		case "user":
-			state.UserOperations[trace.ResourceID] = append([]operationLog{entry}, state.UserOperations[trace.ResourceID]...)
+			state.UserOperations[trace.ResourceID] = append([]OperationLog{entry}, state.UserOperations[trace.ResourceID]...)
 		case "group":
-			state.GroupOperations[trace.ResourceID] = append([]operationLog{entry}, state.GroupOperations[trace.ResourceID]...)
+			state.GroupOperations[trace.ResourceID] = append([]OperationLog{entry}, state.GroupOperations[trace.ResourceID]...)
 		}
 	}
 }
 
-func appendLocalOperationLog(state *appState, resourceType string, resourceID string, summary string) {
-	entry := operationLog{
+func AppendLocalOperationLog(state *AppState, resourceType string, resourceID string, summary string) {
+	entry := OperationLog{
 		Kind:      "local",
 		Summary:   summary,
-		CreatedAt: nowTimestamp(),
+		CreatedAt: NowTimestamp(),
 	}
 
 	if state.UserOperations == nil {
-		state.UserOperations = make(map[string][]operationLog)
+		state.UserOperations = make(map[string][]OperationLog)
 	}
 	if state.GroupOperations == nil {
-		state.GroupOperations = make(map[string][]operationLog)
+		state.GroupOperations = make(map[string][]OperationLog)
 	}
 
 	switch resourceType {
 	case "user":
-		state.UserOperations[resourceID] = append([]operationLog{entry}, state.UserOperations[resourceID]...)
+		state.UserOperations[resourceID] = append([]OperationLog{entry}, state.UserOperations[resourceID]...)
 	case "group":
-		state.GroupOperations[resourceID] = append([]operationLog{entry}, state.GroupOperations[resourceID]...)
+		state.GroupOperations[resourceID] = append([]OperationLog{entry}, state.GroupOperations[resourceID]...)
 	}
 }
 
-func summarizeSyncTrace(trace syncTraceEntry) string {
+func summarizeSyncTrace(trace SyncTraceEntry) string {
 	if trace.Operation == "create" {
 		return "Created"
 	}
@@ -628,18 +628,45 @@ func summarizeSyncTrace(trace syncTraceEntry) string {
 	return "Synced"
 }
 
-func nowTimestamp() string {
+func NowTimestamp() string {
 	return currentTime().UTC().Format(time.RFC3339)
 }
 
-func groupByID(groups []group, id string) (group, bool) {
+func GroupByID(groups []Group, id string) (Group, bool) {
 	for _, g := range groups {
 		if g.ID == id {
 			return g, true
 		}
 	}
 
-	return group{}, false
+	return Group{}, false
+}
+
+func UserByID(users []User, id string) (User, bool) {
+	for _, u := range users {
+		if u.ID == id {
+			return u, true
+		}
+	}
+
+	return User{}, false
+}
+
+func UserLabel(u User) string {
+	if name := FullName(u); name != "" {
+		return name
+	}
+
+	return u.Username
+}
+
+func ConfiguredBaseURL(baseURL string) string {
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		return "not configured"
+	}
+
+	return baseURL
 }
 
 func boolToInt(v bool) int {
@@ -650,7 +677,7 @@ func boolToInt(v bool) int {
 	return 0
 }
 
-func boolString(v bool) string {
+func BoolString(v bool) string {
 	if v {
 		return "1"
 	}
@@ -667,15 +694,15 @@ func newLocalID() (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
-func newUserID() (string, error) {
+func NewUserID() (string, error) {
 	return newLocalID()
 }
 
-func newGroupID() (string, error) {
+func NewGroupID() (string, error) {
 	return newLocalID()
 }
 
-func validateUser(givenName string, familyName string, email string, username string) error {
+func ValidateUser(givenName string, familyName string, email string, username string) error {
 	givenName = strings.TrimSpace(givenName)
 	familyName = strings.TrimSpace(familyName)
 	email = strings.TrimSpace(email)
@@ -694,7 +721,7 @@ func validateUser(givenName string, familyName string, email string, username st
 	}
 }
 
-func validateGroup(displayName string) error {
+func ValidateGroup(displayName string) error {
 	if strings.TrimSpace(displayName) == "" {
 		return fmt.Errorf("group name is required")
 	}
@@ -702,17 +729,17 @@ func validateGroup(displayName string) error {
 	return nil
 }
 
-func migrateLegacyName(u *user) {
+func migrateLegacyName(u *User) {
 	if strings.TrimSpace(u.GivenName) != "" && strings.TrimSpace(u.FamilyName) != "" {
 		return
 	}
 
-	legacyName := strings.TrimSpace(fullName(*u))
+	legacyName := strings.TrimSpace(FullName(*u))
 	if legacyName == "" {
 		legacyName = strings.TrimSpace(u.Username)
 	}
 
-	givenName, familyName := splitName(legacyName)
+	givenName, familyName := SplitName(legacyName)
 	if strings.TrimSpace(u.GivenName) == "" {
 		u.GivenName = givenName
 	}
@@ -721,8 +748,8 @@ func migrateLegacyName(u *user) {
 	}
 }
 
-func splitName(fullName string) (string, string) {
-	parts := strings.Fields(strings.TrimSpace(fullName))
+func SplitName(FullName string) (string, string) {
+	parts := strings.Fields(strings.TrimSpace(FullName))
 	switch len(parts) {
 	case 0:
 		return "", ""
@@ -733,19 +760,19 @@ func splitName(fullName string) (string, string) {
 	}
 }
 
-func fullName(u user) string {
+func FullName(u User) string {
 	return strings.TrimSpace(strings.TrimSpace(u.GivenName) + " " + strings.TrimSpace(u.FamilyName))
 }
 
-func syncStatus(u user) string {
-	return resourceSyncStatus(u.Deleted, u.Dirty, u.LastError, u.RemoteID)
+func SyncStatus(u User) string {
+	return ResourceSyncStatus(u.Deleted, u.Dirty, u.LastError, u.RemoteID)
 }
 
-func groupSyncStatus(g group) string {
-	return resourceSyncStatus(g.Deleted, g.Dirty, g.LastError, g.RemoteID)
+func GroupSyncStatus(g Group) string {
+	return ResourceSyncStatus(g.Deleted, g.Dirty, g.LastError, g.RemoteID)
 }
 
-func resourceSyncStatus(deleted bool, dirty bool, lastError string, remoteID string) string {
+func ResourceSyncStatus(deleted bool, dirty bool, lastError string, remoteID string) string {
 	switch {
 	case deleted && dirty:
 		return "pending delete"
@@ -762,7 +789,7 @@ func resourceSyncStatus(deleted bool, dirty bool, lastError string, remoteID str
 	}
 }
 
-func activeStatus(u user) string {
+func ActiveStatus(u User) string {
 	if !u.Active {
 		return "inactive"
 	}

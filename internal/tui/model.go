@@ -1,4 +1,4 @@
-package main
+package tui
 
 import (
 	"fmt"
@@ -23,6 +23,7 @@ const (
 	modeOperationHistory
 	modeConfigForm
 	modeImportConfirm
+	modeResetConfirm
 )
 
 type syncFinishedMsg syncResult
@@ -62,6 +63,10 @@ type importConfirmState struct {
 	returnTo mode
 }
 
+type resetConfirmState struct {
+	returnTo mode
+}
+
 type model struct {
 	state       appState
 	usersTable  table.Model
@@ -72,6 +77,7 @@ type model struct {
 	trace       traceViewState
 	history     historyViewState
 	importing   importConfirmState
+	resetting   resetConfirmState
 	status      string
 	syncing     bool
 	width       int
@@ -189,21 +195,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case syncFinishedMsg:
 		m.syncing = false
 
-		if msg.fatal != nil {
-			m.status = msg.fatal.Error()
+		if msg.Fatal != nil {
+			m.status = msg.Fatal.Error()
 			return m, nil
 		}
 
-		m.state = msg.state
-		appendOperationLogs(&m.state, msg.traces)
+		m.state = msg.State
+		appendOperationLogs(&m.state, msg.Traces)
 		if err := saveState(m.state); err != nil {
 			m.status = err.Error()
 			return m, nil
 		}
 
-		m.status = msg.status
+		m.status = msg.Status
 		m.refreshTables()
-		m.rememberTraceView(msg.traces)
+		m.rememberTraceView(msg.Traces)
 		if m.state.Config.AutoOpenSyncTrace {
 			m.openTraceView()
 		}
@@ -211,21 +217,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case importFinishedMsg:
 		m.syncing = false
 
-		if msg.fatal != nil {
-			m.rememberTraceView(msg.traces)
-			m.status = msg.fatal.Error()
+		if msg.Fatal != nil {
+			m.rememberTraceView(msg.Traces)
+			m.status = msg.Fatal.Error()
 			return m, nil
 		}
 
-		m.state = msg.state
+		m.state = msg.State
 		if err := saveState(m.state); err != nil {
 			m.status = err.Error()
 			return m, nil
 		}
 
-		m.status = msg.status
+		m.status = msg.Status
 		m.refreshTables()
-		m.rememberTraceView(msg.traces)
+		m.rememberTraceView(msg.Traces)
 		if m.state.Config.AutoOpenSyncTrace {
 			m.openTraceView()
 		}
@@ -241,6 +247,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateMemberPicker(msg)
 	case modeImportConfirm:
 		return m.updateImportConfirm(msg)
+	case modeResetConfirm:
+		return m.updateResetConfirm(msg)
 	case modeSyncTrace:
 		return m.updateTraceView(msg)
 	case modeOperationHistory:
@@ -259,6 +267,9 @@ func (m model) View() string {
 	}
 	if m.mode == modeImportConfirm {
 		return m.viewImportConfirm()
+	}
+	if m.mode == modeResetConfirm {
+		return m.viewResetConfirm()
 	}
 	if m.mode == modeSyncTrace {
 		return m.viewTraceView()
@@ -318,6 +329,9 @@ func (m model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, func() tea.Msg {
 				return syncFinishedMsg(syncDirtyState(state))
 			}
+		case "R":
+			m.startResetConfirm()
+			return m, nil
 		case "i":
 			m.startImportConfirm()
 			return m, nil
@@ -359,6 +373,26 @@ func (m model) updateImportConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, func() tea.Msg {
 				return importFinishedMsg(importStateFromSCIM(state))
 			}
+		}
+	}
+
+	return m, nil
+}
+
+func (m model) updateResetConfirm(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "esc", "n":
+			m.closeResetConfirm("reset cancelled")
+			return m, nil
+		case "y", "enter":
+			m.mode = m.resetting.returnTo
+			if err := m.resetAllSyncStatus(); err != nil {
+				m.status = err.Error()
+				return m, nil
+			}
+			return m, nil
 		}
 	}
 
@@ -574,6 +608,18 @@ func (m model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			m.returnToList("cancelled")
 			return m, nil
+		case "ctrl+x":
+			if err := m.clearFocusedConfigInput(); err != nil {
+				m.status = err.Error()
+				return m, nil
+			}
+			return m, nil
+		case "ctrl+r":
+			if err := m.clearAllConfigInputs(); err != nil {
+				m.status = err.Error()
+				return m, nil
+			}
+			return m, nil
 		case "tab", "shift+tab", "up", "down":
 			m.moveFormFocus(msg.String())
 			return m, nil
@@ -732,7 +778,7 @@ func (m *model) startConfigForm() {
 		inputs:     inputs,
 		focusIndex: 0,
 		title:      "SCIM Config",
-		help:       "tab moves • enter saves • esc cancels",
+		help:       "tab moves • ctrl+x clears field • ctrl+r clears all • enter saves • esc cancels",
 	}
 	m.mode = modeConfigForm
 	m.status = ""
@@ -741,6 +787,12 @@ func (m *model) startConfigForm() {
 func (m *model) startImportConfirm() {
 	m.importing.returnTo = m.mode
 	m.mode = modeImportConfirm
+	m.status = ""
+}
+
+func (m *model) startResetConfirm() {
+	m.resetting.returnTo = m.mode
+	m.mode = modeResetConfirm
 	m.status = ""
 }
 
@@ -788,6 +840,14 @@ func (m *model) closeImportConfirm(status string) {
 		m.importing.returnTo = modeUsersList
 	}
 	m.mode = m.importing.returnTo
+	m.status = status
+}
+
+func (m *model) closeResetConfirm(status string) {
+	if m.resetting.returnTo != modeGroupsList {
+		m.resetting.returnTo = modeUsersList
+	}
+	m.mode = m.resetting.returnTo
 	m.status = status
 }
 
@@ -937,6 +997,33 @@ func (m *model) submitConfigForm() error {
 	return nil
 }
 
+func (m *model) clearFocusedConfigInput() error {
+	if m.form.kind != modeConfigForm {
+		return fmt.Errorf("config form is not open")
+	}
+
+	label := m.form.inputs[m.form.focusIndex].Placeholder
+	m.form.inputs[m.form.focusIndex].SetValue("")
+	m.status = strings.ToLower(label) + " cleared"
+	return nil
+}
+
+func (m *model) clearAllConfigInputs() error {
+	if m.form.kind != modeConfigForm {
+		return fmt.Errorf("config form is not open")
+	}
+
+	for i := range m.form.inputs {
+		m.form.inputs[i].SetValue("")
+	}
+	if len(m.form.inputs) > 0 {
+		m.form.focusIndex = 0
+		m.form.inputs[0].Focus()
+	}
+	m.status = "config fields cleared"
+	return nil
+}
+
 func (m *model) markSelectedUserDeleted(deleted bool) error {
 	selected, ok := m.selectedUser()
 	if !ok {
@@ -1062,6 +1149,36 @@ func (m *model) toggleSelectedActive() error {
 	}
 
 	m.refreshTables()
+	return nil
+}
+
+func (m *model) resetAllSyncStatus() error {
+	if len(m.state.Users) == 0 && len(m.state.Groups) == 0 {
+		return fmt.Errorf("no users or groups to reset")
+	}
+
+	resetUsers := 0
+	for i := range m.state.Users {
+		m.state.Users[i].RemoteID = ""
+		m.state.Users[i].Dirty = true
+		m.state.Users[i].LastError = ""
+		resetUsers++
+	}
+
+	resetGroups := 0
+	for i := range m.state.Groups {
+		m.state.Groups[i].RemoteID = ""
+		m.state.Groups[i].Dirty = true
+		m.state.Groups[i].LastError = ""
+		resetGroups++
+	}
+
+	if err := saveState(m.state); err != nil {
+		return err
+	}
+
+	m.refreshTables()
+	m.status = fmt.Sprintf("reset sync status for %d users and %d groups", resetUsers, resetGroups)
 	return nil
 }
 
@@ -1246,6 +1363,18 @@ func (m model) viewImportConfirm() string {
 	return boxStyle.Render(content)
 }
 
+func (m model) viewResetConfirm() string {
+	content := lipgloss.JoinVertical(
+		lipgloss.Left,
+		titleStyle.Render("Reset Sync State"),
+		errorStyle.Render("This will clear all stored remote IDs for local users and groups."),
+		"The next sync will try to create everything again instead of updating it.",
+		helpStyle.Render("enter/y reset everything • esc/n cancel"),
+	)
+
+	return boxStyle.Render(content)
+}
+
 func (m model) viewTraceView() string {
 	titleText := m.trace.title
 	if strings.TrimSpace(titleText) == "" {
@@ -1320,29 +1449,12 @@ func newInput(placeholder string, value string, password bool) textinput.Model {
 	return input
 }
 
-func configuredBaseURL(baseURL string) string {
-	baseURL = strings.TrimSpace(baseURL)
-	if baseURL == "" {
-		return "not configured"
-	}
-
-	return baseURL
-}
-
-func userLabel(u user) string {
-	if name := fullName(u); name != "" {
-		return name
-	}
-
-	return u.Username
-}
-
 func userListHelp() string {
-	return "tab switch • a add • e edit • t toggle active • d delete • r restore • i import • c config • p trace popup • s sync • q quit"
+	return "tab switch • a add • e edit • t toggle active • d delete • r restore • R reset sync • i import • c config • p trace popup • s sync • q quit"
 }
 
 func groupListHelp() string {
-	return "tab switch • a add • e edit • m members • d delete • r restore • i import • c config • p trace popup • s sync • q quit"
+	return "tab switch • a add • e edit • m members • d delete • r restore • R reset sync • i import • c config • p trace popup • s sync • q quit"
 }
 
 func helpForMode(mode mode) string {

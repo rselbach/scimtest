@@ -4,19 +4,38 @@ import (
 	"fmt"
 	"os"
 
-	tea "github.com/charmbracelet/bubbletea"
+	"scimtest/internal/tui"
+	"scimtest/internal/web"
 )
 
 func main() {
-	m, err := newModel()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "load state: %v\n", err)
-		os.Exit(1)
+	args := os.Args[1:]
+	if len(args) > 0 {
+		switch args[0] {
+		case "web":
+			if err := web.Run(); err != nil {
+				fmt.Fprintf(os.Stderr, "run web: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "-h", "--help", "help":
+			usage(os.Stdout)
+			return
+		default:
+			fmt.Fprintf(os.Stderr, "unknown subcommand %q\n\n", args[0])
+			usage(os.Stderr)
+			os.Exit(2)
+		}
 	}
 
-	p := tea.NewProgram(m, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
+	if err := tui.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "run tui: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func usage(w *os.File) {
+	fmt.Fprintf(w, "Usage: scimtest [web]\n\n")
+	fmt.Fprintf(w, "  (no args)  launch the terminal UI\n")
+	fmt.Fprintf(w, "  web        launch the web UI on $PORT (default 8080)\n")
 }
