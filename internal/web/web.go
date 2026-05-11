@@ -1,6 +1,7 @@
 package web
 
 import (
+	"crypto/rsa"
 	"embed"
 	"fmt"
 	"html/template"
@@ -22,6 +23,10 @@ var pageTemplate = template.Must(template.New("index.html").Funcs(template.FuncM
 
 type webApp struct {
 	mu               sync.Mutex
+	signingKey       *rsa.PrivateKey
+	certDER          []byte
+	authCodes        map[string]authCode
+	accessTokens     map[string]accessToken
 	lastTrace        []syncTraceEntry
 	lastTraceContent string
 }
@@ -36,6 +41,7 @@ type statsView struct {
 	DirtyUsers  int
 	Groups      int
 	DirtyGroups int
+	Apps        int
 }
 
 type userRowView struct {
@@ -61,6 +67,28 @@ type groupRowView struct {
 	Deleted        bool
 	EditURL        string
 	HistoryURL     string
+}
+
+type appRowView struct {
+	ID                     string
+	Name                   string
+	Slug                   string
+	Protocol               string
+	OIDCClientID           string
+	OIDCDiscovery          string
+	OIDCAuthorize          string
+	OIDCJWKS               string
+	SAMLMetadata           string
+	SAMLSSO                string
+	SAMLIDPEntityID        string
+	SAMLCertificatePEM     string
+	SAMLEmailAttributeName string
+	SAMLSPACSURL           string
+	SAMLSPAudience         string
+	SupportsOIDC           bool
+	SupportsSAML           bool
+	EditURL                string
+	HasRedirectURI         bool
 }
 
 type historyEntryView struct {
@@ -99,6 +127,16 @@ type groupFormView struct {
 	Close   string
 }
 
+type appFormView struct {
+	Title              string
+	App                app
+	OIDCRedirectURIs   string
+	SAMLCertificatePEM string
+	SAMLIDPEntityID    string
+	SAMLIDPSSO         string
+	Close              string
+}
+
 type configFormView struct {
 	Config config
 	Close  string
@@ -110,13 +148,18 @@ type pageData struct {
 	Stats             statsView
 	Users             []userRowView
 	Groups            []groupRowView
+	Apps              []appRowView
 	Errors            []string
 	BaseURL           string
+	IDPBaseURL        string
+	SCIMEnabled       bool
 	TracePopupEnabled bool
 	UsersURL          string
 	GroupsURL         string
+	AppsURL           string
 	NewUserURL        string
 	NewGroupURL       string
+	NewAppURL         string
 	ConfigURL         string
 	TraceURL          string
 	TraceCloseURL     string
@@ -126,6 +169,7 @@ type pageData struct {
 	History           *historyView
 	UserForm          *userFormView
 	GroupForm         *groupFormView
+	AppForm           *appFormView
 	ConfigForm        *configFormView
 }
 
@@ -135,9 +179,19 @@ func Run() error {
 		port = "8080"
 	}
 
-	app := &webApp{}
+	key, certDER, err := loadOrCreateSigningMaterial()
+	if err != nil {
+		return err
+	}
+
+	app := &webApp{
+		signingKey:   key,
+		certDER:      certDER,
+		authCodes:    make(map[string]authCode),
+		accessTokens: make(map[string]accessToken),
+	}
 	addr := ":" + port
-	log.Printf("web ui listening on http://localhost%s", addr)
+	log.Printf("merged auth test service listening on http://localhost%s", addr)
 	return http.ListenAndServe(addr, app.routes())
 }
 
@@ -151,11 +205,23 @@ func (a *webApp) routes() http.Handler {
 	mux.HandleFunc("POST /groups/save", a.handleGroupSave)
 	mux.HandleFunc("POST /groups/{id}/delete", a.handleGroupDelete)
 	mux.HandleFunc("POST /groups/{id}/restore", a.handleGroupRestore)
+	mux.HandleFunc("POST /apps/save", a.handleAppSave)
+	mux.HandleFunc("POST /apps/{id}/delete", a.handleAppDelete)
 	mux.HandleFunc("POST /config/save", a.handleConfigSave)
 	mux.HandleFunc("POST /config/clear", a.handleConfigClear)
 	mux.HandleFunc("POST /sync", a.handleSync)
 	mux.HandleFunc("POST /import", a.handleImport)
 	mux.HandleFunc("POST /reset", a.handleReset)
+	mux.HandleFunc("GET /oidc/{slug}/.well-known/openid-configuration", a.handleOIDCDiscovery)
+	mux.HandleFunc("GET /oidc/{slug}/jwks", a.handleOIDCJWKS)
+	mux.HandleFunc("GET /oidc/{slug}/authorize", a.handleOIDCAuthorize)
+	mux.HandleFunc("POST /oidc/{slug}/authorize", a.handleOIDCAuthorizePost)
+	mux.HandleFunc("POST /oidc/{slug}/token", a.handleOIDCToken)
+	mux.HandleFunc("GET /oidc/{slug}/userinfo", a.handleOIDCUserinfo)
+	mux.HandleFunc("POST /oidc/{slug}/userinfo", a.handleOIDCUserinfo)
+	mux.HandleFunc("GET /saml/{slug}/metadata", a.handleSAMLMetadata)
+	mux.HandleFunc("GET /saml/{slug}/sso", a.handleSAMLSSO)
+	mux.HandleFunc("POST /saml/{slug}/sso", a.handleSAMLSSOPost)
 	return mux
 }
 
@@ -179,19 +245,29 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		Stats:             buildStats(state),
 		Users:             buildUserRows(state, tab),
 		Groups:            buildGroupRows(state, tab),
+		Apps:              buildAppRows(state, effectiveIDPBaseURL(r, state), certificatePEM(a.certDER)),
 		Errors:            buildErrorList(state),
 		BaseURL:           configuredBaseURL(state.Config.BaseURL),
+		IDPBaseURL:        effectiveIDPBaseURL(r, state),
+		SCIMEnabled:       scimEnabled(state),
 		TracePopupEnabled: state.Config.AutoOpenSyncTrace,
 		UsersURL:          dashboardURL("users", nil),
 		GroupsURL:         dashboardURL("groups", nil),
+		AppsURL:           dashboardURL("apps", nil),
 		NewUserURL:        dashboardURL("users", map[string]string{"modal": "user"}),
 		NewGroupURL:       dashboardURL("groups", map[string]string{"modal": "group"}),
+		NewAppURL:         dashboardURL("apps", map[string]string{"modal": "app"}),
 		ConfigURL:         dashboardURL(tab, map[string]string{"modal": "config"}),
 		TraceURL:          dashboardURL(tab, map[string]string{"showTrace": "1"}),
 		TraceCloseURL:     dashboardURL(tab, nil),
 		ShowTrace:         showTrace && a.hasTrace(),
 		HasTrace:          a.hasTrace(),
 		TraceContent:      a.traceContent(),
+	}
+	if !data.SCIMEnabled {
+		data.Errors = nil
+		data.ShowTrace = false
+		data.HasTrace = false
 	}
 
 	if history := buildHistoryView(state, tab, r.URL.Query()); history != nil {
@@ -206,6 +282,10 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 	case "group":
 		if form, formErr := buildGroupFormView(state, tab, r.URL.Query().Get("id")); formErr == nil {
 			data.GroupForm = form
+		}
+	case "app":
+		if form, formErr := buildAppFormView(state, tab, r.URL.Query().Get("id"), data.IDPBaseURL, certificatePEM(a.certDER)); formErr == nil {
+			data.AppForm = form
 		}
 	case "config":
 		data.ConfigForm = &configFormView{
@@ -357,6 +437,22 @@ func (a *webApp) handleUserDeletedState(w http.ResponseWriter, r *http.Request, 
 		a.redirectError(w, r, tab, fmt.Errorf("user %s not found", id))
 		return
 	}
+	if !scimEnabled(state) {
+		if !deleted {
+			a.redirectError(w, r, tab, fmt.Errorf("SCIM is disabled"))
+			return
+		}
+		state.Users = append(state.Users[:index], state.Users[index+1:]...)
+		for i := range state.Groups {
+			state.Groups[i].MemberIDs = removeString(state.Groups[i].MemberIDs, id)
+		}
+		if err := saveState(state); err != nil {
+			a.redirectError(w, r, tab, err)
+			return
+		}
+		redirectWithFlash(w, r, dashboardURL("users", nil), flashMessage{Kind: "success", Message: "user deleted"})
+		return
+	}
 
 	state.Users[index].Deleted = deleted
 	state.Users[index].Dirty = true
@@ -462,6 +558,19 @@ func (a *webApp) handleGroupDeletedState(w http.ResponseWriter, r *http.Request,
 		a.redirectError(w, r, tab, fmt.Errorf("group %s not found", id))
 		return
 	}
+	if !scimEnabled(state) {
+		if !deleted {
+			a.redirectError(w, r, tab, fmt.Errorf("SCIM is disabled"))
+			return
+		}
+		state.Groups = append(state.Groups[:index], state.Groups[index+1:]...)
+		if err := saveState(state); err != nil {
+			a.redirectError(w, r, tab, err)
+			return
+		}
+		redirectWithFlash(w, r, dashboardURL("groups", nil), flashMessage{Kind: "success", Message: "group deleted"})
+		return
+	}
 
 	state.Groups[index].Deleted = deleted
 	state.Groups[index].Dirty = true
@@ -492,9 +601,13 @@ func (a *webApp) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	state.Config = config{
-		BaseURL:           strings.TrimSpace(r.FormValue("base_url")),
-		BearerToken:       strings.TrimSpace(r.FormValue("bearer_token")),
-		AutoOpenSyncTrace: r.FormValue("auto_open_sync_trace") == "on",
+		BaseURL:               strings.TrimSpace(r.FormValue("base_url")),
+		BearerToken:           strings.TrimSpace(r.FormValue("bearer_token")),
+		AutoOpenSyncTrace:     r.FormValue("auto_open_sync_trace") == "on",
+		SCIMDisabled:          r.FormValue("scim_enabled") != "on",
+		IDPBaseURL:            strings.TrimSpace(r.FormValue("idp_base_url")),
+		SigningPrivateKeyPEM:  state.Config.SigningPrivateKeyPEM,
+		SigningCertificatePEM: state.Config.SigningCertificatePEM,
 	}
 
 	if err := saveState(state); err != nil {
@@ -516,7 +629,10 @@ func (a *webApp) handleConfigClear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state.Config = config{}
+	state.Config = config{
+		SigningPrivateKeyPEM:  state.Config.SigningPrivateKeyPEM,
+		SigningCertificatePEM: state.Config.SigningCertificatePEM,
+	}
 	if err := saveState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
@@ -533,6 +649,10 @@ func (a *webApp) handleSync(w http.ResponseWriter, r *http.Request) {
 	state, err := loadState()
 	if err != nil {
 		a.redirectError(w, r, tab, err)
+		return
+	}
+	if !scimEnabled(state) {
+		a.redirectError(w, r, tab, fmt.Errorf("SCIM is disabled"))
 		return
 	}
 
@@ -569,6 +689,10 @@ func (a *webApp) handleImport(w http.ResponseWriter, r *http.Request) {
 		a.redirectError(w, r, tab, err)
 		return
 	}
+	if !scimEnabled(state) {
+		a.redirectError(w, r, tab, fmt.Errorf("SCIM is disabled"))
+		return
+	}
 
 	result := importStateFromSCIM(state)
 	a.rememberTrace(result.Traces)
@@ -599,6 +723,10 @@ func (a *webApp) handleReset(w http.ResponseWriter, r *http.Request) {
 	state, err := loadState()
 	if err != nil {
 		a.redirectError(w, r, tab, err)
+		return
+	}
+	if !scimEnabled(state) {
+		a.redirectError(w, r, tab, fmt.Errorf("SCIM is disabled"))
 		return
 	}
 
@@ -654,26 +782,38 @@ func (a *webApp) traceContent() string {
 }
 
 func buildStats(state appState) statsView {
-	stats := statsView{
-		Users:  len(state.Users),
-		Groups: len(state.Groups),
-	}
+	stats := statsView{Apps: len(state.Apps)}
 	for _, u := range state.Users {
-		if u.Dirty {
+		if !scimEnabled(state) && u.Deleted {
+			continue
+		}
+		stats.Users++
+		if scimEnabled(state) && u.Dirty {
 			stats.DirtyUsers++
 		}
 	}
 	for _, g := range state.Groups {
-		if g.Dirty {
+		if !scimEnabled(state) && g.Deleted {
+			continue
+		}
+		stats.Groups++
+		if scimEnabled(state) && g.Dirty {
 			stats.DirtyGroups++
 		}
 	}
 	return stats
 }
 
+func scimEnabled(state appState) bool {
+	return !state.Config.SCIMDisabled
+}
+
 func buildUserRows(state appState, tab string) []userRowView {
 	rows := make([]userRowView, 0, len(state.Users))
 	for _, u := range state.Users {
+		if !scimEnabled(state) && u.Deleted {
+			continue
+		}
 		remoteID := u.RemoteID
 		if remoteID == "" {
 			remoteID = "-"
@@ -697,6 +837,9 @@ func buildUserRows(state appState, tab string) []userRowView {
 func buildGroupRows(state appState, tab string) []groupRowView {
 	rows := make([]groupRowView, 0, len(state.Groups))
 	for _, g := range state.Groups {
+		if !scimEnabled(state) && g.Deleted {
+			continue
+		}
 		remoteID := g.RemoteID
 		if remoteID == "" {
 			remoteID = "-"
@@ -712,6 +855,44 @@ func buildGroupRows(state appState, tab string) []groupRowView {
 			EditURL:        dashboardURL("groups", map[string]string{"modal": "group", "id": g.ID}),
 			HistoryURL:     dashboardURL(tab, map[string]string{"historyType": "group", "historyID": g.ID}),
 		})
+	}
+	return rows
+}
+
+func buildAppRows(state appState, base string, certPEM string) []appRowView {
+	rows := make([]appRowView, 0, len(state.Apps))
+	for _, app := range state.Apps {
+		samlIDPEntityID := base + "/saml/" + app.Slug + "/metadata"
+		samlAudience := app.SAMLAudience
+		if samlAudience == "" {
+			samlAudience = app.SAMLEntityID
+		}
+		row := appRowView{
+			ID:                     app.ID,
+			Name:                   app.Name,
+			Slug:                   app.Slug,
+			Protocol:               strings.ToUpper(app.Protocol),
+			OIDCClientID:           app.OIDCClientID,
+			SupportsOIDC:           supportsOIDC(app),
+			SupportsSAML:           supportsSAML(app),
+			EditURL:                dashboardURL("apps", map[string]string{"modal": "app", "id": app.ID}),
+			HasRedirectURI:         len(app.OIDCRedirectURIs) > 0,
+			SAMLIDPEntityID:        samlIDPEntityID,
+			SAMLCertificatePEM:     certPEM,
+			SAMLEmailAttributeName: app.SAMLEmailAttributeName,
+			SAMLSPACSURL:           app.SAMLACSURL,
+			SAMLSPAudience:         samlAudience,
+		}
+		if row.SupportsOIDC {
+			row.OIDCDiscovery = base + "/oidc/" + app.Slug + "/.well-known/openid-configuration"
+			row.OIDCAuthorize = base + "/oidc/" + app.Slug + "/authorize"
+			row.OIDCJWKS = base + "/oidc/" + app.Slug + "/jwks"
+		}
+		if row.SupportsSAML {
+			row.SAMLMetadata = base + "/saml/" + app.Slug + "/metadata"
+			row.SAMLSSO = base + "/saml/" + app.Slug + "/sso"
+		}
+		rows = append(rows, row)
 	}
 	return rows
 }
@@ -813,7 +994,11 @@ func buildGroupFormView(state appState, tab string, id string) (*groupFormView, 
 
 	for _, u := range state.Users {
 		_, checked := selected[u.ID]
-		meta := strings.TrimSpace(strings.Join([]string{u.Email, activeStatus(u), syncStatus(u)}, " • "))
+		metaParts := []string{u.Email, activeStatus(u)}
+		if scimEnabled(state) {
+			metaParts = append(metaParts, syncStatus(u))
+		}
+		meta := strings.TrimSpace(strings.Join(metaParts, " • "))
 		form.Members = append(form.Members, memberOptionView{
 			ID:      u.ID,
 			Label:   userLabel(u),
@@ -822,6 +1007,35 @@ func buildGroupFormView(state appState, tab string, id string) (*groupFormView, 
 		})
 	}
 
+	return form, nil
+}
+
+func buildAppFormView(state appState, tab string, id string, baseURL string, certPEM string) (*appFormView, error) {
+	form := &appFormView{
+		Title: "Add App",
+		App: app{
+			Protocol:               "oidc",
+			SAMLNameIDFormat:       defaultSAMLEmailNameIDFormat,
+			SAMLEmailAttributeName: defaultSAMLEmailAttributeName,
+			IncludeGroupsClaim:     true,
+		},
+		SAMLCertificatePEM: certPEM,
+		Close:              dashboardURL(tab, nil),
+	}
+	if strings.TrimSpace(id) == "" {
+		return form, nil
+	}
+	existing, ok := appByID(state.Apps, id)
+	if !ok {
+		return nil, fmt.Errorf("app %s not found", id)
+	}
+	form.Title = "Edit App"
+	form.App = existing
+	form.OIDCRedirectURIs = joinLines(form.App.OIDCRedirectURIs)
+	if form.App.Slug != "" {
+		form.SAMLIDPEntityID = baseURL + "/saml/" + form.App.Slug + "/metadata"
+		form.SAMLIDPSSO = baseURL + "/saml/" + form.App.Slug + "/sso"
+	}
 	return form, nil
 }
 
@@ -872,6 +1086,26 @@ func groupIndexByID(groups []group, id string) (int, bool) {
 	return 0, false
 }
 
+func appIndexByID(apps []app, id string) (int, bool) {
+	for i, app := range apps {
+		if app.ID == id {
+			return i, true
+		}
+	}
+
+	return 0, false
+}
+
+func appByID(apps []app, id string) (app, bool) {
+	for _, app := range apps {
+		if app.ID == id {
+			return app, true
+		}
+	}
+
+	return app{}, false
+}
+
 func selectedMemberIDs(users []user, ids []string) []string {
 	allowed := make(map[string]struct{}, len(users))
 	for _, u := range users {
@@ -898,6 +1132,16 @@ func selectedMemberIDs(users []user, ids []string) []string {
 	return selected
 }
 
+func removeString(values []string, target string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != target {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
 func summarizeGroupSave(existing group, displayName string, memberIDs []string) string {
 	if existing.DisplayName != displayName {
 		return "Updated name"
@@ -910,8 +1154,11 @@ func summarizeGroupSave(existing group, displayName string, memberIDs []string) 
 }
 
 func normalizedTab(tab string) string {
-	if strings.TrimSpace(tab) == "groups" {
+	switch strings.TrimSpace(tab) {
+	case "groups":
 		return "groups"
+	case "apps":
+		return "apps"
 	}
 
 	return "users"

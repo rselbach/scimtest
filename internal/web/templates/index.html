@@ -634,9 +634,8 @@
       font-size: 12px;
       font-weight: 500;
     }
-    .field input:not([type="checkbox"]) {
+    .field input:not([type="checkbox"]), .field textarea {
       width: 100%;
-      height: 34px;
       padding: 0 10px;
       border-radius: var(--radius);
       border: 1px solid var(--line-strong);
@@ -644,10 +643,22 @@
       color: var(--text);
       transition: border-color 80ms, box-shadow 80ms;
     }
-    .field input:focus {
+    .field input:not([type="checkbox"]) { height: 34px; }
+    .field textarea {
+      min-height: 82px;
+      padding: 9px 10px;
+      resize: vertical;
+      font: inherit;
+    }
+    .field input:focus, .field textarea:focus {
       outline: none;
       border-color: var(--accent);
       box-shadow: 0 0 0 3px rgba(21, 99, 255, 0.18);
+    }
+    .hint {
+      color: var(--muted);
+      font-size: 11.5px;
+      line-height: 1.35;
     }
     .checkbox-row {
       display: inline-flex;
@@ -699,6 +710,104 @@
       text-align: center;
       color: var(--muted);
       font-size: 12.5px;
+    }
+
+    .endpoint-list { display: grid; gap: 7px; min-width: 320px; }
+    .endpoint, .copy-field {
+      display: grid;
+      grid-template-columns: 96px minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+      font-size: 12px;
+    }
+    .endpoint .k, .copy-field .k {
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .endpoint .v, .copy-field .v {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: var(--mono);
+      color: var(--text);
+    }
+    .copy-field .cert {
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 96px;
+      overflow: auto;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--bg-soft);
+      color: var(--muted);
+    }
+    .saml-setup {
+      display: grid;
+      gap: 6px;
+      margin-top: 6px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--bg-soft);
+    }
+    .saml-setup-title {
+      font-size: 11px;
+      color: var(--muted);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .segmented {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 4px;
+      min-height: 38px;
+      padding: 4px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: var(--bg-soft);
+    }
+    .segmented label { position: relative; min-width: 0; }
+    .segmented input {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+    .segmented span {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 30px;
+      border-radius: 4px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid transparent;
+      pointer-events: none;
+    }
+    .segmented input:checked + span {
+      background: var(--card);
+      color: var(--accent);
+      border-color: var(--line);
+      box-shadow: var(--shadow-sm);
+    }
+    .protocol-section { display: contents; }
+    .protocol-section.is-hidden { display: none; }
+    .section-label {
+      grid-column: 1 / -1;
+      margin-top: 4px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+      color: var(--text-strong);
+      font-size: 12px;
+      font-weight: 700;
     }
 
     /* History */
@@ -775,16 +884,21 @@
         </svg>
       </span>
       scimtest
+      <span class="sr-only">SCIM Control Surface</span>
     </a>
     <span class="topbar-pill" title="Configured SCIM endpoint">
       <span class="icon" aria-hidden="true">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="4" rx="1"/><rect x="2.5" y="9" width="11" height="4" rx="1"/><circle cx="5" cy="5" r="0.6" fill="currentColor"/><circle cx="5" cy="11" r="0.6" fill="currentColor"/></svg>
       </span>
       <span class="k">SCIM</span>
-      <span class="v">{{if .BaseURL}}{{.BaseURL}}{{else}}not configured{{end}}</span>
+      <span class="v">{{if .SCIMEnabled}}{{if .BaseURL}}{{.BaseURL}}{{else}}not configured{{end}}{{else}}disabled{{end}}</span>
+    </span>
+    <span class="topbar-pill" title="Configured IDP issuer base URL">
+      <span class="k">IDP</span>
+      <span class="v">{{.IDPBaseURL}}</span>
     </span>
     <span class="topbar-spacer"></span>
-    <span class="topbar-meta">Trace <b>{{if .TracePopupEnabled}}auto{{else}}manual{{end}}</b></span>
+    {{if .SCIMEnabled}}<span class="topbar-meta">Trace <b>{{if .TracePopupEnabled}}auto{{else}}manual{{end}}</b></span>{{end}}
   </header>
 
   <div class="app">
@@ -796,14 +910,21 @@
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="6" r="2.6"/><path d="M3 14c0-2.4 2.2-4 5-4s5 1.6 5 4"/></svg>
           </span>
           Users
-          <span class="badge {{if .Stats.DirtyUsers}}dirty{{end}}">{{.Stats.Users}}{{if .Stats.DirtyUsers}}·{{.Stats.DirtyUsers}}{{end}}</span>
+          <span class="badge {{if and .SCIMEnabled .Stats.DirtyUsers}}dirty{{end}}">{{.Stats.Users}}{{if and .SCIMEnabled .Stats.DirtyUsers}}·{{.Stats.DirtyUsers}}{{end}}</span>
         </a>
         <a class="side-item {{if eq .Tab "groups"}}active{{end}}" href="{{.GroupsURL}}">
           <span class="icon" aria-hidden="true">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2.2"/><circle cx="11" cy="6" r="1.9"/><path d="M1.5 13c0-2 1.6-3.2 3.5-3.2s3.5 1.2 3.5 3.2"/><path d="M9 13c0-1.4 1-2.4 2.5-2.4s2.5 1 2.5 2.4"/></svg>
           </span>
           Groups
-          <span class="badge {{if .Stats.DirtyGroups}}dirty{{end}}">{{.Stats.Groups}}{{if .Stats.DirtyGroups}}·{{.Stats.DirtyGroups}}{{end}}</span>
+          <span class="badge {{if and .SCIMEnabled .Stats.DirtyGroups}}dirty{{end}}">{{.Stats.Groups}}{{if and .SCIMEnabled .Stats.DirtyGroups}}·{{.Stats.DirtyGroups}}{{end}}</span>
+        </a>
+        <a class="side-item {{if eq .Tab "apps"}}active{{end}}" href="{{.AppsURL}}">
+          <span class="icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="M5.5 6h5M5.5 8.5h5"/></svg>
+          </span>
+          Apps
+          <span class="badge">{{.Stats.Apps}}</span>
         </a>
       </nav>
 
@@ -815,12 +936,12 @@
           </span>
           Config
         </a>
-        <a class="side-item {{if not .HasTrace}}is-disabled{{end}}" href="{{.TraceURL}}" {{if not .HasTrace}}aria-disabled="true" tabindex="-1"{{end}}>
+        {{if .SCIMEnabled}}<a class="side-item {{if not .HasTrace}}is-disabled{{end}}" href="{{.TraceURL}}" {{if not .HasTrace}}aria-disabled="true" tabindex="-1"{{end}}>
           <span class="icon" aria-hidden="true">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h7l3 3v7H3z"/><path d="M9.5 3v3.5h3.5"/><path d="M5.5 9h5M5.5 11h3.5"/></svg>
           </span>
           Trace
-        </a>
+        </a>{{end}}
       </nav>
     </aside>
 
@@ -845,23 +966,28 @@
         <div class="page-icon" aria-hidden="true">
           {{if eq .Tab "groups"}}
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="6.5" cy="7.5" r="2.6"/><circle cx="13.5" cy="7.5" r="2.2"/><path d="M2 16c0-2.3 2-3.7 4.5-3.7s4.5 1.4 4.5 3.7"/><path d="M11 16c0-1.6 1.3-2.7 3-2.7s3 1.1 3 2.7"/></svg>
+          {{else if eq .Tab "apps"}}
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="M7 8h6M7 11h6"/></svg>
           {{else}}
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="7" r="3.4"/><path d="M3.5 17c0-3.1 2.9-5.2 6.5-5.2s6.5 2.1 6.5 5.2"/></svg>
           {{end}}
         </div>
         <div class="page-header-text">
-          <h1>{{if eq .Tab "groups"}}Groups{{else}}Users{{end}}</h1>
-          <p class="lede">{{if eq .Tab "groups"}}Local groups, with sync state and history kept against the configured SCIM endpoint.{{else}}Local users, with sync state and history kept against the configured SCIM endpoint.{{end}}</p>
+          <h1>{{if eq .Tab "groups"}}Groups{{else if eq .Tab "apps"}}Apps{{else}}Users{{end}}</h1>
+          <p class="lede">{{if eq .Tab "groups"}}Local groups shared by SCIM, OIDC, and SAML.{{else if eq .Tab "apps"}}Local OIDC and SAML apps using the same users and groups.{{else}}Local users shared by SCIM, OIDC, and SAML.{{end}}</p>
         </div>
         <div class="actions">
           {{if eq .Tab "groups"}}
           <a class="btn btn-primary" href="{{.NewGroupURL}}"><span class="plus">+</span> Add group</a>
+          {{else if eq .Tab "apps"}}
+          <a class="btn btn-primary" href="{{.NewAppURL}}"><span class="plus">+</span> Add app</a>
           {{else}}
           <a class="btn btn-primary" href="{{.NewUserURL}}"><span class="plus">+</span> Add user</a>
           {{end}}
         </div>
       </header>
 
+      {{if and .SCIMEnabled (ne .Tab "apps")}}
       <div class="actionbar">
         <form method="post" action="/sync">
           <input type="hidden" name="tab" value="{{.Tab}}">
@@ -881,6 +1007,7 @@
           <b>{{.Stats.Groups}}</b> groups{{if .Stats.DirtyGroups}} <span class="sep">·</span> <span class="dirty">{{.Stats.DirtyGroups}} dirty</span>{{end}}
         </span>
       </div>
+      {{end}}
 
       <section class="card">
         <div class="table-wrap">
@@ -890,8 +1017,10 @@
               <tr>
                 <th>Group</th>
                 <th>Members</th>
+                {{if .SCIMEnabled}}
                 <th>Status</th>
                 <th>Remote ID</th>
+                {{end}}
                 <th class="col-actions">Actions</th>
               </tr>
             </thead>
@@ -902,25 +1031,31 @@
                   <div class="row-title" {{if .Deleted}}title="marked for deletion"{{end}}>{{.Name}}</div>
                 </td>
                 <td title="{{.MembersSummary}}">{{.MemberCount}}</td>
+                {{if $.SCIMEnabled}}
                 <td class="cell-widget">
                   <span class="status {{if eq .Status "synced"}}synced{{else if eq .Status "sync error"}}error{{else if eq .Status "deleted"}}deleted{{else}}pending{{end}}">{{.Status}}</span>
                 </td>
                 <td class="mono" title="{{.RemoteID}}">{{.RemoteID}}</td>
+                {{end}}
                 <td class="col-actions cell-widget">
                   <div class="row-actions">
                     <a class="icon-btn" href="{{.EditURL}}" title="Edit group" aria-label="Edit group">
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M10 4l2 2"/></svg>
                     </a>
+                    {{if $.SCIMEnabled}}
                     <a class="icon-btn" href="{{.HistoryURL}}" title="Group history" aria-label="Group history">
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2 1.5"/></svg>
                     </a>
+                    {{end}}
                     {{if .Deleted}}
+                    {{if $.SCIMEnabled}}
                     <form method="post" action="/groups/{{.ID}}/restore">
                       <input type="hidden" name="tab" value="groups">
                       <button class="icon-btn success" type="submit" title="Restore group" aria-label="Restore group">
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a5 5 0 1 0 1.5-3.5"/><path d="M3 3v3h3"/></svg>
                       </button>
                     </form>
+                    {{end}}
                     {{else}}
                     <form method="post" action="/groups/{{.ID}}/delete">
                       <input type="hidden" name="tab" value="groups">
@@ -933,10 +1068,74 @@
                 </td>
               </tr>
               {{else}}
-              <tr><td colspan="5">
+              <tr><td colspan="{{if $.SCIMEnabled}}5{{else}}3{{end}}">
                 <div class="card-empty">
                   <div class="h">No groups yet</div>
                   <div>Add one with the button above, or import from your SCIM server.</div>
+                </div>
+              </td></tr>
+              {{end}}
+            </tbody>
+          </table>
+          {{else if eq .Tab "apps"}}
+          <table>
+            <colgroup><col style="width: 210px"><col style="width: 110px"><col style="width: 210px"><col><col style="width: 124px"></colgroup>
+            <thead>
+              <tr>
+                <th>Application</th>
+                <th>Protocol</th>
+                <th>Client ID</th>
+                <th>Endpoints</th>
+                <th class="col-actions">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range .Apps}}
+              <tr>
+                <td><div class="row-title">{{.Name}}</div><div class="mono">{{.Slug}}</div></td>
+                <td><span class="status">{{.Protocol}}</span></td>
+                <td class="mono" title="{{.OIDCClientID}}">{{if .SupportsOIDC}}{{.OIDCClientID}}{{else}}-{{end}}</td>
+                <td>
+                  <div class="endpoint-list">
+                    {{if .SupportsOIDC}}
+                    <div class="endpoint"><span class="k">Discovery</span><span class="v" title="{{.OIDCDiscovery}}">{{.OIDCDiscovery}}</span></div>
+                    <div class="endpoint"><span class="k">Authorize</span><span class="v" title="{{.OIDCAuthorize}}">{{.OIDCAuthorize}}</span></div>
+                    <div class="endpoint"><span class="k">JWKS</span><span class="v" title="{{.OIDCJWKS}}">{{.OIDCJWKS}}</span></div>
+                    {{end}}
+                    {{if .SupportsSAML}}
+                    <div class="endpoint"><span class="k">Metadata</span><span class="v" title="{{.SAMLMetadata}}">{{.SAMLMetadata}}</span></div>
+                    <div class="endpoint"><span class="k">SSO</span><span class="v" title="{{.SAMLSSO}}">{{.SAMLSSO}}</span></div>
+                    <div class="saml-setup">
+                      <div class="saml-setup-title">Paste into the RP</div>
+                      <div class="copy-field"><span class="k">IDP SSO URL</span><span class="v" title="{{.SAMLSSO}}">{{.SAMLSSO}}</span></div>
+                      <div class="copy-field"><span class="k">IDP entity ID</span><span class="v" title="{{.SAMLIDPEntityID}}">{{.SAMLIDPEntityID}}</span></div>
+                      <div class="copy-field"><span class="k">Certificate</span><span class="v cert">{{.SAMLCertificatePEM}}</span></div>
+                      <div class="saml-setup-title">Configured from RP</div>
+                      <div class="copy-field"><span class="k">SP ACS URL</span><span class="v" title="{{.SAMLSPACSURL}}">{{if .SAMLSPACSURL}}{{.SAMLSPACSURL}}{{else}}not set{{end}}</span></div>
+                      <div class="copy-field"><span class="k">SP entity ID</span><span class="v" title="{{.SAMLSPAudience}}">{{if .SAMLSPAudience}}{{.SAMLSPAudience}}{{else}}not set{{end}}</span></div>
+                      <div class="copy-field"><span class="k">Email attr</span><span class="v" title="{{.SAMLEmailAttributeName}}">{{.SAMLEmailAttributeName}}</span></div>
+                    </div>
+                    {{end}}
+                  </div>
+                </td>
+                <td class="col-actions cell-widget">
+                  <div class="row-actions">
+                    <a class="icon-btn" href="{{.EditURL}}" title="Edit app" aria-label="Edit app">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M10 4l2 2"/></svg>
+                    </a>
+                    <form method="post" action="/apps/{{.ID}}/delete">
+                      <button class="icon-btn danger" type="submit" title="Delete app" aria-label="Delete app">
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10"/><path d="M5.5 4.5V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.5"/><path d="M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>
+                      </button>
+                    </form>
+                  </div>
+                </td>
+              </tr>
+              {{else}}
+              <tr><td colspan="5">
+                <div class="card-empty">
+                  <div class="h">No apps yet</div>
+                  <div>Add an app to expose OIDC and SAML endpoints.</div>
                 </div>
               </td></tr>
               {{end}}
@@ -949,8 +1148,10 @@
               <col>
               <col>
               <col style="width: 100px">
+              {{if .SCIMEnabled}}
               <col style="width: 120px">
               <col style="width: 200px">
+              {{end}}
               <col style="width: 124px">
             </colgroup>
             <thead>
@@ -959,8 +1160,10 @@
                 <th>Username</th>
                 <th>Email</th>
                 <th>Active</th>
+                {{if .SCIMEnabled}}
                 <th>Status</th>
                 <th>Remote ID</th>
+                {{end}}
                 <th class="col-actions">Actions</th>
               </tr>
             </thead>
@@ -982,25 +1185,31 @@
                   </form>
                   {{end}}
                 </td>
+                {{if $.SCIMEnabled}}
                 <td class="cell-widget">
                   <span class="status {{if eq .Status "synced"}}synced{{else if eq .Status "sync error"}}error{{else if eq .Status "deleted"}}deleted{{else}}pending{{end}}">{{.Status}}</span>
                 </td>
                 <td class="mono" title="{{.RemoteID}}">{{.RemoteID}}</td>
+                {{end}}
                 <td class="col-actions cell-widget">
                   <div class="row-actions">
                     <a class="icon-btn" href="{{.EditURL}}" title="Edit user" aria-label="Edit user">
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M10 4l2 2"/></svg>
                     </a>
+                    {{if $.SCIMEnabled}}
                     <a class="icon-btn" href="{{.HistoryURL}}" title="User history" aria-label="User history">
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2 1.5"/></svg>
                     </a>
+                    {{end}}
                     {{if .Deleted}}
+                    {{if $.SCIMEnabled}}
                     <form method="post" action="/users/{{.ID}}/restore">
                       <input type="hidden" name="tab" value="users">
                       <button class="icon-btn success" type="submit" title="Restore user" aria-label="Restore user">
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a5 5 0 1 0 1.5-3.5"/><path d="M3 3v3h3"/></svg>
                       </button>
                     </form>
+                    {{end}}
                     {{else}}
                     <form method="post" action="/users/{{.ID}}/delete">
                       <input type="hidden" name="tab" value="users">
@@ -1013,7 +1222,7 @@
                 </td>
               </tr>
               {{else}}
-              <tr><td colspan="7">
+              <tr><td colspan="{{if $.SCIMEnabled}}7{{else}}5{{end}}">
                 <div class="card-empty">
                   <div class="h">No users yet</div>
                   <div>Add one with the button above, or import from your SCIM server.</div>
@@ -1030,7 +1239,8 @@
 
   <footer class="footer">
     <span class="ok">scimtest</span>
-    <span class="copy">SCIM endpoint: {{if .BaseURL}}{{.BaseURL}}{{else}}not configured{{end}}</span>
+    <span class="copy">SCIM: {{if .SCIMEnabled}}{{if .BaseURL}}{{.BaseURL}}{{else}}enabled, not configured{{end}}{{else}}disabled{{end}}</span>
+    <span>IDP base: {{.IDPBaseURL}}</span>
   </footer>
 
   {{if .History}}
@@ -1162,11 +1372,110 @@
   </div>
   {{end}}
 
+  {{if .AppForm}}
+  <div class="overlay" data-overlay>
+    <div class="modal wide" role="dialog" aria-modal="true" tabindex="-1">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">{{.AppForm.Title}}</div>
+          <div class="modal-sub">OIDC and SAML test client</div>
+        </div>
+        <a class="btn btn-sm btn-ghost" href="{{.AppForm.Close}}" data-autofocus>Close</a>
+      </div>
+      <form method="post" action="/apps/save">
+        <input type="hidden" name="tab" value="apps">
+        <input type="hidden" name="id" value="{{.AppForm.App.ID}}">
+        <div class="modal-body">
+          <div class="form-grid">
+            <label class="field">
+              <span class="label">App name</span>
+              <input name="name" value="{{.AppForm.App.Name}}" autocomplete="off">
+            </label>
+            <label class="field">
+              <span class="label">Slug</span>
+              <input name="slug" value="{{.AppForm.App.Slug}}" placeholder="my-app" autocomplete="off">
+            </label>
+            <div class="field full protocol-field">
+              <span class="label">Protocol</span>
+              <div class="segmented" role="radiogroup" aria-label="Protocol">
+                <label><input type="radio" name="protocol" value="oidc" {{if eq .AppForm.App.Protocol "oidc"}}checked{{end}}><span>OIDC</span></label>
+                <label><input type="radio" name="protocol" value="saml" {{if eq .AppForm.App.Protocol "saml"}}checked{{end}}><span>SAML</span></label>
+                <label><input type="radio" name="protocol" value="both" {{if eq .AppForm.App.Protocol "both"}}checked{{end}}><span>Both</span></label>
+              </div>
+            </div>
+            <label class="field full">
+              <span class="label">Groups</span>
+              <span class="checkbox-row">
+                <input type="checkbox" name="include_groups_claim" {{if .AppForm.App.IncludeGroupsClaim}}checked{{end}}>
+                Include groups claim or SAML attribute
+              </span>
+            </label>
+            <div class="protocol-section" data-protocol-section="oidc">
+              <div class="section-label">OIDC</div>
+              <label class="field">
+                <span class="label">Client ID</span>
+                <input name="oidc_client_id" value="{{.AppForm.App.OIDCClientID}}" autocomplete="off">
+              </label>
+              <label class="field">
+                <span class="label">Client secret</span>
+                <input name="oidc_client_secret" value="{{.AppForm.App.OIDCClientSecret}}" autocomplete="off">
+              </label>
+              <label class="field full">
+                <span class="label">Redirect URIs</span>
+                <textarea name="oidc_redirect_uris" placeholder="http://localhost:3000/callback">{{.AppForm.OIDCRedirectURIs}}</textarea>
+                <span class="hint">One URI per line. Leave empty to allow any redirect URI during local testing.</span>
+              </label>
+            </div>
+            <div class="protocol-section" data-protocol-section="saml">
+              <div class="section-label">SAML</div>
+              <label class="field">
+                <span class="label">SP entity ID</span>
+                <input name="saml_entity_id" value="{{.AppForm.App.SAMLEntityID}}" autocomplete="off">
+              </label>
+              <label class="field">
+                <span class="label">ACS URL</span>
+                <input name="saml_acs_url" value="{{.AppForm.App.SAMLACSURL}}" placeholder="http://localhost:3000/saml/acs" autocomplete="off">
+              </label>
+              <label class="field">
+                <span class="label">Audience</span>
+                <input name="saml_audience" value="{{.AppForm.App.SAMLAudience}}" autocomplete="off">
+              </label>
+              <label class="field">
+                <span class="label">NameID format</span>
+                <input name="saml_name_id_format" value="{{.AppForm.App.SAMLNameIDFormat}}" autocomplete="off">
+              </label>
+              <label class="field full">
+                <span class="label">Email attribute assertion name</span>
+                <input name="saml_email_attribute_name" value="{{.AppForm.App.SAMLEmailAttributeName}}" autocomplete="off">
+                <span class="hint">Use the value expected by the relying party.</span>
+              </label>
+              {{if .AppForm.SAMLIDPSSO}}
+              <div class="field full">
+                <div class="saml-setup">
+                  <div class="saml-setup-title">Paste into the RP</div>
+                  <div class="copy-field"><span class="k">IDP SSO URL</span><span class="v" title="{{.AppForm.SAMLIDPSSO}}">{{.AppForm.SAMLIDPSSO}}</span></div>
+                  <div class="copy-field"><span class="k">IDP entity ID</span><span class="v" title="{{.AppForm.SAMLIDPEntityID}}">{{.AppForm.SAMLIDPEntityID}}</span></div>
+                  <div class="copy-field"><span class="k">Certificate</span><span class="v cert">{{.AppForm.SAMLCertificatePEM}}</span></div>
+                </div>
+              </div>
+              {{end}}
+            </div>
+          </div>
+          <div class="form-actions">
+            <a class="btn btn-ghost" href="{{.AppForm.Close}}">Cancel</a>
+            <button class="btn btn-primary" type="submit">Save app</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+  {{end}}
+
   {{if .ConfigForm}}
   <div class="overlay" data-overlay>
     <div class="modal" role="dialog" aria-modal="true" tabindex="-1">
       <div class="modal-header">
-        <div class="modal-title">SCIM config</div>
+          <div class="modal-title">Config</div>
         <a class="btn btn-sm btn-ghost" href="{{.ConfigForm.Close}}" data-autofocus>Close</a>
       </div>
       <form method="post" action="/config/save">
@@ -1174,8 +1483,20 @@
         <div class="modal-body">
           <div class="form-grid">
             <label class="field full">
+              <span class="label">SCIM</span>
+              <span class="checkbox-row">
+                <input type="checkbox" name="scim_enabled" {{if not .ConfigForm.Config.SCIMDisabled}}checked{{end}}>
+                Enable SCIM sync controls
+              </span>
+            </label>
+            <label class="field full">
               <span class="label">SCIM base URL</span>
               <input name="base_url" value="{{.ConfigForm.Config.BaseURL}}" autocomplete="off">
+            </label>
+            <label class="field full">
+              <span class="label">IDP base URL</span>
+              <input name="idp_base_url" value="{{.ConfigForm.Config.IDPBaseURL}}" placeholder="{{.IDPBaseURL}}" autocomplete="off">
+              <span class="hint">Set this only when OIDC/SAML clients need a public issuer URL different from the current request host.</span>
             </label>
             <label class="field full">
               <span class="label">Bearer token</span>
@@ -1297,6 +1618,27 @@
       if (event.key !== 'Escape') return;
       closeActiveOverlay();
     });
+
+    const protocolControls = document.querySelectorAll('input[name="protocol"]');
+    const protocolSections = document.querySelectorAll('[data-protocol-section]');
+    function syncProtocolSections() {
+      const selectedControl = document.querySelector('input[name="protocol"]:checked');
+      if (!selectedControl) return;
+      const selected = selectedControl.value;
+      for (const section of protocolSections) {
+        const visible = selected === 'both' || section.dataset.protocolSection === selected;
+        section.classList.toggle('is-hidden', !visible);
+        for (const control of section.querySelectorAll('input, textarea, select')) {
+          control.disabled = !visible;
+        }
+      }
+    }
+    if (protocolControls.length) {
+      for (const control of protocolControls) {
+        control.addEventListener('change', syncProtocolSections);
+      }
+      syncProtocolSections();
+    }
   </script>
 </body>
 </html>

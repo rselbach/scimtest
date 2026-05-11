@@ -142,6 +142,90 @@ func TestSyncPersistsRemoteStateAndTraceCookie(t *testing.T) {
 	r.Contains(app.traceContent(), "POST /Users")
 }
 
+func TestSCIMDisabledHidesSyncControlsAndColumns(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+
+	state := appState{
+		Config: config{
+			BaseURL:      "https://example.com/scim",
+			SCIMDisabled: true,
+		},
+		Users: []user{{
+			ID:         "u1",
+			GivenName:  "Troy",
+			FamilyName: "Barnes",
+			Username:   "tbarnes",
+			Email:      "troy@example.com",
+			Active:     true,
+			RemoteID:   "remote-u1",
+			Dirty:      true,
+			LastError:  "sync failed",
+		}},
+		Groups: []group{{
+			ID:          "g1",
+			DisplayName: "Greendale Study Group",
+			MemberIDs:   []string{"u1"},
+			RemoteID:    "remote-g1",
+			Dirty:       true,
+		}},
+		UserOperations:  map[string][]operationLog{},
+		GroupOperations: map[string][]operationLog{},
+	}
+	r.NoError(saveState(state))
+
+	app := &webApp{}
+	userReq := httptest.NewRequest(http.MethodGet, "/?tab=users", nil)
+	userRec := httptest.NewRecorder()
+	app.routes().ServeHTTP(userRec, userReq)
+
+	r.Equal(http.StatusOK, userRec.Code)
+	userBody := userRec.Body.String()
+	r.Contains(userBody, "SCIM")
+	r.Contains(userBody, "disabled")
+	r.NotContains(userBody, ">Sync<")
+	r.NotContains(userBody, ">Import<")
+	r.NotContains(userBody, ">Reset<")
+	r.NotContains(userBody, "<th>Status</th>")
+	r.NotContains(userBody, "<th>Remote ID</th>")
+	r.NotContains(userBody, "remote-u1")
+	r.NotContains(userBody, "sync failed")
+
+	groupReq := httptest.NewRequest(http.MethodGet, "/?tab=groups", nil)
+	groupRec := httptest.NewRecorder()
+	app.routes().ServeHTTP(groupRec, groupReq)
+
+	r.Equal(http.StatusOK, groupRec.Code)
+	groupBody := groupRec.Body.String()
+	r.Contains(groupBody, "Greendale Study Group")
+	r.NotContains(groupBody, "<th>Status</th>")
+	r.NotContains(groupBody, "<th>Remote ID</th>")
+	r.NotContains(groupBody, "remote-g1")
+}
+
+func TestSCIMDisabledRejectsSync(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+
+	state := appState{
+		Config:          config{SCIMDisabled: true},
+		UserOperations:  map[string][]operationLog{},
+		GroupOperations: map[string][]operationLog{},
+	}
+	r.NoError(saveState(state))
+
+	app := &webApp{}
+	form := url.Values{"tab": {"users"}}
+	req := httptest.NewRequest(http.MethodPost, "/sync", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	r.Contains(rec.Header().Get("Set-Cookie"), "SCIM+is+disabled")
+}
+
 func setTestStateFile(t *testing.T) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "state.db")

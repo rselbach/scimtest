@@ -3,11 +3,14 @@ package core
 import (
 	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,10 +19,16 @@ import (
 
 var currentTime = time.Now
 
+const DefaultSAMLEmailAttributeName = "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress"
+
 type Config struct {
-	BaseURL           string `json:"base_url"`
-	BearerToken       string `json:"bearer_token"`
-	AutoOpenSyncTrace bool   `json:"auto_open_sync_trace"`
+	BaseURL               string `json:"base_url"`
+	BearerToken           string `json:"bearer_token"`
+	AutoOpenSyncTrace     bool   `json:"auto_open_sync_trace"`
+	SCIMDisabled          bool   `json:"scim_disabled,omitempty"`
+	IDPBaseURL            string `json:"idp_base_url,omitempty"`
+	SigningPrivateKeyPEM  string `json:"signing_private_key_pem,omitempty"`
+	SigningCertificatePEM string `json:"signing_certificate_pem,omitempty"`
 }
 
 type User struct {
@@ -78,6 +87,7 @@ type AppState struct {
 	Config          Config                    `json:"config"`
 	Users           []User                    `json:"users"`
 	Groups          []Group                   `json:"groups"`
+	Apps            []App                     `json:"apps"`
 	UserOperations  map[string][]OperationLog `json:"-"`
 	GroupOperations map[string][]OperationLog `json:"-"`
 }
@@ -105,6 +115,22 @@ type Group struct {
 	LastError   string   `json:"last_error,omitempty"`
 }
 
+type App struct {
+	ID                     string   `json:"id"`
+	Name                   string   `json:"name"`
+	Slug                   string   `json:"slug"`
+	Protocol               string   `json:"protocol"`
+	OIDCClientID           string   `json:"oidc_client_id,omitempty"`
+	OIDCClientSecret       string   `json:"oidc_client_secret,omitempty"`
+	OIDCRedirectURIs       []string `json:"oidc_redirect_uris,omitempty"`
+	SAMLEntityID           string   `json:"saml_entity_id,omitempty"`
+	SAMLACSURL             string   `json:"saml_acs_url,omitempty"`
+	SAMLAudience           string   `json:"saml_audience,omitempty"`
+	SAMLNameIDFormat       string   `json:"saml_name_id_format,omitempty"`
+	SAMLEmailAttributeName string   `json:"saml_email_attribute_name,omitempty"`
+	IncludeGroupsClaim     bool     `json:"include_groups_claim"`
+}
+
 func LoadState() (AppState, error) {
 	db, err := openStateDB()
 	if err != nil {
@@ -116,6 +142,7 @@ func LoadState() (AppState, error) {
 	if err != nil {
 		return AppState{}, err
 	}
+	NormalizeState(&state)
 	if !StateEmpty(state) {
 		return state, nil
 	}
@@ -132,6 +159,7 @@ func LoadState() (AppState, error) {
 	if !ok {
 		return state, nil
 	}
+	NormalizeState(&legacyState)
 
 	if err := saveStateToDB(db, legacyState); err != nil {
 		return AppState{}, err
@@ -141,6 +169,8 @@ func LoadState() (AppState, error) {
 }
 
 func SaveState(state AppState) error {
+	NormalizeState(&state)
+
 	db, err := openStateDB()
 	if err != nil {
 		return err
@@ -198,6 +228,21 @@ func initStateDB(db *sql.DB) error {
 			dirty INTEGER NOT NULL,
 			deleted INTEGER NOT NULL,
 			last_error TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE TABLE IF NOT EXISTS apps (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			slug TEXT NOT NULL,
+			protocol TEXT NOT NULL,
+			oidc_client_id TEXT NOT NULL DEFAULT '',
+			oidc_client_secret TEXT NOT NULL DEFAULT '',
+			oidc_redirect_uris TEXT NOT NULL DEFAULT '',
+			saml_entity_id TEXT NOT NULL DEFAULT '',
+			saml_acs_url TEXT NOT NULL DEFAULT '',
+			saml_audience TEXT NOT NULL DEFAULT '',
+			saml_name_id_format TEXT NOT NULL DEFAULT '',
+			saml_email_attribute_name TEXT NOT NULL DEFAULT '',
+			include_groups_claim INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE TABLE IF NOT EXISTS group_members (
 			group_id TEXT NOT NULL,
@@ -267,6 +312,14 @@ func loadStateFromDB(db *sql.DB) (AppState, error) {
 			state.Config.BearerToken = value
 		case "auto_open_sync_trace":
 			state.Config.AutoOpenSyncTrace = value == "1"
+		case "scim_disabled":
+			state.Config.SCIMDisabled = value == "1"
+		case "idp_base_url":
+			state.Config.IDPBaseURL = value
+		case "signing_private_key_pem":
+			state.Config.SigningPrivateKeyPEM = value
+		case "signing_certificate_pem":
+			state.Config.SigningCertificatePEM = value
 		}
 	}
 	if err := configRows.Err(); err != nil {
@@ -342,6 +395,27 @@ func loadStateFromDB(db *sql.DB) (AppState, error) {
 		return AppState{}, fmt.Errorf("iterate sqlite group member rows: %w", err)
 	}
 
+	appRows, err := db.Query(`SELECT id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_format, saml_email_attribute_name, include_groups_claim FROM apps ORDER BY rowid`)
+	if err != nil {
+		return AppState{}, fmt.Errorf("load apps from sqlite: %w", err)
+	}
+	defer closeRows(appRows)
+
+	for appRows.Next() {
+		var app App
+		var redirectURIs string
+		var includeGroups int
+		if err := appRows.Scan(&app.ID, &app.Name, &app.Slug, &app.Protocol, &app.OIDCClientID, &app.OIDCClientSecret, &redirectURIs, &app.SAMLEntityID, &app.SAMLACSURL, &app.SAMLAudience, &app.SAMLNameIDFormat, &app.SAMLEmailAttributeName, &includeGroups); err != nil {
+			return AppState{}, fmt.Errorf("scan sqlite app row: %w", err)
+		}
+		app.OIDCRedirectURIs = Lines(redirectURIs)
+		app.IncludeGroupsClaim = includeGroups != 0
+		state.Apps = append(state.Apps, app)
+	}
+	if err := appRows.Err(); err != nil {
+		return AppState{}, fmt.Errorf("iterate sqlite app rows: %w", err)
+	}
+
 	logRows, err := db.Query(`SELECT resource_type, resource_id, kind, summary, operation, method, path, request_body, status, response_body, error_text, created_at FROM operation_logs ORDER BY id DESC`)
 	if err != nil {
 		return AppState{}, fmt.Errorf("load operation logs from sqlite: %w", err)
@@ -387,6 +461,9 @@ func saveStateToDB(db *sql.DB, state AppState) error {
 	if _, err := tx.Exec(`DELETE FROM groups`); err != nil {
 		return fmt.Errorf("clear sqlite groups: %w", err)
 	}
+	if _, err := tx.Exec(`DELETE FROM apps`); err != nil {
+		return fmt.Errorf("clear sqlite apps: %w", err)
+	}
 	if _, err := tx.Exec(`DELETE FROM group_members`); err != nil {
 		return fmt.Errorf("clear sqlite group members: %w", err)
 	}
@@ -401,9 +478,13 @@ func saveStateToDB(db *sql.DB, state AppState) error {
 	defer closeStmt(configStmt)
 
 	configEntries := map[string]string{
-		"base_url":             state.Config.BaseURL,
-		"bearer_token":         state.Config.BearerToken,
-		"auto_open_sync_trace": BoolString(state.Config.AutoOpenSyncTrace),
+		"base_url":                state.Config.BaseURL,
+		"bearer_token":            state.Config.BearerToken,
+		"auto_open_sync_trace":    BoolString(state.Config.AutoOpenSyncTrace),
+		"scim_disabled":           BoolString(state.Config.SCIMDisabled),
+		"idp_base_url":            state.Config.IDPBaseURL,
+		"signing_private_key_pem": state.Config.SigningPrivateKeyPEM,
+		"signing_certificate_pem": state.Config.SigningCertificatePEM,
 	}
 	for key, value := range configEntries {
 		if _, err := configStmt.Exec(key, value); err != nil {
@@ -450,6 +531,18 @@ func saveStateToDB(db *sql.DB, state AppState) error {
 			if _, err := memberStmt.Exec(g.ID, userID, position); err != nil {
 				return fmt.Errorf("insert sqlite group member %s/%s: %w", g.ID, userID, err)
 			}
+		}
+	}
+
+	appStmt, err := tx.Prepare(`INSERT INTO apps(id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_format, saml_email_attribute_name, include_groups_claim) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("prepare sqlite app insert: %w", err)
+	}
+	defer closeStmt(appStmt)
+
+	for _, app := range state.Apps {
+		if _, err := appStmt.Exec(app.ID, app.Name, app.Slug, app.Protocol, app.OIDCClientID, app.OIDCClientSecret, JoinLines(app.OIDCRedirectURIs), app.SAMLEntityID, app.SAMLACSURL, app.SAMLAudience, app.SAMLNameIDFormat, app.SAMLEmailAttributeName, boolToInt(app.IncludeGroupsClaim)); err != nil {
+			return fmt.Errorf("insert sqlite app %s: %w", app.ID, err)
 		}
 	}
 
@@ -561,7 +654,39 @@ func loadLegacyJSONState(path string) (AppState, bool, error) {
 }
 
 func StateEmpty(state AppState) bool {
-	return state.Config == (Config{}) && len(state.Users) == 0 && len(state.Groups) == 0
+	return state.Config == (Config{}) && len(state.Users) == 0 && len(state.Groups) == 0 && len(state.Apps) == 0
+}
+
+func NormalizeState(state *AppState) {
+	state.Config.BaseURL = strings.TrimRight(strings.TrimSpace(state.Config.BaseURL), "/")
+	state.Config.IDPBaseURL = strings.TrimRight(strings.TrimSpace(state.Config.IDPBaseURL), "/")
+
+	for i := range state.Users {
+		if strings.TrimSpace(state.Users[i].Username) == "" {
+			state.Users[i].Username = state.Users[i].Email
+		}
+	}
+	for i := range state.Groups {
+		state.Groups[i].MemberIDs = uniqueStrings(state.Groups[i].MemberIDs)
+	}
+	for i := range state.Apps {
+		if state.Apps[i].Protocol == "" {
+			state.Apps[i].Protocol = "oidc"
+		}
+		if state.Apps[i].Slug == "" {
+			state.Apps[i].Slug = Slugify(state.Apps[i].Name)
+		}
+		if state.Apps[i].OIDCClientID == "" && SupportsOIDC(state.Apps[i]) {
+			state.Apps[i].OIDCClientID = state.Apps[i].Slug
+		}
+		if SupportsSAML(state.Apps[i]) && state.Apps[i].SAMLNameIDFormat == "" {
+			state.Apps[i].SAMLNameIDFormat = "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"
+		}
+		if SupportsSAML(state.Apps[i]) && state.Apps[i].SAMLEmailAttributeName == "" {
+			state.Apps[i].SAMLEmailAttributeName = DefaultSAMLEmailAttributeName
+		}
+		state.Apps[i].OIDCRedirectURIs = cleanLines(state.Apps[i].OIDCRedirectURIs)
+	}
 }
 
 func AppendOperationLogs(state *AppState, traces []SyncTraceEntry) {
@@ -702,6 +827,26 @@ func NewGroupID() (string, error) {
 	return newLocalID()
 }
 
+func NewID(prefix string) (string, error) {
+	id, err := newLocalID()
+	if err != nil {
+		return "", err
+	}
+	return prefix + "_" + id[:16], nil
+}
+
+func NewAppID() (string, error) {
+	return NewID("app")
+}
+
+func RandomSecret(byteCount int) (string, error) {
+	b := make([]byte, byteCount)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate secret: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
 func ValidateUser(givenName string, familyName string, email string, username string) error {
 	givenName = strings.TrimSpace(givenName)
 	familyName = strings.TrimSpace(familyName)
@@ -727,6 +872,104 @@ func ValidateGroup(displayName string) error {
 	}
 
 	return nil
+}
+
+func ValidateApp(app App, apps []App) error {
+	if strings.TrimSpace(app.Name) == "" {
+		return fmt.Errorf("app name is required")
+	}
+	if strings.TrimSpace(app.Slug) == "" {
+		return fmt.Errorf("app slug is required")
+	}
+	if app.Protocol != "oidc" && app.Protocol != "saml" && app.Protocol != "both" {
+		return fmt.Errorf("protocol must be oidc, saml, or both")
+	}
+	for _, existing := range apps {
+		if existing.ID != app.ID && strings.EqualFold(existing.Slug, app.Slug) {
+			return fmt.Errorf("app slug %q is already in use", app.Slug)
+		}
+		if SupportsOIDC(app) && SupportsOIDC(existing) && existing.ID != app.ID && app.OIDCClientID != "" && app.OIDCClientID == existing.OIDCClientID {
+			return fmt.Errorf("OIDC client ID %q is already in use", app.OIDCClientID)
+		}
+	}
+	if SupportsOIDC(app) {
+		if strings.TrimSpace(app.OIDCClientID) == "" {
+			return fmt.Errorf("OIDC client ID is required")
+		}
+		for _, rawURI := range app.OIDCRedirectURIs {
+			if _, err := url.ParseRequestURI(rawURI); err != nil {
+				return fmt.Errorf("OIDC redirect URI %q is invalid: %w", rawURI, err)
+			}
+		}
+	}
+	if SupportsSAML(app) && strings.TrimSpace(app.SAMLACSURL) != "" {
+		if _, err := url.ParseRequestURI(app.SAMLACSURL); err != nil {
+			return fmt.Errorf("SAML ACS URL %q is invalid: %w", app.SAMLACSURL, err)
+		}
+	}
+	return nil
+}
+
+func SupportsOIDC(app App) bool {
+	return app.Protocol == "oidc" || app.Protocol == "both"
+}
+
+func SupportsSAML(app App) bool {
+	return app.Protocol == "saml" || app.Protocol == "both"
+}
+
+func AppBySlug(apps []App, slug string) (App, bool) {
+	for _, app := range apps {
+		if app.Slug == slug {
+			return app, true
+		}
+	}
+	return App{}, false
+}
+
+func UserGroups(state AppState, userID string) []string {
+	var names []string
+	for _, group := range state.Groups {
+		for _, memberID := range group.MemberIDs {
+			if memberID == userID {
+				names = append(names, group.DisplayName)
+				break
+			}
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func UserDisplayName(u User) string {
+	return UserLabel(u)
+}
+
+func Slugify(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var b strings.Builder
+	lastDash := false
+	for _, r := range s {
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if ok {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash && b.Len() > 0 {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+func Lines(s string) []string {
+	return cleanLines(strings.Split(s, "\n"))
+}
+
+func JoinLines(lines []string) string {
+	return strings.Join(cleanLines(lines), "\n")
 }
 
 func migrateLegacyName(u *User) {
@@ -795,4 +1038,29 @@ func ActiveStatus(u User) string {
 	}
 
 	return "active"
+}
+
+func uniqueStrings(in []string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, value := range in {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
+func cleanLines(in []string) []string {
+	var out []string
+	for _, line := range in {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
 }

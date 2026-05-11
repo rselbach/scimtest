@@ -105,6 +105,8 @@ func NewSCIMClient(cfg Config) (*SCIMClient, error) {
 	token := strings.TrimSpace(cfg.BearerToken)
 
 	switch {
+	case cfg.SCIMDisabled:
+		return nil, fmt.Errorf("SCIM is disabled")
 	case baseURL == "":
 		return nil, fmt.Errorf("SCIM base URL is required")
 	case token == "":

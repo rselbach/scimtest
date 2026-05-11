@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 
-	"scimtest/internal/tui"
 	"scimtest/internal/web"
 )
 
@@ -28,14 +27,14 @@ func main() {
 		}
 	}
 
-	if err := tui.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "run tui: %v\n", err)
+	if err := web.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "run web: %v\n", err)
 		os.Exit(1)
 	}
 }
 
 func usage(w *os.File) {
 	fmt.Fprintf(w, "Usage: scimtest [web]\n\n")
-	fmt.Fprintf(w, "  (no args)  launch the terminal UI\n")
-	fmt.Fprintf(w, "  web        launch the web UI on $PORT (default 8080)\n")
+	fmt.Fprintf(w, "  (no args)  launch the web UI and auth endpoints on $PORT (default 8080)\n")
+	fmt.Fprintf(w, "  web        launch the web UI and auth endpoints on $PORT (default 8080)\n")
 }
