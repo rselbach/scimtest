@@ -1,6 +1,8 @@
 package web
 
 import (
+	"bytes"
+	"compress/flate"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -13,6 +15,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"html/template"
+	"io"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -63,7 +66,7 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		SAMLEntityID:           strings.TrimSpace(r.FormValue("saml_entity_id")),
 		SAMLACSURL:             strings.TrimSpace(r.FormValue("saml_acs_url")),
 		SAMLAudience:           strings.TrimSpace(r.FormValue("saml_audience")),
-		SAMLNameIDFormat:       strings.TrimSpace(r.FormValue("saml_name_id_format")),
+		SAMLNameIDField:        normalizeSAMLNameIDField(r.FormValue("saml_name_id_field")),
 		SAMLEmailAttributeName: strings.TrimSpace(r.FormValue("saml_email_attribute_name")),
 		IncludeGroupsClaim:     r.FormValue("include_groups_claim") == "on",
 	}
@@ -90,9 +93,10 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		app.OIDCRedirectURIs = nil
 	}
 	if supportsSAML(app) {
-		if app.SAMLNameIDFormat == "" {
-			app.SAMLNameIDFormat = defaultSAMLEmailNameIDFormat
+		if app.SAMLNameIDField == "" {
+			app.SAMLNameIDField = defaultSAMLNameIDField
 		}
+		app.SAMLNameIDFormat = samlNameIDFormatForField(app.SAMLNameIDField)
 		if app.SAMLEmailAttributeName == "" {
 			app.SAMLEmailAttributeName = defaultSAMLEmailAttributeName
 		}
@@ -100,6 +104,7 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		app.SAMLEntityID = ""
 		app.SAMLACSURL = ""
 		app.SAMLAudience = ""
+		app.SAMLNameIDField = ""
 		app.SAMLNameIDFormat = ""
 		app.SAMLEmailAttributeName = ""
 	}
@@ -200,13 +205,16 @@ func (a *webApp) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	loginHint := loginHintFromRequest(r)
+	selectedUserID := selectedLoginHintUserID(state.Users, loginHint)
 	renderChooser(w, chooserData{
-		Title:       "OIDC sign-in",
-		AppName:     app.Name,
-		Action:      r.URL.RequestURI(),
-		Users:       activeUsers(state.Users),
-		Hidden:      hiddenValues(r.URL.Query()),
-		NoUsersHint: "Create an active user before starting an OIDC flow.",
+		Title:          "OIDC sign-in",
+		AppName:        app.Name,
+		Action:         r.URL.RequestURI(),
+		Users:          activeUsersWithLoginHint(state.Users, loginHint),
+		SelectedUserID: selectedUserID,
+		Hidden:         hiddenValues(r.URL.Query()),
+		NoUsersHint:    "Create an active user before starting an OIDC flow.",
 	})
 }
 
@@ -359,6 +367,10 @@ func (a *webApp) handleSAMLMetadata(w http.ResponseWriter, r *http.Request) {
 	}
 	baseURL := effectiveIDPBaseURL(r, state)
 	entityID := baseURL + "/saml/" + app.Slug + "/metadata"
+	nameIDFormat := app.SAMLNameIDFormat
+	if nameIDFormat == "" {
+		nameIDFormat = samlNameIDFormatForField(app.SAMLNameIDField)
+	}
 	cert := base64.StdEncoding.EncodeToString(a.certDER)
 	metadata := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <EntityDescriptor xmlns="urn:oasis:names:tc:SAML:2.0:metadata" entityID="%s">
@@ -368,7 +380,7 @@ func (a *webApp) handleSAMLMetadata(w http.ResponseWriter, r *http.Request) {
     <SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="%s/saml/%s/sso"/>
     <SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="%s/saml/%s/sso"/>
   </IDPSSODescriptor>
-</EntityDescriptor>`, xmlEscape(entityID), cert, xmlEscape(app.SAMLNameIDFormat), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(baseURL), xmlEscape(app.Slug))
+</EntityDescriptor>`, xmlEscape(entityID), cert, xmlEscape(nameIDFormat), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(baseURL), xmlEscape(app.Slug))
 	w.Header().Set("Content-Type", "application/samlmetadata+xml; charset=utf-8")
 	_, _ = w.Write([]byte(metadata))
 }
@@ -378,13 +390,16 @@ func (a *webApp) handleSAMLSSO(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	loginHint := loginHintFromRequest(r)
+	selectedUserID := selectedLoginHintUserID(state.Users, loginHint)
 	renderChooser(w, chooserData{
-		Title:       "SAML sign-in",
-		AppName:     app.Name,
-		Action:      r.URL.RequestURI(),
-		Users:       activeUsers(state.Users),
-		Hidden:      hiddenValues(r.URL.Query()),
-		NoUsersHint: "Create an active user before starting a SAML flow.",
+		Title:          "SAML sign-in",
+		AppName:        app.Name,
+		Action:         r.URL.RequestURI(),
+		Users:          activeUsersWithLoginHint(state.Users, loginHint),
+		SelectedUserID: selectedUserID,
+		Hidden:         hiddenValues(r.URL.Query()),
+		NoUsersHint:    "Create an active user before starting a SAML flow.",
 	})
 }
 
@@ -395,6 +410,20 @@ func (a *webApp) handleSAMLSSOPost(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if r.FormValue("user_id") == "" && (r.FormValue("SAMLRequest") != "" || r.FormValue("login_hint") != "" || r.FormValue("RelayState") != "") {
+		loginHint := loginHintFromValues(r.Form)
+		selectedUserID := selectedLoginHintUserID(state.Users, loginHint)
+		renderChooser(w, chooserData{
+			Title:          "SAML sign-in",
+			AppName:        app.Name,
+			Action:         r.URL.RequestURI(),
+			Users:          activeUsersWithLoginHint(state.Users, loginHint),
+			SelectedUserID: selectedUserID,
+			Hidden:         hiddenValues(r.Form),
+			NoUsersHint:    "Create an active user before starting a SAML flow.",
+		})
 		return
 	}
 	user, ok := userByID(state.Users, r.FormValue("user_id"))
@@ -545,12 +574,13 @@ func stringIn(values []string, target string) bool {
 }
 
 type chooserData struct {
-	Title       string
-	AppName     string
-	Action      string
-	Users       []user
-	Hidden      map[string][]string
-	NoUsersHint string
+	Title          string
+	AppName        string
+	Action         string
+	Users          []user
+	SelectedUserID string
+	Hidden         map[string][]string
+	NoUsersHint    string
 }
 
 func activeUsers(users []user) []user {
@@ -564,6 +594,165 @@ func activeUsers(users []user) []user {
 		return userLabel(active[i]) < userLabel(active[j])
 	})
 	return active
+}
+
+func activeUsersWithLoginHint(users []user, loginHint string) []user {
+	active := activeUsers(users)
+	selectedID := selectedLoginHintUserID(active, loginHint)
+	if selectedID == "" {
+		return active
+	}
+	for i, user := range active {
+		if user.ID != selectedID {
+			continue
+		}
+		selected := active[i]
+		copy(active[1:i+1], active[0:i])
+		active[0] = selected
+		return active
+	}
+	return active
+}
+
+func selectedLoginHintUserID(users []user, loginHint string) string {
+	loginHint = strings.TrimSpace(loginHint)
+	if loginHint == "" {
+		return ""
+	}
+
+	selectedID := ""
+	for _, user := range users {
+		if !user.Active || user.Deleted {
+			continue
+		}
+		if !loginHintMatchesUser(loginHint, user) {
+			continue
+		}
+		if selectedID != "" && selectedID != user.ID {
+			return ""
+		}
+		selectedID = user.ID
+	}
+	return selectedID
+}
+
+func loginHintMatchesUser(loginHint string, user user) bool {
+	username := strings.TrimSpace(user.Username)
+	email := strings.TrimSpace(user.Email)
+	return (username != "" && strings.EqualFold(loginHint, username)) ||
+		(email != "" && strings.EqualFold(loginHint, email))
+}
+
+func loginHintFromRequest(r *http.Request) string {
+	return loginHintFromValues(r.URL.Query())
+}
+
+func loginHintFromValues(values url.Values) string {
+	if loginHint, _ := firstQueryValue(values, "login_hint", "LoginHint", "loginHint"); loginHint != "" {
+		return loginHint
+	}
+	if loginHint := loginHintFromSAMLRequest(values.Get("SAMLRequest")); loginHint != "" {
+		return loginHint
+	}
+	if loginHint := loginHintFromRelayState(values.Get("RelayState")); loginHint != "" {
+		return loginHint
+	}
+	return ""
+}
+
+func firstQueryValue(values url.Values, keys ...string) (string, string) {
+	for _, key := range keys {
+		if value := strings.TrimSpace(values.Get(key)); value != "" {
+			return value, key
+		}
+	}
+	return "", ""
+}
+
+func loginHintFromSAMLRequest(encodedRequest string) string {
+	encodedRequest = strings.TrimSpace(encodedRequest)
+	if encodedRequest == "" {
+		return ""
+	}
+	decoded, err := base64.StdEncoding.DecodeString(encodedRequest)
+	if err != nil {
+		decoded, err = base64.StdEncoding.DecodeString(strings.ReplaceAll(encodedRequest, " ", "+"))
+		if err != nil {
+			return ""
+		}
+	}
+	requestXML := inflateRawDeflate(decoded)
+	if len(requestXML) == 0 {
+		requestXML = decoded
+	}
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(string(requestXML)); err != nil || doc.Root() == nil {
+		return ""
+	}
+	for _, localName := range []string{"NameID", "LoginHint", "login_hint"} {
+		if text := firstElementTextByLocalName(doc.Root(), localName); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func loginHintFromRelayState(relayState string) string {
+	relayState = strings.TrimSpace(relayState)
+	if relayState == "" {
+		return ""
+	}
+	candidates := []string{relayState}
+	if decoded, err := url.QueryUnescape(relayState); err == nil && decoded != relayState {
+		candidates = append(candidates, decoded)
+	}
+	for _, candidate := range candidates {
+		if loginHint := loginHintFromURLOrQuery(candidate); loginHint != "" {
+			return loginHint
+		}
+	}
+	return ""
+}
+
+func loginHintFromURLOrQuery(value string) string {
+	if parsed, err := url.Parse(value); err == nil && parsed.RawQuery != "" {
+		if loginHint, _ := firstQueryValue(parsed.Query(), "login_hint", "LoginHint", "loginHint"); loginHint != "" {
+			return loginHint
+		}
+	}
+	if parsedValues, err := url.ParseQuery(value); err == nil {
+		loginHint, _ := firstQueryValue(parsedValues, "login_hint", "LoginHint", "loginHint")
+		return loginHint
+	}
+	return ""
+}
+
+func inflateRawDeflate(data []byte) []byte {
+	reader := flate.NewReader(bytes.NewReader(data))
+	defer reader.Close()
+	out, err := io.ReadAll(reader)
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
+func firstElementTextByLocalName(el *etree.Element, localName string) string {
+	if el == nil {
+		return ""
+	}
+	if elementLocalName(el) == localName {
+		if text := strings.TrimSpace(el.Text()); text != "" {
+			return text
+		}
+	}
+	for _, child := range el.ChildElements() {
+		if text := firstElementTextByLocalName(child, localName); text != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 func hiddenValues(values url.Values) map[string][]string {
@@ -619,7 +808,7 @@ var chooserTemplate = template.Must(template.New("chooser").Funcs(template.FuncM
       {{range $key, $values := .Hidden}}{{range $values}}<input type="hidden" name="{{$key}}" value="{{.}}">{{end}}{{end}}
       {{range .Users}}
       <label>
-        <input type="radio" name="user_id" value="{{.ID}}" required>
+        <input type="radio" name="user_id" value="{{.ID}}" required {{if eq .ID $.SelectedUserID}}checked{{end}}>
         <div><strong>{{userDisplayName .}}</strong><span>{{.Email}}</span></div>
       </label>
       {{end}}
@@ -668,7 +857,7 @@ func findElementByLocalName(el *etree.Element, localName string) *etree.Element 
 	if el == nil {
 		return nil
 	}
-	if el.Tag == localName {
+	if elementLocalName(el) == localName {
 		return el
 	}
 	for _, child := range el.ChildElements() {
@@ -677,6 +866,16 @@ func findElementByLocalName(el *etree.Element, localName string) *etree.Element 
 		}
 	}
 	return nil
+}
+
+func elementLocalName(el *etree.Element) string {
+	if el == nil {
+		return ""
+	}
+	if index := strings.LastIndex(el.Tag, ":"); index >= 0 {
+		return el.Tag[index+1:]
+	}
+	return el.Tag
 }
 
 func buildSAMLResponse(state appState, baseURL string, app app, user user) string {
@@ -701,6 +900,11 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user) strin
 			groupAttrs.WriteString("</saml:AttributeValue>")
 		}
 		groupAttribute = "<saml:Attribute Name=\"groups\">" + groupAttrs.String() + "</saml:Attribute>"
+	}
+	nameIDValue := samlNameIDValue(app, user)
+	nameIDFormat := app.SAMLNameIDFormat
+	if nameIDFormat == "" {
+		nameIDFormat = samlNameIDFormatForField(app.SAMLNameIDField)
 	}
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="%s" Version="2.0" IssueInstant="%s" Destination="%s">
@@ -727,7 +931,7 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user) strin
 </samlp:Response>`,
 		xmlEscape(responseID), now.Format(time.RFC3339), xmlEscape(app.SAMLACSURL), xmlEscape(issuer),
 		xmlEscape(assertionID), now.Format(time.RFC3339), xmlEscape(issuer),
-		xmlEscape(app.SAMLNameIDFormat), xmlEscape(user.Email), now.Add(5*time.Minute).Format(time.RFC3339), xmlEscape(app.SAMLACSURL),
+		xmlEscape(nameIDFormat), xmlEscape(nameIDValue), now.Add(5*time.Minute).Format(time.RFC3339), xmlEscape(app.SAMLACSURL),
 		now.Add(-time.Minute).Format(time.RFC3339), now.Add(5*time.Minute).Format(time.RFC3339), xmlEscape(audience),
 		now.Format(time.RFC3339), xmlEscape(app.SAMLEmailAttributeName), xmlEscape(user.Email), xmlEscape(user.Username), xmlEscape(user.GivenName), xmlEscape(user.FamilyName), groupAttribute)
 }

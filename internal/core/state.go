@@ -20,6 +20,9 @@ import (
 var currentTime = time.Now
 
 const DefaultSAMLEmailAttributeName = "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress"
+const DefaultSAMLNameIDField = "email"
+const SAMLNameIDFormatEmail = "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"
+const SAMLNameIDFormatUnspecified = "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified"
 
 type Config struct {
 	BaseURL               string `json:"base_url"`
@@ -126,6 +129,7 @@ type App struct {
 	SAMLEntityID           string   `json:"saml_entity_id,omitempty"`
 	SAMLACSURL             string   `json:"saml_acs_url,omitempty"`
 	SAMLAudience           string   `json:"saml_audience,omitempty"`
+	SAMLNameIDField        string   `json:"saml_name_id_field,omitempty"`
 	SAMLNameIDFormat       string   `json:"saml_name_id_format,omitempty"`
 	SAMLEmailAttributeName string   `json:"saml_email_attribute_name,omitempty"`
 	IncludeGroupsClaim     bool     `json:"include_groups_claim"`
@@ -240,6 +244,7 @@ func initStateDB(db *sql.DB) error {
 			saml_entity_id TEXT NOT NULL DEFAULT '',
 			saml_acs_url TEXT NOT NULL DEFAULT '',
 			saml_audience TEXT NOT NULL DEFAULT '',
+			saml_name_id_field TEXT NOT NULL DEFAULT 'email',
 			saml_name_id_format TEXT NOT NULL DEFAULT '',
 			saml_email_attribute_name TEXT NOT NULL DEFAULT '',
 			include_groups_claim INTEGER NOT NULL DEFAULT 0
@@ -277,6 +282,7 @@ func initStateDB(db *sql.DB) error {
 	migrations := []string{
 		`ALTER TABLE operation_logs ADD COLUMN kind TEXT NOT NULL DEFAULT 'sync'`,
 		`ALTER TABLE operation_logs ADD COLUMN summary TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE apps ADD COLUMN saml_name_id_field TEXT NOT NULL DEFAULT 'email'`,
 	}
 	for _, migration := range migrations {
 		if _, err := db.Exec(migration); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -395,7 +401,7 @@ func loadStateFromDB(db *sql.DB) (AppState, error) {
 		return AppState{}, fmt.Errorf("iterate sqlite group member rows: %w", err)
 	}
 
-	appRows, err := db.Query(`SELECT id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_format, saml_email_attribute_name, include_groups_claim FROM apps ORDER BY rowid`)
+	appRows, err := db.Query(`SELECT id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, include_groups_claim FROM apps ORDER BY rowid`)
 	if err != nil {
 		return AppState{}, fmt.Errorf("load apps from sqlite: %w", err)
 	}
@@ -405,7 +411,7 @@ func loadStateFromDB(db *sql.DB) (AppState, error) {
 		var app App
 		var redirectURIs string
 		var includeGroups int
-		if err := appRows.Scan(&app.ID, &app.Name, &app.Slug, &app.Protocol, &app.OIDCClientID, &app.OIDCClientSecret, &redirectURIs, &app.SAMLEntityID, &app.SAMLACSURL, &app.SAMLAudience, &app.SAMLNameIDFormat, &app.SAMLEmailAttributeName, &includeGroups); err != nil {
+		if err := appRows.Scan(&app.ID, &app.Name, &app.Slug, &app.Protocol, &app.OIDCClientID, &app.OIDCClientSecret, &redirectURIs, &app.SAMLEntityID, &app.SAMLACSURL, &app.SAMLAudience, &app.SAMLNameIDField, &app.SAMLNameIDFormat, &app.SAMLEmailAttributeName, &includeGroups); err != nil {
 			return AppState{}, fmt.Errorf("scan sqlite app row: %w", err)
 		}
 		app.OIDCRedirectURIs = Lines(redirectURIs)
@@ -534,14 +540,14 @@ func saveStateToDB(db *sql.DB, state AppState) error {
 		}
 	}
 
-	appStmt, err := tx.Prepare(`INSERT INTO apps(id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_format, saml_email_attribute_name, include_groups_claim) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	appStmt, err := tx.Prepare(`INSERT INTO apps(id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, include_groups_claim) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("prepare sqlite app insert: %w", err)
 	}
 	defer closeStmt(appStmt)
 
 	for _, app := range state.Apps {
-		if _, err := appStmt.Exec(app.ID, app.Name, app.Slug, app.Protocol, app.OIDCClientID, app.OIDCClientSecret, JoinLines(app.OIDCRedirectURIs), app.SAMLEntityID, app.SAMLACSURL, app.SAMLAudience, app.SAMLNameIDFormat, app.SAMLEmailAttributeName, boolToInt(app.IncludeGroupsClaim)); err != nil {
+		if _, err := appStmt.Exec(app.ID, app.Name, app.Slug, app.Protocol, app.OIDCClientID, app.OIDCClientSecret, JoinLines(app.OIDCRedirectURIs), app.SAMLEntityID, app.SAMLACSURL, app.SAMLAudience, app.SAMLNameIDField, app.SAMLNameIDFormat, app.SAMLEmailAttributeName, boolToInt(app.IncludeGroupsClaim)); err != nil {
 			return fmt.Errorf("insert sqlite app %s: %w", app.ID, err)
 		}
 	}
@@ -679,8 +685,9 @@ func NormalizeState(state *AppState) {
 		if state.Apps[i].OIDCClientID == "" && SupportsOIDC(state.Apps[i]) {
 			state.Apps[i].OIDCClientID = state.Apps[i].Slug
 		}
-		if SupportsSAML(state.Apps[i]) && state.Apps[i].SAMLNameIDFormat == "" {
-			state.Apps[i].SAMLNameIDFormat = "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"
+		if SupportsSAML(state.Apps[i]) {
+			state.Apps[i].SAMLNameIDField = NormalizeSAMLNameIDField(state.Apps[i].SAMLNameIDField)
+			state.Apps[i].SAMLNameIDFormat = SAMLNameIDFormatForField(state.Apps[i].SAMLNameIDField)
 		}
 		if SupportsSAML(state.Apps[i]) && state.Apps[i].SAMLEmailAttributeName == "" {
 			state.Apps[i].SAMLEmailAttributeName = DefaultSAMLEmailAttributeName
@@ -907,7 +914,45 @@ func ValidateApp(app App, apps []App) error {
 			return fmt.Errorf("SAML ACS URL %q is invalid: %w", app.SAMLACSURL, err)
 		}
 	}
+	if SupportsSAML(app) && strings.TrimSpace(app.SAMLNameIDField) != "" && NormalizeSAMLNameIDField(app.SAMLNameIDField) != app.SAMLNameIDField {
+		return fmt.Errorf("SAML NameID field must be email, username, firstName, or lastName")
+	}
 	return nil
+}
+
+func NormalizeSAMLNameIDField(field string) string {
+	switch strings.TrimSpace(field) {
+	case "email":
+		return "email"
+	case "username":
+		return "username"
+	case "firstName":
+		return "firstName"
+	case "lastName":
+		return "lastName"
+	default:
+		return DefaultSAMLNameIDField
+	}
+}
+
+func SAMLNameIDFormatForField(field string) string {
+	if NormalizeSAMLNameIDField(field) == "email" {
+		return SAMLNameIDFormatEmail
+	}
+	return SAMLNameIDFormatUnspecified
+}
+
+func SAMLNameIDValue(app App, user User) string {
+	switch NormalizeSAMLNameIDField(app.SAMLNameIDField) {
+	case "username":
+		return user.Username
+	case "firstName":
+		return user.GivenName
+	case "lastName":
+		return user.FamilyName
+	default:
+		return user.Email
+	}
 }
 
 func SupportsOIDC(app App) bool {

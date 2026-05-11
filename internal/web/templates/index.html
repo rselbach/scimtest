@@ -634,7 +634,7 @@
       font-size: 12px;
       font-weight: 500;
     }
-    .field input:not([type="checkbox"]), .field textarea {
+    .field input:not([type="checkbox"]), .field textarea, .field select {
       width: 100%;
       padding: 0 10px;
       border-radius: var(--radius);
@@ -643,14 +643,14 @@
       color: var(--text);
       transition: border-color 80ms, box-shadow 80ms;
     }
-    .field input:not([type="checkbox"]) { height: 34px; }
+    .field input:not([type="checkbox"]), .field select { height: 34px; }
     .field textarea {
       min-height: 82px;
       padding: 9px 10px;
       resize: vertical;
       font: inherit;
     }
-    .field input:focus, .field textarea:focus {
+    .field input:focus, .field textarea:focus, .field select:focus {
       outline: none;
       border-color: var(--accent);
       box-shadow: 0 0 0 3px rgba(21, 99, 255, 0.18);
@@ -1446,8 +1446,14 @@
                 <input name="saml_audience" value="{{.AppForm.App.SAMLAudience}}" autocomplete="off">
               </label>
               <label class="field">
-                <span class="label">NameID format</span>
-                <input name="saml_name_id_format" value="{{.AppForm.App.SAMLNameIDFormat}}" autocomplete="off">
+                <span class="label">NameID field</span>
+                <select name="saml_name_id_field">
+                  <option value="email" {{if eq .AppForm.App.SAMLNameIDField "email"}}selected{{end}}>Email</option>
+                  <option value="username" {{if eq .AppForm.App.SAMLNameIDField "username"}}selected{{end}}>Username</option>
+                  <option value="firstName" {{if eq .AppForm.App.SAMLNameIDField "firstName"}}selected{{end}}>First name</option>
+                  <option value="lastName" {{if eq .AppForm.App.SAMLNameIDField "lastName"}}selected{{end}}>Last name</option>
+                </select>
+                <span class="hint">NameID format is inferred from this value.</span>
               </label>
               <label class="field full">
                 <span class="label">Email attribute assertion name</span>

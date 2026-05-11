@@ -38,6 +38,16 @@ func TestSaveAndLoadState(t *testing.T) {
 			RemoteID:    "remote-group-1",
 			Dirty:       true,
 		}},
+		Apps: []App{{
+			ID:                     "app-1",
+			Name:                   "Study App",
+			Slug:                   "study-app",
+			Protocol:               "saml",
+			SAMLACSURL:             "https://example.com/saml/acs",
+			SAMLNameIDField:        "username",
+			SAMLNameIDFormat:       SAMLNameIDFormatUnspecified,
+			SAMLEmailAttributeName: DefaultSAMLEmailAttributeName,
+		}},
 		UserOperations: map[string][]OperationLog{
 			"local-1": {{
 				Kind:         "sync",

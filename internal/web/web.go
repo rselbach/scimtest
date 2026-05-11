@@ -25,6 +25,7 @@ type webApp struct {
 	mu               sync.Mutex
 	signingKey       *rsa.PrivateKey
 	certDER          []byte
+	debugRP          bool
 	authCodes        map[string]authCode
 	accessTokens     map[string]accessToken
 	lastTrace        []syncTraceEntry
@@ -173,7 +174,16 @@ type pageData struct {
 	ConfigForm        *configFormView
 }
 
-func Run() error {
+type RunOptions struct {
+	Debug bool
+}
+
+func Run(options ...RunOptions) error {
+	var opts RunOptions
+	if len(options) > 0 {
+		opts = options[0]
+	}
+
 	port := strings.TrimSpace(os.Getenv("PORT"))
 	if port == "" {
 		port = "8080"
@@ -187,11 +197,15 @@ func Run() error {
 	app := &webApp{
 		signingKey:   key,
 		certDER:      certDER,
+		debugRP:      opts.Debug,
 		authCodes:    make(map[string]authCode),
 		accessTokens: make(map[string]accessToken),
 	}
 	addr := ":" + port
 	log.Printf("merged auth test service listening on http://localhost%s", addr)
+	if opts.Debug {
+		fmt.Fprintln(os.Stdout, "RP debug logging enabled")
+	}
 	return http.ListenAndServe(addr, app.routes())
 }
 
@@ -212,16 +226,16 @@ func (a *webApp) routes() http.Handler {
 	mux.HandleFunc("POST /sync", a.handleSync)
 	mux.HandleFunc("POST /import", a.handleImport)
 	mux.HandleFunc("POST /reset", a.handleReset)
-	mux.HandleFunc("GET /oidc/{slug}/.well-known/openid-configuration", a.handleOIDCDiscovery)
-	mux.HandleFunc("GET /oidc/{slug}/jwks", a.handleOIDCJWKS)
-	mux.HandleFunc("GET /oidc/{slug}/authorize", a.handleOIDCAuthorize)
-	mux.HandleFunc("POST /oidc/{slug}/authorize", a.handleOIDCAuthorizePost)
-	mux.HandleFunc("POST /oidc/{slug}/token", a.handleOIDCToken)
-	mux.HandleFunc("GET /oidc/{slug}/userinfo", a.handleOIDCUserinfo)
-	mux.HandleFunc("POST /oidc/{slug}/userinfo", a.handleOIDCUserinfo)
-	mux.HandleFunc("GET /saml/{slug}/metadata", a.handleSAMLMetadata)
-	mux.HandleFunc("GET /saml/{slug}/sso", a.handleSAMLSSO)
-	mux.HandleFunc("POST /saml/{slug}/sso", a.handleSAMLSSOPost)
+	mux.HandleFunc("GET /oidc/{slug}/.well-known/openid-configuration", a.debugRPHandler(a.handleOIDCDiscovery))
+	mux.HandleFunc("GET /oidc/{slug}/jwks", a.debugRPHandler(a.handleOIDCJWKS))
+	mux.HandleFunc("GET /oidc/{slug}/authorize", a.debugRPHandler(a.handleOIDCAuthorize))
+	mux.HandleFunc("POST /oidc/{slug}/authorize", a.debugRPHandler(a.handleOIDCAuthorizePost))
+	mux.HandleFunc("POST /oidc/{slug}/token", a.debugRPHandler(a.handleOIDCToken))
+	mux.HandleFunc("GET /oidc/{slug}/userinfo", a.debugRPHandler(a.handleOIDCUserinfo))
+	mux.HandleFunc("POST /oidc/{slug}/userinfo", a.debugRPHandler(a.handleOIDCUserinfo))
+	mux.HandleFunc("GET /saml/{slug}/metadata", a.debugRPHandler(a.handleSAMLMetadata))
+	mux.HandleFunc("GET /saml/{slug}/sso", a.debugRPHandler(a.handleSAMLSSO))
+	mux.HandleFunc("POST /saml/{slug}/sso", a.debugRPHandler(a.handleSAMLSSOPost))
 	return mux
 }
 
@@ -1015,7 +1029,8 @@ func buildAppFormView(state appState, tab string, id string, baseURL string, cer
 		Title: "Add App",
 		App: app{
 			Protocol:               "oidc",
-			SAMLNameIDFormat:       defaultSAMLEmailNameIDFormat,
+			SAMLNameIDField:        defaultSAMLNameIDField,
+			SAMLNameIDFormat:       samlNameIDFormatForField(defaultSAMLNameIDField),
 			SAMLEmailAttributeName: defaultSAMLEmailAttributeName,
 			IncludeGroupsClaim:     true,
 		},
@@ -1031,6 +1046,8 @@ func buildAppFormView(state appState, tab string, id string, baseURL string, cer
 	}
 	form.Title = "Edit App"
 	form.App = existing
+	form.App.SAMLNameIDField = normalizeSAMLNameIDField(form.App.SAMLNameIDField)
+	form.App.SAMLNameIDFormat = samlNameIDFormatForField(form.App.SAMLNameIDField)
 	form.OIDCRedirectURIs = joinLines(form.App.OIDCRedirectURIs)
 	if form.App.Slug != "" {
 		form.SAMLIDPEntityID = baseURL + "/saml/" + form.App.Slug + "/metadata"
