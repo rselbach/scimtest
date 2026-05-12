@@ -259,3 +259,33 @@ func TestAppendLocalOperationLogPrependsEntry(t *testing.T) {
 	r.Equal("2026-05-01T12:00:00Z", state.UserOperations["user-1"][0].CreatedAt)
 	r.Equal("Synced", state.UserOperations["user-1"][1].Summary)
 }
+
+func TestLoadStateOrdersOperationLogsNewestFirst(t *testing.T) {
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r := require.New(t)
+
+	state := AppState{
+		Users: []User{{
+			ID:         "user-1",
+			GivenName:  "Troy",
+			FamilyName: "Barnes",
+			Email:      "troy@greendale.edu",
+			Username:   "troy",
+			Active:     true,
+		}},
+		UserOperations: map[string][]OperationLog{
+			"user-1": {
+				{Kind: "local", Summary: "Updated email", CreatedAt: "2026-05-01T12:00:00Z"},
+				{Kind: "sync", Summary: "Synced", CreatedAt: "2026-05-01T11:00:00Z"},
+			},
+		},
+	}
+
+	r.NoError(SaveState(state))
+
+	loaded, err := LoadState()
+	r.NoError(err)
+	r.Len(loaded.UserOperations["user-1"], 2)
+	r.Equal("Updated email", loaded.UserOperations["user-1"][0].Summary)
+	r.Equal("Synced", loaded.UserOperations["user-1"][1].Summary)
+}

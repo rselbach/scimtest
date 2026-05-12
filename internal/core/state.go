@@ -422,7 +422,7 @@ func loadStateFromDB(db *sql.DB) (AppState, error) {
 		return AppState{}, fmt.Errorf("iterate sqlite app rows: %w", err)
 	}
 
-	logRows, err := db.Query(`SELECT resource_type, resource_id, kind, summary, operation, method, path, request_body, status, response_body, error_text, created_at FROM operation_logs ORDER BY id DESC`)
+	logRows, err := db.Query(`SELECT resource_type, resource_id, kind, summary, operation, method, path, request_body, status, response_body, error_text, created_at FROM operation_logs ORDER BY resource_type, resource_id, created_at DESC, id ASC`)
 	if err != nil {
 		return AppState{}, fmt.Errorf("load operation logs from sqlite: %w", err)
 	}

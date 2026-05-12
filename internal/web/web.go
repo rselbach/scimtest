@@ -204,7 +204,9 @@ func Run(options ...RunOptions) error {
 	addr := ":" + port
 	log.Printf("merged auth test service listening on http://localhost%s", addr)
 	if opts.Debug {
-		fmt.Fprintln(os.Stdout, "RP debug logging enabled")
+		if _, err := fmt.Fprintln(os.Stdout, "RP debug logging enabled"); err != nil {
+			return fmt.Errorf("write debug status: %w", err)
+		}
 	}
 	return http.ListenAndServe(addr, app.routes())
 }
@@ -384,7 +386,6 @@ func (a *webApp) handleUserSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	redirectWithFlash(w, r, dashboardURL("users", nil), flashMessage{Kind: "success", Message: status})
-	return
 }
 
 func (a *webApp) handleUserToggleActive(w http.ResponseWriter, r *http.Request) {

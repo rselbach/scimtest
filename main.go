@@ -10,7 +10,7 @@ import (
 func main() {
 	command, debug, help, err := parseArgs(os.Args[1:])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n\n", err)
+		mustWriteOutput(os.Stderr, "%v\n\n", err)
 		usage(os.Stderr)
 		os.Exit(2)
 	}
@@ -21,11 +21,11 @@ func main() {
 	switch command {
 	case "", "web":
 		if err := web.Run(web.RunOptions{Debug: debug}); err != nil {
-			fmt.Fprintf(os.Stderr, "run web: %v\n", err)
+			mustWriteOutput(os.Stderr, "run web: %v\n", err)
 			os.Exit(1)
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n\n", command)
+		mustWriteOutput(os.Stderr, "unknown subcommand %q\n\n", command)
 		usage(os.Stderr)
 		os.Exit(2)
 	}
@@ -53,9 +53,15 @@ func parseArgs(args []string) (string, bool, bool, error) {
 }
 
 func usage(w *os.File) {
-	fmt.Fprintf(w, "Usage: scimtest [--debug] [web]\n")
-	fmt.Fprintf(w, "       scimtest web [--debug]\n\n")
-	fmt.Fprintf(w, "  (no args)  launch the web UI and auth endpoints on $PORT (default 8080)\n")
-	fmt.Fprintf(w, "  web        launch the web UI and auth endpoints on $PORT (default 8080)\n")
-	fmt.Fprintf(w, "  --debug    print OIDC/SAML RP requests and responses to stdout\n")
+	mustWriteOutput(w, "Usage: scimtest [--debug] [web]\n")
+	mustWriteOutput(w, "       scimtest web [--debug]\n\n")
+	mustWriteOutput(w, "  (no args)  launch the web UI and auth endpoints on $PORT (default 8080)\n")
+	mustWriteOutput(w, "  web        launch the web UI and auth endpoints on $PORT (default 8080)\n")
+	mustWriteOutput(w, "  --debug    print OIDC/SAML RP requests and responses to stdout\n")
+}
+
+func mustWriteOutput(w *os.File, format string, args ...any) {
+	if _, err := fmt.Fprintf(w, format, args...); err != nil {
+		panic(fmt.Sprintf("write output: %v", err))
+	}
 }

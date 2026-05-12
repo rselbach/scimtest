@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -48,9 +49,16 @@ func (a *webApp) debugRPHandler(next http.HandlerFunc) http.HandlerFunc {
 		return next
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		requestBody, _ := io.ReadAll(r.Body)
+		requestBody, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("read RP debug request body: %v", err), http.StatusInternalServerError)
+			return
+		}
 		if r.Body != nil {
-			_ = r.Body.Close()
+			if err := r.Body.Close(); err != nil {
+				http.Error(w, fmt.Sprintf("close RP debug request body: %v", err), http.StatusInternalServerError)
+				return
+			}
 		}
 		r.Body = io.NopCloser(bytes.NewReader(requestBody))
 
@@ -59,22 +67,34 @@ func (a *webApp) debugRPHandler(next http.HandlerFunc) http.HandlerFunc {
 
 		rpDebugLogMu.Lock()
 		defer rpDebugLogMu.Unlock()
-		fmt.Fprintln(os.Stdout)
-		fmt.Fprintf(os.Stdout, "===== RP interaction %s =====\n", time.Now().Format(time.RFC3339))
+		writeDebugln(os.Stdout)
+		writeDebugf(os.Stdout, "===== RP interaction %s =====\n", time.Now().Format(time.RFC3339))
 		writeDebugHTTPRequest(os.Stdout, r, requestBody)
 		writeDebugHTTPResponse(os.Stdout, capture)
-		fmt.Fprintln(os.Stdout, "===== end RP interaction =====")
+		writeDebugln(os.Stdout, "===== end RP interaction =====")
+	}
+}
+
+func writeDebugln(w io.Writer, args ...any) {
+	if _, err := fmt.Fprintln(w, args...); err != nil {
+		log.Printf("write RP debug output: %v", err)
+	}
+}
+
+func writeDebugf(w io.Writer, format string, args ...any) {
+	if _, err := fmt.Fprintf(w, format, args...); err != nil {
+		log.Printf("write RP debug output: %v", err)
 	}
 }
 
 func writeDebugHTTPRequest(w io.Writer, r *http.Request, body []byte) {
-	fmt.Fprintln(w, "----- request from RP -----")
-	fmt.Fprintf(w, "%s %s %s\n", r.Method, r.URL.RequestURI(), r.Proto)
-	fmt.Fprintf(w, "Host: %s\n", r.Host)
+	writeDebugln(w, "----- request from RP -----")
+	writeDebugf(w, "%s %s %s\n", r.Method, r.URL.RequestURI(), r.Proto)
+	writeDebugf(w, "Host: %s\n", r.Host)
 	writeDebugHeaders(w, r.Header)
 	if len(body) > 0 {
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, string(body))
+		writeDebugln(w)
+		writeDebugln(w, string(body))
 	}
 	writeDebugSAMLRequest(w, "query", r.URL.Query().Get("SAMLRequest"))
 	if isFormEncoded(r.Header.Get("Content-Type")) && len(body) > 0 {
@@ -90,12 +110,12 @@ func writeDebugHTTPResponse(w io.Writer, response *debugResponseWriter) {
 		status = http.StatusOK
 	}
 	body := response.body.String()
-	fmt.Fprintln(w, "----- response to RP -----")
-	fmt.Fprintf(w, "HTTP %d %s\n", status, http.StatusText(status))
+	writeDebugln(w, "----- response to RP -----")
+	writeDebugf(w, "HTTP %d %s\n", status, http.StatusText(status))
 	writeDebugHeaders(w, response.Header())
 	if body != "" {
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, body)
+		writeDebugln(w)
+		writeDebugln(w, body)
 	}
 	writeDebugSAMLResponse(w, body)
 }
@@ -108,7 +128,7 @@ func writeDebugHeaders(w io.Writer, headers http.Header) {
 	sort.Strings(keys)
 	for _, key := range keys {
 		for _, value := range headers.Values(key) {
-			fmt.Fprintf(w, "%s: %s\n", key, value)
+			writeDebugf(w, "%s: %s\n", key, value)
 		}
 	}
 }
@@ -119,10 +139,10 @@ func writeDebugSAMLRequest(w io.Writer, source string, encodedRequest string) {
 	}
 	xml := decodedSAMLRequestXML(encodedRequest)
 	if xml == "" {
-		fmt.Fprintf(w, "\n----- decoded SAMLRequest (%s): unavailable -----\n", source)
+		writeDebugf(w, "\n----- decoded SAMLRequest (%s): unavailable -----\n", source)
 		return
 	}
-	fmt.Fprintf(w, "\n----- decoded SAMLRequest (%s) -----\n%s\n", source, xml)
+	writeDebugf(w, "\n----- decoded SAMLRequest (%s) -----\n%s\n", source, xml)
 }
 
 func writeDebugSAMLResponse(w io.Writer, body string) {
@@ -132,10 +152,10 @@ func writeDebugSAMLResponse(w io.Writer, body string) {
 	}
 	decoded, err := base64.StdEncoding.DecodeString(encodedResponse)
 	if err != nil {
-		fmt.Fprintln(w, "\n----- decoded SAMLResponse: unavailable -----")
+		writeDebugln(w, "\n----- decoded SAMLResponse: unavailable -----")
 		return
 	}
-	fmt.Fprintf(w, "\n----- decoded SAMLResponse -----\n%s\n", string(decoded))
+	writeDebugf(w, "\n----- decoded SAMLResponse -----\n%s\n", string(decoded))
 }
 
 func decodedSAMLRequestXML(encodedRequest string) string {
@@ -146,8 +166,8 @@ func decodedSAMLRequestXML(encodedRequest string) string {
 			return ""
 		}
 	}
-	requestXML := inflateRawDeflate(decoded)
-	if len(requestXML) == 0 {
+	requestXML, err := inflateRawDeflate(decoded)
+	if err != nil || len(requestXML) == 0 {
 		requestXML = decoded
 	}
 	return string(requestXML)

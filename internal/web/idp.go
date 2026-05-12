@@ -681,8 +681,8 @@ func loginHintFromSAMLRequest(encodedRequest string) string {
 			return ""
 		}
 	}
-	requestXML := inflateRawDeflate(decoded)
-	if len(requestXML) == 0 {
+	requestXML, err := inflateRawDeflate(decoded)
+	if err != nil || len(requestXML) == 0 {
 		requestXML = decoded
 	}
 
@@ -728,14 +728,19 @@ func loginHintFromURLOrQuery(value string) string {
 	return ""
 }
 
-func inflateRawDeflate(data []byte) []byte {
+func inflateRawDeflate(data []byte) ([]byte, error) {
 	reader := flate.NewReader(bytes.NewReader(data))
-	defer reader.Close()
 	out, err := io.ReadAll(reader)
 	if err != nil {
-		return nil
+		if closeErr := reader.Close(); closeErr != nil {
+			return nil, fmt.Errorf("read raw deflate: %w (close: %v)", err, closeErr)
+		}
+		return nil, fmt.Errorf("read raw deflate: %w", err)
 	}
-	return out
+	if err := reader.Close(); err != nil {
+		return nil, fmt.Errorf("close raw deflate reader: %w", err)
+	}
+	return out, nil
 }
 
 func firstElementTextByLocalName(el *etree.Element, localName string) string {
