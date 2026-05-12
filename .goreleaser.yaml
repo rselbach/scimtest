@@ -32,24 +32,17 @@ checksum:
 changelog:
   sort: asc
 
-homebrew_casks:
+brews:
   - name: scimtest
     ids:
-      - scimtest
-    binaries:
       - scimtest
     repository:
       owner: rselbach
       name: homebrew-tap
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
-    directory: Casks
-    url:
-      verified: github.com/rselbach/scimtest
+    directory: Formula
     homepage: https://github.com/rselbach/scimtest
     description: Local SCIM/OIDC/SAML auth testing service
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/scimtest"]
-          end
+    license: MIT
+    test: |
+      system "#{bin}/scimtest", "--help"
