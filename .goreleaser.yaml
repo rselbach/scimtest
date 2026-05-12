@@ -1,0 +1,55 @@
+version: 2
+
+project_name: scimtest
+
+builds:
+  - id: scimtest
+    main: .
+    binary: scimtest
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: scimtest
+    ids:
+      - scimtest
+    formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+
+homebrew_casks:
+  - name: scimtest
+    ids:
+      - scimtest
+    binaries:
+      - scimtest
+    repository:
+      owner: rselbach
+      name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    url:
+      verified: github.com/rselbach/scimtest
+    homepage: https://github.com/rselbach/scimtest
+    description: Local SCIM/OIDC/SAML auth testing service
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/scimtest"]
+          end
