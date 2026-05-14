@@ -162,7 +162,7 @@ func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	issuer := oidcIssuer(effectiveIDPBaseURL(r, state), app)
+	issuer := oidcIssuer(a.effectiveIDPBaseURL(r, state), app)
 	writeJSON(w, map[string]any{
 		"issuer":                                issuer,
 		"authorization_endpoint":                issuer + "/authorize",
@@ -306,7 +306,7 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now()
 	claims := userClaims(state, app, user)
-	claims["iss"] = oidcIssuer(effectiveIDPBaseURL(r, state), app)
+	claims["iss"] = oidcIssuer(a.effectiveIDPBaseURL(r, state), app)
 	claims["aud"] = app.OIDCClientID
 	claims["iat"] = now.Unix()
 	claims["exp"] = now.Add(time.Hour).Unix()
@@ -365,7 +365,7 @@ func (a *webApp) handleSAMLMetadata(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	baseURL := effectiveIDPBaseURL(r, state)
+	baseURL := a.effectiveIDPBaseURL(r, state)
 	entityID := baseURL + "/saml/" + app.Slug + "/metadata"
 	nameIDFormat := app.SAMLNameIDFormat
 	if nameIDFormat == "" {
@@ -439,7 +439,7 @@ func (a *webApp) handleSAMLSSOPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "SAML ACS URL is required on the app or request", http.StatusBadRequest)
 		return
 	}
-	response, err := a.buildSignedSAMLResponse(state, effectiveIDPBaseURL(r, state), app, user)
+	response, err := a.buildSignedSAMLResponse(state, a.effectiveIDPBaseURL(r, state), app, user)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	rgrokclient "github.com/rselbach/rgrok/client"
 	"github.com/stretchr/testify/require"
 )
 
@@ -224,6 +226,207 @@ func TestSCIMDisabledRejectsSync(t *testing.T) {
 
 	r.Equal(http.StatusSeeOther, rec.Code)
 	r.Contains(rec.Header().Get("Set-Cookie"), "SCIM+is+disabled")
+}
+
+func TestConfigRendersRgrokSetupLink(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+
+	app := &webApp{}
+	req := httptest.NewRequest(http.MethodGet, "/?tab=users&modal=config", nil)
+	rec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	r.Contains(body, "Set up rgrok tunnel")
+	r.Contains(body, "/?modal=config&amp;rgrok=1&amp;tab=users")
+	r.Contains(body, `name="idp_base_url"`)
+	r.NotContains(body, `name="idp_base_url" value="" placeholder="http://example.com" autocomplete="off" disabled`)
+}
+
+func TestConfigRendersEstablishedRgrokTunnel(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+
+	app := &webApp{
+		rgrokTunnel: &activeRgrokTunnel{
+			Name:      "demo",
+			PublicURL: "https://demo.rgrok.rselbach.com",
+			Tunnel:    &fakeTunnel{},
+		},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/?tab=users&modal=config", nil)
+	rec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	r.Contains(body, "Tunnel established.")
+	r.Contains(body, `form="rgrok-cancel-form">Cancel</button>`)
+	r.Contains(body, `value="https://demo.rgrok.rselbach.com"`)
+	r.Contains(body, `autocomplete="off" disabled`)
+	r.NotContains(body, "Set up rgrok tunnel")
+}
+
+func TestRgrokSetupStartsTunnel(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+
+	var got rgrokclient.Config
+	var gotCtx context.Context
+	tunnel := &fakeTunnel{}
+	app := &webApp{
+		localPort: 8080,
+		rgrokStart: func(ctx context.Context, cfg rgrokclient.Config) (*startedRgrokTunnel, error) {
+			gotCtx = ctx
+			got = cfg
+			return &startedRgrokTunnel{
+				PublicURL: "https://demo.rgrok.rselbach.com",
+				Tunnel:    tunnel,
+			}, nil
+		},
+	}
+	form := url.Values{
+		"tab":         {"apps"},
+		"rgrok_name":  {"Demo"},
+		"rgrok_token": {"token-123"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/rgrok/setup", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	r.Contains(rec.Header().Get("Location"), "modal=config")
+	r.Equal("https://rgrok.rselbach.com", got.ServerBaseURL)
+	r.Equal("token-123", got.Token)
+	r.Equal("demo", got.Name)
+	r.Equal(8080, got.LocalPort)
+	r.Equal("https://demo.rgrok.rselbach.com", app.rgrokPublicURL())
+	r.False(tunnel.closed)
+	r.NoError(gotCtx.Err())
+
+	state, err := loadState()
+	r.NoError(err)
+	r.Equal("demo", state.Config.RgrokName)
+	r.Equal("token-123", state.Config.RgrokToken)
+	r.Equal("https://demo.rgrok.rselbach.com", state.Config.IDPBaseURL)
+}
+
+func TestRgrokSetupRedirectsBackToDialogOnError(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+
+	app := &webApp{localPort: 8080}
+	form := url.Values{
+		"tab":         {"users"},
+		"rgrok_name":  {"bad_name"},
+		"rgrok_token": {"token-123"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/rgrok/setup", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	location := rec.Header().Get("Location")
+	r.Contains(location, "modal=config")
+	r.Contains(location, "rgrok=1")
+	r.Contains(location, "rgrok_error=")
+	r.Empty(app.rgrokPublicURL())
+}
+
+func TestRgrokCancelClosesTunnel(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Config: config{
+			IDPBaseURL: "https://demo.rgrok.rselbach.com",
+			RgrokName:  "demo",
+			RgrokToken: "token-123",
+		},
+	}))
+
+	tunnel := &fakeTunnel{}
+	app := &webApp{
+		rgrokTunnel: &activeRgrokTunnel{
+			Name:      "demo",
+			PublicURL: "https://demo.rgrok.rselbach.com",
+			Tunnel:    tunnel,
+		},
+	}
+	form := url.Values{"tab": {"users"}}
+	req := httptest.NewRequest(http.MethodPost, "/rgrok/cancel", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	r.True(tunnel.closed)
+	r.Empty(app.rgrokPublicURL())
+
+	state, err := loadState()
+	r.NoError(err)
+	r.Empty(state.Config.RgrokName)
+	r.Empty(state.Config.RgrokToken)
+	r.Empty(state.Config.IDPBaseURL)
+}
+
+func TestRestoreSavedRgrokTunnel(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Config: config{
+			RgrokName:  "demo",
+			RgrokToken: "token-123",
+		},
+	}))
+
+	var got rgrokclient.Config
+	tunnel := &fakeTunnel{}
+	app := &webApp{
+		localPort: 8080,
+		rgrokStart: func(ctx context.Context, cfg rgrokclient.Config) (*startedRgrokTunnel, error) {
+			got = cfg
+			return &startedRgrokTunnel{
+				PublicURL: "https://demo.rgrok.rselbach.com",
+				Tunnel:    tunnel,
+			}, nil
+		},
+	}
+
+	app.restoreSavedRgrokTunnel()
+
+	r.Equal("https://rgrok.rselbach.com", got.ServerBaseURL)
+	r.Equal("token-123", got.Token)
+	r.Equal("demo", got.Name)
+	r.Equal(8080, got.LocalPort)
+	r.Equal("https://demo.rgrok.rselbach.com", app.rgrokPublicURL())
+	r.False(tunnel.closed)
+
+	state, err := loadState()
+	r.NoError(err)
+	r.Equal("demo", state.Config.RgrokName)
+	r.Equal("token-123", state.Config.RgrokToken)
+	r.Equal("https://demo.rgrok.rselbach.com", state.Config.IDPBaseURL)
+}
+
+type fakeTunnel struct {
+	closed bool
+}
+
+func (f *fakeTunnel) Close() error {
+	f.closed = true
+	return nil
 }
 
 func setTestStateFile(t *testing.T) {

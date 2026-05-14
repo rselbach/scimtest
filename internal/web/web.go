@@ -1,17 +1,23 @@
 package web
 
 import (
+	"context"
 	"crypto/rsa"
 	"embed"
 	"fmt"
 	"html/template"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	rgrokclient "github.com/rselbach/rgrok/client"
 )
 
 //go:embed templates/*.html
@@ -26,10 +32,42 @@ type webApp struct {
 	signingKey       *rsa.PrivateKey
 	certDER          []byte
 	debugRP          bool
+	localPort        int
+	rgrokStart       rgrokStarter
+	rgrokMu          sync.Mutex
+	rgrokTunnel      *activeRgrokTunnel
 	authCodes        map[string]authCode
 	accessTokens     map[string]accessToken
 	lastTrace        []syncTraceEntry
 	lastTraceContent string
+}
+
+type rgrokStarter func(context.Context, rgrokclient.Config) (*startedRgrokTunnel, error)
+
+type startedRgrokTunnel struct {
+	PublicURL string
+	Tunnel    tunnelCloser
+}
+
+type tunnelCloser interface {
+	Close() error
+}
+
+type activeRgrokTunnel struct {
+	Name      string
+	PublicURL string
+	Tunnel    tunnelCloser
+}
+
+type rgrokTunnelView struct {
+	Name      string
+	PublicURL string
+}
+
+type rgrokFormView struct {
+	Name  string
+	Error string
+	Close string
 }
 
 type flashMessage struct {
@@ -139,8 +177,13 @@ type appFormView struct {
 }
 
 type configFormView struct {
-	Config config
-	Close  string
+	Config             config
+	Close              string
+	RgrokSetupURL      string
+	IDPBaseURLValue    string
+	IDPBaseURLDisabled bool
+	Tunnel             *rgrokTunnelView
+	RgrokForm          *rgrokFormView
 }
 
 type pageData struct {
@@ -198,17 +241,24 @@ func Run(options ...RunOptions) error {
 		signingKey:   key,
 		certDER:      certDER,
 		debugRP:      opts.Debug,
+		localPort:    parseLocalPort(port),
+		rgrokStart:   startRgrokTunnel,
 		authCodes:    make(map[string]authCode),
 		accessTokens: make(map[string]accessToken),
 	}
 	addr := ":" + port
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", addr, err)
+	}
+	go app.restoreSavedRgrokTunnel()
 	log.Printf("merged auth test service listening on http://localhost%s", addr)
 	if opts.Debug {
 		if _, err := fmt.Fprintln(os.Stdout, "RP debug logging enabled"); err != nil {
 			return fmt.Errorf("write debug status: %w", err)
 		}
 	}
-	return http.ListenAndServe(addr, app.routes())
+	return http.Serve(listener, app.routes())
 }
 
 func (a *webApp) routes() http.Handler {
@@ -225,6 +275,8 @@ func (a *webApp) routes() http.Handler {
 	mux.HandleFunc("POST /apps/{id}/delete", a.handleAppDelete)
 	mux.HandleFunc("POST /config/save", a.handleConfigSave)
 	mux.HandleFunc("POST /config/clear", a.handleConfigClear)
+	mux.HandleFunc("POST /rgrok/setup", a.handleRgrokSetup)
+	mux.HandleFunc("POST /rgrok/cancel", a.handleRgrokCancel)
 	mux.HandleFunc("POST /sync", a.handleSync)
 	mux.HandleFunc("POST /import", a.handleImport)
 	mux.HandleFunc("POST /reset", a.handleReset)
@@ -261,10 +313,10 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		Stats:             buildStats(state),
 		Users:             buildUserRows(state, tab),
 		Groups:            buildGroupRows(state, tab),
-		Apps:              buildAppRows(state, effectiveIDPBaseURL(r, state), certificatePEM(a.certDER)),
+		Apps:              buildAppRows(state, a.effectiveIDPBaseURL(r, state), certificatePEM(a.certDER)),
 		Errors:            buildErrorList(state),
 		BaseURL:           configuredBaseURL(state.Config.BaseURL),
-		IDPBaseURL:        effectiveIDPBaseURL(r, state),
+		IDPBaseURL:        a.effectiveIDPBaseURL(r, state),
 		SCIMEnabled:       scimEnabled(state),
 		TracePopupEnabled: state.Config.AutoOpenSyncTrace,
 		UsersURL:          dashboardURL("users", nil),
@@ -304,10 +356,7 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 			data.AppForm = form
 		}
 	case "config":
-		data.ConfigForm = &configFormView{
-			Config: state.Config,
-			Close:  dashboardURL(tab, nil),
-		}
+		data.ConfigForm = a.buildConfigFormView(state.Config, tab, r.URL.Query())
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -621,8 +670,13 @@ func (a *webApp) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 		AutoOpenSyncTrace:     r.FormValue("auto_open_sync_trace") == "on",
 		SCIMDisabled:          r.FormValue("scim_enabled") != "on",
 		IDPBaseURL:            strings.TrimSpace(r.FormValue("idp_base_url")),
+		RgrokName:             state.Config.RgrokName,
+		RgrokToken:            state.Config.RgrokToken,
 		SigningPrivateKeyPEM:  state.Config.SigningPrivateKeyPEM,
 		SigningCertificatePEM: state.Config.SigningCertificatePEM,
+	}
+	if publicURL := a.rgrokPublicURL(); publicURL != "" {
+		state.Config.IDPBaseURL = publicURL
 	}
 
 	if err := saveState(state); err != nil {
@@ -631,6 +685,308 @@ func (a *webApp) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	redirectWithFlash(w, r, dashboardURL(tab, nil), flashMessage{Kind: "success", Message: "config saved"})
+}
+
+func (a *webApp) handleRgrokSetup(w http.ResponseWriter, r *http.Request) {
+	tab := normalizedTab(r.FormValue("tab"))
+	name := normalizeRgrokName(r.FormValue("rgrok_name"))
+	token := strings.TrimSpace(r.FormValue("rgrok_token"))
+
+	a.rgrokMu.Lock()
+	defer a.rgrokMu.Unlock()
+
+	if a.rgrokTunnel != nil {
+		redirectWithFlash(w, r, dashboardURL(tab, map[string]string{"modal": "config"}), flashMessage{Kind: "success", Message: "tunnel already established"})
+		return
+	}
+	if err := validateRgrokSetup(name, token, a.localPort); err != nil {
+		a.redirectRgrokFormError(w, r, tab, name, err)
+		return
+	}
+
+	starter := a.rgrokStart
+	if starter == nil {
+		starter = startRgrokTunnel
+	}
+	started, err := startRgrokWithTimeout(starter, rgrokclient.Config{
+		ServerBaseURL: "https://rgrok.rselbach.com",
+		Token:         token,
+		Name:          name,
+		LocalPort:     a.localPort,
+	}, 20*time.Second)
+	if err != nil {
+		a.redirectRgrokFormError(w, r, tab, name, fmt.Errorf("set up rgrok tunnel: %w", err))
+		return
+	}
+	if started == nil || started.Tunnel == nil || strings.TrimSpace(started.PublicURL) == "" {
+		a.redirectRgrokFormError(w, r, tab, name, fmt.Errorf("set up rgrok tunnel: rgrok did not return a public URL"))
+		return
+	}
+
+	a.rgrokTunnel = &activeRgrokTunnel{
+		Name:      name,
+		PublicURL: strings.TrimRight(strings.TrimSpace(started.PublicURL), "/"),
+		Tunnel:    started.Tunnel,
+	}
+	if err := a.saveRgrokConfig(name, token, a.rgrokTunnel.PublicURL); err != nil {
+		a.rgrokTunnel = nil
+		if closeErr := started.Tunnel.Close(); closeErr != nil {
+			err = fmt.Errorf("%w; close tunnel: %v", err, closeErr)
+		}
+		a.redirectRgrokFormError(w, r, tab, name, fmt.Errorf("save rgrok tunnel config: %w", err))
+		return
+	}
+	redirectWithFlash(w, r, dashboardURL(tab, map[string]string{"modal": "config"}), flashMessage{Kind: "success", Message: "tunnel established"})
+}
+
+func (a *webApp) handleRgrokCancel(w http.ResponseWriter, r *http.Request) {
+	tab := normalizedTab(r.FormValue("tab"))
+
+	if err := a.closeActiveRgrokTunnel(); err != nil {
+		redirectWithFlash(w, r, dashboardURL(tab, map[string]string{"modal": "config"}), flashMessage{Kind: "error", Message: fmt.Sprintf("disconnect tunnel: %v", err)})
+		return
+	}
+	if err := a.clearRgrokConfig(); err != nil {
+		redirectWithFlash(w, r, dashboardURL(tab, map[string]string{"modal": "config"}), flashMessage{Kind: "error", Message: fmt.Sprintf("clear tunnel config: %v", err)})
+		return
+	}
+	redirectWithFlash(w, r, dashboardURL(tab, map[string]string{"modal": "config"}), flashMessage{Kind: "success", Message: "tunnel disconnected"})
+}
+
+func (a *webApp) closeActiveRgrokTunnel() error {
+	a.rgrokMu.Lock()
+	tunnel := a.rgrokTunnel
+	a.rgrokTunnel = nil
+	a.rgrokMu.Unlock()
+
+	if tunnel == nil || tunnel.Tunnel == nil {
+		return nil
+	}
+	return tunnel.Tunnel.Close()
+}
+
+func (a *webApp) restoreSavedRgrokTunnel() {
+	state, err := loadState()
+	if err != nil {
+		log.Printf("restore rgrok tunnel: load state: %v", err)
+		return
+	}
+	name := normalizeRgrokName(state.Config.RgrokName)
+	token := strings.TrimSpace(state.Config.RgrokToken)
+	if name == "" || token == "" {
+		return
+	}
+	if err := validateRgrokSetup(name, token, a.localPort); err != nil {
+		log.Printf("restore rgrok tunnel: %v", err)
+		return
+	}
+	starter := a.rgrokStart
+	if starter == nil {
+		starter = startRgrokTunnel
+	}
+	started, err := startRgrokWithTimeout(starter, rgrokclient.Config{
+		ServerBaseURL: "https://rgrok.rselbach.com",
+		Token:         token,
+		Name:          name,
+		LocalPort:     a.localPort,
+	}, 20*time.Second)
+	if err != nil {
+		log.Printf("restore rgrok tunnel: %v", err)
+		return
+	}
+	if started == nil || started.Tunnel == nil || strings.TrimSpace(started.PublicURL) == "" {
+		log.Printf("restore rgrok tunnel: rgrok did not return a public URL")
+		return
+	}
+
+	publicURL := strings.TrimRight(strings.TrimSpace(started.PublicURL), "/")
+	a.rgrokMu.Lock()
+	if a.rgrokTunnel != nil {
+		a.rgrokMu.Unlock()
+		if err := started.Tunnel.Close(); err != nil {
+			log.Printf("restore rgrok tunnel: close duplicate tunnel: %v", err)
+		}
+		return
+	}
+	a.rgrokTunnel = &activeRgrokTunnel{
+		Name:      name,
+		PublicURL: publicURL,
+		Tunnel:    started.Tunnel,
+	}
+	a.rgrokMu.Unlock()
+
+	if err := a.saveRgrokConfig(name, token, publicURL); err != nil {
+		log.Printf("restore rgrok tunnel: save public URL: %v", err)
+	}
+	log.Printf("restored rgrok tunnel at %s", publicURL)
+}
+
+func (a *webApp) saveRgrokConfig(name, token, publicURL string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	state, err := loadState()
+	if err != nil {
+		return err
+	}
+	state.Config.RgrokName = name
+	state.Config.RgrokToken = token
+	state.Config.IDPBaseURL = strings.TrimRight(strings.TrimSpace(publicURL), "/")
+	return saveState(state)
+}
+
+func (a *webApp) clearRgrokConfig() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	state, err := loadState()
+	if err != nil {
+		return err
+	}
+	state.Config.RgrokName = ""
+	state.Config.RgrokToken = ""
+	state.Config.IDPBaseURL = ""
+	return saveState(state)
+}
+
+func startRgrokTunnel(ctx context.Context, cfg rgrokclient.Config) (*startedRgrokTunnel, error) {
+	tunnel, err := rgrokclient.Start(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &startedRgrokTunnel{
+		PublicURL: tunnel.PublicURL,
+		Tunnel:    tunnel,
+	}, nil
+}
+
+func startRgrokWithTimeout(starter rgrokStarter, cfg rgrokclient.Config, timeout time.Duration) (*startedRgrokTunnel, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan struct {
+		tunnel *startedRgrokTunnel
+		err    error
+	}, 1)
+
+	go func() {
+		tunnel, err := starter(ctx, cfg)
+		result <- struct {
+			tunnel *startedRgrokTunnel
+			err    error
+		}{tunnel: tunnel, err: err}
+	}()
+
+	select {
+	case outcome := <-result:
+		if outcome.err != nil {
+			cancel()
+			return nil, outcome.err
+		}
+		return outcome.tunnel, nil
+	case <-time.After(timeout):
+		cancel()
+		return nil, fmt.Errorf("timed out waiting for rgrok tunnel registration")
+	}
+}
+
+func parseLocalPort(port string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(port))
+	if err != nil {
+		return 0
+	}
+	if n <= 0 || n > 65535 {
+		return 0
+	}
+	return n
+}
+
+var rgrokNamePattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+
+func normalizeRgrokName(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	value = strings.TrimPrefix(value, "https://")
+	value = strings.TrimPrefix(value, "http://")
+	value = strings.TrimSuffix(value, ".rgrok.rselbach.com")
+	return strings.Trim(value, ".")
+}
+
+func validateRgrokSetup(name, token string, localPort int) error {
+	if name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if !rgrokNamePattern.MatchString(name) {
+		return fmt.Errorf("name must be a valid subdomain using lowercase letters, numbers, and hyphens")
+	}
+	if token == "" {
+		return fmt.Errorf("API token is required")
+	}
+	if localPort == 0 {
+		return fmt.Errorf("local web port is not available for rgrok")
+	}
+	return nil
+}
+
+func (a *webApp) buildConfigFormView(cfg config, tab string, query url.Values) *configFormView {
+	closeURL := dashboardURL(tab, nil)
+	form := &configFormView{
+		Config:          cfg,
+		Close:           closeURL,
+		RgrokSetupURL:   dashboardURL(tab, map[string]string{"modal": "config", "rgrok": "1"}),
+		IDPBaseURLValue: cfg.IDPBaseURL,
+	}
+	if tunnel := a.rgrokTunnelView(); tunnel != nil {
+		form.Tunnel = tunnel
+		form.IDPBaseURLValue = tunnel.PublicURL
+		form.IDPBaseURLDisabled = true
+	}
+	if query.Get("rgrok") == "1" {
+		formName := normalizeRgrokName(query.Get("rgrok_name"))
+		if formName == "" {
+			formName = normalizeRgrokName(cfg.RgrokName)
+		}
+		form.RgrokForm = &rgrokFormView{
+			Name:  formName,
+			Error: query.Get("rgrok_error"),
+			Close: dashboardURL(tab, map[string]string{"modal": "config"}),
+		}
+	}
+	return form
+}
+
+func (a *webApp) redirectRgrokFormError(w http.ResponseWriter, r *http.Request, tab, name string, err error) {
+	redirectWithFlash(w, r, dashboardURL(tab, map[string]string{
+		"modal":       "config",
+		"rgrok":       "1",
+		"rgrok_name":  name,
+		"rgrok_error": err.Error(),
+	}), flashMessage{})
+}
+
+func (a *webApp) effectiveIDPBaseURL(r *http.Request, state appState) string {
+	if publicURL := a.rgrokPublicURL(); publicURL != "" {
+		return publicURL
+	}
+	return effectiveIDPBaseURL(r, state)
+}
+
+func (a *webApp) rgrokPublicURL() string {
+	a.rgrokMu.Lock()
+	defer a.rgrokMu.Unlock()
+	if a.rgrokTunnel == nil {
+		return ""
+	}
+	return a.rgrokTunnel.PublicURL
+}
+
+func (a *webApp) rgrokTunnelView() *rgrokTunnelView {
+	a.rgrokMu.Lock()
+	defer a.rgrokMu.Unlock()
+	if a.rgrokTunnel == nil {
+		return nil
+	}
+	return &rgrokTunnelView{
+		Name:      a.rgrokTunnel.Name,
+		PublicURL: a.rgrokTunnel.PublicURL,
+	}
 }
 
 func (a *webApp) handleConfigClear(w http.ResponseWriter, r *http.Request) {
@@ -650,6 +1006,10 @@ func (a *webApp) handleConfigClear(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := saveState(state); err != nil {
 		a.redirectError(w, r, tab, err)
+		return
+	}
+	if err := a.closeActiveRgrokTunnel(); err != nil {
+		redirectWithFlash(w, r, dashboardURL(tab, nil), flashMessage{Kind: "error", Message: fmt.Sprintf("config cleared; disconnect tunnel: %v", err)})
 		return
 	}
 

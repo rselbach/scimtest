@@ -30,6 +30,8 @@ type Config struct {
 	AutoOpenSyncTrace     bool   `json:"auto_open_sync_trace"`
 	SCIMDisabled          bool   `json:"scim_disabled,omitempty"`
 	IDPBaseURL            string `json:"idp_base_url,omitempty"`
+	RgrokName             string `json:"rgrok_name,omitempty"`
+	RgrokToken            string `json:"rgrok_token,omitempty"`
 	SigningPrivateKeyPEM  string `json:"signing_private_key_pem,omitempty"`
 	SigningCertificatePEM string `json:"signing_certificate_pem,omitempty"`
 }
@@ -322,6 +324,10 @@ func loadStateFromDB(db *sql.DB) (AppState, error) {
 			state.Config.SCIMDisabled = value == "1"
 		case "idp_base_url":
 			state.Config.IDPBaseURL = value
+		case "rgrok_name":
+			state.Config.RgrokName = value
+		case "rgrok_token":
+			state.Config.RgrokToken = value
 		case "signing_private_key_pem":
 			state.Config.SigningPrivateKeyPEM = value
 		case "signing_certificate_pem":
@@ -489,6 +495,8 @@ func saveStateToDB(db *sql.DB, state AppState) error {
 		"auto_open_sync_trace":    BoolString(state.Config.AutoOpenSyncTrace),
 		"scim_disabled":           BoolString(state.Config.SCIMDisabled),
 		"idp_base_url":            state.Config.IDPBaseURL,
+		"rgrok_name":              state.Config.RgrokName,
+		"rgrok_token":             state.Config.RgrokToken,
 		"signing_private_key_pem": state.Config.SigningPrivateKeyPEM,
 		"signing_certificate_pem": state.Config.SigningCertificatePEM,
 	}
@@ -666,6 +674,8 @@ func StateEmpty(state AppState) bool {
 func NormalizeState(state *AppState) {
 	state.Config.BaseURL = strings.TrimRight(strings.TrimSpace(state.Config.BaseURL), "/")
 	state.Config.IDPBaseURL = strings.TrimRight(strings.TrimSpace(state.Config.IDPBaseURL), "/")
+	state.Config.RgrokName = strings.TrimSpace(state.Config.RgrokName)
+	state.Config.RgrokToken = strings.TrimSpace(state.Config.RgrokToken)
 
 	for i := range state.Users {
 		if strings.TrimSpace(state.Users[i].Username) == "" {

@@ -20,6 +20,9 @@ func TestSaveAndLoadState(t *testing.T) {
 			BaseURL:           "https://example.com/scim/v2",
 			BearerToken:       "secret",
 			AutoOpenSyncTrace: true,
+			IDPBaseURL:        "https://demo.rgrok.rselbach.com",
+			RgrokName:         "demo",
+			RgrokToken:        "rgrok-token",
 		},
 		Users: []User{{
 			ID:         "local-1",

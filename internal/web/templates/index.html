@@ -660,6 +660,67 @@
       font-size: 11.5px;
       line-height: 1.35;
     }
+    .inline-error {
+      grid-column: 1 / -1;
+      padding: 9px 11px;
+      border: 1px solid rgba(199, 52, 68, 0.28);
+      border-radius: var(--radius);
+      background: var(--danger-soft);
+      color: #7f1d2d;
+      font-size: 12.5px;
+    }
+    .link-button {
+      display: inline;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--accent);
+      cursor: pointer;
+      font: inherit;
+    }
+    .link-button:hover { text-decoration: underline; }
+    .tunnel-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 18px;
+      color: var(--muted);
+      font-size: 12.5px;
+    }
+    .tunnel-row form { display: inline; margin: 0; }
+    .tunnel-row strong {
+      color: var(--success);
+      font-weight: 500;
+    }
+    .subdomain-field {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+    }
+    .subdomain-field input {
+      border-top-right-radius: 0 !important;
+      border-bottom-right-radius: 0 !important;
+    }
+    .subdomain-suffix {
+      display: inline-flex;
+      align-items: center;
+      height: 34px;
+      padding: 0 10px;
+      border: 1px solid var(--line-strong);
+      border-left: 0;
+      border-top-right-radius: var(--radius);
+      border-bottom-right-radius: var(--radius);
+      background: var(--bg-soft);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .field input:disabled {
+      background: var(--bg-soft);
+      color: var(--muted);
+      cursor: not-allowed;
+    }
     .checkbox-row {
       display: inline-flex;
       align-items: center;
@@ -1522,9 +1583,22 @@
               <span class="label">SCIM base URL</span>
               <input name="base_url" value="{{.ConfigForm.Config.BaseURL}}" autocomplete="off">
             </label>
+            <div class="field full">
+              {{if .ConfigForm.Tunnel}}
+              <div class="tunnel-row">
+                <strong>Tunnel established.</strong>
+                <button class="link-button" type="submit" form="rgrok-cancel-form">Cancel</button>
+              </div>
+              {{else}}
+              <div class="tunnel-row">
+                <a href="{{.ConfigForm.RgrokSetupURL}}">Set up rgrok tunnel</a>
+              </div>
+              {{end}}
+            </div>
             <label class="field full">
               <span class="label">IDP base URL</span>
-              <input name="idp_base_url" value="{{.ConfigForm.Config.IDPBaseURL}}" placeholder="{{.IDPBaseURL}}" autocomplete="off">
+              {{if .ConfigForm.IDPBaseURLDisabled}}<input type="hidden" name="idp_base_url" value="{{.ConfigForm.IDPBaseURLValue}}">{{end}}
+              <input name="idp_base_url" value="{{.ConfigForm.IDPBaseURLValue}}" placeholder="{{.IDPBaseURL}}" autocomplete="off" {{if .ConfigForm.IDPBaseURLDisabled}}disabled{{end}}>
               <span class="hint">Set this only when OIDC/SAML clients need a public issuer URL different from the current request host.</span>
             </label>
             <label class="field full">
@@ -1550,8 +1624,50 @@
       <form id="config-clear-form" method="post" action="/config/clear" style="margin:0">
         <input type="hidden" name="tab" value="{{.Tab}}">
       </form>
+      <form id="rgrok-cancel-form" method="post" action="/rgrok/cancel" style="margin:0">
+        <input type="hidden" name="tab" value="{{.Tab}}">
+      </form>
     </div>
   </div>
+
+  {{if .ConfigForm.RgrokForm}}
+  <div class="overlay" data-overlay>
+    <div class="modal" role="dialog" aria-modal="true" tabindex="-1">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">Set up rgrok tunnel</div>
+          <div class="modal-sub">Creates a public IDP issuer URL for this local scimtest server.</div>
+        </div>
+        <a class="btn btn-sm btn-ghost" href="{{.ConfigForm.RgrokForm.Close}}" data-autofocus>Close</a>
+      </div>
+      <form method="post" action="/rgrok/setup" data-rgrok-form>
+        <input type="hidden" name="tab" value="{{$.Tab}}">
+        <div class="modal-body">
+          <div class="form-grid">
+            {{if .ConfigForm.RgrokForm.Error}}
+            <div class="inline-error" role="alert">{{.ConfigForm.RgrokForm.Error}}</div>
+            {{end}}
+            <label class="field full">
+              <span class="label">Name</span>
+              <span class="subdomain-field">
+                <input name="rgrok_name" value="{{.ConfigForm.RgrokForm.Name}}" autocomplete="off" data-rgrok-required>
+                <span class="subdomain-suffix">.rgrok.rselbach.com</span>
+              </span>
+            </label>
+            <label class="field full">
+              <span class="label">API Token</span>
+              <input type="password" name="rgrok_token" autocomplete="off" data-rgrok-required>
+            </label>
+          </div>
+          <div class="form-actions">
+            <a class="btn btn-ghost" href="{{.ConfigForm.RgrokForm.Close}}">Cancel</a>
+            <button class="btn btn-primary" type="submit" data-rgrok-submit disabled>Setup</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+  {{end}}
   {{end}}
 
   <script>
@@ -1718,6 +1834,20 @@
         control.addEventListener('change', syncProtocolSections);
       }
       syncProtocolSections();
+    }
+
+    const rgrokForm = document.querySelector('[data-rgrok-form]');
+    if (rgrokForm) {
+      const submit = rgrokForm.querySelector('[data-rgrok-submit]');
+      const required = Array.from(rgrokForm.querySelectorAll('[data-rgrok-required]'));
+      function syncRgrokSubmit() {
+        if (!submit) return;
+        submit.disabled = required.some((control) => !control.value.trim());
+      }
+      for (const control of required) {
+        control.addEventListener('input', syncRgrokSubmit);
+      }
+      syncRgrokSubmit();
     }
   </script>
 </body>
