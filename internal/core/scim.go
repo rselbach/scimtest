@@ -3,10 +3,12 @@ package core
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -68,8 +70,28 @@ type SyncResult struct {
 	State   AppState
 	Status  string
 	Fatal   error
+	Stopped error
 	Changed bool
 	Traces  []SyncTraceEntry
+}
+
+// RateLimitError describes a SCIM 429 response.
+type RateLimitError struct {
+	Method       string
+	Path         string
+	Status       string
+	RetryAfter   string
+	ResponseBody string
+}
+
+func (e *RateLimitError) Error() string {
+	message := fmt.Sprintf("SCIM server rate limit hit (%s)", e.Status)
+	if e.RetryAfter != "" {
+		message += ". Try again " + e.RetryAfter + "."
+		return message
+	}
+
+	return message + ". Try again later."
 }
 
 type ImportResult struct {
@@ -80,17 +102,18 @@ type ImportResult struct {
 }
 
 type SyncTraceEntry struct {
-	ResourceType string
-	ResourceID   string
-	Label        string
-	Operation    string
-	Method       string
-	Path         string
-	RequestBody  string
-	Status       string
-	ResponseBody string
-	Err          string
-	CreatedAt    string
+	ResourceType       string
+	ResourceID         string
+	Label              string
+	Operation          string
+	Method             string
+	Path               string
+	RequestBody        string
+	Status             string
+	ResponseRetryAfter string
+	ResponseBody       string
+	Err                string
+	CreatedAt          string
 }
 
 type SCIMListResponse[T any] struct {
@@ -133,8 +156,12 @@ func SyncDirtyState(state AppState) SyncResult {
 		return SyncResult{Fatal: err}
 	}
 
-	state, userCounts := syncDirtyUsers(client, state)
-	state, groupCounts := syncDirtyGroups(client, state)
+	state, userCounts, stopped := syncDirtyUsers(client, state)
+	groupCounts := syncCounts{}
+	if stopped == nil {
+		state, groupCounts, stopped = syncDirtyGroups(client, state)
+	}
+
 	status := fmt.Sprintf(
 		"sync finished: users %d created, %d updated, %d deleted, %d failed; groups %d created, %d updated, %d deleted, %d failed",
 		userCounts.created,
@@ -146,10 +173,14 @@ func SyncDirtyState(state AppState) SyncResult {
 		groupCounts.deleted,
 		groupCounts.failed,
 	)
+	if stopped != nil {
+		status = fmt.Sprintf("sync stopped: %v; %s", stopped, status)
+	}
 
 	return SyncResult{
 		State:   state,
 		Status:  status,
+		Stopped: stopped,
 		Changed: userCounts.total()+groupCounts.total() > 0,
 		Traces:  client.traces,
 	}
@@ -194,12 +225,11 @@ func (c syncCounts) total() int {
 	return c.created + c.updated + c.deleted + c.failed
 }
 
-func syncDirtyUsers(client *SCIMClient, state AppState) (AppState, syncCounts) {
-
+func syncDirtyUsers(client *SCIMClient, state AppState) (AppState, syncCounts, error) {
 	nextUsers := make([]User, 0, len(state.Users))
 	counts := syncCounts{}
 
-	for _, u := range state.Users {
+	for i, u := range state.Users {
 		if !u.Dirty {
 			nextUsers = append(nextUsers, u)
 			continue
@@ -216,6 +246,11 @@ func syncDirtyUsers(client *SCIMClient, state AppState) (AppState, syncCounts) {
 				u.LastError = err.Error()
 				counts.failed++
 				nextUsers = append(nextUsers, u)
+				if isRateLimitError(err) {
+					nextUsers = append(nextUsers, state.Users[i+1:]...)
+					state.Users = nextUsers
+					return state, counts, err
+				}
 				continue
 			}
 
@@ -226,6 +261,11 @@ func syncDirtyUsers(client *SCIMClient, state AppState) (AppState, syncCounts) {
 				u.LastError = err.Error()
 				counts.failed++
 				nextUsers = append(nextUsers, u)
+				if isRateLimitError(err) {
+					nextUsers = append(nextUsers, state.Users[i+1:]...)
+					state.Users = nextUsers
+					return state, counts, err
+				}
 				continue
 			}
 
@@ -238,6 +278,11 @@ func syncDirtyUsers(client *SCIMClient, state AppState) (AppState, syncCounts) {
 				u.LastError = err.Error()
 				counts.failed++
 				nextUsers = append(nextUsers, u)
+				if isRateLimitError(err) {
+					nextUsers = append(nextUsers, state.Users[i+1:]...)
+					state.Users = nextUsers
+					return state, counts, err
+				}
 				continue
 			}
 
@@ -248,14 +293,14 @@ func syncDirtyUsers(client *SCIMClient, state AppState) (AppState, syncCounts) {
 	}
 
 	state.Users = nextUsers
-	return state, counts
+	return state, counts, nil
 }
 
-func syncDirtyGroups(client *SCIMClient, state AppState) (AppState, syncCounts) {
+func syncDirtyGroups(client *SCIMClient, state AppState) (AppState, syncCounts, error) {
 	nextGroups := make([]Group, 0, len(state.Groups))
 	counts := syncCounts{}
 
-	for _, g := range state.Groups {
+	for i, g := range state.Groups {
 		if !g.Dirty {
 			nextGroups = append(nextGroups, g)
 			continue
@@ -272,6 +317,11 @@ func syncDirtyGroups(client *SCIMClient, state AppState) (AppState, syncCounts) 
 				g.LastError = err.Error()
 				counts.failed++
 				nextGroups = append(nextGroups, g)
+				if isRateLimitError(err) {
+					nextGroups = append(nextGroups, state.Groups[i+1:]...)
+					state.Groups = nextGroups
+					return state, counts, err
+				}
 				continue
 			}
 
@@ -282,6 +332,11 @@ func syncDirtyGroups(client *SCIMClient, state AppState) (AppState, syncCounts) 
 				g.LastError = err.Error()
 				counts.failed++
 				nextGroups = append(nextGroups, g)
+				if isRateLimitError(err) {
+					nextGroups = append(nextGroups, state.Groups[i+1:]...)
+					state.Groups = nextGroups
+					return state, counts, err
+				}
 				continue
 			}
 
@@ -294,6 +349,11 @@ func syncDirtyGroups(client *SCIMClient, state AppState) (AppState, syncCounts) 
 				g.LastError = err.Error()
 				counts.failed++
 				nextGroups = append(nextGroups, g)
+				if isRateLimitError(err) {
+					nextGroups = append(nextGroups, state.Groups[i+1:]...)
+					state.Groups = nextGroups
+					return state, counts, err
+				}
 				continue
 			}
 
@@ -304,7 +364,12 @@ func syncDirtyGroups(client *SCIMClient, state AppState) (AppState, syncCounts) 
 	}
 
 	state.Groups = nextGroups
-	return state, counts
+	return state, counts, nil
+}
+
+func isRateLimitError(err error) bool {
+	var rateLimitErr *RateLimitError
+	return errors.As(err, &rateLimitErr)
 }
 
 func (c *SCIMClient) createUser(u User) (string, error) {
@@ -531,6 +596,7 @@ func (c *SCIMClient) doJSON(method string, path string, body any, out any, targe
 		c.traces = append(c.traces, trace)
 		return fmt.Errorf("run SCIM %s %s request: %w", method, path, err)
 	}
+	trace.ResponseRetryAfter = strings.TrimSpace(resp.Header.Get("Retry-After"))
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -555,6 +621,19 @@ func (c *SCIMClient) doJSON(method string, path string, body any, out any, targe
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if resp.StatusCode == http.StatusTooManyRequests {
+			err := &RateLimitError{
+				Method:       method,
+				Path:         path,
+				Status:       resp.Status,
+				RetryAfter:   parseRetryAfter(resp.Header.Get("Retry-After"), currentTime()),
+				ResponseBody: strings.TrimSpace(string(data)),
+			}
+			trace.Err = err.Error()
+			c.traces = append(c.traces, trace)
+			return err
+		}
+
 		c.traces = append(c.traces, trace)
 		if requestBody == "" {
 			return fmt.Errorf("SCIM %s %s returned %s: %s", method, path, resp.Status, strings.TrimSpace(string(data)))
@@ -574,6 +653,65 @@ func (c *SCIMClient) doJSON(method string, path string, body any, out any, targe
 	}
 
 	return nil
+}
+
+func parseRetryAfter(value string, now time.Time) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+
+	seconds, err := strconv.Atoi(value)
+	if err == nil {
+		if seconds <= 0 {
+			return "now"
+		}
+
+		return "in " + humanRetryAfter(time.Duration(seconds)*time.Second)
+	}
+
+	retryAt, err := http.ParseTime(value)
+	if err != nil {
+		return "after " + value
+	}
+
+	delay := retryAt.Sub(now)
+	if delay <= 0 {
+		return "now"
+	}
+
+	return "in " + humanRetryAfter(delay)
+}
+
+func humanRetryAfter(delay time.Duration) string {
+	seconds := int64((delay + time.Second - 1) / time.Second)
+	switch {
+	case seconds <= 1:
+		return "1 second"
+	case seconds < 60:
+		return fmt.Sprintf("%d seconds", seconds)
+	case seconds < 3600:
+		minutes := (seconds + 59) / 60
+		if minutes == 1 {
+			return "1 minute"
+		}
+
+		return fmt.Sprintf("%d minutes", minutes)
+	case seconds < 86400:
+		hours := (seconds + 3599) / 3600
+		if hours == 1 {
+			return "1 hour"
+		}
+
+		return fmt.Sprintf("%d hours", hours)
+	default:
+		days := (seconds + 86399) / 86400
+		if days == 1 {
+			return "1 day"
+		}
+
+		return fmt.Sprintf("%d days", days)
+	}
 }
 
 func traceTargetForUser(u User, operation string) TraceTarget {

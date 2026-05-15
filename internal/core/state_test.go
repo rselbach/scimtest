@@ -53,15 +53,16 @@ func TestSaveAndLoadState(t *testing.T) {
 		}},
 		UserOperations: map[string][]OperationLog{
 			"local-1": {{
-				Kind:         "sync",
-				Summary:      "Created",
-				Operation:    "create",
-				Method:       "POST",
-				Path:         "/Users",
-				RequestBody:  `{"userName":"troy"}`,
-				Status:       "201 Created",
-				ResponseBody: `{"id":"remote-1"}`,
-				CreatedAt:    "2026-05-01T10:00:00Z",
+				Kind:               "sync",
+				Summary:            "Created",
+				Operation:          "create",
+				Method:             "POST",
+				Path:               "/Users",
+				RequestBody:        `{"userName":"troy"}`,
+				Status:             "201 Created",
+				ResponseRetryAfter: "60",
+				ResponseBody:       `{"id":"remote-1"}`,
+				CreatedAt:          "2026-05-01T10:00:00Z",
 			}},
 		},
 		GroupOperations: map[string][]OperationLog{
@@ -234,6 +235,7 @@ func TestLoadStateMigratesLegacyOperationLogsTable(t *testing.T) {
 	r.Len(state.UserOperations["local-1"], 1)
 	r.Equal("sync", state.UserOperations["local-1"][0].Kind)
 	r.Equal("", state.UserOperations["local-1"][0].Summary)
+	r.Equal("", state.UserOperations["local-1"][0].ResponseRetryAfter)
 }
 
 func TestAppendLocalOperationLogPrependsEntry(t *testing.T) {

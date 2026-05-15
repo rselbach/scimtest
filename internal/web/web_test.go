@@ -144,6 +144,109 @@ func TestSyncPersistsRemoteStateAndTraceCookie(t *testing.T) {
 	r.Contains(app.traceContent(), "POST /Users")
 }
 
+func TestSyncRateLimitRendersReadableError(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		r.Equal(http.MethodPut, req.Method)
+		r.Equal("/Users/remote-dean", req.URL.Path)
+		w.Header().Set("Content-Type", "application/scim+json")
+		w.Header().Set("Retry-After", "60")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, err := fmt.Fprint(w, `{"schemas":["urn:ietf:params:scim:api:messages:2.0:Error"],"detail":"Too many requests. Please retry after the rate limit resets.","status":"429"}`)
+		r.NoError(err)
+	}))
+	defer server.Close()
+
+	state := appState{
+		Config: config{
+			BaseURL:     server.URL,
+			BearerToken: "token",
+		},
+		Users: []user{{
+			ID:         "u1",
+			GivenName:  "Dean",
+			FamilyName: "Pelton",
+			Username:   "deanp",
+			Email:      "dean@example.com",
+			Active:     true,
+			RemoteID:   "remote-dean",
+			Dirty:      true,
+		}},
+		UserOperations:  map[string][]operationLog{},
+		GroupOperations: map[string][]operationLog{},
+	}
+	r.NoError(saveState(state))
+
+	app := &webApp{}
+	form := url.Values{"tab": {"users"}}
+	syncReq := httptest.NewRequest(http.MethodPost, "/sync", strings.NewReader(form.Encode()))
+	syncReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	syncRec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(syncRec, syncReq)
+
+	r.Equal(http.StatusSeeOther, syncRec.Code)
+	updated, err := loadState()
+	r.NoError(err)
+	r.Contains(updated.Users[0].LastError, "Try again in 1 minute")
+	r.NotContains(updated.Users[0].LastError, "schemas")
+	r.Equal("60", updated.UserOperations["u1"][0].ResponseRetryAfter)
+	r.Contains(app.traceContent(), "Retry-After: 60")
+
+	indexReq := httptest.NewRequest(http.MethodGet, "/?tab=users", nil)
+	indexRec := httptest.NewRecorder()
+	app.routes().ServeHTTP(indexRec, indexReq)
+
+	r.Equal(http.StatusOK, indexRec.Code)
+	body := indexRec.Body.String()
+	r.Contains(body, "user Dean Pelton: SCIM server rate limit hit (429 Too Many Requests). Try again in 1 minute.")
+	r.NotContains(body, "schemas")
+
+	historyReq := httptest.NewRequest(http.MethodGet, "/?tab=users&historyType=user&historyID=u1", nil)
+	historyRec := httptest.NewRecorder()
+	app.routes().ServeHTTP(historyRec, historyReq)
+
+	r.Equal(http.StatusOK, historyRec.Code)
+	r.Contains(historyRec.Body.String(), "Retry-After: 60")
+}
+
+func TestIndexRendersLegacyRateLimitErrorReadable(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+
+	state := appState{
+		Config: config{BaseURL: "https://example.com/scim"},
+		Users: []user{{
+			ID:         "u1",
+			GivenName:  "Dean",
+			FamilyName: "Pelton",
+			Username:   "deanp",
+			Email:      "dean@example.com",
+			Active:     true,
+			RemoteID:   "remote-dean",
+			Dirty:      true,
+			LastError:  `SCIM PUT /Users/remote-dean returned 429 Too Many Requests; rate limited; retry after 1m0s: {"schemas":["urn:ietf:params:scim:api:messages:2.0:Error"],"detail":"Too many requests.","status":"429"}`,
+		}},
+		UserOperations:  map[string][]operationLog{},
+		GroupOperations: map[string][]operationLog{},
+	}
+	r.NoError(saveState(state))
+
+	app := &webApp{}
+	req := httptest.NewRequest(http.MethodGet, "/?tab=users", nil)
+	rec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	r.Contains(body, "user Dean Pelton: SCIM server rate limit hit (429 Too Many Requests). Try again in 1 minute.")
+	r.NotContains(body, "schemas")
+	r.NotContains(body, "1m0s")
+}
+
 func TestSCIMDisabledHidesSyncControlsAndColumns(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)

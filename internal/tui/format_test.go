@@ -21,3 +21,18 @@ func TestPrettyJSONHighlightsOutput(t *testing.T) {
 	r.Contains(formatted, "\n")
 	r.True(strings.Index(formatted, `"active"`) < strings.Index(formatted, `"count"`))
 }
+
+func TestFormatSyncTracesIncludesRetryAfter(t *testing.T) {
+	r := require.New(t)
+
+	formatted := formatSyncTraces([]syncTraceEntry{{
+		CreatedAt:          "2026-05-01T10:00:00Z",
+		Method:             "PUT",
+		Path:               "/Users/remote-1",
+		Status:             "429 Too Many Requests",
+		ResponseRetryAfter: "60",
+	}})
+
+	r.Contains(formatted, "Response Status: 429 Too Many Requests")
+	r.Contains(formatted, "Retry-After: 60")
+}

@@ -45,14 +45,15 @@ func TestOpenSelectedHistoryDetailOnlyForSyncEntries(t *testing.T) {
 	r.EqualError(err, "details only available for sync operations")
 
 	m.history.entries = []operationLog{{
-		Kind:         "sync",
-		Summary:      "Synced",
-		Method:       "PUT",
-		Path:         "/Users/remote-1",
-		RequestBody:  `{"userName":"troy"}`,
-		Status:       "200 OK",
-		ResponseBody: `{"id":"remote-1"}`,
-		CreatedAt:    "2026-05-01T10:01:00Z",
+		Kind:               "sync",
+		Summary:            "Synced",
+		Method:             "PUT",
+		Path:               "/Users/remote-1",
+		RequestBody:        `{"userName":"troy"}`,
+		Status:             "200 OK",
+		ResponseRetryAfter: "60",
+		ResponseBody:       `{"id":"remote-1"}`,
+		CreatedAt:          "2026-05-01T10:01:00Z",
 	}}
 
 	r.NoError(m.openSelectedHistoryDetail())
@@ -60,6 +61,7 @@ func TestOpenSelectedHistoryDetailOnlyForSyncEntries(t *testing.T) {
 	r.Equal(modeOperationHistory, m.trace.returnTo)
 	r.Equal("User History: Troy Barnes Detail", m.trace.title)
 	r.Contains(m.trace.content, "PUT /Users/remote-1")
+	r.Contains(m.trace.content, "Retry-After: 60")
 }
 
 func TestImportRequiresConfirmation(t *testing.T) {

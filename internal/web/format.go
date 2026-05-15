@@ -24,6 +24,9 @@ func formatSyncTraces(traces []syncTraceEntry) string {
 		if trace.Status != "" {
 			lines = append(lines, "Response Status: "+trace.Status)
 		}
+		if trace.ResponseRetryAfter != "" {
+			lines = append(lines, "Retry-After: "+trace.ResponseRetryAfter)
+		}
 		if trace.ResponseBody != "" {
 			lines = append(lines, "Response Body:")
 			lines = append(lines, indentBlock(prettyJSON(trace.ResponseBody), "  "))
@@ -104,6 +107,9 @@ func formatOperationDetail(entry operationLog) string {
 	}
 	if entry.Status != "" {
 		lines = append(lines, "Response Status: "+entry.Status)
+	}
+	if entry.ResponseRetryAfter != "" {
+		lines = append(lines, "Retry-After: "+entry.ResponseRetryAfter)
 	}
 	if entry.ResponseBody != "" {
 		lines = append(lines, "Response Body:")

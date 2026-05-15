@@ -98,16 +98,17 @@ type AppState struct {
 }
 
 type OperationLog struct {
-	Kind         string
-	Summary      string
-	Operation    string
-	Method       string
-	Path         string
-	RequestBody  string
-	Status       string
-	ResponseBody string
-	Err          string
-	CreatedAt    string
+	Kind               string
+	Summary            string
+	Operation          string
+	Method             string
+	Path               string
+	RequestBody        string
+	Status             string
+	ResponseRetryAfter string
+	ResponseBody       string
+	Err                string
+	CreatedAt          string
 }
 
 type Group struct {
@@ -269,6 +270,7 @@ func initStateDB(db *sql.DB) error {
 			path TEXT NOT NULL,
 			request_body TEXT NOT NULL,
 			status TEXT NOT NULL,
+			response_retry_after TEXT NOT NULL DEFAULT '',
 			response_body TEXT NOT NULL,
 			error_text TEXT NOT NULL,
 			created_at TEXT NOT NULL
@@ -284,6 +286,7 @@ func initStateDB(db *sql.DB) error {
 	migrations := []string{
 		`ALTER TABLE operation_logs ADD COLUMN kind TEXT NOT NULL DEFAULT 'sync'`,
 		`ALTER TABLE operation_logs ADD COLUMN summary TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE operation_logs ADD COLUMN response_retry_after TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE apps ADD COLUMN saml_name_id_field TEXT NOT NULL DEFAULT 'email'`,
 	}
 	for _, migration := range migrations {
@@ -428,7 +431,7 @@ func loadStateFromDB(db *sql.DB) (AppState, error) {
 		return AppState{}, fmt.Errorf("iterate sqlite app rows: %w", err)
 	}
 
-	logRows, err := db.Query(`SELECT resource_type, resource_id, kind, summary, operation, method, path, request_body, status, response_body, error_text, created_at FROM operation_logs ORDER BY resource_type, resource_id, created_at DESC, id ASC`)
+	logRows, err := db.Query(`SELECT resource_type, resource_id, kind, summary, operation, method, path, request_body, status, response_retry_after, response_body, error_text, created_at FROM operation_logs ORDER BY resource_type, resource_id, created_at DESC, id ASC`)
 	if err != nil {
 		return AppState{}, fmt.Errorf("load operation logs from sqlite: %w", err)
 	}
@@ -438,7 +441,7 @@ func loadStateFromDB(db *sql.DB) (AppState, error) {
 		var resourceType string
 		var resourceID string
 		var entry OperationLog
-		if err := logRows.Scan(&resourceType, &resourceID, &entry.Kind, &entry.Summary, &entry.Operation, &entry.Method, &entry.Path, &entry.RequestBody, &entry.Status, &entry.ResponseBody, &entry.Err, &entry.CreatedAt); err != nil {
+		if err := logRows.Scan(&resourceType, &resourceID, &entry.Kind, &entry.Summary, &entry.Operation, &entry.Method, &entry.Path, &entry.RequestBody, &entry.Status, &entry.ResponseRetryAfter, &entry.ResponseBody, &entry.Err, &entry.CreatedAt); err != nil {
 			return AppState{}, fmt.Errorf("scan sqlite operation log row: %w", err)
 		}
 
@@ -530,7 +533,7 @@ func saveStateToDB(db *sql.DB, state AppState) error {
 	}
 	defer closeStmt(memberStmt)
 
-	logStmt, err := tx.Prepare(`INSERT INTO operation_logs(resource_type, resource_id, label, kind, summary, operation, method, path, request_body, status, response_body, error_text, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	logStmt, err := tx.Prepare(`INSERT INTO operation_logs(resource_type, resource_id, label, kind, summary, operation, method, path, request_body, status, response_retry_after, response_body, error_text, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("prepare sqlite operation log insert: %w", err)
 	}
@@ -566,7 +569,7 @@ func saveStateToDB(db *sql.DB, state AppState) error {
 			label = UserLabel(User)
 		}
 		for _, entry := range entries {
-			if _, err := logStmt.Exec("user", resourceID, label, entry.Kind, entry.Summary, entry.Operation, entry.Method, entry.Path, entry.RequestBody, entry.Status, entry.ResponseBody, entry.Err, entry.CreatedAt); err != nil {
+			if _, err := logStmt.Exec("user", resourceID, label, entry.Kind, entry.Summary, entry.Operation, entry.Method, entry.Path, entry.RequestBody, entry.Status, entry.ResponseRetryAfter, entry.ResponseBody, entry.Err, entry.CreatedAt); err != nil {
 				return fmt.Errorf("insert sqlite user operation log %s: %w", resourceID, err)
 			}
 		}
@@ -578,7 +581,7 @@ func saveStateToDB(db *sql.DB, state AppState) error {
 			label = Group.DisplayName
 		}
 		for _, entry := range entries {
-			if _, err := logStmt.Exec("group", resourceID, label, entry.Kind, entry.Summary, entry.Operation, entry.Method, entry.Path, entry.RequestBody, entry.Status, entry.ResponseBody, entry.Err, entry.CreatedAt); err != nil {
+			if _, err := logStmt.Exec("group", resourceID, label, entry.Kind, entry.Summary, entry.Operation, entry.Method, entry.Path, entry.RequestBody, entry.Status, entry.ResponseRetryAfter, entry.ResponseBody, entry.Err, entry.CreatedAt); err != nil {
 				return fmt.Errorf("insert sqlite group operation log %s: %w", resourceID, err)
 			}
 		}
@@ -716,16 +719,17 @@ func AppendOperationLogs(state *AppState, traces []SyncTraceEntry) {
 
 	for _, trace := range traces {
 		entry := OperationLog{
-			Kind:         "sync",
-			Summary:      summarizeSyncTrace(trace),
-			Operation:    trace.Operation,
-			Method:       trace.Method,
-			Path:         trace.Path,
-			RequestBody:  trace.RequestBody,
-			Status:       trace.Status,
-			ResponseBody: trace.ResponseBody,
-			Err:          trace.Err,
-			CreatedAt:    trace.CreatedAt,
+			Kind:               "sync",
+			Summary:            summarizeSyncTrace(trace),
+			Operation:          trace.Operation,
+			Method:             trace.Method,
+			Path:               trace.Path,
+			RequestBody:        trace.RequestBody,
+			Status:             trace.Status,
+			ResponseRetryAfter: trace.ResponseRetryAfter,
+			ResponseBody:       trace.ResponseBody,
+			Err:                trace.Err,
+			CreatedAt:          trace.CreatedAt,
 		}
 
 		switch trace.ResourceType {

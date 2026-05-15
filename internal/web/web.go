@@ -53,6 +53,20 @@ type tunnelCloser interface {
 	Close() error
 }
 
+type cancelingTunnelCloser struct {
+	tunnel tunnelCloser
+	cancel context.CancelFunc
+}
+
+func (c cancelingTunnelCloser) Close() error {
+	c.cancel()
+	if c.tunnel == nil {
+		return nil
+	}
+
+	return c.tunnel.Close()
+}
+
 type activeRgrokTunnel struct {
 	Name      string
 	PublicURL string
@@ -881,11 +895,21 @@ func startRgrokWithTimeout(starter rgrokStarter, cfg rgrokclient.Config, timeout
 			cancel()
 			return nil, outcome.err
 		}
-		return outcome.tunnel, nil
+		return startedRgrokTunnelWithCancel(outcome.tunnel, cancel), nil
 	case <-time.After(timeout):
 		cancel()
 		return nil, fmt.Errorf("timed out waiting for rgrok tunnel registration")
 	}
+}
+
+func startedRgrokTunnelWithCancel(started *startedRgrokTunnel, cancel context.CancelFunc) *startedRgrokTunnel {
+	if started == nil || started.Tunnel == nil {
+		cancel()
+		return started
+	}
+
+	started.Tunnel = cancelingTunnelCloser{tunnel: started.Tunnel, cancel: cancel}
+	return started
 }
 
 func parseLocalPort(port string) int {
@@ -1051,7 +1075,11 @@ func (a *webApp) handleSync(w http.ResponseWriter, r *http.Request) {
 	if state.Config.AutoOpenSyncTrace {
 		setShowTraceCookie(w)
 	}
-	redirectWithFlash(w, r, dashboardURL(tab, nil), flashMessage{Kind: "success", Message: result.Status})
+	flashKind := "success"
+	if result.Stopped != nil {
+		flashKind = "error"
+	}
+	redirectWithFlash(w, r, dashboardURL(tab, nil), flashMessage{Kind: flashKind, Message: result.Status})
 }
 
 func (a *webApp) handleImport(w http.ResponseWriter, r *http.Request) {
@@ -1276,15 +1304,107 @@ func buildErrorList(state appState) []string {
 	var errors []string
 	for _, u := range state.Users {
 		if u.LastError != "" {
-			errors = append(errors, fmt.Sprintf("user %s: %s", userLabel(u), u.LastError))
+			errors = append(errors, fmt.Sprintf("user %s: %s", userLabel(u), readableLastError(u.LastError)))
 		}
 	}
 	for _, g := range state.Groups {
 		if g.LastError != "" {
-			errors = append(errors, fmt.Sprintf("group %s: %s", g.DisplayName, g.LastError))
+			errors = append(errors, fmt.Sprintf("group %s: %s", g.DisplayName, readableLastError(g.LastError)))
 		}
 	}
 	return errors
+}
+
+func readableLastError(message string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return ""
+	}
+	if strings.HasPrefix(message, "SCIM server rate limit hit") {
+		return message
+	}
+	if !strings.Contains(message, "429 Too Many Requests") {
+		return message
+	}
+
+	retryAfter := legacyRetryAfter(message)
+	if retryAfter == "" {
+		return "SCIM server rate limit hit (429 Too Many Requests). Try again later."
+	}
+
+	return "SCIM server rate limit hit (429 Too Many Requests). Try again " + retryAfter + "."
+}
+
+func legacyRetryAfter(message string) string {
+	const marker = "retry after "
+	index := strings.Index(message, marker)
+	if index < 0 {
+		return ""
+	}
+
+	value := strings.TrimSpace(message[index+len(marker):])
+	if colon := strings.Index(value, ":"); colon >= 0 {
+		value = value[:colon]
+	}
+	value = strings.Trim(strings.TrimSpace(value), ".")
+	if value == "" {
+		return ""
+	}
+
+	return readableRetryAfter(value)
+}
+
+func readableRetryAfter(value string) string {
+	if strings.HasPrefix(value, "in ") || strings.HasPrefix(value, "after ") || value == "now" {
+		return value
+	}
+
+	delay, err := time.ParseDuration(value)
+	if err == nil {
+		return readableRetryDelay(delay)
+	}
+
+	seconds, err := strconv.Atoi(value)
+	if err == nil {
+		return readableRetryDelay(time.Duration(seconds) * time.Second)
+	}
+
+	return "after " + value
+}
+
+func readableRetryDelay(delay time.Duration) string {
+	if delay <= 0 {
+		return "now"
+	}
+
+	seconds := int64((delay + time.Second - 1) / time.Second)
+	switch {
+	case seconds <= 1:
+		return "in 1 second"
+	case seconds < 60:
+		return fmt.Sprintf("in %d seconds", seconds)
+	case seconds < 3600:
+		minutes := (seconds + 59) / 60
+		if minutes == 1 {
+			return "in 1 minute"
+		}
+
+		return fmt.Sprintf("in %d minutes", minutes)
+	case seconds < 86400:
+		hours := (seconds + 3599) / 3600
+		if hours == 1 {
+			return "in 1 hour"
+		}
+
+		return fmt.Sprintf("in %d hours", hours)
+	default:
+		days := (seconds + 86399) / 86400
+		if days == 1 {
+			return "in 1 day"
+		}
+
+		return fmt.Sprintf("in %d days", days)
+	}
 }
 
 func buildHistoryView(state appState, tab string, values url.Values) *historyView {

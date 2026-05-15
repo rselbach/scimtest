@@ -2,9 +2,11 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -108,6 +110,84 @@ func TestSyncDirtyState(t *testing.T) {
 	r.False(result.State.Groups[1].Dirty)
 }
 
+func TestSyncDirtyStateStopsOnRateLimit(t *testing.T) {
+	r := require.New(t)
+
+	requests := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		requests = append(requests, req.Method+" "+req.URL.Path)
+		r.Equal("Bearer chang-secret", req.Header.Get("Authorization"))
+
+		if req.Method != http.MethodPost || req.URL.Path != "/Users" {
+			t.Fatalf("unexpected request after rate limit: %s %s", req.Method, req.URL.Path)
+		}
+
+		var body SCIMUserResource
+		r.NoError(json.NewDecoder(req.Body).Decode(&body))
+		switch body.UserName {
+		case "troys":
+			w.Header().Set("Content-Type", "application/scim+json")
+			w.WriteHeader(http.StatusCreated)
+			r.NoError(json.NewEncoder(w).Encode(SCIMUserResource{ID: "remote-user-1"}))
+		case "abedn":
+			w.Header().Set("Retry-After", "45")
+			http.Error(w, "slow down, Professor Professorson", http.StatusTooManyRequests)
+		default:
+			t.Fatalf("unexpected user create: %s", body.UserName)
+		}
+	}))
+	defer server.Close()
+
+	state := AppState{
+		Config: Config{
+			BaseURL:     server.URL,
+			BearerToken: "chang-secret",
+		},
+		Users: []User{
+			{ID: "user-1", GivenName: "Troy", FamilyName: "Barnes", Username: "troys", Email: "troy@greendale.edu", Active: true, Dirty: true},
+			{ID: "user-2", GivenName: "Abed", FamilyName: "Nadir", Username: "abedn", Email: "abed@greendale.edu", Active: true, Dirty: true},
+			{ID: "user-3", GivenName: "Annie", FamilyName: "Edison", Username: "anniee", Email: "annie@greendale.edu", Active: true, Dirty: true},
+		},
+		Groups: []Group{{
+			ID:          "group-1",
+			DisplayName: "Study Group",
+			MemberIDs:   []string{"user-1"},
+			Dirty:       true,
+		}},
+	}
+
+	result := SyncDirtyState(state)
+	r.NoError(result.Fatal)
+	r.Error(result.Stopped)
+	r.True(result.Changed)
+	r.Contains(result.Status, "sync stopped")
+	r.Contains(result.Status, "Try again in 45 seconds")
+	r.Equal([]string{"POST /Users", "POST /Users"}, requests)
+
+	var rateLimitErr *RateLimitError
+	r.True(errors.As(result.Stopped, &rateLimitErr))
+	r.Equal("in 45 seconds", rateLimitErr.RetryAfter)
+
+	r.Len(result.State.Users, 3)
+	r.Equal("remote-user-1", result.State.Users[0].RemoteID)
+	r.False(result.State.Users[0].Dirty)
+	r.True(result.State.Users[1].Dirty)
+	r.Contains(result.State.Users[1].LastError, "429 Too Many Requests")
+	r.Contains(result.State.Users[1].LastError, "Try again in 45 seconds")
+	r.NotContains(result.State.Users[1].LastError, "schemas")
+	r.True(result.State.Users[2].Dirty)
+	r.Empty(result.State.Users[2].RemoteID)
+	r.Empty(result.State.Users[2].LastError)
+	r.Len(result.State.Groups, 1)
+	r.True(result.State.Groups[0].Dirty)
+	r.Empty(result.State.Groups[0].RemoteID)
+
+	r.Len(result.Traces, 2)
+	r.Equal("429 Too Many Requests", result.Traces[1].Status)
+	r.Equal("45", result.Traces[1].ResponseRetryAfter)
+	r.Contains(result.Traces[1].Err, "Try again in 45 seconds")
+}
+
 func TestSyncDirtyStateFailsGroupWhenMemberNotSynced(t *testing.T) {
 	r := require.New(t)
 
@@ -137,6 +217,42 @@ func TestSyncDirtyStateFailsGroupWhenMemberNotSynced(t *testing.T) {
 	r.Len(result.State.Groups, 1)
 	r.Contains(result.State.Groups[0].LastError, "has not been synced yet")
 	r.True(result.State.Groups[0].Dirty)
+}
+
+func TestImportStateFromSCIMRateLimitParsesHTTPDateRetryAfter(t *testing.T) {
+	r := require.New(t)
+
+	fixedNow := time.Date(2026, 5, 15, 20, 0, 0, 0, time.UTC)
+	originalCurrentTime := currentTime
+	currentTime = func() time.Time { return fixedNow }
+	t.Cleanup(func() { currentTime = originalCurrentTime })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		r.Equal(http.MethodGet, req.Method)
+		r.Equal("/Users", req.URL.Path)
+		w.Header().Set("Retry-After", fixedNow.Add(45*time.Second).Format(http.TimeFormat))
+		http.Error(w, "cool it, Leonard", http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	state := AppState{
+		Config: Config{
+			BaseURL:     server.URL,
+			BearerToken: "chang-secret",
+		},
+	}
+
+	result := ImportStateFromSCIM(state)
+	r.Error(result.Fatal)
+	r.Contains(result.Fatal.Error(), "Try again in 45 seconds")
+
+	var rateLimitErr *RateLimitError
+	r.True(errors.As(result.Fatal, &rateLimitErr))
+	r.Equal("in 45 seconds", rateLimitErr.RetryAfter)
+	r.Len(result.Traces, 1)
+	r.Equal("429 Too Many Requests", result.Traces[0].Status)
+	r.Equal(fixedNow.Add(45*time.Second).Format(http.TimeFormat), result.Traces[0].ResponseRetryAfter)
+	r.Contains(result.Traces[0].Err, "Try again in 45 seconds")
 }
 
 func TestImportStateFromSCIM(t *testing.T) {
