@@ -25,7 +25,7 @@ var templateFS embed.FS
 
 var pageTemplate = template.Must(template.New("index.html").Funcs(template.FuncMap{
 	"join": strings.Join,
-}).ParseFS(templateFS, "templates/index.html"))
+}).ParseFS(templateFS, "templates/*.html"))
 
 type webApp struct {
 	mu               sync.Mutex
@@ -36,6 +36,8 @@ type webApp struct {
 	rgrokStart       rgrokStarter
 	rgrokMu          sync.Mutex
 	rgrokTunnel      *activeRgrokTunnel
+	syncJobMu        sync.Mutex
+	syncJob          *syncJobSnapshot
 	authCodes        map[string]authCode
 	accessTokens     map[string]accessToken
 	lastTrace        []syncTraceEntry
@@ -87,6 +89,23 @@ type rgrokFormView struct {
 type flashMessage struct {
 	Kind    string
 	Message string
+}
+
+type syncJobSnapshot struct {
+	ID             string `json:"id"`
+	Running        bool   `json:"running"`
+	Done           bool   `json:"done"`
+	Success        bool   `json:"success"`
+	TraceAvailable bool   `json:"traceAvailable"`
+	Total          int    `json:"total"`
+	Processed      int    `json:"processed"`
+	Percent        int    `json:"percent"`
+	Message        string `json:"message"`
+	Error          string `json:"error"`
+	Current        string `json:"current"`
+	RateLimited    bool   `json:"rateLimited"`
+	StartedAt      string `json:"startedAt"`
+	FinishedAt     string `json:"finishedAt,omitempty"`
 }
 
 type statsView struct {
@@ -158,6 +177,25 @@ type historyView struct {
 	Items []historyEntryView
 }
 
+type paginationView struct {
+	Page            int
+	PageSize        int
+	SearchQuery     string
+	TotalPages      int
+	Summary         string
+	PreviousURL     string
+	NextURL         string
+	HasPrevious     bool
+	HasNext         bool
+	PageSizeOptions []pageSizeOptionView
+}
+
+type pageSizeOptionView struct {
+	Size     int
+	Label    string
+	Selected bool
+}
+
 type userFormView struct {
 	Title string
 	ID    string
@@ -200,6 +238,10 @@ type configFormView struct {
 	RgrokForm          *rgrokFormView
 }
 
+type toolsFormView struct {
+	Close string
+}
+
 type pageData struct {
 	Tab               string
 	Flash             flashMessage
@@ -207,6 +249,7 @@ type pageData struct {
 	Users             []userRowView
 	Groups            []groupRowView
 	Apps              []appRowView
+	Pagination        *paginationView
 	Errors            []string
 	BaseURL           string
 	IDPBaseURL        string
@@ -219,6 +262,7 @@ type pageData struct {
 	NewGroupURL       string
 	NewAppURL         string
 	ConfigURL         string
+	ToolsURL          string
 	TraceURL          string
 	TraceCloseURL     string
 	ShowTrace         bool
@@ -229,10 +273,33 @@ type pageData struct {
 	GroupForm         *groupFormView
 	AppForm           *appFormView
 	ConfigForm        *configFormView
+	ToolsForm         *toolsFormView
+	SyncJob           *syncJobSnapshot
 }
 
 type RunOptions struct {
 	Debug bool
+}
+
+const defaultListPageSize = 15
+const maxToolCreateUsers = 10000
+
+var listPageSizeOptions = []int{15, 25, 50, 100}
+
+var toolUserNames = []struct {
+	given  string
+	family string
+}{
+	{given: "Troy", family: "Barnes"},
+	{given: "Abed", family: "Nadir"},
+	{given: "Annie", family: "Edison"},
+	{given: "Britta", family: "Perry"},
+	{given: "Shirley", family: "Bennett"},
+	{given: "Jeff", family: "Winger"},
+	{given: "Dean", family: "Pelton"},
+	{given: "Señor", family: "Chang"},
+	{given: "Leonard", family: "Rodriguez"},
+	{given: "Magnitude", family: "PopPop"},
 }
 
 func Run(options ...RunOptions) error {
@@ -291,6 +358,11 @@ func (a *webApp) routes() http.Handler {
 	mux.HandleFunc("POST /config/clear", a.handleConfigClear)
 	mux.HandleFunc("POST /rgrok/setup", a.handleRgrokSetup)
 	mux.HandleFunc("POST /rgrok/cancel", a.handleRgrokCancel)
+	mux.HandleFunc("POST /tools/delete-all", a.handleToolsDeleteAll)
+	mux.HandleFunc("POST /tools/deactivate-all", a.handleToolsDeactivateAll)
+	mux.HandleFunc("POST /tools/activate-all", a.handleToolsActivateAll)
+	mux.HandleFunc("POST /tools/create-users", a.handleToolsCreateUsers)
+	mux.HandleFunc("GET /sync/status", a.handleSyncStatus)
 	mux.HandleFunc("POST /sync", a.handleSync)
 	mux.HandleFunc("POST /import", a.handleImport)
 	mux.HandleFunc("POST /reset", a.handleReset)
@@ -315,19 +387,43 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tab := normalizedTab(r.URL.Query().Get("tab"))
+	page := requestPage(r.URL.Query().Get("page"))
+	pageSize := requestPageSize(r.URL.Query().Get("pageSize"))
+	search := searchQuery(r.URL.Query().Get("q"))
 	flash := consumeFlash(w, r)
 	showTrace := r.URL.Query().Get("showTrace") == "1"
 	if consumeShowTrace(w, r) {
 		showTrace = true
 	}
 
+	users := filterUserRows(buildUserRows(state, tab, page, pageSize, search), search)
+	groups := filterGroupRows(buildGroupRows(state, tab, page, pageSize, search), search)
+	var pagination *paginationView
+	switch tab {
+	case "groups":
+		total := len(groups)
+		page = currentListPage(total, page, pageSize)
+		groups = filterGroupRows(buildGroupRows(state, tab, page, pageSize, search), search)
+		groups = slicePage(groups, page, pageSize)
+		pagination = buildPagination(total, tab, page, pageSize, search)
+	case "users":
+		total := len(users)
+		page = currentListPage(total, page, pageSize)
+		users = filterUserRows(buildUserRows(state, tab, page, pageSize, search), search)
+		users = slicePage(users, page, pageSize)
+		pagination = buildPagination(total, tab, page, pageSize, search)
+	default:
+		page = 1
+	}
+
 	data := pageData{
 		Tab:               tab,
 		Flash:             flash,
 		Stats:             buildStats(state),
-		Users:             buildUserRows(state, tab),
-		Groups:            buildGroupRows(state, tab),
+		Users:             users,
+		Groups:            groups,
 		Apps:              buildAppRows(state, a.effectiveIDPBaseURL(r, state), certificatePEM(a.certDER)),
+		Pagination:        pagination,
 		Errors:            buildErrorList(state),
 		BaseURL:           configuredBaseURL(state.Config.BaseURL),
 		IDPBaseURL:        a.effectiveIDPBaseURL(r, state),
@@ -336,15 +432,17 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		UsersURL:          dashboardURL("users", nil),
 		GroupsURL:         dashboardURL("groups", nil),
 		AppsURL:           dashboardURL("apps", nil),
-		NewUserURL:        dashboardURL("users", map[string]string{"modal": "user"}),
-		NewGroupURL:       dashboardURL("groups", map[string]string{"modal": "group"}),
+		NewUserURL:        dashboardURLWithPage("users", page, pageSize, search, map[string]string{"modal": "user"}),
+		NewGroupURL:       dashboardURLWithPage("groups", page, pageSize, search, map[string]string{"modal": "group"}),
 		NewAppURL:         dashboardURL("apps", map[string]string{"modal": "app"}),
-		ConfigURL:         dashboardURL(tab, map[string]string{"modal": "config"}),
-		TraceURL:          dashboardURL(tab, map[string]string{"showTrace": "1"}),
-		TraceCloseURL:     dashboardURL(tab, nil),
+		ConfigURL:         dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"modal": "config"}),
+		ToolsURL:          dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"modal": "tools"}),
+		TraceURL:          dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"showTrace": "1"}),
+		TraceCloseURL:     dashboardURLWithPage(tab, page, pageSize, search, nil),
 		ShowTrace:         showTrace && a.hasTrace(),
 		HasTrace:          a.hasTrace(),
 		TraceContent:      a.traceContent(),
+		SyncJob:           a.currentSyncJob(),
 	}
 	if !data.SCIMEnabled {
 		data.Errors = nil
@@ -352,17 +450,25 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		data.HasTrace = false
 	}
 
-	if history := buildHistoryView(state, tab, r.URL.Query()); history != nil {
+	if r.URL.Query().Get("partial") == "list" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if err := pageTemplate.ExecuteTemplate(w, "list-card.html", data); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	if history := buildHistoryView(state, tab, page, pageSize, search, r.URL.Query()); history != nil {
 		data.History = history
 	}
 
 	switch r.URL.Query().Get("modal") {
 	case "user":
-		if form, formErr := buildUserFormView(state, tab, r.URL.Query().Get("id")); formErr == nil {
+		if form, formErr := buildUserFormView(state, tab, page, pageSize, search, r.URL.Query().Get("id")); formErr == nil {
 			data.UserForm = form
 		}
 	case "group":
-		if form, formErr := buildGroupFormView(state, tab, r.URL.Query().Get("id")); formErr == nil {
+		if form, formErr := buildGroupFormView(state, tab, page, pageSize, search, r.URL.Query().Get("id")); formErr == nil {
 			data.GroupForm = form
 		}
 	case "app":
@@ -370,7 +476,9 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 			data.AppForm = form
 		}
 	case "config":
-		data.ConfigForm = a.buildConfigFormView(state.Config, tab, r.URL.Query())
+		data.ConfigForm = a.buildConfigFormView(state.Config, tab, page, pageSize, search, r.URL.Query())
+	case "tools":
+		data.ToolsForm = &toolsFormView{Close: dashboardURLWithPage(tab, page, pageSize, search, nil)}
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -448,7 +556,7 @@ func (a *webApp) handleUserSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	redirectWithFlash(w, r, dashboardURL("users", nil), flashMessage{Kind: "success", Message: status})
+	redirectWithFlash(w, r, dashboardURLWithPage("users", formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: status})
 }
 
 func (a *webApp) handleUserToggleActive(w http.ResponseWriter, r *http.Request) {
@@ -487,7 +595,7 @@ func (a *webApp) handleUserToggleActive(w http.ResponseWriter, r *http.Request) 
 	if state.Users[index].Active {
 		status = "user activated"
 	}
-	redirectWithFlash(w, r, dashboardURL("users", nil), flashMessage{Kind: "success", Message: status})
+	redirectWithFlash(w, r, dashboardURLWithPage("users", formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: status})
 }
 
 func (a *webApp) handleUserDelete(w http.ResponseWriter, r *http.Request) {
@@ -528,7 +636,7 @@ func (a *webApp) handleUserDeletedState(w http.ResponseWriter, r *http.Request, 
 			a.redirectError(w, r, tab, err)
 			return
 		}
-		redirectWithFlash(w, r, dashboardURL("users", nil), flashMessage{Kind: "success", Message: "user deleted"})
+		redirectWithFlash(w, r, dashboardURLWithPage("users", formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: "user deleted"})
 		return
 	}
 
@@ -546,7 +654,7 @@ func (a *webApp) handleUserDeletedState(w http.ResponseWriter, r *http.Request, 
 	if deleted {
 		status = "user marked for deletion"
 	}
-	redirectWithFlash(w, r, dashboardURL("users", nil), flashMessage{Kind: "success", Message: status})
+	redirectWithFlash(w, r, dashboardURLWithPage("users", formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: status})
 }
 
 func (a *webApp) handleGroupSave(w http.ResponseWriter, r *http.Request) {
@@ -608,7 +716,7 @@ func (a *webApp) handleGroupSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	redirectWithFlash(w, r, dashboardURL("groups", nil), flashMessage{Kind: "success", Message: status})
+	redirectWithFlash(w, r, dashboardURLWithPage("groups", formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: status})
 }
 
 func (a *webApp) handleGroupDelete(w http.ResponseWriter, r *http.Request) {
@@ -646,7 +754,7 @@ func (a *webApp) handleGroupDeletedState(w http.ResponseWriter, r *http.Request,
 			a.redirectError(w, r, tab, err)
 			return
 		}
-		redirectWithFlash(w, r, dashboardURL("groups", nil), flashMessage{Kind: "success", Message: "group deleted"})
+		redirectWithFlash(w, r, dashboardURLWithPage("groups", formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: "group deleted"})
 		return
 	}
 
@@ -664,7 +772,7 @@ func (a *webApp) handleGroupDeletedState(w http.ResponseWriter, r *http.Request,
 	if deleted {
 		status = "group marked for deletion"
 	}
-	redirectWithFlash(w, r, dashboardURL("groups", nil), flashMessage{Kind: "success", Message: status})
+	redirectWithFlash(w, r, dashboardURLWithPage("groups", formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: status})
 }
 
 func (a *webApp) handleConfigSave(w http.ResponseWriter, r *http.Request) {
@@ -698,7 +806,7 @@ func (a *webApp) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	redirectWithFlash(w, r, dashboardURL(tab, nil), flashMessage{Kind: "success", Message: "config saved"})
+	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: "config saved"})
 }
 
 func (a *webApp) handleRgrokSetup(w http.ResponseWriter, r *http.Request) {
@@ -710,7 +818,7 @@ func (a *webApp) handleRgrokSetup(w http.ResponseWriter, r *http.Request) {
 	defer a.rgrokMu.Unlock()
 
 	if a.rgrokTunnel != nil {
-		redirectWithFlash(w, r, dashboardURL(tab, map[string]string{"modal": "config"}), flashMessage{Kind: "success", Message: "tunnel already established"})
+		redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), map[string]string{"modal": "config"}), flashMessage{Kind: "success", Message: "tunnel already established"})
 		return
 	}
 	if err := validateRgrokSetup(name, token, a.localPort); err != nil {
@@ -750,21 +858,21 @@ func (a *webApp) handleRgrokSetup(w http.ResponseWriter, r *http.Request) {
 		a.redirectRgrokFormError(w, r, tab, name, fmt.Errorf("save rgrok tunnel config: %w", err))
 		return
 	}
-	redirectWithFlash(w, r, dashboardURL(tab, map[string]string{"modal": "config"}), flashMessage{Kind: "success", Message: "tunnel established"})
+	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), map[string]string{"modal": "config"}), flashMessage{Kind: "success", Message: "tunnel established"})
 }
 
 func (a *webApp) handleRgrokCancel(w http.ResponseWriter, r *http.Request) {
 	tab := normalizedTab(r.FormValue("tab"))
 
 	if err := a.closeActiveRgrokTunnel(); err != nil {
-		redirectWithFlash(w, r, dashboardURL(tab, map[string]string{"modal": "config"}), flashMessage{Kind: "error", Message: fmt.Sprintf("disconnect tunnel: %v", err)})
+		redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), map[string]string{"modal": "config"}), flashMessage{Kind: "error", Message: fmt.Sprintf("disconnect tunnel: %v", err)})
 		return
 	}
 	if err := a.clearRgrokConfig(); err != nil {
-		redirectWithFlash(w, r, dashboardURL(tab, map[string]string{"modal": "config"}), flashMessage{Kind: "error", Message: fmt.Sprintf("clear tunnel config: %v", err)})
+		redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), map[string]string{"modal": "config"}), flashMessage{Kind: "error", Message: fmt.Sprintf("clear tunnel config: %v", err)})
 		return
 	}
-	redirectWithFlash(w, r, dashboardURL(tab, map[string]string{"modal": "config"}), flashMessage{Kind: "success", Message: "tunnel disconnected"})
+	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), map[string]string{"modal": "config"}), flashMessage{Kind: "success", Message: "tunnel disconnected"})
 }
 
 func (a *webApp) closeActiveRgrokTunnel() error {
@@ -949,12 +1057,12 @@ func validateRgrokSetup(name, token string, localPort int) error {
 	return nil
 }
 
-func (a *webApp) buildConfigFormView(cfg config, tab string, query url.Values) *configFormView {
-	closeURL := dashboardURL(tab, nil)
+func (a *webApp) buildConfigFormView(cfg config, tab string, page int, pageSize int, search string, query url.Values) *configFormView {
+	closeURL := dashboardURLWithPage(tab, page, pageSize, search, nil)
 	form := &configFormView{
 		Config:          cfg,
 		Close:           closeURL,
-		RgrokSetupURL:   dashboardURL(tab, map[string]string{"modal": "config", "rgrok": "1"}),
+		RgrokSetupURL:   dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"modal": "config", "rgrok": "1"}),
 		IDPBaseURLValue: cfg.IDPBaseURL,
 	}
 	if tunnel := a.rgrokTunnelView(); tunnel != nil {
@@ -970,14 +1078,14 @@ func (a *webApp) buildConfigFormView(cfg config, tab string, query url.Values) *
 		form.RgrokForm = &rgrokFormView{
 			Name:  formName,
 			Error: query.Get("rgrok_error"),
-			Close: dashboardURL(tab, map[string]string{"modal": "config"}),
+			Close: dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"modal": "config"}),
 		}
 	}
 	return form
 }
 
 func (a *webApp) redirectRgrokFormError(w http.ResponseWriter, r *http.Request, tab, name string, err error) {
-	redirectWithFlash(w, r, dashboardURL(tab, map[string]string{
+	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), map[string]string{
 		"modal":       "config",
 		"rgrok":       "1",
 		"rgrok_name":  name,
@@ -1033,53 +1141,190 @@ func (a *webApp) handleConfigClear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.closeActiveRgrokTunnel(); err != nil {
-		redirectWithFlash(w, r, dashboardURL(tab, nil), flashMessage{Kind: "error", Message: fmt.Sprintf("config cleared; disconnect tunnel: %v", err)})
+		redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "error", Message: fmt.Sprintf("config cleared; disconnect tunnel: %v", err)})
 		return
 	}
 
-	redirectWithFlash(w, r, dashboardURL(tab, nil), flashMessage{Kind: "success", Message: "config cleared"})
+	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: "config cleared"})
 }
 
 func (a *webApp) handleSync(w http.ResponseWriter, r *http.Request) {
 	tab := normalizedTab(r.FormValue("tab"))
+	if job := a.currentSyncJob(); job != nil && job.Running {
+		a.respondSyncStartError(w, r, tab, fmt.Errorf("sync already running"))
+		return
+	}
+
+	a.mu.Lock()
+	state, err := loadState()
+	a.mu.Unlock()
+	if err != nil {
+		a.respondSyncStartError(w, r, tab, err)
+		return
+	}
+	if !scimEnabled(state) {
+		a.respondSyncStartError(w, r, tab, fmt.Errorf("SCIM is disabled"))
+		return
+	}
+
+	job, err := a.startSyncJob()
+	if err != nil {
+		a.respondSyncStartError(w, r, tab, err)
+		return
+	}
+
+	if wantsJSON(r) {
+		writeJSON(w, job)
+		return
+	}
+
+	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: "sync started"})
+}
+
+func (a *webApp) handleSyncStatus(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, a.currentSyncJob())
+}
+
+func (a *webApp) respondSyncStartError(w http.ResponseWriter, r *http.Request, tab string, err error) {
+	if wantsJSON(r) {
+		w.WriteHeader(http.StatusConflict)
+		writeJSON(w, syncJobSnapshot{Done: true, Error: err.Error(), Message: err.Error()})
+		return
+	}
+
+	a.redirectError(w, r, tab, err)
+}
+
+func (a *webApp) startSyncJob() (*syncJobSnapshot, error) {
+	a.syncJobMu.Lock()
+	defer a.syncJobMu.Unlock()
+
+	if a.syncJob != nil && a.syncJob.Running {
+		return nil, fmt.Errorf("sync already running")
+	}
+
+	job := &syncJobSnapshot{
+		ID:        strconvFormatInt(time.Now().UnixNano()),
+		Running:   true,
+		Message:   "Starting sync",
+		StartedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	a.syncJob = job
+	go a.runSyncJob(job.ID)
+
+	return cloneSyncJob(job), nil
+}
+
+func (a *webApp) runSyncJob(id string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	state, err := loadState()
 	if err != nil {
-		a.redirectError(w, r, tab, err)
+		a.finishSyncJob(id, false, err.Error(), false)
 		return
 	}
 	if !scimEnabled(state) {
-		a.redirectError(w, r, tab, fmt.Errorf("SCIM is disabled"))
+		a.finishSyncJob(id, false, "SCIM is disabled", false)
 		return
 	}
 
-	result := syncDirtyState(state)
+	result := syncDirtyStateWithProgress(state, func(progress syncProgress) {
+		a.updateSyncJobProgress(id, progress)
+	})
 	a.rememberTrace(result.Traces)
 	if result.Fatal != nil {
-		if len(result.Traces) > 0 && state.Config.AutoOpenSyncTrace {
-			setShowTraceCookie(w)
-		}
-		redirectWithFlash(w, r, dashboardURL(tab, nil), flashMessage{Kind: "error", Message: result.Fatal.Error()})
+		a.finishSyncJob(id, false, result.Fatal.Error(), len(result.Traces) > 0)
 		return
 	}
 
 	state = result.State
 	appendOperationLogs(&state, result.Traces)
 	if err := saveState(state); err != nil {
-		a.redirectError(w, r, tab, err)
+		a.finishSyncJob(id, false, err.Error(), len(result.Traces) > 0)
 		return
 	}
 
-	if state.Config.AutoOpenSyncTrace {
-		setShowTraceCookie(w)
+	success := result.Stopped == nil
+	a.finishSyncJob(id, success, result.Status, len(result.Traces) > 0)
+}
+
+func (a *webApp) updateSyncJobProgress(id string, progress syncProgress) {
+	a.syncJobMu.Lock()
+	defer a.syncJobMu.Unlock()
+
+	if a.syncJob == nil || a.syncJob.ID != id {
+		return
 	}
-	flashKind := "success"
-	if result.Stopped != nil {
-		flashKind = "error"
+	a.syncJob.Total = progress.Total
+	a.syncJob.Processed = progress.Processed
+	a.syncJob.Percent = syncProgressPercent(progress.Processed, progress.Total, false)
+	if progress.Label != "" {
+		a.syncJob.Current = strings.TrimSpace(strings.Join([]string{progress.Operation, progress.ResourceType, progress.Label}, " "))
 	}
-	redirectWithFlash(w, r, dashboardURL(tab, nil), flashMessage{Kind: flashKind, Message: result.Status})
+	a.syncJob.RateLimited = progress.RateLimited
+	if progress.Status != "" {
+		a.syncJob.Message = progress.Status
+	}
+}
+
+func (a *webApp) finishSyncJob(id string, success bool, message string, traceAvailable bool) {
+	a.syncJobMu.Lock()
+	defer a.syncJobMu.Unlock()
+
+	if a.syncJob == nil || a.syncJob.ID != id {
+		return
+	}
+	a.syncJob.Running = false
+	a.syncJob.Done = true
+	a.syncJob.Success = success
+	a.syncJob.TraceAvailable = traceAvailable
+	a.syncJob.RateLimited = false
+	a.syncJob.Message = message
+	a.syncJob.Percent = syncProgressPercent(a.syncJob.Processed, a.syncJob.Total, true)
+	a.syncJob.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+	if !success {
+		a.syncJob.Error = message
+	}
+}
+
+func (a *webApp) currentSyncJob() *syncJobSnapshot {
+	a.syncJobMu.Lock()
+	defer a.syncJobMu.Unlock()
+
+	return cloneSyncJob(a.syncJob)
+}
+
+func cloneSyncJob(job *syncJobSnapshot) *syncJobSnapshot {
+	if job == nil {
+		return nil
+	}
+
+	cloned := *job
+	return &cloned
+}
+
+func syncProgressPercent(processed int, total int, done bool) int {
+	if total <= 0 {
+		if done {
+			return 100
+		}
+		return 0
+	}
+
+	percent := processed * 100 / total
+	if done {
+		return 100
+	}
+	if percent > 99 {
+		return 99
+	}
+
+	return percent
+}
+
+func wantsJSON(r *http.Request) bool {
+	return r.Header.Get("X-Requested-With") == "fetch" || strings.Contains(r.Header.Get("Accept"), "application/json")
 }
 
 func (a *webApp) handleImport(w http.ResponseWriter, r *http.Request) {
@@ -1103,7 +1348,7 @@ func (a *webApp) handleImport(w http.ResponseWriter, r *http.Request) {
 		if len(result.Traces) > 0 && state.Config.AutoOpenSyncTrace {
 			setShowTraceCookie(w)
 		}
-		redirectWithFlash(w, r, dashboardURL(tab, nil), flashMessage{Kind: "error", Message: result.Fatal.Error()})
+		redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "error", Message: result.Fatal.Error()})
 		return
 	}
 
@@ -1115,7 +1360,7 @@ func (a *webApp) handleImport(w http.ResponseWriter, r *http.Request) {
 	if result.State.Config.AutoOpenSyncTrace {
 		setShowTraceCookie(w)
 	}
-	redirectWithFlash(w, r, dashboardURL(tab, nil), flashMessage{Kind: "success", Message: result.Status})
+	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: result.Status})
 }
 
 func (a *webApp) handleReset(w http.ResponseWriter, r *http.Request) {
@@ -1160,11 +1405,148 @@ func (a *webApp) handleReset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	message := fmt.Sprintf("reset sync status for %d users and %d groups", resetUsers, resetGroups)
-	redirectWithFlash(w, r, dashboardURL(tab, nil), flashMessage{Kind: "success", Message: message})
+	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: message})
+}
+
+func (a *webApp) handleToolsDeleteAll(w http.ResponseWriter, r *http.Request) {
+	tab := normalizedTab(r.FormValue("tab"))
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	state, err := loadState()
+	if err != nil {
+		a.redirectError(w, r, tab, err)
+		return
+	}
+
+	changed := 0
+	message := "no users changed"
+	if scimEnabled(state) {
+		for i := range state.Users {
+			if state.Users[i].Deleted {
+				continue
+			}
+			state.Users[i].Deleted = true
+			state.Users[i].Dirty = true
+			state.Users[i].LastError = ""
+			appendLocalOperationLog(&state, "user", state.Users[i].ID, "Marked for deletion by tools")
+			changed++
+		}
+		if changed > 0 {
+			message = fmt.Sprintf("marked %d users for deletion", changed)
+		}
+	} else {
+		changed = len(state.Users)
+		state.Users = nil
+		for i := range state.Groups {
+			state.Groups[i].MemberIDs = nil
+		}
+		if changed > 0 {
+			message = fmt.Sprintf("deleted %d users", changed)
+		}
+	}
+
+	if changed > 0 {
+		if err := saveState(state); err != nil {
+			a.redirectError(w, r, tab, err)
+			return
+		}
+	}
+
+	redirectWithFlash(w, r, dashboardURL("users", nil), flashMessage{Kind: "success", Message: message})
+}
+
+func (a *webApp) handleToolsDeactivateAll(w http.ResponseWriter, r *http.Request) {
+	a.handleToolsSetAllActive(w, r, false)
+}
+
+func (a *webApp) handleToolsActivateAll(w http.ResponseWriter, r *http.Request) {
+	a.handleToolsSetAllActive(w, r, true)
+}
+
+func (a *webApp) handleToolsSetAllActive(w http.ResponseWriter, r *http.Request, active bool) {
+	tab := normalizedTab(r.FormValue("tab"))
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	state, err := loadState()
+	if err != nil {
+		a.redirectError(w, r, tab, err)
+		return
+	}
+
+	changed := 0
+	for i := range state.Users {
+		if state.Users[i].Deleted || state.Users[i].Active == active {
+			continue
+		}
+		state.Users[i].Active = active
+		state.Users[i].Dirty = true
+		state.Users[i].LastError = ""
+		appendLocalOperationLog(&state, "user", state.Users[i].ID, summarizeActiveToggle(active))
+		changed++
+	}
+
+	if changed > 0 {
+		if err := saveState(state); err != nil {
+			a.redirectError(w, r, tab, err)
+			return
+		}
+	}
+
+	verb := "activated"
+	if !active {
+		verb = "deactivated"
+	}
+	message := "no users changed"
+	if changed > 0 {
+		message = fmt.Sprintf("%s %d users", verb, changed)
+	}
+	redirectWithFlash(w, r, dashboardURL("users", nil), flashMessage{Kind: "success", Message: message})
+}
+
+func (a *webApp) handleToolsCreateUsers(w http.ResponseWriter, r *http.Request) {
+	tab := normalizedTab(r.FormValue("tab"))
+	count, err := toolUserCount(r.FormValue("count"))
+	if err != nil {
+		a.redirectToolsError(w, r, tab, err)
+		return
+	}
+	domain, err := toolEmailDomain(r.FormValue("email_domain"))
+	if err != nil {
+		a.redirectToolsError(w, r, tab, err)
+		return
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	state, err := loadState()
+	if err != nil {
+		a.redirectError(w, r, tab, err)
+		return
+	}
+
+	created, err := appendToolUsers(&state, count, domain)
+	if err != nil {
+		a.redirectToolsError(w, r, tab, err)
+		return
+	}
+	if err := saveState(state); err != nil {
+		a.redirectError(w, r, tab, err)
+		return
+	}
+
+	message := fmt.Sprintf("created %d users for %s", created, domain)
+	redirectWithFlash(w, r, dashboardURL("users", nil), flashMessage{Kind: "success", Message: message})
+}
+
+func (a *webApp) redirectToolsError(w http.ResponseWriter, r *http.Request, tab string, err error) {
+	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), map[string]string{"modal": "tools"}), flashMessage{Kind: "error", Message: err.Error()})
 }
 
 func (a *webApp) redirectError(w http.ResponseWriter, r *http.Request, tab string, err error) {
-	redirectWithFlash(w, r, dashboardURL(tab, nil), flashMessage{Kind: "error", Message: err.Error()})
+	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "error", Message: err.Error()})
 }
 
 func (a *webApp) rememberTrace(traces []syncTraceEntry) {
@@ -1211,7 +1593,7 @@ func scimEnabled(state appState) bool {
 	return !state.Config.SCIMDisabled
 }
 
-func buildUserRows(state appState, tab string) []userRowView {
+func buildUserRows(state appState, tab string, page int, pageSize int, search string) []userRowView {
 	rows := make([]userRowView, 0, len(state.Users))
 	for _, u := range state.Users {
 		if !scimEnabled(state) && u.Deleted {
@@ -1230,14 +1612,14 @@ func buildUserRows(state appState, tab string) []userRowView {
 			Status:     syncStatus(u),
 			RemoteID:   remoteID,
 			Deleted:    u.Deleted,
-			EditURL:    dashboardURL("users", map[string]string{"modal": "user", "id": u.ID}),
-			HistoryURL: dashboardURL(tab, map[string]string{"historyType": "user", "historyID": u.ID}),
+			EditURL:    dashboardURLWithPage("users", page, pageSize, search, map[string]string{"modal": "user", "id": u.ID}),
+			HistoryURL: dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"historyType": "user", "historyID": u.ID}),
 		})
 	}
 	return rows
 }
 
-func buildGroupRows(state appState, tab string) []groupRowView {
+func buildGroupRows(state appState, tab string, page int, pageSize int, search string) []groupRowView {
 	rows := make([]groupRowView, 0, len(state.Groups))
 	for _, g := range state.Groups {
 		if !scimEnabled(state) && g.Deleted {
@@ -1255,11 +1637,45 @@ func buildGroupRows(state appState, tab string) []groupRowView {
 			Status:         groupSyncStatus(g),
 			RemoteID:       remoteID,
 			Deleted:        g.Deleted,
-			EditURL:        dashboardURL("groups", map[string]string{"modal": "group", "id": g.ID}),
-			HistoryURL:     dashboardURL(tab, map[string]string{"historyType": "group", "historyID": g.ID}),
+			EditURL:        dashboardURLWithPage("groups", page, pageSize, search, map[string]string{"modal": "group", "id": g.ID}),
+			HistoryURL:     dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"historyType": "group", "historyID": g.ID}),
 		})
 	}
 	return rows
+}
+
+func filterUserRows(rows []userRowView, query string) []userRowView {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return rows
+	}
+
+	filtered := make([]userRowView, 0, len(rows))
+	for _, row := range rows {
+		if strings.Contains(strings.ToLower(row.Name), query) ||
+			strings.Contains(strings.ToLower(row.Username), query) ||
+			strings.Contains(strings.ToLower(row.Email), query) {
+			filtered = append(filtered, row)
+		}
+	}
+
+	return filtered
+}
+
+func filterGroupRows(rows []groupRowView, query string) []groupRowView {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return rows
+	}
+
+	filtered := make([]groupRowView, 0, len(rows))
+	for _, row := range rows {
+		if strings.Contains(strings.ToLower(row.Name), query) {
+			filtered = append(filtered, row)
+		}
+	}
+
+	return filtered
 }
 
 func buildAppRows(state appState, base string, certPEM string) []appRowView {
@@ -1407,14 +1823,14 @@ func readableRetryDelay(delay time.Duration) string {
 	}
 }
 
-func buildHistoryView(state appState, tab string, values url.Values) *historyView {
+func buildHistoryView(state appState, tab string, page int, pageSize int, search string, values url.Values) *historyView {
 	resourceType := strings.TrimSpace(values.Get("historyType"))
 	resourceID := strings.TrimSpace(values.Get("historyID"))
 	if resourceType == "" || resourceID == "" {
 		return nil
 	}
 
-	view := &historyView{Close: dashboardURL(tab, nil)}
+	view := &historyView{Close: dashboardURLWithPage(tab, page, pageSize, search, nil)}
 	var entries []operationLog
 	if resourceType == "user" {
 		u, ok := userByID(state.Users, resourceID)
@@ -1458,9 +1874,9 @@ func buildHistoryView(state appState, tab string, values url.Values) *historyVie
 	return view
 }
 
-func buildUserFormView(state appState, tab string, id string) (*userFormView, error) {
+func buildUserFormView(state appState, tab string, page int, pageSize int, search string, id string) (*userFormView, error) {
 	if strings.TrimSpace(id) == "" {
-		return &userFormView{Title: "Add User", Close: dashboardURL(tab, nil)}, nil
+		return &userFormView{Title: "Add User", Close: dashboardURLWithPage(tab, page, pageSize, search, nil)}, nil
 	}
 
 	u, ok := userByID(state.Users, id)
@@ -1468,11 +1884,11 @@ func buildUserFormView(state appState, tab string, id string) (*userFormView, er
 		return nil, fmt.Errorf("user %s not found", id)
 	}
 
-	return &userFormView{Title: "Edit User", ID: id, User: u, Close: dashboardURL(tab, nil)}, nil
+	return &userFormView{Title: "Edit User", ID: id, User: u, Close: dashboardURLWithPage(tab, page, pageSize, search, nil)}, nil
 }
 
-func buildGroupFormView(state appState, tab string, id string) (*groupFormView, error) {
-	form := &groupFormView{Title: "Add Group", Close: dashboardURL(tab, nil)}
+func buildGroupFormView(state appState, tab string, page int, pageSize int, search string, id string) (*groupFormView, error) {
+	form := &groupFormView{Title: "Add Group", Close: dashboardURLWithPage(tab, page, pageSize, search, nil)}
 	selected := map[string]struct{}{}
 	if strings.TrimSpace(id) != "" {
 		g, ok := groupByID(state.Groups, id)
@@ -1535,6 +1951,82 @@ func buildAppFormView(state appState, tab string, id string, baseURL string, cer
 		form.SAMLIDPSSO = baseURL + "/saml/" + form.App.Slug + "/sso"
 	}
 	return form, nil
+}
+
+func toolUserCount(value string) (int, error) {
+	count, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return 0, fmt.Errorf("number of users must be between 1 and %d", maxToolCreateUsers)
+	}
+	if count < 1 || count > maxToolCreateUsers {
+		return 0, fmt.Errorf("number of users must be between 1 and %d", maxToolCreateUsers)
+	}
+
+	return count, nil
+}
+
+func toolEmailDomain(value string) (string, error) {
+	domain := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(value)), "@")
+	switch {
+	case domain == "":
+		return "", fmt.Errorf("email domain is required")
+	case strings.Contains(domain, "@"):
+		return "", fmt.Errorf("email domain must not include @")
+	case strings.ContainsAny(domain, " \t\r\n/\\"):
+		return "", fmt.Errorf("email domain contains invalid characters")
+	case strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, "."):
+		return "", fmt.Errorf("email domain must not start or end with a dot")
+	}
+
+	return domain, nil
+}
+
+func appendToolUsers(state *appState, count int, domain string) (int, error) {
+	usedEmails := make(map[string]struct{}, len(state.Users)+count)
+	usedUsernames := make(map[string]struct{}, len(state.Users)+count)
+	for _, u := range state.Users {
+		usedEmails[strings.ToLower(u.Email)] = struct{}{}
+		usedUsernames[strings.ToLower(u.Username)] = struct{}{}
+	}
+
+	created := 0
+	candidate := 1
+	for created < count {
+		username := fmt.Sprintf("user%03d", candidate)
+		email := username + "@" + domain
+		candidate++
+		if _, ok := usedEmails[strings.ToLower(email)]; ok {
+			continue
+		}
+		if _, ok := usedUsernames[strings.ToLower(username)]; ok {
+			continue
+		}
+
+		name := toolUserNames[created%len(toolUserNames)]
+		if err := validateUser(name.given, name.family, email, username); err != nil {
+			return created, err
+		}
+		id, err := newUserID()
+		if err != nil {
+			return created, err
+		}
+
+		state.Users = append(state.Users, user{
+			ID:         id,
+			GivenName:  name.given,
+			FamilyName: name.family,
+			Username:   username,
+			Email:      email,
+			Active:     true,
+			Dirty:      true,
+		})
+		appendLocalOperationLog(state, "user", id, "Created by tools")
+		usedEmails[strings.ToLower(email)] = struct{}{}
+		usedUsernames[strings.ToLower(username)] = struct{}{}
+		created++
+	}
+
+	return created, nil
 }
 
 func groupMembersSummary(users []user, g group) string {
@@ -1660,6 +2152,145 @@ func normalizedTab(tab string) string {
 	}
 
 	return "users"
+}
+
+func requestPage(value string) int {
+	page, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || page < 1 {
+		return 1
+	}
+
+	return page
+}
+
+func formPage(r *http.Request) int {
+	return requestPage(r.FormValue("page"))
+}
+
+func searchQuery(value string) string {
+	return strings.TrimSpace(value)
+}
+
+func formSearch(r *http.Request) string {
+	return searchQuery(r.FormValue("q"))
+}
+
+func requestPageSize(value string) int {
+	pageSize, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return defaultListPageSize
+	}
+	for _, option := range listPageSizeOptions {
+		if pageSize == option {
+			return pageSize
+		}
+	}
+
+	return defaultListPageSize
+}
+
+func formPageSize(r *http.Request) int {
+	return requestPageSize(r.FormValue("pageSize"))
+}
+
+func currentListPage(total int, page int, pageSize int) int {
+	if total <= pageSize {
+		return 1
+	}
+
+	totalPages := (total + pageSize - 1) / pageSize
+	if page > totalPages {
+		return totalPages
+	}
+	if page < 1 {
+		return 1
+	}
+
+	return page
+}
+
+func slicePage[T any](rows []T, page int, pageSize int) []T {
+	start := (page - 1) * pageSize
+	if start >= len(rows) {
+		return nil
+	}
+
+	end := start + pageSize
+	if end > len(rows) {
+		end = len(rows)
+	}
+
+	return rows[start:end]
+}
+
+func buildPagination(total int, tab string, page int, pageSize int, search string) *paginationView {
+	if total == 0 && search == "" {
+		return nil
+	}
+
+	totalPages := (total + pageSize - 1) / pageSize
+	if totalPages < 1 {
+		totalPages = 1
+	}
+	summary := "No results"
+	if total > 0 {
+		start := (page-1)*pageSize + 1
+		end := page * pageSize
+		if end > total {
+			end = total
+		}
+		summary = fmt.Sprintf("Showing %d–%d of %d", start, end, total)
+	}
+
+	view := &paginationView{
+		Page:            page,
+		PageSize:        pageSize,
+		SearchQuery:     search,
+		TotalPages:      totalPages,
+		Summary:         summary,
+		PageSizeOptions: buildPageSizeOptions(pageSize),
+	}
+	if page > 1 {
+		view.HasPrevious = true
+		view.PreviousURL = dashboardURLWithPage(tab, page-1, pageSize, search, nil)
+	}
+	if page < totalPages {
+		view.HasNext = true
+		view.NextURL = dashboardURLWithPage(tab, page+1, pageSize, search, nil)
+	}
+
+	return view
+}
+
+func buildPageSizeOptions(pageSize int) []pageSizeOptionView {
+	options := make([]pageSizeOptionView, 0, len(listPageSizeOptions))
+	for _, option := range listPageSizeOptions {
+		options = append(options, pageSizeOptionView{
+			Size:     option,
+			Label:    strconv.Itoa(option),
+			Selected: option == pageSize,
+		})
+	}
+
+	return options
+}
+
+func dashboardURLWithPage(tab string, page int, pageSize int, search string, extra map[string]string) string {
+	values := make(map[string]string, len(extra)+3)
+	for key, value := range extra {
+		values[key] = value
+	}
+	if page > 1 {
+		values["page"] = strconv.Itoa(page)
+	}
+	if pageSize != defaultListPageSize {
+		values["pageSize"] = strconv.Itoa(pageSize)
+	}
+	if strings.TrimSpace(search) != "" {
+		values["q"] = search
+	}
+
+	return dashboardURL(tab, values)
 }
 
 func dashboardURL(tab string, extra map[string]string) string {

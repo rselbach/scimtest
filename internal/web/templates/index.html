@@ -367,6 +367,95 @@
     .actionbar-meta b { color: var(--text-strong); font-weight: 600; }
     .actionbar-meta .dirty { color: var(--warn-text); font-weight: 500; }
     .actionbar-meta .sep { margin: 0 6px; color: var(--muted-2); }
+    .sync-progress {
+      display: grid;
+      gap: 7px;
+      margin: -4px 0 14px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: var(--bg-soft);
+      box-shadow: var(--shadow-sm);
+    }
+    .sync-progress.is-hidden { display: none; }
+    .sync-progress.is-error { border-color: rgba(199, 52, 68, 0.28); background: var(--danger-soft); }
+    .sync-progress.is-rate-limited { border-color: rgba(180, 83, 9, 0.3); background: var(--warn-soft); }
+    .sync-progress.is-success { border-color: rgba(0, 133, 62, 0.3); background: var(--success-soft); }
+    .sync-progress-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 12.5px;
+    }
+    .sync-progress-title { color: var(--text-strong); font-weight: 600; }
+    .sync-progress-count { color: var(--muted); font-family: var(--mono); }
+    .sync-progress-bar {
+      height: 8px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.1);
+    }
+    .sync-progress-fill {
+      width: 0;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--accent);
+      transition: width 160ms ease-out;
+    }
+    .sync-progress.is-error .sync-progress-fill { background: var(--danger); }
+    .sync-progress.is-rate-limited .sync-progress-fill { background: var(--warn-text); }
+    .sync-progress.is-success .sync-progress-fill { background: var(--success); }
+    .sync-progress-detail {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 12.5px;
+    }
+    .sync-progress-current { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sync-progress-trace.is-hidden { display: none; }
+
+    .pagination {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 14px;
+      border-top: 1px solid var(--line);
+      background: var(--bg-soft);
+      color: var(--muted);
+      font-size: 12.5px;
+    }
+    .pagination-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .page-size-form {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0;
+    }
+    .page-size-form label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .page-size-form input,
+    .page-size-form select {
+      height: 28px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: var(--card);
+      color: var(--text);
+      font-size: 12.5px;
+    }
+    .page-size-form input {
+      width: 180px;
+      padding: 0 8px;
+    }
 
     /* Card + table */
     .card {
@@ -739,6 +828,31 @@
       flex-wrap: wrap;
     }
     .form-actions .spacer { flex: 1; }
+    .tool-grid {
+      display: grid;
+      gap: 12px;
+    }
+    .tool-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+      background: var(--bg-soft);
+    }
+    .tool-card h3 {
+      margin: 0 0 4px;
+      color: var(--text-strong);
+      font-size: 14px;
+    }
+    .tool-card p {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 12.5px;
+    }
+    .tool-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
 
     .members-grid {
       display: grid;
@@ -1026,6 +1140,12 @@
           </span>
           Config
         </a>
+        <a class="side-item" href="{{.ToolsURL}}">
+          <span class="icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13l4-4"/><path d="M9.5 3.5l3 3"/><path d="M8 5l3 3"/><path d="M10.5 2.5l3 3-6.5 6.5-3 1 1-3z"/></svg>
+          </span>
+          Tools
+        </a>
         {{if .SCIMEnabled}}<a class="side-item {{if not .HasTrace}}is-disabled{{end}}" href="{{.TraceURL}}" {{if not .HasTrace}}aria-disabled="true" tabindex="-1"{{end}}>
           <span class="icon" aria-hidden="true">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h7l3 3v7H3z"/><path d="M9.5 3v3.5h3.5"/><path d="M5.5 9h5M5.5 11h3.5"/></svg>
@@ -1079,16 +1199,19 @@
 
       {{if and .SCIMEnabled (ne .Tab "apps")}}
       <div class="actionbar">
-        <form method="post" action="/sync">
+        <form method="post" action="/sync" data-sync-form>
           <input type="hidden" name="tab" value="{{.Tab}}">
-          <button class="btn" type="submit">Sync</button>
+          {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
+          <button class="btn" type="submit" data-sync-submit {{if and .SyncJob .SyncJob.Running}}disabled{{end}}>Sync</button>
         </form>
         <form method="post" action="/import" onsubmit="return confirm('This replaces local users, groups, and operation history with the SCIM server state. Continue?')">
           <input type="hidden" name="tab" value="{{.Tab}}">
+          {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
           <button class="btn" type="submit">Import</button>
         </form>
         <form method="post" action="/reset" onsubmit="return confirm('This clears all remote IDs and marks everything dirty. Continue?')">
           <input type="hidden" name="tab" value="{{.Tab}}">
+          {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
           <button class="btn btn-danger" type="submit">Reset</button>
         </form>
         <span class="actionbar-meta">
@@ -1097,209 +1220,22 @@
           <b>{{.Stats.Groups}}</b> groups{{if .Stats.DirtyGroups}} <span class="sep">·</span> <span class="dirty">{{.Stats.DirtyGroups}} dirty</span>{{end}}
         </span>
       </div>
+      <div class="sync-progress {{if not .SyncJob}}is-hidden{{else if .SyncJob.Error}}is-error{{else if .SyncJob.RateLimited}}is-rate-limited{{else if .SyncJob.Done}}is-success{{end}}" data-sync-progress data-sync-active="{{if and .SyncJob .SyncJob.Running}}true{{else}}false{{end}}">
+        <div class="sync-progress-head">
+          <span class="sync-progress-title" data-sync-message>{{if .SyncJob}}{{.SyncJob.Message}}{{else}}Starting sync{{end}}</span>
+          <span class="sync-progress-count" data-sync-count>{{if .SyncJob}}{{.SyncJob.Processed}} / {{.SyncJob.Total}}{{else}}0 / 0{{end}}</span>
+        </div>
+        <div class="sync-progress-bar" aria-hidden="true">
+          <div class="sync-progress-fill" data-sync-fill style="width: {{if .SyncJob}}{{.SyncJob.Percent}}{{else}}0{{end}}%"></div>
+        </div>
+        <div class="sync-progress-detail">
+          <span class="sync-progress-current" data-sync-current>{{if .SyncJob}}{{.SyncJob.Current}}{{end}}</span>
+          <a class="sync-progress-trace {{if not (and .SyncJob .SyncJob.TraceAvailable)}}is-hidden{{end}}" href="{{.TraceURL}}" data-sync-trace>View trace</a>
+        </div>
+      </div>
       {{end}}
 
-      <section class="card">
-        <div class="table-wrap">
-          {{if eq .Tab "groups"}}
-          <table class="groups-table">
-            <thead>
-              <tr>
-                <th>Group</th>
-                <th>Members</th>
-                {{if .SCIMEnabled}}
-                <th>Status</th>
-                <th>Remote ID</th>
-                {{end}}
-                <th class="col-actions">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {{range .Groups}}
-              <tr {{if .Deleted}}class="is-deleted"{{end}}>
-                <td>
-                  <div class="row-title" {{if .Deleted}}title="marked for deletion"{{end}}>{{.Name}}</div>
-                </td>
-                <td title="{{.MembersSummary}}">{{.MemberCount}}</td>
-                {{if $.SCIMEnabled}}
-                <td class="cell-widget">
-                  <span class="status {{if eq .Status "synced"}}synced{{else if eq .Status "sync error"}}error{{else if eq .Status "deleted"}}deleted{{else}}pending{{end}}">{{.Status}}</span>
-                </td>
-                <td class="mono" title="{{.RemoteID}}">{{.RemoteID}}</td>
-                {{end}}
-                <td class="col-actions cell-widget">
-                  <div class="row-actions">
-                    <a class="icon-btn" href="{{.EditURL}}" title="Edit group" aria-label="Edit group">
-                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M10 4l2 2"/></svg>
-                    </a>
-                    {{if $.SCIMEnabled}}
-                    <a class="icon-btn" href="{{.HistoryURL}}" title="Group history" aria-label="Group history">
-                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2 1.5"/></svg>
-                    </a>
-                    {{end}}
-                    {{if .Deleted}}
-                    {{if $.SCIMEnabled}}
-                    <form method="post" action="/groups/{{.ID}}/restore">
-                      <input type="hidden" name="tab" value="groups">
-                      <button class="icon-btn success" type="submit" title="Restore group" aria-label="Restore group">
-                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a5 5 0 1 0 1.5-3.5"/><path d="M3 3v3h3"/></svg>
-                      </button>
-                    </form>
-                    {{end}}
-                    {{else}}
-                    <form method="post" action="/groups/{{.ID}}/delete">
-                      <input type="hidden" name="tab" value="groups">
-                      <button class="icon-btn danger" type="submit" title="Delete group" aria-label="Delete group">
-                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10"/><path d="M5.5 4.5V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.5"/><path d="M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>
-                      </button>
-                    </form>
-                    {{end}}
-                  </div>
-                </td>
-              </tr>
-              {{else}}
-              <tr><td colspan="{{if $.SCIMEnabled}}5{{else}}3{{end}}">
-                <div class="card-empty">
-                  <div class="h">No groups yet</div>
-                  <div>Add one with the button above, or import from your SCIM server.</div>
-                </div>
-              </td></tr>
-              {{end}}
-            </tbody>
-          </table>
-          {{else if eq .Tab "apps"}}
-          <table>
-            <colgroup><col><col style="width: 120px"><col style="width: 260px"><col style="width: 124px"></colgroup>
-            <thead>
-              <tr>
-                <th>Application</th>
-                <th>Protocol</th>
-                <th>Client ID</th>
-                <th class="col-actions">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {{range .Apps}}
-              <tr>
-                <td><div class="row-title">{{.Name}}</div><div class="mono">{{.Slug}}</div></td>
-                <td><span class="status">{{.Protocol}}</span></td>
-                <td class="mono" title="{{.OIDCClientID}}">{{if .SupportsOIDC}}{{.OIDCClientID}}{{else}}-{{end}}</td>
-                <td class="col-actions cell-widget">
-                  <div class="row-actions">
-                    <a class="icon-btn" href="{{.EditURL}}" title="Edit app" aria-label="Edit app">
-                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M10 4l2 2"/></svg>
-                    </a>
-                    <form method="post" action="/apps/{{.ID}}/delete">
-                      <button class="icon-btn danger" type="submit" title="Delete app" aria-label="Delete app">
-                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10"/><path d="M5.5 4.5V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.5"/><path d="M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>
-                      </button>
-                    </form>
-                  </div>
-                </td>
-              </tr>
-              {{else}}
-              <tr><td colspan="4">
-                <div class="card-empty">
-                  <div class="h">No apps yet</div>
-                  <div>Add an app to expose OIDC and SAML endpoints.</div>
-                </div>
-              </td></tr>
-              {{end}}
-            </tbody>
-          </table>
-          {{else}}
-          <table>
-            <colgroup>
-              <col>
-              <col>
-              <col>
-              <col style="width: 100px">
-              {{if .SCIMEnabled}}
-              <col style="width: 120px">
-              <col style="width: 200px">
-              {{end}}
-              <col style="width: 124px">
-            </colgroup>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Username</th>
-                <th>Email</th>
-                <th>Active</th>
-                {{if .SCIMEnabled}}
-                <th>Status</th>
-                <th>Remote ID</th>
-                {{end}}
-                <th class="col-actions">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {{range .Users}}
-              <tr {{if .Deleted}}class="is-deleted"{{end}}>
-                <td>
-                  <div class="row-title" {{if .Deleted}}title="marked for deletion"{{end}}>{{.Name}}</div>
-                </td>
-                <td title="{{.Username}}">{{.Username}}</td>
-                <td title="{{.Email}}">{{.Email}}</td>
-                <td class="cell-widget">
-                  {{if .Deleted}}
-                  <span class="active-toggle is-readonly {{if eq .Active "active"}}is-active{{end}}">{{.Active}}</span>
-                  {{else}}
-                  <form method="post" action="/users/{{.ID}}/toggle-active" style="display:inline;margin:0">
-                    <input type="hidden" name="tab" value="users">
-                    <button class="active-toggle {{if eq .Active "active"}}is-active{{end}}" type="submit">{{.Active}}</button>
-                  </form>
-                  {{end}}
-                </td>
-                {{if $.SCIMEnabled}}
-                <td class="cell-widget">
-                  <span class="status {{if eq .Status "synced"}}synced{{else if eq .Status "sync error"}}error{{else if eq .Status "deleted"}}deleted{{else}}pending{{end}}">{{.Status}}</span>
-                </td>
-                <td class="mono" title="{{.RemoteID}}">{{.RemoteID}}</td>
-                {{end}}
-                <td class="col-actions cell-widget">
-                  <div class="row-actions">
-                    <a class="icon-btn" href="{{.EditURL}}" title="Edit user" aria-label="Edit user">
-                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M10 4l2 2"/></svg>
-                    </a>
-                    {{if $.SCIMEnabled}}
-                    <a class="icon-btn" href="{{.HistoryURL}}" title="User history" aria-label="User history">
-                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2 1.5"/></svg>
-                    </a>
-                    {{end}}
-                    {{if .Deleted}}
-                    {{if $.SCIMEnabled}}
-                    <form method="post" action="/users/{{.ID}}/restore">
-                      <input type="hidden" name="tab" value="users">
-                      <button class="icon-btn success" type="submit" title="Restore user" aria-label="Restore user">
-                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a5 5 0 1 0 1.5-3.5"/><path d="M3 3v3h3"/></svg>
-                      </button>
-                    </form>
-                    {{end}}
-                    {{else}}
-                    <form method="post" action="/users/{{.ID}}/delete">
-                      <input type="hidden" name="tab" value="users">
-                      <button class="icon-btn danger" type="submit" title="Delete user" aria-label="Delete user">
-                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10"/><path d="M5.5 4.5V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.5"/><path d="M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>
-                      </button>
-                    </form>
-                    {{end}}
-                  </div>
-                </td>
-              </tr>
-              {{else}}
-              <tr><td colspan="{{if $.SCIMEnabled}}7{{else}}5{{end}}">
-                <div class="card-empty">
-                  <div class="h">No users yet</div>
-                  <div>Add one with the button above, or import from your SCIM server.</div>
-                </div>
-              </td></tr>
-              {{end}}
-            </tbody>
-          </table>
-          {{end}}
-        </div>
-      </section>
+      {{template "list-card.html" .}}
     </main>
   </div>
 
@@ -1356,6 +1292,66 @@
   </div>
   {{end}}
 
+  {{if .ToolsForm}}
+  <div class="overlay" data-overlay>
+    <div class="modal" role="dialog" aria-modal="true" tabindex="-1">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">Tools</div>
+          <div class="modal-sub">Bulk user actions for test data wrangling.</div>
+        </div>
+        <a class="btn btn-sm btn-ghost" href="{{.ToolsForm.Close}}" data-autofocus>Close</a>
+      </div>
+      <div class="modal-body">
+        <div class="tool-grid">
+          <section class="tool-card">
+            <h3>Create users</h3>
+            <p>Add active, dirty local users with generated names, usernames, and emails.</p>
+            <form method="post" action="/tools/create-users">
+              <input type="hidden" name="tab" value="{{.Tab}}">
+              {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
+              <div class="form-grid">
+                <label class="field">
+                  <span class="label">Number</span>
+                  <input name="count" type="number" min="1" max="10000" value="10" inputmode="numeric">
+                </label>
+                <label class="field">
+                  <span class="label">Email domain</span>
+                  <input name="email_domain" placeholder="greendale.edu" autocomplete="off">
+                </label>
+              </div>
+              <div class="form-actions">
+                <button class="btn btn-primary" type="submit">Create users</button>
+              </div>
+            </form>
+          </section>
+          <section class="tool-card">
+            <h3>Bulk user actions</h3>
+            <p>Apply the same state change to every non-deleted user.</p>
+            <div class="tool-actions">
+              <form method="post" action="/tools/activate-all">
+                <input type="hidden" name="tab" value="{{.Tab}}">
+                {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
+                <button class="btn" type="submit" onclick="return confirm('Activate all non-deleted users?')">Activate All</button>
+              </form>
+              <form method="post" action="/tools/deactivate-all">
+                <input type="hidden" name="tab" value="{{.Tab}}">
+                {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
+                <button class="btn" type="submit" onclick="return confirm('Deactivate all non-deleted users?')">Deactivate All</button>
+              </form>
+              <form method="post" action="/tools/delete-all">
+                <input type="hidden" name="tab" value="{{.Tab}}">
+                {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
+                <button class="btn btn-danger" type="submit" onclick="return confirm('Delete all users? This is a big red button, my dude.')">Delete All</button>
+              </form>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </div>
+  {{end}}
+
   {{if .UserForm}}
   <div class="overlay" data-overlay>
     <div class="modal" role="dialog" aria-modal="true" tabindex="-1">
@@ -1365,6 +1361,7 @@
       </div>
       <form method="post" action="/users/save">
         <input type="hidden" name="tab" value="users">
+        {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
         <input type="hidden" name="id" value="{{.UserForm.ID}}">
         <div class="modal-body">
           <div class="form-grid">
@@ -1404,6 +1401,7 @@
       </div>
       <form method="post" action="/groups/save">
         <input type="hidden" name="tab" value="groups">
+        {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
         <input type="hidden" name="id" value="{{.GroupForm.ID}}">
         <div class="modal-body">
           <div class="form-grid">
@@ -1570,6 +1568,7 @@
       </div>
       <form method="post" action="/config/save">
         <input type="hidden" name="tab" value="{{.Tab}}">
+        {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
         <div class="modal-body">
           <div class="form-grid">
             <label class="field full">
@@ -1623,9 +1622,11 @@
       </form>
       <form id="config-clear-form" method="post" action="/config/clear" style="margin:0">
         <input type="hidden" name="tab" value="{{.Tab}}">
+        {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
       </form>
       <form id="rgrok-cancel-form" method="post" action="/rgrok/cancel" style="margin:0">
         <input type="hidden" name="tab" value="{{.Tab}}">
+        {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
       </form>
     </div>
   </div>
@@ -1642,6 +1643,7 @@
       </div>
       <form method="post" action="/rgrok/setup" data-rgrok-form>
         <input type="hidden" name="tab" value="{{$.Tab}}">
+        {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
         <div class="modal-body">
           <div class="form-grid">
             {{if .ConfigForm.RgrokForm.Error}}
@@ -1834,6 +1836,171 @@
         control.addEventListener('change', syncProtocolSections);
       }
       syncProtocolSections();
+    }
+
+    function listURLFromForm(form) {
+      const url = new URL(form.action, window.location.href);
+      const data = new FormData(form);
+      for (const [key, value] of data.entries()) {
+        if (String(value).trim() === '') {
+          url.searchParams.delete(key);
+          continue;
+        }
+        url.searchParams.set(key, value);
+      }
+      url.searchParams.delete('page');
+      return url;
+    }
+
+    function cleanListURL(url) {
+      const clean = new URL(url.href);
+      clean.searchParams.delete('partial');
+      return clean;
+    }
+
+    let listUpdateID = 0;
+    async function replaceListCard(url) {
+      const card = document.querySelector('[data-list-card]');
+      if (!card) return;
+
+      const updateID = ++listUpdateID;
+      const active = document.activeElement;
+      const restoreSearchFocus = active && active.matches('[data-list-search]');
+      const selectionStart = restoreSearchFocus ? active.selectionStart : null;
+      const selectionEnd = restoreSearchFocus ? active.selectionEnd : null;
+      const partialURL = new URL(url.href);
+      partialURL.searchParams.set('partial', 'list');
+      try {
+        const response = await fetch(partialURL, {
+          headers: { 'X-Requested-With': 'fetch' }
+        });
+        if (!response.ok) {
+          throw new Error('list update failed: ' + response.status);
+        }
+        const html = await response.text();
+        if (updateID !== listUpdateID) return;
+        card.outerHTML = html;
+        if (restoreSearchFocus) {
+          const nextSearch = document.querySelector('[data-list-search]');
+          if (nextSearch) {
+            nextSearch.focus();
+            nextSearch.setSelectionRange(selectionStart, selectionEnd);
+          }
+        }
+        window.history.replaceState(null, '', cleanListURL(url));
+      } catch (err) {
+        console.error(err);
+        window.location.href = cleanListURL(url).href;
+      }
+    }
+
+    let listSearchTimer = null;
+    document.addEventListener('input', function (event) {
+      if (!event.target.matches('[data-list-search]')) return;
+      clearTimeout(listSearchTimer);
+      listSearchTimer = setTimeout(function () {
+        replaceListCard(listURLFromForm(event.target.form));
+      }, 250);
+    });
+
+    document.addEventListener('submit', function (event) {
+      const form = event.target.closest('[data-list-search-form]');
+      if (!form) return;
+      event.preventDefault();
+      replaceListCard(listURLFromForm(form));
+    });
+
+    document.addEventListener('click', function (event) {
+      const link = event.target.closest('[data-list-link]');
+      if (!link) return;
+      event.preventDefault();
+      if (link.getAttribute('aria-disabled') === 'true') return;
+      replaceListCard(new URL(link.href, window.location.href));
+    });
+
+    const syncForm = document.querySelector('[data-sync-form]');
+    const syncSubmit = document.querySelector('[data-sync-submit]');
+    const syncProgress = document.querySelector('[data-sync-progress]');
+    const syncMessage = document.querySelector('[data-sync-message]');
+    const syncCount = document.querySelector('[data-sync-count]');
+    const syncFill = document.querySelector('[data-sync-fill]');
+    const syncCurrent = document.querySelector('[data-sync-current]');
+    const syncTrace = document.querySelector('[data-sync-trace]');
+    let syncPollTimer = null;
+    let refreshListWhenSyncFinishes = false;
+
+    function setSyncProgress(job) {
+      if (!syncProgress || !job) return;
+      syncProgress.classList.remove('is-hidden', 'is-error', 'is-rate-limited', 'is-success');
+      if (job.error) syncProgress.classList.add('is-error');
+      if (job.rateLimited && !job.error) syncProgress.classList.add('is-rate-limited');
+      if (job.done && !job.error) syncProgress.classList.add('is-success');
+      if (syncMessage) syncMessage.textContent = job.message || job.error || 'Sync running';
+      if (syncCount) syncCount.textContent = String(job.processed || 0) + ' / ' + String(job.total || 0);
+      if (syncFill) syncFill.style.width = String(job.percent || 0) + '%';
+      if (syncCurrent) syncCurrent.textContent = job.current || '';
+      if (syncTrace) syncTrace.classList.toggle('is-hidden', !job.traceAvailable);
+      if (syncSubmit) syncSubmit.disabled = Boolean(job.running);
+    }
+
+    async function pollSyncStatus() {
+      try {
+        const response = await fetch('/sync/status', {
+          headers: { 'Accept': 'application/json' }
+        });
+        if (!response.ok) {
+          throw new Error('sync status failed: ' + response.status);
+        }
+        const job = await response.json();
+        setSyncProgress(job);
+        if (job && job.running) {
+          syncPollTimer = setTimeout(pollSyncStatus, 750);
+          return;
+        }
+        if (job && job.done && refreshListWhenSyncFinishes) {
+          refreshListWhenSyncFinishes = false;
+          replaceListCard(new URL(window.location.href));
+        }
+      } catch (err) {
+        console.error(err);
+        if (syncMessage) syncMessage.textContent = err.message;
+        if (syncProgress) syncProgress.classList.add('is-error');
+        if (syncSubmit) syncSubmit.disabled = false;
+      }
+    }
+
+    if (syncForm) {
+      syncForm.addEventListener('submit', async function (event) {
+        event.preventDefault();
+        if (syncPollTimer) clearTimeout(syncPollTimer);
+        refreshListWhenSyncFinishes = true;
+        if (syncSubmit) syncSubmit.disabled = true;
+        setSyncProgress({ running: true, message: 'Starting sync', processed: 0, total: 0, percent: 0 });
+        try {
+          const response = await fetch(syncForm.action, {
+            method: 'POST',
+            body: new FormData(syncForm),
+            headers: {
+              'Accept': 'application/json',
+              'X-Requested-With': 'fetch'
+            }
+          });
+          const job = await response.json();
+          if (!response.ok) {
+            throw new Error(job.error || job.message || 'sync could not start');
+          }
+          setSyncProgress(job);
+          syncPollTimer = setTimeout(pollSyncStatus, 300);
+        } catch (err) {
+          console.error(err);
+          setSyncProgress({ done: true, error: err.message, message: err.message, percent: 100 });
+        }
+      });
+    }
+
+    if (syncProgress && syncProgress.dataset.syncActive === 'true') {
+      refreshListWhenSyncFinishes = true;
+      pollSyncStatus();
     }
 
     const rgrokForm = document.querySelector('[data-rgrok-form]');

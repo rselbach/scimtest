@@ -1,0 +1,230 @@
+{{define "list-card.html"}}
+      <section class="card" data-list-card>
+        <div class="table-wrap">
+          {{if eq .Tab "groups"}}
+          <table class="groups-table">
+            <thead>
+              <tr>
+                <th>Group</th>
+                <th>Members</th>
+                {{if .SCIMEnabled}}
+                <th>Status</th>
+                <th>Remote ID</th>
+                {{end}}
+                <th class="col-actions">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range .Groups}}
+              <tr {{if .Deleted}}class="is-deleted"{{end}}>
+                <td>
+                  <div class="row-title" {{if .Deleted}}title="marked for deletion"{{end}}>{{.Name}}</div>
+                </td>
+                <td title="{{.MembersSummary}}">{{.MemberCount}}</td>
+                {{if $.SCIMEnabled}}
+                <td class="cell-widget">
+                  <span class="status {{if eq .Status "synced"}}synced{{else if eq .Status "sync error"}}error{{else if eq .Status "deleted"}}deleted{{else}}pending{{end}}">{{.Status}}</span>
+                </td>
+                <td class="mono" title="{{.RemoteID}}">{{.RemoteID}}</td>
+                {{end}}
+                <td class="col-actions cell-widget">
+                  <div class="row-actions">
+                    <a class="icon-btn" href="{{.EditURL}}" title="Edit group" aria-label="Edit group">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M10 4l2 2"/></svg>
+                    </a>
+                    {{if $.SCIMEnabled}}
+                    <a class="icon-btn" href="{{.HistoryURL}}" title="Group history" aria-label="Group history">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2 1.5"/></svg>
+                    </a>
+                    {{end}}
+                    {{if .Deleted}}
+                    {{if $.SCIMEnabled}}
+                    <form method="post" action="/groups/{{.ID}}/restore">
+                      <input type="hidden" name="tab" value="groups">
+                      {{if $.Pagination}}<input type="hidden" name="page" value="{{$.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{$.Pagination.PageSize}}">{{if $.Pagination.SearchQuery}}<input type="hidden" name="q" value="{{$.Pagination.SearchQuery}}">{{end}}{{end}}
+                      <button class="icon-btn success" type="submit" title="Restore group" aria-label="Restore group">
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a5 5 0 1 0 1.5-3.5"/><path d="M3 3v3h3"/></svg>
+                      </button>
+                    </form>
+                    {{end}}
+                    {{else}}
+                    <form method="post" action="/groups/{{.ID}}/delete">
+                      <input type="hidden" name="tab" value="groups">
+                      {{if $.Pagination}}<input type="hidden" name="page" value="{{$.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{$.Pagination.PageSize}}">{{if $.Pagination.SearchQuery}}<input type="hidden" name="q" value="{{$.Pagination.SearchQuery}}">{{end}}{{end}}
+                      <button class="icon-btn danger" type="submit" title="Delete group" aria-label="Delete group">
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10"/><path d="M5.5 4.5V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.5"/><path d="M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>
+                      </button>
+                    </form>
+                    {{end}}
+                  </div>
+                </td>
+              </tr>
+              {{else}}
+              <tr><td colspan="{{if $.SCIMEnabled}}5{{else}}3{{end}}">
+                <div class="card-empty">
+                  <div class="h">{{if and $.Pagination $.Pagination.SearchQuery}}No groups match search{{else}}No groups yet{{end}}</div>
+                  <div>{{if and $.Pagination $.Pagination.SearchQuery}}Try a different search.{{else}}Add one with the button above, or import from your SCIM server.{{end}}</div>
+                </div>
+              </td></tr>
+              {{end}}
+            </tbody>
+          </table>
+          {{else if eq .Tab "apps"}}
+          <table>
+            <colgroup><col><col style="width: 120px"><col style="width: 260px"><col style="width: 124px"></colgroup>
+            <thead>
+              <tr>
+                <th>Application</th>
+                <th>Protocol</th>
+                <th>Client ID</th>
+                <th class="col-actions">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range .Apps}}
+              <tr>
+                <td><div class="row-title">{{.Name}}</div><div class="mono">{{.Slug}}</div></td>
+                <td><span class="status">{{.Protocol}}</span></td>
+                <td class="mono" title="{{.OIDCClientID}}">{{if .SupportsOIDC}}{{.OIDCClientID}}{{else}}-{{end}}</td>
+                <td class="col-actions cell-widget">
+                  <div class="row-actions">
+                    <a class="icon-btn" href="{{.EditURL}}" title="Edit app" aria-label="Edit app">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M10 4l2 2"/></svg>
+                    </a>
+                    <form method="post" action="/apps/{{.ID}}/delete">
+                      <button class="icon-btn danger" type="submit" title="Delete app" aria-label="Delete app">
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10"/><path d="M5.5 4.5V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.5"/><path d="M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>
+                      </button>
+                    </form>
+                  </div>
+                </td>
+              </tr>
+              {{else}}
+              <tr><td colspan="4">
+                <div class="card-empty">
+                  <div class="h">No apps yet</div>
+                  <div>Add an app to expose OIDC and SAML endpoints.</div>
+                </div>
+              </td></tr>
+              {{end}}
+            </tbody>
+          </table>
+          {{else}}
+          <table>
+            <colgroup>
+              <col>
+              <col>
+              <col>
+              <col style="width: 100px">
+              {{if .SCIMEnabled}}
+              <col style="width: 120px">
+              <col style="width: 200px">
+              {{end}}
+              <col style="width: 124px">
+            </colgroup>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Username</th>
+                <th>Email</th>
+                <th>Active</th>
+                {{if .SCIMEnabled}}
+                <th>Status</th>
+                <th>Remote ID</th>
+                {{end}}
+                <th class="col-actions">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range .Users}}
+              <tr {{if .Deleted}}class="is-deleted"{{end}}>
+                <td>
+                  <div class="row-title" {{if .Deleted}}title="marked for deletion"{{end}}>{{.Name}}</div>
+                </td>
+                <td title="{{.Username}}">{{.Username}}</td>
+                <td title="{{.Email}}">{{.Email}}</td>
+                <td class="cell-widget">
+                  {{if .Deleted}}
+                  <span class="active-toggle is-readonly {{if eq .Active "active"}}is-active{{end}}">{{.Active}}</span>
+                  {{else}}
+                  <form method="post" action="/users/{{.ID}}/toggle-active" style="display:inline;margin:0">
+                    <input type="hidden" name="tab" value="users">
+                    {{if $.Pagination}}<input type="hidden" name="page" value="{{$.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{$.Pagination.PageSize}}">{{if $.Pagination.SearchQuery}}<input type="hidden" name="q" value="{{$.Pagination.SearchQuery}}">{{end}}{{end}}
+                    <button class="active-toggle {{if eq .Active "active"}}is-active{{end}}" type="submit">{{.Active}}</button>
+                  </form>
+                  {{end}}
+                </td>
+                {{if $.SCIMEnabled}}
+                <td class="cell-widget">
+                  <span class="status {{if eq .Status "synced"}}synced{{else if eq .Status "sync error"}}error{{else if eq .Status "deleted"}}deleted{{else}}pending{{end}}">{{.Status}}</span>
+                </td>
+                <td class="mono" title="{{.RemoteID}}">{{.RemoteID}}</td>
+                {{end}}
+                <td class="col-actions cell-widget">
+                  <div class="row-actions">
+                    <a class="icon-btn" href="{{.EditURL}}" title="Edit user" aria-label="Edit user">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M10 4l2 2"/></svg>
+                    </a>
+                    {{if $.SCIMEnabled}}
+                    <a class="icon-btn" href="{{.HistoryURL}}" title="User history" aria-label="User history">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2 1.5"/></svg>
+                    </a>
+                    {{end}}
+                    {{if .Deleted}}
+                    {{if $.SCIMEnabled}}
+                    <form method="post" action="/users/{{.ID}}/restore">
+                      <input type="hidden" name="tab" value="users">
+                      {{if $.Pagination}}<input type="hidden" name="page" value="{{$.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{$.Pagination.PageSize}}">{{if $.Pagination.SearchQuery}}<input type="hidden" name="q" value="{{$.Pagination.SearchQuery}}">{{end}}{{end}}
+                      <button class="icon-btn success" type="submit" title="Restore user" aria-label="Restore user">
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a5 5 0 1 0 1.5-3.5"/><path d="M3 3v3h3"/></svg>
+                      </button>
+                    </form>
+                    {{end}}
+                    {{else}}
+                    <form method="post" action="/users/{{.ID}}/delete">
+                      <input type="hidden" name="tab" value="users">
+                      {{if $.Pagination}}<input type="hidden" name="page" value="{{$.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{$.Pagination.PageSize}}">{{if $.Pagination.SearchQuery}}<input type="hidden" name="q" value="{{$.Pagination.SearchQuery}}">{{end}}{{end}}
+                      <button class="icon-btn danger" type="submit" title="Delete user" aria-label="Delete user">
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10"/><path d="M5.5 4.5V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.5"/><path d="M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>
+                      </button>
+                    </form>
+                    {{end}}
+                  </div>
+                </td>
+              </tr>
+              {{else}}
+              <tr><td colspan="{{if $.SCIMEnabled}}7{{else}}5{{end}}">
+                <div class="card-empty">
+                  <div class="h">{{if and $.Pagination $.Pagination.SearchQuery}}No users match search{{else}}No users yet{{end}}</div>
+                  <div>{{if and $.Pagination $.Pagination.SearchQuery}}Try a different search.{{else}}Add one with the button above, or import from your SCIM server.{{end}}</div>
+                </div>
+              </td></tr>
+              {{end}}
+            </tbody>
+          </table>
+          {{end}}
+        </div>
+        {{if .Pagination}}
+        <div class="pagination">
+          <span>{{.Pagination.Summary}}</span>
+          <div class="pagination-actions">
+            <form class="page-size-form" method="get" action="/" data-list-search-form>
+              <input type="hidden" name="tab" value="{{.Tab}}">
+              <label for="list-search">Search
+                <input id="list-search" name="q" value="{{.Pagination.SearchQuery}}" placeholder="name, username, email" autocomplete="off" data-list-search>
+              </label>
+              <label for="page-size">Rows
+                <select id="page-size" name="pageSize" onchange="this.form.requestSubmit()">
+                  {{range .Pagination.PageSizeOptions}}
+                  <option value="{{.Size}}" {{if .Selected}}selected{{end}}>{{.Label}}</option>
+                  {{end}}
+                </select>
+              </label>
+            </form>
+            <a class="btn btn-sm {{if not .Pagination.HasPrevious}}is-disabled{{end}}" href="{{.Pagination.PreviousURL}}" aria-disabled="{{if .Pagination.HasPrevious}}false{{else}}true{{end}}" data-list-link>Previous</a>
+            <a class="btn btn-sm {{if not .Pagination.HasNext}}is-disabled{{end}}" href="{{.Pagination.NextURL}}" aria-disabled="{{if .Pagination.HasNext}}false{{else}}true{{end}}" data-list-link>Next</a>
+          </div>
+        </div>
+        {{end}}
+      </section>
+{{end}}

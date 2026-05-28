@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	rgrokclient "github.com/rselbach/rgrok/client"
 	"github.com/stretchr/testify/require"
@@ -57,6 +59,213 @@ func TestIndexRendersDashboard(t *testing.T) {
 	r.Contains(groupRec.Body.String(), "Greendale Study Group")
 }
 
+func TestIndexPaginatesUsersAndGroups(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+
+	users := make([]user, 0, 30)
+	for i := 1; i <= 30; i++ {
+		users = append(users, user{
+			ID:         fmt.Sprintf("u%03d", i),
+			GivenName:  "Troy",
+			FamilyName: fmt.Sprintf("Barnes %03d", i),
+			Username:   fmt.Sprintf("student%03d", i),
+			Email:      fmt.Sprintf("student%03d@greendale.edu", i),
+			Active:     true,
+		})
+	}
+	groups := make([]group, 0, 28)
+	for i := 1; i <= 28; i++ {
+		groups = append(groups, group{
+			ID:          fmt.Sprintf("g%03d", i),
+			DisplayName: fmt.Sprintf("Greendale Group %03d", i),
+		})
+	}
+
+	state := appState{
+		Users:           users,
+		Groups:          groups,
+		UserOperations:  map[string][]operationLog{},
+		GroupOperations: map[string][]operationLog{},
+	}
+	r.NoError(saveState(state))
+
+	app := &webApp{}
+	userReq := httptest.NewRequest(http.MethodGet, "/?tab=users&page=2", nil)
+	userRec := httptest.NewRecorder()
+	app.routes().ServeHTTP(userRec, userReq)
+
+	r.Equal(http.StatusOK, userRec.Code)
+	userBody := userRec.Body.String()
+	r.Contains(userBody, "Showing 16–30 of 30")
+	r.Contains(userBody, "student016@greendale.edu")
+	r.NotContains(userBody, "student015@greendale.edu")
+	r.Contains(userBody, `name="page" value="2"`)
+	r.Contains(userBody, `name="pageSize" value="15"`)
+	r.Contains(userBody, `value="15" selected`)
+
+	groupReq := httptest.NewRequest(http.MethodGet, "/?tab=groups&page=2&pageSize=25", nil)
+	groupRec := httptest.NewRecorder()
+	app.routes().ServeHTTP(groupRec, groupReq)
+
+	r.Equal(http.StatusOK, groupRec.Code)
+	groupBody := groupRec.Body.String()
+	r.Contains(groupBody, "Showing 26–28 of 28")
+	r.Contains(groupBody, "Greendale Group 026")
+	r.NotContains(groupBody, "Greendale Group 025")
+	r.Contains(groupBody, `name="page" value="2"`)
+	r.Contains(groupBody, `name="pageSize" value="25"`)
+	r.Contains(groupBody, `value="25" selected`)
+}
+
+func TestIndexSearchesUsersAndGroups(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+
+	state := appState{
+		Users: []user{{
+			ID:         "u1",
+			GivenName:  "Troy",
+			FamilyName: "Barnes",
+			Username:   "tbarnes",
+			Email:      "troy@greendale.edu",
+			Active:     true,
+		}, {
+			ID:         "u2",
+			GivenName:  "Abed",
+			FamilyName: "Nadir",
+			Username:   "coolabed",
+			Email:      "abed@greendale.edu",
+			Active:     true,
+		}, {
+			ID:         "u3",
+			GivenName:  "Annie",
+			FamilyName: "Edison",
+			Username:   "aedison",
+			Email:      "humanbeing@greendale.edu",
+			Active:     true,
+		}},
+		Groups: []group{{
+			ID:          "g1",
+			DisplayName: "Study Group",
+		}, {
+			ID:          "g2",
+			DisplayName: "Paintball Squad",
+		}},
+		UserOperations:  map[string][]operationLog{},
+		GroupOperations: map[string][]operationLog{},
+	}
+	r.NoError(saveState(state))
+
+	app := &webApp{}
+	tests := map[string]struct {
+		path    string
+		want    string
+		notWant string
+	}{
+		"user name": {
+			path:    "/?tab=users&q=nadir",
+			want:    "Abed Nadir",
+			notWant: "Troy Barnes",
+		},
+		"user username": {
+			path:    "/?tab=users&q=coolabed",
+			want:    "abed@greendale.edu",
+			notWant: "aedison",
+		},
+		"user email": {
+			path:    "/?tab=users&q=humanbeing",
+			want:    "Annie Edison",
+			notWant: "Abed Nadir",
+		},
+		"group name": {
+			path:    "/?tab=groups&q=paintball",
+			want:    "Paintball Squad",
+			notWant: "Study Group",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			rec := httptest.NewRecorder()
+			app.routes().ServeHTTP(rec, req)
+
+			r.Equal(http.StatusOK, rec.Code)
+			body := rec.Body.String()
+			r.Contains(body, "Showing 1–1 of 1")
+			r.Contains(body, tc.want)
+			r.NotContains(body, tc.notWant)
+			r.Contains(body, `name="q"`)
+		})
+	}
+}
+
+func TestIndexRendersListPartial(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+
+	state := appState{
+		Users: []user{{
+			ID:         "u1",
+			GivenName:  "Abed",
+			FamilyName: "Nadir",
+			Username:   "coolabed",
+			Email:      "abed@greendale.edu",
+			Active:     true,
+		}},
+		UserOperations:  map[string][]operationLog{},
+		GroupOperations: map[string][]operationLog{},
+	}
+	r.NoError(saveState(state))
+
+	app := &webApp{}
+	req := httptest.NewRequest(http.MethodGet, "/?tab=users&q=abed&partial=list", nil)
+	rec := httptest.NewRecorder()
+	app.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	r.Contains(body, `data-list-card`)
+	r.Contains(body, "Abed Nadir")
+	r.NotContains(body, "<!DOCTYPE html>")
+	r.NotContains(body, `class="topbar"`)
+}
+
+func TestUserActionPreservesPage(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+
+	users := make([]user, 0, 30)
+	for i := 1; i <= 30; i++ {
+		users = append(users, user{
+			ID:         fmt.Sprintf("u%03d", i),
+			GivenName:  "Annie",
+			FamilyName: fmt.Sprintf("Edison %03d", i),
+			Username:   fmt.Sprintf("student%03d", i),
+			Email:      fmt.Sprintf("student%03d@greendale.edu", i),
+			Active:     true,
+		})
+	}
+	r.NoError(saveState(appState{
+		Users:           users,
+		UserOperations:  map[string][]operationLog{},
+		GroupOperations: map[string][]operationLog{},
+	}))
+
+	app := &webApp{}
+	form := url.Values{"tab": {"users"}, "page": {"2"}, "pageSize": {"25"}, "q": {"student026"}}
+	req := httptest.NewRequest(http.MethodPost, "/users/u026/toggle-active", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	r.Equal("/?page=2&pageSize=25&q=student026&tab=users", rec.Header().Get("Location"))
+}
+
 func TestToggleActiveUpdatesStateAndHistory(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
@@ -91,6 +300,220 @@ func TestToggleActiveUpdatesStateAndHistory(t *testing.T) {
 	r.True(updated.Users[0].Dirty)
 	r.Equal("", updated.Users[0].LastError)
 	r.Equal("Deactivated", updated.UserOperations["u1"][0].Summary)
+}
+
+func TestIndexRendersToolsModal(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+
+	app := &webApp{}
+	req := httptest.NewRequest(http.MethodGet, "/?tab=users&modal=tools", nil)
+	rec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	r.Contains(body, "Tools")
+	r.Contains(body, `/tools/create-users`)
+	r.Contains(body, `name="count"`)
+	r.Contains(body, `name="email_domain"`)
+	r.Contains(body, `/tools/delete-all`)
+	r.Contains(body, "Activate All")
+	r.Contains(body, "Deactivate All")
+}
+
+func TestToolsCreateUsers(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+
+	r.NoError(saveState(appState{
+		Users: []user{{
+			ID:         "u1",
+			GivenName:  "Troy",
+			FamilyName: "Barnes",
+			Username:   "user001",
+			Email:      "user001@greendale.edu",
+			Active:     true,
+		}},
+		UserOperations:  map[string][]operationLog{},
+		GroupOperations: map[string][]operationLog{},
+	}))
+
+	app := &webApp{}
+	form := url.Values{"tab": {"users"}, "count": {"3"}, "email_domain": {"@greendale.edu"}}
+	req := httptest.NewRequest(http.MethodPost, "/tools/create-users", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	r.Equal("/?tab=users", rec.Header().Get("Location"))
+	updated, err := loadState()
+	r.NoError(err)
+	r.Len(updated.Users, 4)
+
+	created := updated.Users[1:]
+	r.Equal("user002", created[0].Username)
+	r.Equal("user002@greendale.edu", created[0].Email)
+	r.Equal("user003", created[1].Username)
+	r.Equal("user004", created[2].Username)
+	for _, u := range created {
+		r.True(u.Active)
+		r.True(u.Dirty)
+		r.Equal("Created by tools", updated.UserOperations[u.ID][0].Summary)
+	}
+}
+
+func TestToolsActivateAndDeactivateAll(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+
+	r.NoError(saveState(appState{
+		Users: []user{{
+			ID:         "u1",
+			GivenName:  "Abed",
+			FamilyName: "Nadir",
+			Username:   "coolabed",
+			Email:      "abed@greendale.edu",
+		}, {
+			ID:         "u2",
+			GivenName:  "Annie",
+			FamilyName: "Edison",
+			Username:   "aedison",
+			Email:      "annie@greendale.edu",
+			Active:     true,
+		}, {
+			ID:         "u3",
+			GivenName:  "Señor",
+			FamilyName: "Chang",
+			Username:   "chang",
+			Email:      "chang@greendale.edu",
+			Deleted:    true,
+		}},
+		UserOperations:  map[string][]operationLog{},
+		GroupOperations: map[string][]operationLog{},
+	}))
+
+	app := &webApp{}
+	activate := url.Values{"tab": {"users"}}
+	activateReq := httptest.NewRequest(http.MethodPost, "/tools/activate-all", strings.NewReader(activate.Encode()))
+	activateReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	activateRec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(activateRec, activateReq)
+
+	r.Equal(http.StatusSeeOther, activateRec.Code)
+	updated, err := loadState()
+	r.NoError(err)
+	r.True(updated.Users[0].Active)
+	r.True(updated.Users[0].Dirty)
+	r.True(updated.Users[1].Active)
+	r.False(updated.Users[1].Dirty)
+	r.False(updated.Users[2].Active)
+	r.False(updated.Users[2].Dirty)
+	r.Equal("Activated", updated.UserOperations["u1"][0].Summary)
+
+	deactivate := url.Values{"tab": {"users"}}
+	deactivateReq := httptest.NewRequest(http.MethodPost, "/tools/deactivate-all", strings.NewReader(deactivate.Encode()))
+	deactivateReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	deactivateRec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(deactivateRec, deactivateReq)
+
+	r.Equal(http.StatusSeeOther, deactivateRec.Code)
+	updated, err = loadState()
+	r.NoError(err)
+	r.False(updated.Users[0].Active)
+	r.True(updated.Users[0].Dirty)
+	r.False(updated.Users[1].Active)
+	r.True(updated.Users[1].Dirty)
+	r.False(updated.Users[2].Active)
+	r.False(updated.Users[2].Dirty)
+	r.Equal("Deactivated", updated.UserOperations["u2"][0].Summary)
+}
+
+func TestToolsDeleteAll(t *testing.T) {
+	t.Run("SCIM enabled marks users for deletion", func(t *testing.T) {
+		r := require.New(t)
+		setTestStateFile(t)
+		r.NoError(saveState(appState{
+			Users: []user{{
+				ID:         "u1",
+				GivenName:  "Jeff",
+				FamilyName: "Winger",
+				Username:   "jwinger",
+				Email:      "jeff@greendale.edu",
+				Active:     true,
+			}, {
+				ID:         "u2",
+				GivenName:  "Britta",
+				FamilyName: "Perry",
+				Username:   "bperry",
+				Email:      "britta@greendale.edu",
+				Active:     true,
+				Deleted:    true,
+			}},
+			UserOperations:  map[string][]operationLog{},
+			GroupOperations: map[string][]operationLog{},
+		}))
+
+		app := &webApp{}
+		form := url.Values{"tab": {"users"}}
+		req := httptest.NewRequest(http.MethodPost, "/tools/delete-all", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+
+		app.routes().ServeHTTP(rec, req)
+
+		r.Equal(http.StatusSeeOther, rec.Code)
+		updated, err := loadState()
+		r.NoError(err)
+		r.True(updated.Users[0].Deleted)
+		r.True(updated.Users[0].Dirty)
+		r.True(updated.Users[1].Deleted)
+		r.False(updated.Users[1].Dirty)
+		r.Equal("Marked for deletion by tools", updated.UserOperations["u1"][0].Summary)
+	})
+
+	t.Run("SCIM disabled removes users locally", func(t *testing.T) {
+		r := require.New(t)
+		setTestStateFile(t)
+		r.NoError(saveState(appState{
+			Config: config{SCIMDisabled: true},
+			Users: []user{{
+				ID:         "u1",
+				GivenName:  "Shirley",
+				FamilyName: "Bennett",
+				Username:   "sbennett",
+				Email:      "shirley@greendale.edu",
+				Active:     true,
+			}},
+			Groups: []group{{
+				ID:          "g1",
+				DisplayName: "Study Group",
+				MemberIDs:   []string{"u1"},
+			}},
+			UserOperations:  map[string][]operationLog{},
+			GroupOperations: map[string][]operationLog{},
+		}))
+
+		app := &webApp{}
+		form := url.Values{"tab": {"users"}}
+		req := httptest.NewRequest(http.MethodPost, "/tools/delete-all", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+
+		app.routes().ServeHTTP(rec, req)
+
+		r.Equal(http.StatusSeeOther, rec.Code)
+		updated, err := loadState()
+		r.NoError(err)
+		r.Empty(updated.Users)
+		r.Empty(updated.Groups[0].MemberIDs)
+	})
 }
 
 func TestSyncPersistsRemoteStateAndTraceCookie(t *testing.T) {
@@ -135,13 +558,93 @@ func TestSyncPersistsRemoteStateAndTraceCookie(t *testing.T) {
 	app.routes().ServeHTTP(rec, req)
 
 	r.Equal(http.StatusSeeOther, rec.Code)
+	job := waitForSyncDone(t, app)
+	r.True(job.Success)
+	r.True(job.TraceAvailable)
 	updated, err := loadState()
 	r.NoError(err)
 	r.Equal("remote-user-1", updated.Users[0].RemoteID)
 	r.False(updated.Users[0].Dirty)
 	r.NotEmpty(updated.UserOperations["u1"])
-	r.Contains(rec.Header().Get("Set-Cookie"), "scimtest_trace=")
 	r.Contains(app.traceContent(), "POST /Users")
+}
+
+func TestSyncStartsAsyncAndReportsStatus(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		r.Equal(http.MethodPost, req.Method)
+		r.Equal("/Users", req.URL.Path)
+		close(started)
+		<-release
+		w.Header().Set("Content-Type", "application/scim+json")
+		_, err := fmt.Fprint(w, `{"id":"remote-user-1"}`)
+		r.NoError(err)
+	}))
+	defer server.Close()
+
+	r.NoError(saveState(appState{
+		Config: config{
+			BaseURL:     server.URL,
+			BearerToken: "token",
+		},
+		Users: []user{{
+			ID:         "u1",
+			GivenName:  "Shirley",
+			FamilyName: "Bennett",
+			Username:   "sbennett",
+			Email:      "shirley@example.com",
+			Active:     true,
+			Dirty:      true,
+		}},
+		UserOperations:  map[string][]operationLog{},
+		GroupOperations: map[string][]operationLog{},
+	}))
+
+	app := &webApp{}
+	form := url.Values{"tab": {"users"}}
+	req := httptest.NewRequest(http.MethodPost, "/sync", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Requested-With", "fetch")
+	rec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusOK, rec.Code)
+	var startedJob syncJobSnapshot
+	r.NoError(json.NewDecoder(rec.Body).Decode(&startedJob))
+	r.True(startedJob.Running)
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("sync request did not start")
+	}
+
+	statusReq := httptest.NewRequest(http.MethodGet, "/sync/status", nil)
+	statusRec := httptest.NewRecorder()
+	app.routes().ServeHTTP(statusRec, statusReq)
+
+	r.Equal(http.StatusOK, statusRec.Code)
+	var runningJob syncJobSnapshot
+	r.NoError(json.NewDecoder(statusRec.Body).Decode(&runningJob))
+	r.True(runningJob.Running)
+	r.Equal(1, runningJob.Total)
+	r.Equal(0, runningJob.Processed)
+
+	updated, err := loadState()
+	r.NoError(err)
+	r.Empty(updated.Users[0].RemoteID)
+
+	close(release)
+	finishedJob := waitForSyncDone(t, app)
+	r.True(finishedJob.Success)
+	r.Equal(100, finishedJob.Percent)
+	r.Equal("create user Shirley Bennett (sbennett)", finishedJob.Current)
 }
 
 func TestSyncRateLimitRendersReadableError(t *testing.T) {
@@ -152,7 +655,7 @@ func TestSyncRateLimitRendersReadableError(t *testing.T) {
 		r.Equal(http.MethodPut, req.Method)
 		r.Equal("/Users/remote-dean", req.URL.Path)
 		w.Header().Set("Content-Type", "application/scim+json")
-		w.Header().Set("Retry-After", "60")
+		w.Header().Set("Retry-After", "0")
 		w.WriteHeader(http.StatusTooManyRequests)
 		_, err := fmt.Fprint(w, `{"schemas":["urn:ietf:params:scim:api:messages:2.0:Error"],"detail":"Too many requests. Please retry after the rate limit resets.","status":"429"}`)
 		r.NoError(err)
@@ -188,12 +691,15 @@ func TestSyncRateLimitRendersReadableError(t *testing.T) {
 	app.routes().ServeHTTP(syncRec, syncReq)
 
 	r.Equal(http.StatusSeeOther, syncRec.Code)
+	job := waitForSyncDone(t, app)
+	r.False(job.Success)
+	r.True(job.TraceAvailable)
 	updated, err := loadState()
 	r.NoError(err)
-	r.Contains(updated.Users[0].LastError, "Try again in 1 minute")
+	r.Contains(updated.Users[0].LastError, "Try again now")
 	r.NotContains(updated.Users[0].LastError, "schemas")
-	r.Equal("60", updated.UserOperations["u1"][0].ResponseRetryAfter)
-	r.Contains(app.traceContent(), "Retry-After: 60")
+	r.Equal("0", updated.UserOperations["u1"][0].ResponseRetryAfter)
+	r.Contains(app.traceContent(), "Retry-After: 0")
 
 	indexReq := httptest.NewRequest(http.MethodGet, "/?tab=users", nil)
 	indexRec := httptest.NewRecorder()
@@ -201,7 +707,7 @@ func TestSyncRateLimitRendersReadableError(t *testing.T) {
 
 	r.Equal(http.StatusOK, indexRec.Code)
 	body := indexRec.Body.String()
-	r.Contains(body, "user Dean Pelton: SCIM server rate limit hit (429 Too Many Requests). Try again in 1 minute.")
+	r.Contains(body, "user Dean Pelton: SCIM server rate limit hit (429 Too Many Requests). Try again now.")
 	r.NotContains(body, "schemas")
 
 	historyReq := httptest.NewRequest(http.MethodGet, "/?tab=users&historyType=user&historyID=u1", nil)
@@ -209,7 +715,7 @@ func TestSyncRateLimitRendersReadableError(t *testing.T) {
 	app.routes().ServeHTTP(historyRec, historyReq)
 
 	r.Equal(http.StatusOK, historyRec.Code)
-	r.Contains(historyRec.Body.String(), "Retry-After: 60")
+	r.Contains(historyRec.Body.String(), "Retry-After: 0")
 }
 
 func TestIndexRendersLegacyRateLimitErrorReadable(t *testing.T) {
@@ -530,6 +1036,22 @@ type fakeTunnel struct {
 func (f *fakeTunnel) Close() error {
 	f.closed = true
 	return nil
+}
+
+func waitForSyncDone(t *testing.T, app *webApp) syncJobSnapshot {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		job := app.currentSyncJob()
+		if job != nil && job.Done {
+			return *job
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("sync job did not finish")
+	return syncJobSnapshot{}
 }
 
 func setTestStateFile(t *testing.T) {

@@ -17,10 +17,11 @@ const scimUserSchema = "urn:ietf:params:scim:schemas:core:2.0:User"
 const scimGroupSchema = "urn:ietf:params:scim:schemas:core:2.0:Group"
 
 type SCIMClient struct {
-	baseURL string
-	token   string
-	client  *http.Client
-	traces  []SyncTraceEntry
+	baseURL     string
+	token       string
+	client      *http.Client
+	onRateLimit func(TraceTarget, time.Duration, string, int)
+	traces      []SyncTraceEntry
 }
 
 type TraceTarget struct {
@@ -77,11 +78,12 @@ type SyncResult struct {
 
 // RateLimitError describes a SCIM 429 response.
 type RateLimitError struct {
-	Method       string
-	Path         string
-	Status       string
-	RetryAfter   string
-	ResponseBody string
+	Method           string
+	Path             string
+	Status           string
+	RetryAfter       string
+	RetryAfterHeader string
+	ResponseBody     string
 }
 
 func (e *RateLimitError) Error() string {
@@ -99,6 +101,19 @@ type ImportResult struct {
 	Status string
 	Fatal  error
 	Traces []SyncTraceEntry
+}
+
+// SyncProgress reports foreground progress during a dirty-state sync.
+type SyncProgress struct {
+	Total        int
+	Processed    int
+	ResourceType string
+	ResourceID   string
+	Label        string
+	Operation    string
+	Status       string
+	RateLimited  bool
+	RetryAfter   string
 }
 
 type SyncTraceEntry struct {
@@ -122,6 +137,10 @@ type SCIMListResponse[T any] struct {
 	ItemsPerPage int `json:"itemsPerPage"`
 	Resources    []T `json:"Resources"`
 }
+
+const maxSCIMRateLimitRetries = 3
+
+var rateLimitSleep = time.Sleep
 
 func NewSCIMClient(cfg Config) (*SCIMClient, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
@@ -151,15 +170,23 @@ func NewSCIMClient(cfg Config) (*SCIMClient, error) {
 }
 
 func SyncDirtyState(state AppState) SyncResult {
+	return SyncDirtyStateWithProgress(state, nil)
+}
+
+// SyncDirtyStateWithProgress syncs dirty resources and reports per-resource progress.
+func SyncDirtyStateWithProgress(state AppState, onProgress func(SyncProgress)) SyncResult {
 	client, err := NewSCIMClient(state.Config)
 	if err != nil {
 		return SyncResult{Fatal: err}
 	}
 
-	state, userCounts, stopped := syncDirtyUsers(client, state)
+	progress := newSyncProgressReporter(countDirtyResources(state), onProgress)
+	client.onRateLimit = progress.reportRateLimit
+	progress.report(SyncProgress{Status: "Starting sync"})
+	state, userCounts, stopped := syncDirtyUsers(client, state, progress)
 	groupCounts := syncCounts{}
 	if stopped == nil {
-		state, groupCounts, stopped = syncDirtyGroups(client, state)
+		state, groupCounts, stopped = syncDirtyGroups(client, state, progress)
 	}
 
 	status := fmt.Sprintf(
@@ -225,7 +252,108 @@ func (c syncCounts) total() int {
 	return c.created + c.updated + c.deleted + c.failed
 }
 
-func syncDirtyUsers(client *SCIMClient, state AppState) (AppState, syncCounts, error) {
+type syncProgressReporter struct {
+	total      int
+	processed  int
+	onProgress func(SyncProgress)
+}
+
+func newSyncProgressReporter(total int, onProgress func(SyncProgress)) *syncProgressReporter {
+	return &syncProgressReporter{total: total, onProgress: onProgress}
+}
+
+func (r *syncProgressReporter) report(progress SyncProgress) {
+	if r == nil || r.onProgress == nil {
+		return
+	}
+
+	progress.Total = r.total
+	progress.Processed = r.processed
+	r.onProgress(progress)
+}
+
+func (r *syncProgressReporter) reportUser(u User, operation string, status string) {
+	if r == nil {
+		return
+	}
+
+	r.processed++
+	r.report(SyncProgress{
+		ResourceType: "user",
+		ResourceID:   u.ID,
+		Label:        progressUserLabel(u),
+		Operation:    operation,
+		Status:       status,
+	})
+}
+
+func (r *syncProgressReporter) reportRateLimit(target TraceTarget, delay time.Duration, retryAfterHeader string, _ int) {
+	if r == nil {
+		return
+	}
+
+	wait := "now"
+	if delay > 0 {
+		wait = humanRetryAfter(delay)
+	}
+	status := "Rate limited; retrying " + wait
+	if retryAfterHeader != "" {
+		status = "Rate limited; waiting " + wait
+	}
+
+	r.report(SyncProgress{
+		ResourceType: target.ResourceType,
+		ResourceID:   target.ResourceID,
+		Label:        target.Label,
+		Operation:    target.Operation,
+		Status:       status,
+		RateLimited:  true,
+		RetryAfter:   retryAfterHeader,
+	})
+}
+
+func progressUserLabel(u User) string {
+	label := UserLabel(u)
+	username := strings.TrimSpace(u.Username)
+	if username == "" || username == label {
+		return label
+	}
+
+	return fmt.Sprintf("%s (%s)", label, username)
+}
+
+func (r *syncProgressReporter) reportGroup(g Group, operation string, status string) {
+	if r == nil {
+		return
+	}
+
+	r.processed++
+	r.report(SyncProgress{
+		ResourceType: "group",
+		ResourceID:   g.ID,
+		Label:        g.DisplayName,
+		Operation:    operation,
+		Status:       status,
+	})
+}
+
+func countDirtyResources(state AppState) int {
+	total := 0
+	for _, u := range state.Users {
+		if u.Dirty {
+			total++
+		}
+	}
+	for _, g := range state.Groups {
+		if g.Dirty {
+			total++
+		}
+	}
+
+	return total
+}
+
+func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressReporter) (AppState, syncCounts, error) {
 	nextUsers := make([]User, 0, len(state.Users))
 	counts := syncCounts{}
 
@@ -240,12 +368,14 @@ func syncDirtyUsers(client *SCIMClient, state AppState) (AppState, syncCounts, e
 		switch {
 		case u.Deleted && u.RemoteID == "":
 			counts.deleted++
+			progress.reportUser(u, "delete", "Deleted locally")
 			continue
 		case u.Deleted:
 			if err := client.deleteUser(u, "delete"); err != nil {
 				u.LastError = err.Error()
 				counts.failed++
 				nextUsers = append(nextUsers, u)
+				progress.reportUser(u, "delete", "Failed")
 				if isRateLimitError(err) {
 					nextUsers = append(nextUsers, state.Users[i+1:]...)
 					state.Users = nextUsers
@@ -255,12 +385,14 @@ func syncDirtyUsers(client *SCIMClient, state AppState) (AppState, syncCounts, e
 			}
 
 			counts.deleted++
+			progress.reportUser(u, "delete", "Deleted")
 		case u.RemoteID == "":
 			remoteID, err := client.createUser(u)
 			if err != nil {
 				u.LastError = err.Error()
 				counts.failed++
 				nextUsers = append(nextUsers, u)
+				progress.reportUser(u, "create", "Failed")
 				if isRateLimitError(err) {
 					nextUsers = append(nextUsers, state.Users[i+1:]...)
 					state.Users = nextUsers
@@ -273,11 +405,13 @@ func syncDirtyUsers(client *SCIMClient, state AppState) (AppState, syncCounts, e
 			u.Dirty = false
 			counts.created++
 			nextUsers = append(nextUsers, u)
+			progress.reportUser(u, "create", "Created")
 		default:
 			if err := client.replaceUser(u); err != nil {
 				u.LastError = err.Error()
 				counts.failed++
 				nextUsers = append(nextUsers, u)
+				progress.reportUser(u, "update", "Failed")
 				if isRateLimitError(err) {
 					nextUsers = append(nextUsers, state.Users[i+1:]...)
 					state.Users = nextUsers
@@ -289,6 +423,7 @@ func syncDirtyUsers(client *SCIMClient, state AppState) (AppState, syncCounts, e
 			u.Dirty = false
 			counts.updated++
 			nextUsers = append(nextUsers, u)
+			progress.reportUser(u, "update", "Updated")
 		}
 	}
 
@@ -296,7 +431,7 @@ func syncDirtyUsers(client *SCIMClient, state AppState) (AppState, syncCounts, e
 	return state, counts, nil
 }
 
-func syncDirtyGroups(client *SCIMClient, state AppState) (AppState, syncCounts, error) {
+func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressReporter) (AppState, syncCounts, error) {
 	nextGroups := make([]Group, 0, len(state.Groups))
 	counts := syncCounts{}
 
@@ -311,12 +446,14 @@ func syncDirtyGroups(client *SCIMClient, state AppState) (AppState, syncCounts, 
 		switch {
 		case g.Deleted && g.RemoteID == "":
 			counts.deleted++
+			progress.reportGroup(g, "delete", "Deleted locally")
 			continue
 		case g.Deleted:
 			if err := client.deleteGroup(g, "delete"); err != nil {
 				g.LastError = err.Error()
 				counts.failed++
 				nextGroups = append(nextGroups, g)
+				progress.reportGroup(g, "delete", "Failed")
 				if isRateLimitError(err) {
 					nextGroups = append(nextGroups, state.Groups[i+1:]...)
 					state.Groups = nextGroups
@@ -326,12 +463,14 @@ func syncDirtyGroups(client *SCIMClient, state AppState) (AppState, syncCounts, 
 			}
 
 			counts.deleted++
+			progress.reportGroup(g, "delete", "Deleted")
 		case g.RemoteID == "":
 			remoteID, err := client.createGroup(g, state.Users)
 			if err != nil {
 				g.LastError = err.Error()
 				counts.failed++
 				nextGroups = append(nextGroups, g)
+				progress.reportGroup(g, "create", "Failed")
 				if isRateLimitError(err) {
 					nextGroups = append(nextGroups, state.Groups[i+1:]...)
 					state.Groups = nextGroups
@@ -344,11 +483,13 @@ func syncDirtyGroups(client *SCIMClient, state AppState) (AppState, syncCounts, 
 			g.Dirty = false
 			counts.created++
 			nextGroups = append(nextGroups, g)
+			progress.reportGroup(g, "create", "Created")
 		default:
 			if err := client.replaceGroup(g, state.Users); err != nil {
 				g.LastError = err.Error()
 				counts.failed++
 				nextGroups = append(nextGroups, g)
+				progress.reportGroup(g, "update", "Failed")
 				if isRateLimitError(err) {
 					nextGroups = append(nextGroups, state.Groups[i+1:]...)
 					state.Groups = nextGroups
@@ -360,6 +501,7 @@ func syncDirtyGroups(client *SCIMClient, state AppState) (AppState, syncCounts, 
 			g.Dirty = false
 			counts.updated++
 			nextGroups = append(nextGroups, g)
+			progress.reportGroup(g, "update", "Updated")
 		}
 	}
 
@@ -556,15 +698,43 @@ func newSCIMGroupResource(g Group, users []User) (SCIMGroupResource, error) {
 }
 
 func (c *SCIMClient) doJSON(method string, path string, body any, out any, target TraceTarget) error {
-	var reader io.Reader
+	var payload []byte
 	requestBody := ""
 	if body != nil {
-		payload, err := json.Marshal(body)
+		encoded, err := json.Marshal(body)
 		if err != nil {
 			return fmt.Errorf("encode SCIM %s %s body: %w", method, path, err)
 		}
 
-		requestBody = string(payload)
+		payload = encoded
+		requestBody = string(encoded)
+	}
+
+	for attempt := 0; ; attempt++ {
+		err := c.doJSONOnce(method, path, payload, requestBody, out, target)
+		if err == nil {
+			return nil
+		}
+
+		var rateLimitErr *RateLimitError
+		if !errors.As(err, &rateLimitErr) {
+			return err
+		}
+		if attempt >= maxSCIMRateLimitRetries {
+			return err
+		}
+
+		delay := rateLimitRetryDelay(rateLimitErr.RetryAfterHeader, attempt, currentTime())
+		if c.onRateLimit != nil {
+			c.onRateLimit(target, delay, rateLimitErr.RetryAfterHeader, attempt+1)
+		}
+		rateLimitSleep(delay)
+	}
+}
+
+func (c *SCIMClient) doJSONOnce(method string, path string, payload []byte, requestBody string, out any, target TraceTarget) error {
+	var reader io.Reader
+	if payload != nil {
 		reader = bytes.NewReader(payload)
 	}
 
@@ -575,7 +745,7 @@ func (c *SCIMClient) doJSON(method string, path string, body any, out any, targe
 
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/scim+json")
-	if body != nil {
+	if payload != nil {
 		req.Header.Set("Content-Type", "application/scim+json")
 	}
 
@@ -623,11 +793,12 @@ func (c *SCIMClient) doJSON(method string, path string, body any, out any, targe
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if resp.StatusCode == http.StatusTooManyRequests {
 			err := &RateLimitError{
-				Method:       method,
-				Path:         path,
-				Status:       resp.Status,
-				RetryAfter:   parseRetryAfter(resp.Header.Get("Retry-After"), currentTime()),
-				ResponseBody: strings.TrimSpace(string(data)),
+				Method:           method,
+				Path:             path,
+				Status:           resp.Status,
+				RetryAfter:       parseRetryAfter(trace.ResponseRetryAfter, currentTime()),
+				RetryAfterHeader: trace.ResponseRetryAfter,
+				ResponseBody:     strings.TrimSpace(string(data)),
 			}
 			trace.Err = err.Error()
 			c.traces = append(c.traces, trace)
@@ -683,6 +854,45 @@ func parseRetryAfter(value string, now time.Time) string {
 	return "in " + humanRetryAfter(delay)
 }
 
+func rateLimitRetryDelay(value string, attempt int, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallbackRateLimitDelay(attempt)
+	}
+
+	seconds, err := strconv.Atoi(value)
+	if err == nil {
+		if seconds <= 0 {
+			return 0
+		}
+
+		return time.Duration(seconds) * time.Second
+	}
+
+	retryAt, err := http.ParseTime(value)
+	if err != nil {
+		return fallbackRateLimitDelay(attempt)
+	}
+
+	delay := retryAt.Sub(now)
+	if delay <= 0 {
+		return 0
+	}
+
+	return delay
+}
+
+func fallbackRateLimitDelay(attempt int) time.Duration {
+	if attempt < 0 {
+		return time.Second
+	}
+	if attempt > maxSCIMRateLimitRetries {
+		attempt = maxSCIMRateLimitRetries
+	}
+
+	return time.Duration(1<<attempt) * time.Second
+}
+
 func humanRetryAfter(delay time.Duration) string {
 	seconds := int64((delay + time.Second - 1) / time.Second)
 	switch {
@@ -718,7 +928,7 @@ func traceTargetForUser(u User, operation string) TraceTarget {
 	return TraceTarget{
 		ResourceType: "user",
 		ResourceID:   u.ID,
-		Label:        UserLabel(u),
+		Label:        progressUserLabel(u),
 		Operation:    operation,
 	}
 }

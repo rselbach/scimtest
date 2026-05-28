@@ -110,10 +110,72 @@ func TestSyncDirtyState(t *testing.T) {
 	r.False(result.State.Groups[1].Dirty)
 }
 
-func TestSyncDirtyStateStopsOnRateLimit(t *testing.T) {
+func TestSyncDirtyStateRetriesRateLimit(t *testing.T) {
 	r := require.New(t)
+	sleeps := captureRateLimitSleeps(t)
 
-	requests := make([]string, 0, 2)
+	attempts := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		r.Equal("Bearer chang-secret", req.Header.Get("Authorization"))
+		r.Equal(http.MethodPost, req.Method)
+		r.Equal("/Users", req.URL.Path)
+
+		var body SCIMUserResource
+		r.NoError(json.NewDecoder(req.Body).Decode(&body))
+		attempts[body.UserName]++
+		if body.UserName == "abedn" && attempts[body.UserName] == 1 {
+			w.Header().Set("Retry-After", "2")
+			http.Error(w, "slow down, Professor Professorson", http.StatusTooManyRequests)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/scim+json")
+		w.WriteHeader(http.StatusCreated)
+		r.NoError(json.NewEncoder(w).Encode(SCIMUserResource{ID: "remote-" + body.UserName}))
+	}))
+	defer server.Close()
+
+	state := AppState{
+		Config: Config{
+			BaseURL:     server.URL,
+			BearerToken: "chang-secret",
+		},
+		Users: []User{
+			{ID: "user-1", GivenName: "Troy", FamilyName: "Barnes", Username: "troys", Email: "troy@greendale.edu", Active: true, Dirty: true},
+			{ID: "user-2", GivenName: "Abed", FamilyName: "Nadir", Username: "abedn", Email: "abed@greendale.edu", Active: true, Dirty: true},
+		},
+	}
+
+	var progressEvents []SyncProgress
+	result := SyncDirtyStateWithProgress(state, func(progress SyncProgress) {
+		progressEvents = append(progressEvents, progress)
+	})
+	r.NoError(result.Fatal)
+	r.NoError(result.Stopped)
+	r.True(result.Changed)
+	r.Equal([]time.Duration{2 * time.Second}, *sleeps)
+	r.Equal(1, attempts["troys"])
+	r.Equal(2, attempts["abedn"])
+	r.Len(result.State.Users, 2)
+	r.Equal("remote-troys", result.State.Users[0].RemoteID)
+	r.Equal("remote-abedn", result.State.Users[1].RemoteID)
+	r.False(result.State.Users[0].Dirty)
+	r.False(result.State.Users[1].Dirty)
+	r.Empty(result.State.Users[1].LastError)
+	r.Len(result.Traces, 3)
+	r.Equal("429 Too Many Requests", result.Traces[1].Status)
+	r.Equal("201 Created", result.Traces[2].Status)
+	r.Contains(progressLabels(progressEvents), "Troy Barnes (troys)")
+	r.Contains(progressLabels(progressEvents), "Abed Nadir (abedn)")
+	r.Contains(progressStatuses(progressEvents), "Rate limited; waiting 2 seconds")
+	r.True(hasRateLimitedProgress(progressEvents))
+}
+
+func TestSyncDirtyStateStopsOnRateLimitAfterRetries(t *testing.T) {
+	r := require.New(t)
+	sleeps := captureRateLimitSleeps(t)
+
+	requests := make([]string, 0, 5)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		requests = append(requests, req.Method+" "+req.URL.Path)
 		r.Equal("Bearer chang-secret", req.Header.Get("Authorization"))
@@ -162,7 +224,8 @@ func TestSyncDirtyStateStopsOnRateLimit(t *testing.T) {
 	r.True(result.Changed)
 	r.Contains(result.Status, "sync stopped")
 	r.Contains(result.Status, "Try again in 45 seconds")
-	r.Equal([]string{"POST /Users", "POST /Users"}, requests)
+	r.Equal([]string{"POST /Users", "POST /Users", "POST /Users", "POST /Users", "POST /Users"}, requests)
+	r.Equal([]time.Duration{45 * time.Second, 45 * time.Second, 45 * time.Second}, *sleeps)
 
 	var rateLimitErr *RateLimitError
 	r.True(errors.As(result.Stopped, &rateLimitErr))
@@ -182,10 +245,10 @@ func TestSyncDirtyStateStopsOnRateLimit(t *testing.T) {
 	r.True(result.State.Groups[0].Dirty)
 	r.Empty(result.State.Groups[0].RemoteID)
 
-	r.Len(result.Traces, 2)
-	r.Equal("429 Too Many Requests", result.Traces[1].Status)
-	r.Equal("45", result.Traces[1].ResponseRetryAfter)
-	r.Contains(result.Traces[1].Err, "Try again in 45 seconds")
+	r.Len(result.Traces, 5)
+	r.Equal("429 Too Many Requests", result.Traces[4].Status)
+	r.Equal("45", result.Traces[4].ResponseRetryAfter)
+	r.Contains(result.Traces[4].Err, "Try again in 45 seconds")
 }
 
 func TestSyncDirtyStateFailsGroupWhenMemberNotSynced(t *testing.T) {
@@ -221,6 +284,7 @@ func TestSyncDirtyStateFailsGroupWhenMemberNotSynced(t *testing.T) {
 
 func TestImportStateFromSCIMRateLimitParsesHTTPDateRetryAfter(t *testing.T) {
 	r := require.New(t)
+	sleeps := captureRateLimitSleeps(t)
 
 	fixedNow := time.Date(2026, 5, 15, 20, 0, 0, 0, time.UTC)
 	originalCurrentTime := currentTime
@@ -245,14 +309,15 @@ func TestImportStateFromSCIMRateLimitParsesHTTPDateRetryAfter(t *testing.T) {
 	result := ImportStateFromSCIM(state)
 	r.Error(result.Fatal)
 	r.Contains(result.Fatal.Error(), "Try again in 45 seconds")
+	r.Equal([]time.Duration{45 * time.Second, 45 * time.Second, 45 * time.Second}, *sleeps)
 
 	var rateLimitErr *RateLimitError
 	r.True(errors.As(result.Fatal, &rateLimitErr))
 	r.Equal("in 45 seconds", rateLimitErr.RetryAfter)
-	r.Len(result.Traces, 1)
-	r.Equal("429 Too Many Requests", result.Traces[0].Status)
-	r.Equal(fixedNow.Add(45*time.Second).Format(http.TimeFormat), result.Traces[0].ResponseRetryAfter)
-	r.Contains(result.Traces[0].Err, "Try again in 45 seconds")
+	r.Len(result.Traces, 4)
+	r.Equal("429 Too Many Requests", result.Traces[3].Status)
+	r.Equal(fixedNow.Add(45*time.Second).Format(http.TimeFormat), result.Traces[3].ResponseRetryAfter)
+	r.Contains(result.Traces[3].Err, "Try again in 45 seconds")
 }
 
 func TestImportStateFromSCIM(t *testing.T) {
@@ -406,6 +471,51 @@ func TestImportStateFromSCIM(t *testing.T) {
 	r.Len(result.Traces, 3)
 	r.Equal("import", result.Traces[0].Operation)
 	r.Equal("GET", result.Traces[0].Method)
+}
+
+func captureRateLimitSleeps(t *testing.T) *[]time.Duration {
+	t.Helper()
+
+	sleeps := []time.Duration{}
+	originalRateLimitSleep := rateLimitSleep
+	rateLimitSleep = func(delay time.Duration) {
+		sleeps = append(sleeps, delay)
+	}
+	t.Cleanup(func() { rateLimitSleep = originalRateLimitSleep })
+
+	return &sleeps
+}
+
+func progressLabels(events []SyncProgress) []string {
+	labels := make([]string, 0, len(events))
+	for _, event := range events {
+		if event.Label != "" {
+			labels = append(labels, event.Label)
+		}
+	}
+
+	return labels
+}
+
+func progressStatuses(events []SyncProgress) []string {
+	statuses := make([]string, 0, len(events))
+	for _, event := range events {
+		if event.Status != "" {
+			statuses = append(statuses, event.Status)
+		}
+	}
+
+	return statuses
+}
+
+func hasRateLimitedProgress(events []SyncProgress) bool {
+	for _, event := range events {
+		if event.RateLimited {
+			return true
+		}
+	}
+
+	return false
 }
 
 func boolPtr(v bool) *bool {
