@@ -829,6 +829,11 @@ func (c *SCIMClient) doJSONOnce(method string, path string, payload []byte, requ
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if method == http.MethodDelete && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone) {
+			c.traces = append(c.traces, trace)
+			return nil
+		}
+
 		if resp.StatusCode == http.StatusTooManyRequests {
 			err := &RateLimitError{
 				Method:           method,

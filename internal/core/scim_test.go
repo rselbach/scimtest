@@ -242,6 +242,40 @@ func TestFailedSyncHistoryReportsFailure(t *testing.T) {
 	}
 }
 
+func TestSCIMDeleteTreatsMissingResourcesAsSuccess(t *testing.T) {
+	tests := map[string]struct {
+		status int
+	}{
+		"gone":      {status: http.StatusGone},
+		"not found": {status: http.StatusNotFound},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				r.Contains([]string{http.MethodDelete, http.MethodPut}, req.Method)
+				w.WriteHeader(tc.status)
+			}))
+			defer server.Close()
+
+			client, err := NewSCIMClient(Config{
+				BaseURL:     server.URL,
+				BearerToken: "chang-secret",
+			})
+			r.NoError(err)
+			r.NoError(client.deleteUser(User{ID: "user-troy", RemoteID: "missing-user"}, "delete"))
+			r.NoError(client.deleteGroup(Group{ID: "group-study", RemoteID: "missing-group"}, "delete"))
+			r.Error(client.doJSON(http.MethodPut, "/Users/missing-user", nil, nil, TraceTarget{}))
+			r.Len(client.traces, 3)
+			r.Contains(client.traces[0].Status, http.StatusText(tc.status))
+			r.Empty(client.traces[0].Err)
+			r.Empty(client.traces[1].Err)
+			r.NotEmpty(client.traces[2].Err)
+		})
+	}
+}
+
 func TestSyncDirtyStateRetriesRateLimit(t *testing.T) {
 	r := require.New(t)
 	sleeps := captureRateLimitSleeps(t)
