@@ -44,6 +44,22 @@ type accessToken struct {
 	ExpiresAt time.Time
 }
 
+const samlHTTPPostBinding = "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+
+type samlAuthnRequest struct {
+	ID              string
+	Issuer          string
+	Destination     string
+	ACSURL          string
+	ProtocolBinding string
+	Signed          bool
+}
+
+type samlResponseContext struct {
+	ACSURL       string
+	InResponseTo string
+}
+
 func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 	tab := normalizedTab(r.FormValue("tab"))
 	a.mu.Lock()
@@ -390,6 +406,11 @@ func (a *webApp) handleSAMLSSO(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	baseURL := a.effectiveIDPBaseURL(r, state)
+	if _, err := resolveSAMLResponseContext(r.URL.Query(), app, baseURL, false); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	loginHint := loginHintFromRequest(r)
 	selectedUserID := selectedLoginHintUserID(state.Users, loginHint)
 	renderChooser(w, chooserData{
@@ -412,6 +433,12 @@ func (a *webApp) handleSAMLSSOPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	baseURL := a.effectiveIDPBaseURL(r, state)
+	responseContext, err := resolveSAMLResponseContext(r.Form, app, baseURL, r.FormValue("user_id") != "")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if r.FormValue("user_id") == "" && (r.FormValue("SAMLRequest") != "" || r.FormValue("login_hint") != "" || r.FormValue("RelayState") != "") {
 		loginHint := loginHintFromValues(r.Form)
 		selectedUserID := selectedLoginHintUserID(state.Users, loginHint)
@@ -431,20 +458,12 @@ func (a *webApp) handleSAMLSSOPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "active user is required", http.StatusBadRequest)
 		return
 	}
-	acsURL := strings.TrimSpace(r.FormValue("acs_url"))
-	if acsURL == "" {
-		acsURL = app.SAMLACSURL
-	}
-	if acsURL == "" {
-		http.Error(w, "SAML ACS URL is required on the app or request", http.StatusBadRequest)
-		return
-	}
-	response, err := a.buildSignedSAMLResponse(state, a.effectiveIDPBaseURL(r, state), app, user)
+	response, err := a.buildSignedSAMLResponse(state, baseURL, app, user, responseContext)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	renderPostBack(w, acsURL, map[string]string{
+	renderPostBack(w, responseContext.ACSURL, map[string]string{
 		"SAMLResponse": base64.StdEncoding.EncodeToString([]byte(response)),
 		"RelayState":   r.FormValue("RelayState"),
 	})
@@ -485,6 +504,83 @@ func effectiveIDPBaseURL(r *http.Request, state appState) string {
 
 func oidcIssuer(baseURL string, app app) string {
 	return baseURL + "/oidc/" + app.Slug
+}
+
+func resolveSAMLResponseContext(values url.Values, app app, baseURL string, requireACS bool) (samlResponseContext, error) {
+	configuredACS := strings.TrimSpace(app.SAMLACSURL)
+	requestedACS := strings.TrimSpace(values.Get("acs_url"))
+	if requestedACS != "" {
+		if configuredACS == "" {
+			return samlResponseContext{}, fmt.Errorf("SAML ACS URL must be configured on the app")
+		}
+		if requestedACS != configuredACS {
+			return samlResponseContext{}, fmt.Errorf("SAML ACS URL does not match the configured app")
+		}
+	}
+
+	context := samlResponseContext{ACSURL: configuredACS}
+	encodedRequest := strings.TrimSpace(values.Get("SAMLRequest"))
+	if encodedRequest != "" {
+		if values.Get("Signature") != "" || values.Get("SigAlg") != "" {
+			return samlResponseContext{}, fmt.Errorf("signed SAML AuthnRequest is not supported")
+		}
+		request, err := parseSAMLAuthnRequest(encodedRequest)
+		if err != nil {
+			return samlResponseContext{}, err
+		}
+		if request.Signed {
+			return samlResponseContext{}, fmt.Errorf("signed SAML AuthnRequest is not supported")
+		}
+		if request.ID == "" {
+			return samlResponseContext{}, fmt.Errorf("SAML AuthnRequest ID is required")
+		}
+		if expectedIssuer := strings.TrimSpace(app.SAMLEntityID); expectedIssuer != "" && request.Issuer != expectedIssuer {
+			return samlResponseContext{}, fmt.Errorf("SAML AuthnRequest issuer does not match the configured app")
+		}
+		expectedDestination := strings.TrimRight(baseURL, "/") + "/saml/" + app.Slug + "/sso"
+		if request.Destination != "" && request.Destination != expectedDestination {
+			return samlResponseContext{}, fmt.Errorf("SAML AuthnRequest destination does not match this IDP")
+		}
+		if request.ACSURL != "" && configuredACS != "" && request.ACSURL != configuredACS {
+			return samlResponseContext{}, fmt.Errorf("SAML AuthnRequest ACS URL does not match the configured app")
+		}
+		if request.ProtocolBinding != "" && request.ProtocolBinding != samlHTTPPostBinding {
+			return samlResponseContext{}, fmt.Errorf("SAML AuthnRequest must request the HTTP-POST response binding")
+		}
+		context.InResponseTo = request.ID
+	}
+	if requireACS && configuredACS == "" {
+		return samlResponseContext{}, fmt.Errorf("SAML ACS URL must be configured on the app")
+	}
+	return context, nil
+}
+
+func parseSAMLAuthnRequest(encodedRequest string) (samlAuthnRequest, error) {
+	doc, err := parseSAMLRequestDocument(encodedRequest)
+	if err != nil {
+		return samlAuthnRequest{}, err
+	}
+	root := doc.Root()
+	if elementLocalName(root) != "AuthnRequest" {
+		return samlAuthnRequest{}, fmt.Errorf("SAMLRequest must contain an AuthnRequest")
+	}
+	return samlAuthnRequest{
+		ID:              strings.TrimSpace(root.SelectAttrValue("ID", "")),
+		Issuer:          childElementTextByLocalName(root, "Issuer"),
+		Destination:     strings.TrimSpace(root.SelectAttrValue("Destination", "")),
+		ACSURL:          strings.TrimSpace(root.SelectAttrValue("AssertionConsumerServiceURL", "")),
+		ProtocolBinding: strings.TrimSpace(root.SelectAttrValue("ProtocolBinding", "")),
+		Signed:          findElementByLocalName(root, "Signature") != nil,
+	}, nil
+}
+
+func childElementTextByLocalName(parent *etree.Element, localName string) string {
+	for _, child := range parent.ChildElements() {
+		if elementLocalName(child) == localName {
+			return strings.TrimSpace(child.Text())
+		}
+	}
+	return ""
 }
 
 func validateAuthorizeRequest(app app, values url.Values) error {
@@ -670,24 +766,8 @@ func firstQueryValue(values url.Values, keys ...string) (string, string) {
 }
 
 func loginHintFromSAMLRequest(encodedRequest string) string {
-	encodedRequest = strings.TrimSpace(encodedRequest)
-	if encodedRequest == "" {
-		return ""
-	}
-	decoded, err := base64.StdEncoding.DecodeString(encodedRequest)
+	doc, err := parseSAMLRequestDocument(encodedRequest)
 	if err != nil {
-		decoded, err = base64.StdEncoding.DecodeString(strings.ReplaceAll(encodedRequest, " ", "+"))
-		if err != nil {
-			return ""
-		}
-	}
-	requestXML, err := inflateRawDeflate(decoded)
-	if err != nil || len(requestXML) == 0 {
-		requestXML = decoded
-	}
-
-	doc := etree.NewDocument()
-	if err := doc.ReadFromString(string(requestXML)); err != nil || doc.Root() == nil {
 		return ""
 	}
 	for _, localName := range []string{"NameID", "LoginHint", "login_hint"} {
@@ -696,6 +776,33 @@ func loginHintFromSAMLRequest(encodedRequest string) string {
 		}
 	}
 	return ""
+}
+
+func parseSAMLRequestDocument(encodedRequest string) (*etree.Document, error) {
+	encodedRequest = strings.TrimSpace(encodedRequest)
+	if encodedRequest == "" {
+		return nil, fmt.Errorf("SAMLRequest is required")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(encodedRequest)
+	if err != nil {
+		decoded, err = base64.StdEncoding.DecodeString(strings.ReplaceAll(encodedRequest, " ", "+"))
+		if err != nil {
+			return nil, fmt.Errorf("decode SAMLRequest: %w", err)
+		}
+	}
+	requestXML, inflateErr := inflateRawDeflate(decoded)
+	if inflateErr != nil || len(requestXML) == 0 {
+		requestXML = decoded
+	}
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(string(requestXML)); err != nil {
+		return nil, fmt.Errorf("parse SAMLRequest XML: %w", err)
+	}
+	if doc.Root() == nil {
+		return nil, fmt.Errorf("parse SAMLRequest XML: root element is required")
+	}
+	return doc, nil
 }
 
 func loginHintFromRelayState(relayState string) string {
@@ -826,8 +933,8 @@ var chooserTemplate = template.Must(template.New("chooser").Funcs(template.FuncM
 </body>
 </html>`))
 
-func (a *webApp) buildSignedSAMLResponse(state appState, baseURL string, app app, user user) (string, error) {
-	response := buildSAMLResponse(state, baseURL, app, user)
+func (a *webApp) buildSignedSAMLResponse(state appState, baseURL string, app app, user user, responseContext samlResponseContext) (string, error) {
+	response := buildSAMLResponse(state, baseURL, app, user, responseContext)
 	doc := etree.NewDocument()
 	if err := doc.ReadFromString(response); err != nil {
 		return "", fmt.Errorf("parse SAML response for signing: %w", err)
@@ -905,7 +1012,7 @@ func elementLocalName(el *etree.Element) string {
 	return el.Tag
 }
 
-func buildSAMLResponse(state appState, baseURL string, app app, user user) string {
+func buildSAMLResponse(state appState, baseURL string, app app, user user, responseContext samlResponseContext) string {
 	now := time.Now().UTC()
 	responseID, _ := newID("saml-response")
 	assertionID, _ := newID("saml-assertion")
@@ -915,7 +1022,7 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user) strin
 		audience = app.SAMLEntityID
 	}
 	if audience == "" {
-		audience = app.SAMLACSURL
+		audience = responseContext.ACSURL
 	}
 	groups := userGroups(state, user.ID)
 	var groupAttribute string
@@ -933,8 +1040,14 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user) strin
 	if nameIDFormat == "" {
 		nameIDFormat = samlNameIDFormatForField(app.SAMLNameIDField)
 	}
+	responseInResponseTo := ""
+	subjectInResponseTo := ""
+	if responseContext.InResponseTo != "" {
+		responseInResponseTo = ` InResponseTo="` + xmlEscape(responseContext.InResponseTo) + `"`
+		subjectInResponseTo = ` InResponseTo="` + xmlEscape(responseContext.InResponseTo) + `"`
+	}
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
-<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="%s" Version="2.0" IssueInstant="%s" Destination="%s">
+<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="%s" Version="2.0" IssueInstant="%s" Destination="%s"%s>
   <saml:Issuer>%s</saml:Issuer>
   <samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>
   <saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="%s" Version="2.0" IssueInstant="%s">
@@ -942,7 +1055,7 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user) strin
     <saml:Subject>
       <saml:NameID Format="%s">%s</saml:NameID>
       <saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">
-        <saml:SubjectConfirmationData NotOnOrAfter="%s" Recipient="%s"/>
+        <saml:SubjectConfirmationData%s NotOnOrAfter="%s" Recipient="%s"/>
       </saml:SubjectConfirmation>
     </saml:Subject>
     <saml:Conditions NotBefore="%s" NotOnOrAfter="%s"><saml:AudienceRestriction><saml:Audience>%s</saml:Audience></saml:AudienceRestriction></saml:Conditions>
@@ -956,9 +1069,9 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user) strin
     </saml:AttributeStatement>
   </saml:Assertion>
 </samlp:Response>`,
-		xmlEscape(responseID), now.Format(time.RFC3339), xmlEscape(app.SAMLACSURL), xmlEscape(issuer),
+		xmlEscape(responseID), now.Format(time.RFC3339), xmlEscape(responseContext.ACSURL), responseInResponseTo, xmlEscape(issuer),
 		xmlEscape(assertionID), now.Format(time.RFC3339), xmlEscape(issuer),
-		xmlEscape(nameIDFormat), xmlEscape(nameIDValue), now.Add(5*time.Minute).Format(time.RFC3339), xmlEscape(app.SAMLACSURL),
+		xmlEscape(nameIDFormat), xmlEscape(nameIDValue), subjectInResponseTo, now.Add(5*time.Minute).Format(time.RFC3339), xmlEscape(responseContext.ACSURL),
 		now.Add(-time.Minute).Format(time.RFC3339), now.Add(5*time.Minute).Format(time.RFC3339), xmlEscape(audience),
 		now.Format(time.RFC3339), xmlEscape(app.SAMLEmailAttributeName), xmlEscape(user.Email), xmlEscape(user.Username), xmlEscape(user.GivenName), xmlEscape(user.FamilyName), groupAttribute)
 }
