@@ -310,6 +310,10 @@ func TestSignedSAMLResponseUsesSharedGroups(t *testing.T) {
 	r.NoError(doc.ReadFromString(response))
 	assertion := findElementByLocalName(doc.Root(), "Assertion")
 	r.NotNil(assertion)
+	children := assertion.ChildElements()
+	r.GreaterOrEqual(len(children), 2)
+	r.Equal("Issuer", elementLocalName(children[0]))
+	r.Equal("Signature", elementLocalName(children[1]))
 	cert, err := x509.ParseCertificate(svc.certDER)
 	r.NoError(err)
 	validator := dsig.NewDefaultValidationContext(&dsig.MemoryX509CertificateStore{

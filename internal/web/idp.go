@@ -841,9 +841,13 @@ func (a *webApp) buildSignedSAMLResponse(state appState, baseURL string, app app
 		return "", fmt.Errorf("create SAML signing context: %w", err)
 	}
 	ctx.Canonicalizer = dsig.MakeC14N10ExclusiveCanonicalizerWithPrefixList("")
-	signedAssertion, err := ctx.SignEnveloped(assertion)
+	signature, err := ctx.ConstructSignature(assertion, true)
 	if err != nil {
 		return "", fmt.Errorf("sign SAML assertion: %w", err)
+	}
+	signedAssertion := assertion.Copy()
+	if err := placeSAMLAssertionSignature(signedAssertion, signature); err != nil {
+		return "", err
 	}
 	parent := assertion.Parent()
 	if parent == nil {
@@ -856,6 +860,24 @@ func (a *webApp) buildSignedSAMLResponse(state appState, baseURL string, app app
 		return "", fmt.Errorf("serialize signed SAML response: %w", err)
 	}
 	return signed, nil
+}
+
+func placeSAMLAssertionSignature(assertion *etree.Element, signature *etree.Element) error {
+	issuerIndex := -1
+	for index, child := range assertion.Child {
+		element, ok := child.(*etree.Element)
+		if !ok {
+			continue
+		}
+		if elementLocalName(element) == "Issuer" {
+			issuerIndex = index
+		}
+	}
+	if issuerIndex < 0 {
+		return fmt.Errorf("signed SAML assertion issuer not found")
+	}
+	assertion.InsertChildAt(issuerIndex+1, signature)
+	return nil
 }
 
 func findElementByLocalName(el *etree.Element, localName string) *etree.Element {
