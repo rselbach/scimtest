@@ -14,7 +14,7 @@ Users and groups are stored once in SQLite and are shared by SCIM sync, OIDC cla
 go run .
 ```
 
-The server listens on `http://localhost:8080` by default. Set `PORT` to use a different port:
+The admin server listens on `http://127.0.0.1:8080` by default. Set `PORT` to use a different port:
 
 ```sh
 PORT=8090 go run .
@@ -32,6 +32,8 @@ The config modal has two base URLs:
 SCIM can be disabled from the config modal. When disabled, the users and groups pages hide SCIM sync actions, remote IDs, sync status, trace links, and sync errors; the local OIDC/SAML IDP continues to use the same users and groups.
 
 Leave IDP base URL empty when clients can reach the current request host. Set it when clients need a public tunnel or another externally reachable URL.
+
+The built-in rgrok tunnel exposes only the OIDC and SAML endpoints. The admin UI and its SCIM credentials remain available only on the loopback listener.
 
 ## IDP Endpoints
 

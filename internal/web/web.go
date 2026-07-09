@@ -282,6 +282,11 @@ type RunOptions struct {
 	Debug bool
 }
 
+type serverError struct {
+	name string
+	err  error
+}
+
 const defaultListPageSize = 15
 const maxToolCreateUsers = 10000
 
@@ -319,32 +324,86 @@ func Run(options ...RunOptions) error {
 		return err
 	}
 
+	idpListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("listen for tunneled IDP traffic: %w", err)
+	}
+	idpAddress, ok := idpListener.Addr().(*net.TCPAddr)
+	if !ok {
+		if closeErr := idpListener.Close(); closeErr != nil {
+			return fmt.Errorf("get tunneled IDP listener address; close listener: %v", closeErr)
+		}
+		return fmt.Errorf("get tunneled IDP listener address")
+	}
+
 	app := &webApp{
 		signingKey:   key,
 		certDER:      certDER,
 		debugRP:      opts.Debug,
-		localPort:    parseLocalPort(port),
+		localPort:    idpAddress.Port,
 		rgrokStart:   startRgrokTunnel,
 		authCodes:    make(map[string]authCode),
 		accessTokens: make(map[string]accessToken),
 	}
-	addr := ":" + port
+	addr := net.JoinHostPort("127.0.0.1", port)
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
+		if closeErr := idpListener.Close(); closeErr != nil {
+			return fmt.Errorf("listen on %s: %w; close tunneled IDP listener: %v", addr, err, closeErr)
+		}
 		return fmt.Errorf("listen on %s: %w", addr, err)
 	}
 	go app.restoreSavedRgrokTunnel()
-	log.Printf("merged auth test service listening on http://localhost%s", addr)
+	log.Printf("merged auth test service listening on http://%s", addr)
 	if opts.Debug {
 		if _, err := fmt.Fprintln(os.Stdout, "RP debug logging enabled"); err != nil {
+			adminCloseErr := listener.Close()
+			idpCloseErr := idpListener.Close()
+			switch {
+			case adminCloseErr != nil && idpCloseErr != nil:
+				return fmt.Errorf("write debug status: %w; close admin listener: %v; close tunneled IDP listener: %v", err, adminCloseErr, idpCloseErr)
+			case adminCloseErr != nil:
+				return fmt.Errorf("write debug status: %w; close admin listener: %v", err, adminCloseErr)
+			case idpCloseErr != nil:
+				return fmt.Errorf("write debug status: %w; close tunneled IDP listener: %v", err, idpCloseErr)
+			}
 			return fmt.Errorf("write debug status: %w", err)
 		}
 	}
-	return http.Serve(listener, app.routes())
+
+	serveErrors := make(chan serverError, 2)
+	go func() {
+		serveErrors <- serverError{name: "admin", err: http.Serve(listener, app.routes())}
+	}()
+	go func() {
+		serveErrors <- serverError{name: "tunneled IDP", err: http.Serve(idpListener, app.idpRoutes())}
+	}()
+
+	result := <-serveErrors
+	other := idpListener
+	if result.name == "tunneled IDP" {
+		other = listener
+	}
+	if err := other.Close(); err != nil {
+		return fmt.Errorf("serve %s: %w; close other listener: %v", result.name, result.err, err)
+	}
+	return fmt.Errorf("serve %s: %w", result.name, result.err)
 }
 
 func (a *webApp) routes() http.Handler {
 	mux := http.NewServeMux()
+	a.registerAdminRoutes(mux)
+	a.registerIDPRoutes(mux)
+	return mux
+}
+
+func (a *webApp) idpRoutes() http.Handler {
+	mux := http.NewServeMux()
+	a.registerIDPRoutes(mux)
+	return mux
+}
+
+func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /", a.handleIndex)
 	mux.HandleFunc("POST /users/save", a.handleUserSave)
 	mux.HandleFunc("POST /users/{id}/toggle-active", a.handleUserToggleActive)
@@ -367,6 +426,9 @@ func (a *webApp) routes() http.Handler {
 	mux.HandleFunc("POST /sync", a.handleSync)
 	mux.HandleFunc("POST /import", a.handleImport)
 	mux.HandleFunc("POST /reset", a.handleReset)
+}
+
+func (a *webApp) registerIDPRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /oidc/{slug}/.well-known/openid-configuration", a.debugRPHandler(a.handleOIDCDiscovery))
 	mux.HandleFunc("GET /oidc/{slug}/jwks", a.debugRPHandler(a.handleOIDCJWKS))
 	mux.HandleFunc("GET /oidc/{slug}/authorize", a.debugRPHandler(a.handleOIDCAuthorize))
@@ -377,7 +439,6 @@ func (a *webApp) routes() http.Handler {
 	mux.HandleFunc("GET /saml/{slug}/metadata", a.debugRPHandler(a.handleSAMLMetadata))
 	mux.HandleFunc("GET /saml/{slug}/sso", a.debugRPHandler(a.handleSAMLSSO))
 	mux.HandleFunc("POST /saml/{slug}/sso", a.debugRPHandler(a.handleSAMLSSOPost))
-	return mux
 }
 
 func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -1034,17 +1095,6 @@ func startedRgrokTunnelWithCancel(started *startedRgrokTunnel, cancel context.Ca
 
 	started.Tunnel = cancelingTunnelCloser{tunnel: started.Tunnel, cancel: cancel}
 	return started
-}
-
-func parseLocalPort(port string) int {
-	n, err := strconv.Atoi(strings.TrimSpace(port))
-	if err != nil {
-		return 0
-	}
-	if n <= 0 || n > 65535 {
-		return 0
-	}
-	return n
 }
 
 var rgrokNamePattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)

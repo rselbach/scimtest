@@ -59,6 +59,58 @@ func TestIndexRendersDashboard(t *testing.T) {
 	r.Contains(groupRec.Body.String(), "Greendale Study Group")
 }
 
+func TestIDPRoutesExcludeAdminEndpoints(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Config: config{BearerToken: "chang-secret"},
+		Users: []user{{
+			ID:         "u1",
+			GivenName:  "Troy",
+			FamilyName: "Barnes",
+			Username:   "tbarnes",
+			Email:      "troy@greendale.edu",
+			Active:     true,
+		}},
+		Apps: []app{{
+			ID:               "app-1",
+			Name:             "Greendale",
+			Slug:             "greendale",
+			Protocol:         "oidc",
+			OIDCClientID:     "greendale-client",
+			OIDCClientSecret: "secret-dean",
+		}},
+	}))
+
+	app := &webApp{}
+	public := app.idpRoutes()
+
+	for _, target := range []string{"/", "/?modal=config", "/sync/status"} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		rec := httptest.NewRecorder()
+		public.ServeHTTP(rec, req)
+		r.Equal(http.StatusNotFound, rec.Code, target)
+		r.NotContains(rec.Body.String(), "chang-secret", target)
+		r.NotContains(rec.Body.String(), "secret-dean", target)
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodPost, "/tools/delete-all", nil)
+	deleteRec := httptest.NewRecorder()
+	public.ServeHTTP(deleteRec, deleteReq)
+	r.Equal(http.StatusNotFound, deleteRec.Code)
+
+	discoveryReq := httptest.NewRequest(http.MethodGet, "/oidc/greendale/.well-known/openid-configuration", nil)
+	discoveryReq.Host = "idp.greendale.test"
+	discoveryRec := httptest.NewRecorder()
+	public.ServeHTTP(discoveryRec, discoveryReq)
+	r.Equal(http.StatusOK, discoveryRec.Code)
+	r.Contains(discoveryRec.Body.String(), "http://idp.greendale.test/oidc/greendale")
+
+	state, err := loadState()
+	r.NoError(err)
+	r.Len(state.Users, 1)
+}
+
 func TestIndexPaginatesUsersAndGroups(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
