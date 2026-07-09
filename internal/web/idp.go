@@ -255,6 +255,8 @@ func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "active user is required", http.StatusBadRequest)
 		return
 	}
+	now := time.Now()
+	a.pruneExpiredOIDCCredentials(now)
 
 	code, err := randomSecret(24)
 	if err != nil {
@@ -268,7 +270,7 @@ func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request)
 		RedirectURI: r.FormValue("redirect_uri"),
 		Nonce:       r.FormValue("nonce"),
 		Scope:       r.FormValue("scope"),
-		ExpiresAt:   time.Now().Add(5 * time.Minute),
+		ExpiresAt:   now.Add(5 * time.Minute),
 	}
 
 	redirectURI, _ := url.Parse(r.FormValue("redirect_uri"))
@@ -301,10 +303,12 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		writeOAuthError(w, http.StatusUnauthorized, "invalid_client", "client authentication failed")
 		return
 	}
+	now := time.Now()
+	a.pruneExpiredOIDCCredentials(now)
 
 	codeValue := r.FormValue("code")
 	code, ok := a.authCodes[codeValue]
-	if !ok || code.ExpiresAt.Before(time.Now()) {
+	if !ok {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "authorization code is invalid or expired")
 		return
 	}
@@ -320,7 +324,6 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	now := time.Now()
 	claims := userClaims(state, app, user)
 	claims["iss"] = oidcIssuer(a.effectiveIDPBaseURL(r, state), app)
 	claims["aud"] = app.OIDCClientID
@@ -362,9 +365,10 @@ func (a *webApp) handleOIDCUserinfo(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	a.pruneExpiredOIDCCredentials(time.Now())
 	tokenValue := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	token, ok := a.accessTokens[tokenValue]
-	if !ok || token.ExpiresAt.Before(time.Now()) || token.AppSlug != app.Slug {
+	if !ok || token.AppSlug != app.Slug {
 		writeOAuthError(w, http.StatusUnauthorized, "invalid_token", "access token is invalid or expired")
 		return
 	}
@@ -374,6 +378,19 @@ func (a *webApp) handleOIDCUserinfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, userClaims(state, app, user))
+}
+
+func (a *webApp) pruneExpiredOIDCCredentials(now time.Time) {
+	for value, code := range a.authCodes {
+		if !code.ExpiresAt.After(now) {
+			delete(a.authCodes, value)
+		}
+	}
+	for value, token := range a.accessTokens {
+		if !token.ExpiresAt.After(now) {
+			delete(a.accessTokens, value)
+		}
+	}
 }
 
 func (a *webApp) handleSAMLMetadata(w http.ResponseWriter, r *http.Request) {

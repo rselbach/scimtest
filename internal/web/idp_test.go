@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/beevik/etree"
 	dsig "github.com/russellhaering/goxmldsig"
@@ -93,6 +94,46 @@ func TestOIDCAuthorizationCodeFlowUsesSharedDirectory(t *testing.T) {
 	r.NoError(json.Unmarshal(token.Body.Bytes(), &tokenBody))
 	r.NotEmpty(tokenBody["access_token"])
 	r.NotEmpty(tokenBody["id_token"])
+}
+
+func TestOIDCTokenPrunesExpiredCredentials(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	svc := newTestIDPApp(t)
+	r.NoError(saveState(appState{Apps: []app{{
+		ID:               "app-1",
+		Name:             "Example",
+		Slug:             "example",
+		Protocol:         "oidc",
+		OIDCClientID:     "example-client",
+		OIDCClientSecret: "secret",
+		OIDCRedirectURIs: []string{"http://client.test/callback"},
+	}}}))
+
+	past := time.Now().Add(-time.Minute)
+	future := time.Now().Add(time.Minute)
+	svc.authCodes["expired-code"] = authCode{ExpiresAt: past}
+	svc.authCodes["valid-code"] = authCode{ExpiresAt: future}
+	svc.accessTokens["expired-token"] = accessToken{ExpiresAt: past}
+	svc.accessTokens["valid-token"] = accessToken{ExpiresAt: future}
+
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {"expired-code"},
+		"redirect_uri":  {"http://client.test/callback"},
+		"client_id":     {"example-client"},
+		"client_secret": {"secret"},
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/oidc/example/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	svc.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusBadRequest, rec.Code)
+	r.NotContains(svc.authCodes, "expired-code")
+	r.Contains(svc.authCodes, "valid-code")
+	r.NotContains(svc.accessTokens, "expired-token")
+	r.Contains(svc.accessTokens, "valid-token")
 }
 
 func TestOIDCAuthorizeLoginHintPreselectsUniqueUser(t *testing.T) {
