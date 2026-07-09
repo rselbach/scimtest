@@ -473,6 +473,40 @@ func TestImportStateFromSCIM(t *testing.T) {
 	r.Equal("GET", result.Traces[0].Method)
 }
 
+func TestReplaceStateFromSCIMPreservesUserIDByRemoteID(t *testing.T) {
+	r := require.New(t)
+	state := AppState{
+		Users: []User{{
+			ID:         "local-troy",
+			GivenName:  "Troy",
+			FamilyName: "Barnes",
+			Username:   "tbarnes",
+			Email:      "troy@greendale.edu",
+			Active:     true,
+			RemoteID:   "remote-troy",
+		}},
+	}
+	resources := []SCIMUserResource{{
+		ID:       "remote-troy",
+		UserName: "tbarnes",
+		Name: &SCIMName{
+			GivenName:  "Troy",
+			FamilyName: "Barnes",
+		},
+		Emails: []SCIMEmail{{Value: "troy@greendale.edu", Primary: true}},
+	}}
+
+	first, err := replaceStateFromSCIM(state, resources, nil)
+	r.NoError(err)
+	r.Len(first.Users, 1)
+	r.Equal("local-troy", first.Users[0].ID)
+
+	second, err := replaceStateFromSCIM(first, resources, nil)
+	r.NoError(err)
+	r.Len(second.Users, 1)
+	r.Equal("local-troy", second.Users[0].ID)
+}
+
 func captureRateLimitSleeps(t *testing.T) *[]time.Duration {
 	t.Helper()
 

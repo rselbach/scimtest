@@ -947,7 +947,7 @@ func replaceStateFromSCIM(state AppState, userResources []SCIMUserResource, grou
 	remoteToLocalUserID := make(map[string]string, len(userResources))
 
 	for _, resource := range userResources {
-		importedUser, err := importedUserFromSCIM(nil, resource)
+		importedUser, err := importedUserFromSCIM(state.Users, resource)
 		if err != nil {
 			return AppState{}, err
 		}
