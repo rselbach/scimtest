@@ -557,7 +557,9 @@ func (c *SCIMClient) createUser(u User) (string, error) {
 	}
 
 	if strings.TrimSpace(response.ID) == "" {
-		return "", fmt.Errorf("SCIM create response missing id")
+		err := fmt.Errorf("SCIM create response missing id")
+		c.setLastTraceError(err)
+		return "", err
 	}
 
 	return response.ID, nil
@@ -689,7 +691,9 @@ func (c *SCIMClient) createGroup(g Group, users []User) (string, error) {
 	}
 
 	if strings.TrimSpace(response.ID) == "" {
-		return "", fmt.Errorf("SCIM create group response missing id")
+		err := fmt.Errorf("SCIM create group response missing id")
+		c.setLastTraceError(err)
+		return "", err
 	}
 
 	return response.ID, nil
@@ -839,25 +843,38 @@ func (c *SCIMClient) doJSONOnce(method string, path string, payload []byte, requ
 			return err
 		}
 
-		c.traces = append(c.traces, trace)
+		var responseErr error
 		if requestBody == "" {
-			return fmt.Errorf("SCIM %s %s returned %s: %s", method, path, resp.Status, strings.TrimSpace(string(data)))
+			responseErr = fmt.Errorf("SCIM %s %s returned %s: %s", method, path, resp.Status, strings.TrimSpace(string(data)))
+		} else {
+			responseErr = fmt.Errorf("SCIM %s %s returned %s: %s | request body: %s", method, path, resp.Status, strings.TrimSpace(string(data)), requestBody)
 		}
-
-		return fmt.Errorf("SCIM %s %s returned %s: %s | request body: %s", method, path, resp.Status, strings.TrimSpace(string(data)), requestBody)
+		trace.Err = responseErr.Error()
+		c.traces = append(c.traces, trace)
+		return responseErr
 	}
 
-	c.traces = append(c.traces, trace)
-
 	if out == nil || len(data) == 0 {
+		c.traces = append(c.traces, trace)
 		return nil
 	}
 
 	if err := json.Unmarshal(data, out); err != nil {
-		return fmt.Errorf("decode SCIM %s %s response: %w", method, path, err)
+		responseErr := fmt.Errorf("decode SCIM %s %s response: %w", method, path, err)
+		trace.Err = responseErr.Error()
+		c.traces = append(c.traces, trace)
+		return responseErr
 	}
 
+	c.traces = append(c.traces, trace)
 	return nil
+}
+
+func (c *SCIMClient) setLastTraceError(err error) {
+	if err == nil || len(c.traces) == 0 {
+		return
+	}
+	c.traces[len(c.traces)-1].Err = err.Error()
 }
 
 func parseRetryAfter(value string, now time.Time) string {

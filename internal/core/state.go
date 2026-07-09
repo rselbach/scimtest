@@ -783,6 +783,13 @@ func AppendLocalOperationLog(state *AppState, resourceType string, resourceID st
 }
 
 func summarizeSyncTrace(trace SyncTraceEntry) string {
+	if trace.Err != "" {
+		operation := strings.TrimSpace(trace.Operation)
+		if operation == "" {
+			return "Failed"
+		}
+		return "Failed to " + operation
+	}
 	if trace.Operation == "create" {
 		return "Created"
 	}

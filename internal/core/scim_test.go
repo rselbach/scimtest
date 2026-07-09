@@ -184,6 +184,64 @@ func TestSyncDirtyStatePrunesDeletedUsersFromGroups(t *testing.T) {
 	r.Equal(4, lastProgress.Processed)
 }
 
+func TestFailedSyncHistoryReportsFailure(t *testing.T) {
+	tests := map[string]struct {
+		status    int
+		body      string
+		wantError string
+	}{
+		"HTTP failure": {
+			status:    http.StatusInternalServerError,
+			body:      "Greendale is on fire",
+			wantError: "500 Internal Server Error",
+		},
+		"malformed JSON": {
+			status:    http.StatusCreated,
+			body:      `{`,
+			wantError: "decode SCIM POST /Users response",
+		},
+		"missing ID": {
+			status:    http.StatusCreated,
+			body:      `{}`,
+			wantError: "SCIM create response missing id",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/scim+json")
+				w.WriteHeader(tc.status)
+				_, err := w.Write([]byte(tc.body))
+				r.NoError(err)
+			}))
+			defer server.Close()
+
+			result := SyncDirtyState(AppState{
+				Config: Config{BaseURL: server.URL, BearerToken: "chang-secret"},
+				Users: []User{{
+					ID:         "user-troy",
+					GivenName:  "Troy",
+					FamilyName: "Barnes",
+					Username:   "tbarnes",
+					Email:      "troy@greendale.edu",
+					Active:     true,
+					Dirty:      true,
+				}},
+			})
+			r.NoError(result.Fatal)
+			r.Len(result.Traces, 1)
+			r.ErrorContains(errors.New(result.Traces[0].Err), tc.wantError)
+
+			AppendOperationLogs(&result.State, result.Traces)
+			r.Len(result.State.UserOperations["user-troy"], 1)
+			r.Equal("Failed to create", result.State.UserOperations["user-troy"][0].Summary)
+			r.Contains(result.State.UserOperations["user-troy"][0].Err, tc.wantError)
+		})
+	}
+}
+
 func TestSyncDirtyStateRetriesRateLimit(t *testing.T) {
 	r := require.New(t)
 	sleeps := captureRateLimitSleeps(t)
