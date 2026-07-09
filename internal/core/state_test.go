@@ -355,3 +355,51 @@ func TestUserGroupsExcludesDeletedGroups(t *testing.T) {
 
 	r.Equal([]string{"Study Group"}, UserGroups(state, "troy"))
 }
+
+func TestValidateAppRequiresSafeSAMLACSURL(t *testing.T) {
+	tests := map[string]struct {
+		acsURL  string
+		wantErr string
+	}{
+		"empty": {
+			wantErr: "SAML ACS URL is required",
+		},
+		"relative": {
+			acsURL:  "/saml/acs",
+			wantErr: "absolute HTTP(S) URL",
+		},
+		"network path": {
+			acsURL:  "//sp.greendale.test/acs",
+			wantErr: "absolute HTTP(S) URL",
+		},
+		"unsafe scheme": {
+			acsURL:  "javascript:alert(1)",
+			wantErr: "absolute HTTP(S) URL",
+		},
+		"fragment": {
+			acsURL:  "https://sp.greendale.test/acs#fragment",
+			wantErr: "absolute HTTP(S) URL",
+		},
+		"valid": {
+			acsURL: "https://sp.greendale.test/acs",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			err := ValidateApp(App{
+				ID:         "app-1",
+				Name:       "Greendale",
+				Slug:       "greendale",
+				Protocol:   "saml",
+				SAMLACSURL: tc.acsURL,
+			}, nil)
+			if tc.wantErr == "" {
+				r.NoError(err)
+				return
+			}
+			r.ErrorContains(err, tc.wantErr)
+		})
+	}
+}

@@ -942,9 +942,17 @@ func ValidateApp(app App, apps []App) error {
 			}
 		}
 	}
-	if SupportsSAML(app) && strings.TrimSpace(app.SAMLACSURL) != "" {
-		if _, err := url.ParseRequestURI(app.SAMLACSURL); err != nil {
+	if SupportsSAML(app) {
+		rawACSURL := strings.TrimSpace(app.SAMLACSURL)
+		if rawACSURL == "" {
+			return fmt.Errorf("SAML ACS URL is required")
+		}
+		acsURL, err := url.Parse(rawACSURL)
+		if err != nil {
 			return fmt.Errorf("SAML ACS URL %q is invalid: %w", app.SAMLACSURL, err)
+		}
+		if !acsURL.IsAbs() || acsURL.Host == "" || (acsURL.Scheme != "http" && acsURL.Scheme != "https") || acsURL.Fragment != "" {
+			return fmt.Errorf("SAML ACS URL must be an absolute HTTP(S) URL without a fragment")
 		}
 	}
 	if SupportsSAML(app) && strings.TrimSpace(app.SAMLNameIDField) != "" && NormalizeSAMLNameIDField(app.SAMLNameIDField) != app.SAMLNameIDField {
