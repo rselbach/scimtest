@@ -392,9 +392,15 @@ func Run(options ...RunOptions) error {
 
 func (a *webApp) routes() http.Handler {
 	mux := http.NewServeMux()
-	a.registerAdminRoutes(mux)
+	mux.Handle("/", a.adminRoutes())
 	a.registerIDPRoutes(mux)
 	return mux
+}
+
+func (a *webApp) adminRoutes() http.Handler {
+	mux := http.NewServeMux()
+	a.registerAdminRoutes(mux)
+	return http.NewCrossOriginProtection().Handler(mux)
 }
 
 func (a *webApp) idpRoutes() http.Handler {

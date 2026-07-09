@@ -111,6 +111,79 @@ func TestIDPRoutesExcludeAdminEndpoints(t *testing.T) {
 	r.Len(state.Users, 1)
 }
 
+func TestAdminRoutesRejectCrossOriginMutations(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Config: config{SCIMDisabled: true},
+		Users: []user{{
+			ID:         "u1",
+			GivenName:  "Britta",
+			FamilyName: "Perry",
+			Username:   "bperry",
+			Email:      "britta@greendale.edu",
+			Active:     true,
+		}},
+	}))
+
+	app := &webApp{}
+	req := httptest.NewRequest(http.MethodPost, "/tools/delete-all", nil)
+	req.Host = "admin.greendale.test"
+	req.Header.Set("Origin", "https://evil.example")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	rec := httptest.NewRecorder()
+	app.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusForbidden, rec.Code)
+	state, err := loadState()
+	r.NoError(err)
+	r.Len(state.Users, 1)
+}
+
+func TestAdminRoutesAllowSameOriginMutations(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Config: config{SCIMDisabled: true},
+		Users: []user{{
+			ID:         "u1",
+			GivenName:  "Britta",
+			FamilyName: "Perry",
+			Username:   "bperry",
+			Email:      "britta@greendale.edu",
+			Active:     true,
+		}},
+	}))
+
+	app := &webApp{}
+	req := httptest.NewRequest(http.MethodPost, "/tools/delete-all", nil)
+	req.Host = "admin.greendale.test"
+	req.Header.Set("Origin", "http://admin.greendale.test")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	rec := httptest.NewRecorder()
+	app.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	state, err := loadState()
+	r.NoError(err)
+	r.Empty(state.Users)
+}
+
+func TestIDPPostRoutesAllowCrossOriginRequests(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+
+	app := &webApp{}
+	req := httptest.NewRequest(http.MethodPost, "/saml/missing/sso", nil)
+	req.Header.Set("Origin", "https://sp.greendale.test")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	rec := httptest.NewRecorder()
+	app.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusNotFound, rec.Code)
+}
+
 func TestIndexPaginatesUsersAndGroups(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
