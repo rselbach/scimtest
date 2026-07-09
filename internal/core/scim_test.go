@@ -390,7 +390,7 @@ func TestSyncDirtyStateRetriesRateLimit(t *testing.T) {
 	r.True(hasRateLimitedProgress(progressEvents))
 }
 
-func TestSyncDirtyStateStopsOnRateLimitAfterRetries(t *testing.T) {
+func TestSyncDirtyStateDoesNotWaitForLongRetryAfter(t *testing.T) {
 	r := require.New(t)
 	sleeps := captureRateLimitSleeps(t)
 
@@ -443,8 +443,8 @@ func TestSyncDirtyStateStopsOnRateLimitAfterRetries(t *testing.T) {
 	r.True(result.Changed)
 	r.Contains(result.Status, "sync stopped")
 	r.Contains(result.Status, "Try again in 45 seconds")
-	r.Equal([]string{"POST /Users", "POST /Users", "POST /Users", "POST /Users", "POST /Users"}, requests)
-	r.Equal([]time.Duration{45 * time.Second, 45 * time.Second, 45 * time.Second}, *sleeps)
+	r.Equal([]string{"POST /Users", "POST /Users"}, requests)
+	r.Empty(*sleeps)
 
 	var rateLimitErr *RateLimitError
 	r.True(errors.As(result.Stopped, &rateLimitErr))
@@ -464,10 +464,10 @@ func TestSyncDirtyStateStopsOnRateLimitAfterRetries(t *testing.T) {
 	r.True(result.State.Groups[0].Dirty)
 	r.Empty(result.State.Groups[0].RemoteID)
 
-	r.Len(result.Traces, 5)
-	r.Equal("429 Too Many Requests", result.Traces[4].Status)
-	r.Equal("45", result.Traces[4].ResponseRetryAfter)
-	r.Contains(result.Traces[4].Err, "Try again in 45 seconds")
+	r.Len(result.Traces, 2)
+	r.Equal("429 Too Many Requests", result.Traces[1].Status)
+	r.Equal("45", result.Traces[1].ResponseRetryAfter)
+	r.Contains(result.Traces[1].Err, "Try again in 45 seconds")
 }
 
 func TestSyncDirtyStateFailsGroupWhenMemberNotSynced(t *testing.T) {
@@ -501,7 +501,7 @@ func TestSyncDirtyStateFailsGroupWhenMemberNotSynced(t *testing.T) {
 	r.True(result.State.Groups[0].Dirty)
 }
 
-func TestImportStateFromSCIMRateLimitParsesHTTPDateRetryAfter(t *testing.T) {
+func TestImportStateFromSCIMDoesNotWaitForLongHTTPDateRetryAfter(t *testing.T) {
 	r := require.New(t)
 	sleeps := captureRateLimitSleeps(t)
 
@@ -528,15 +528,15 @@ func TestImportStateFromSCIMRateLimitParsesHTTPDateRetryAfter(t *testing.T) {
 	result := ImportStateFromSCIM(state)
 	r.Error(result.Fatal)
 	r.Contains(result.Fatal.Error(), "Try again in 45 seconds")
-	r.Equal([]time.Duration{45 * time.Second, 45 * time.Second, 45 * time.Second}, *sleeps)
+	r.Empty(*sleeps)
 
 	var rateLimitErr *RateLimitError
 	r.True(errors.As(result.Fatal, &rateLimitErr))
 	r.Equal("in 45 seconds", rateLimitErr.RetryAfter)
-	r.Len(result.Traces, 4)
-	r.Equal("429 Too Many Requests", result.Traces[3].Status)
-	r.Equal(fixedNow.Add(45*time.Second).Format(http.TimeFormat), result.Traces[3].ResponseRetryAfter)
-	r.Contains(result.Traces[3].Err, "Try again in 45 seconds")
+	r.Len(result.Traces, 1)
+	r.Equal("429 Too Many Requests", result.Traces[0].Status)
+	r.Equal(fixedNow.Add(45*time.Second).Format(http.TimeFormat), result.Traces[0].ResponseRetryAfter)
+	r.Contains(result.Traces[0].Err, "Try again in 45 seconds")
 }
 
 func TestImportStateFromSCIM(t *testing.T) {

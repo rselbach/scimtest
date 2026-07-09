@@ -138,7 +138,10 @@ type SCIMListResponse[T any] struct {
 	Resources    []T `json:"Resources"`
 }
 
-const maxSCIMRateLimitRetries = 3
+const (
+	maxSCIMRateLimitRetries    = 3
+	maxAutomaticRateLimitDelay = 30 * time.Second
+)
 
 var rateLimitSleep = time.Sleep
 
@@ -769,6 +772,9 @@ func (c *SCIMClient) doJSON(method string, path string, body any, out any, targe
 		}
 
 		delay := rateLimitRetryDelay(rateLimitErr.RetryAfterHeader, attempt, currentTime())
+		if delay > maxAutomaticRateLimitDelay {
+			return err
+		}
 		if c.onRateLimit != nil {
 			c.onRateLimit(target, delay, rateLimitErr.RetryAfterHeader, attempt+1)
 		}
