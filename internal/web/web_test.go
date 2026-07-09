@@ -929,6 +929,80 @@ func TestRgrokSetupStartsTunnel(t *testing.T) {
 	r.Equal("https://demo.rgrok.rselbach.com", state.Config.IDPBaseURL)
 }
 
+func TestRgrokSetupDoesNotBlockConfigSave(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	app := &webApp{
+		localPort: 8080,
+		rgrokStart: func(context.Context, rgrokclient.Config) (*startedRgrokTunnel, error) {
+			close(started)
+			<-release
+			return &startedRgrokTunnel{
+				PublicURL: "https://demo.rgrok.rselbach.com",
+				Tunnel:    &fakeTunnel{},
+			}, nil
+		},
+	}
+
+	setupForm := url.Values{
+		"tab":         {"apps"},
+		"rgrok_name":  {"demo"},
+		"rgrok_token": {"token-123"},
+	}
+	setupReq := httptest.NewRequest(http.MethodPost, "/rgrok/setup", strings.NewReader(setupForm.Encode()))
+	setupReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setupRec := httptest.NewRecorder()
+	setupDone := make(chan struct{})
+	go func() {
+		app.routes().ServeHTTP(setupRec, setupReq)
+		close(setupDone)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("rgrok setup did not start")
+	}
+
+	configForm := url.Values{
+		"tab":          {"apps"},
+		"base_url":     {"https://scim.greendale.test"},
+		"bearer_token": {"chang-secret"},
+	}
+	configReq := httptest.NewRequest(http.MethodPost, "/config/save", strings.NewReader(configForm.Encode()))
+	configReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	configRec := httptest.NewRecorder()
+	configDone := make(chan struct{})
+	go func() {
+		app.routes().ServeHTTP(configRec, configReq)
+		close(configDone)
+	}()
+
+	select {
+	case <-configDone:
+		r.Equal(http.StatusSeeOther, configRec.Code)
+	case <-time.After(time.Second):
+		t.Fatal("config save blocked on rgrok setup")
+	}
+
+	close(release)
+	select {
+	case <-setupDone:
+		r.Equal(http.StatusSeeOther, setupRec.Code)
+	case <-time.After(time.Second):
+		t.Fatal("rgrok setup did not finish")
+	}
+
+	state, err := loadState()
+	r.NoError(err)
+	r.Equal("https://scim.greendale.test", state.Config.BaseURL)
+	r.Equal("demo", state.Config.RgrokName)
+}
+
 func TestRgrokSetupRedirectsBackToDialogOnError(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
@@ -1027,6 +1101,74 @@ func TestRestoreSavedRgrokTunnel(t *testing.T) {
 	r.Equal("demo", state.Config.RgrokName)
 	r.Equal("token-123", state.Config.RgrokToken)
 	r.Equal("https://demo.rgrok.rselbach.com", state.Config.IDPBaseURL)
+}
+
+func TestRgrokCancelWaitsForRestore(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Config: config{
+			RgrokName:  "demo",
+			RgrokToken: "token-123",
+		},
+	}))
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	tunnel := &fakeTunnel{}
+	app := &webApp{
+		localPort: 8080,
+		rgrokStart: func(context.Context, rgrokclient.Config) (*startedRgrokTunnel, error) {
+			close(started)
+			<-release
+			return &startedRgrokTunnel{
+				PublicURL: "https://demo.rgrok.rselbach.com",
+				Tunnel:    tunnel,
+			}, nil
+		},
+	}
+	restoreDone := make(chan struct{})
+	go func() {
+		app.restoreSavedRgrokTunnel()
+		close(restoreDone)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("rgrok restore did not start")
+	}
+
+	cancelForm := url.Values{"tab": {"users"}}
+	cancelReq := httptest.NewRequest(http.MethodPost, "/rgrok/cancel", strings.NewReader(cancelForm.Encode()))
+	cancelReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	cancelRec := httptest.NewRecorder()
+	cancelDone := make(chan struct{})
+	go func() {
+		app.routes().ServeHTTP(cancelRec, cancelReq)
+		close(cancelDone)
+	}()
+
+	close(release)
+	select {
+	case <-restoreDone:
+	case <-time.After(time.Second):
+		t.Fatal("rgrok restore did not finish")
+	}
+	select {
+	case <-cancelDone:
+	case <-time.After(time.Second):
+		t.Fatal("rgrok cancel did not finish")
+	}
+
+	r.Equal(http.StatusSeeOther, cancelRec.Code)
+	r.True(tunnel.closed)
+	r.Empty(app.rgrokPublicURL())
+	state, err := loadState()
+	r.NoError(err)
+	r.Empty(state.Config.RgrokName)
+	r.Empty(state.Config.RgrokToken)
+	r.Empty(state.Config.IDPBaseURL)
 }
 
 type fakeTunnel struct {
