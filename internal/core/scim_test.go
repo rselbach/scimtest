@@ -110,6 +110,80 @@ func TestSyncDirtyState(t *testing.T) {
 	r.False(result.State.Groups[1].Dirty)
 }
 
+func TestSyncDirtyStatePrunesDeletedUsersFromGroups(t *testing.T) {
+	r := require.New(t)
+	requests := make([]string, 0, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		requests = append(requests, req.Method+" "+req.URL.Path)
+		switch req.Method + " " + req.URL.Path {
+		case "DELETE /Users/remote-chang":
+			w.WriteHeader(http.StatusNoContent)
+		case "PUT /Groups/remote-spanish":
+			var body SCIMGroupResource
+			r.NoError(json.NewDecoder(req.Body).Decode(&body))
+			r.Empty(body.Members)
+			w.WriteHeader(http.StatusNoContent)
+		case "POST /Groups":
+			var body SCIMGroupResource
+			r.NoError(json.NewDecoder(req.Body).Decode(&body))
+			r.Empty(body.Members)
+			w.Header().Set("Content-Type", "application/scim+json")
+			w.WriteHeader(http.StatusCreated)
+			r.NoError(json.NewEncoder(w).Encode(SCIMGroupResource{ID: "remote-new-group"}))
+		default:
+			t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	state := AppState{
+		Config: Config{BaseURL: server.URL, BearerToken: "chang-secret"},
+		Users: []User{{
+			ID:       "user-chang",
+			RemoteID: "remote-chang",
+			Dirty:    true,
+			Deleted:  true,
+		}, {
+			ID:      "user-koogler",
+			Dirty:   true,
+			Deleted: true,
+		}},
+		Groups: []Group{{
+			ID:          "group-spanish",
+			DisplayName: "Spanish Class",
+			MemberIDs:   []string{"user-chang"},
+			RemoteID:    "remote-spanish",
+		}, {
+			ID:          "group-new",
+			DisplayName: "The Koogler Club",
+			MemberIDs:   []string{"user-koogler"},
+			Dirty:       true,
+		}},
+	}
+	var progressEvents []SyncProgress
+	result := SyncDirtyStateWithProgress(state, func(progress SyncProgress) {
+		progressEvents = append(progressEvents, progress)
+	})
+
+	r.NoError(result.Fatal)
+	r.NoError(result.Stopped)
+	r.Empty(result.State.Users)
+	r.Len(result.State.Groups, 2)
+	r.Empty(result.State.Groups[0].MemberIDs)
+	r.Empty(result.State.Groups[1].MemberIDs)
+	r.False(result.State.Groups[0].Dirty)
+	r.False(result.State.Groups[1].Dirty)
+	r.Equal([]string{
+		"DELETE /Users/remote-chang",
+		"PUT /Groups/remote-spanish",
+		"POST /Groups",
+	}, requests)
+	r.NotEmpty(progressEvents)
+	lastProgress := progressEvents[len(progressEvents)-1]
+	r.Equal(4, lastProgress.Total)
+	r.Equal(4, lastProgress.Processed)
+}
+
 func TestSyncDirtyStateRetriesRateLimit(t *testing.T) {
 	r := require.New(t)
 	sleeps := captureRateLimitSleeps(t)

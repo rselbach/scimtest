@@ -272,6 +272,13 @@ func (r *syncProgressReporter) report(progress SyncProgress) {
 	r.onProgress(progress)
 }
 
+func (r *syncProgressReporter) addTotal(delta int) {
+	if r == nil || delta <= 0 {
+		return
+	}
+	r.total += delta
+}
+
 func (r *syncProgressReporter) reportUser(u User, operation string, status string) {
 	if r == nil {
 		return
@@ -367,6 +374,7 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 
 		switch {
 		case u.Deleted && u.RemoteID == "":
+			progress.addTotal(pruneUserFromGroups(&state, u.ID))
 			counts.deleted++
 			progress.reportUser(u, "delete", "Deleted locally")
 			continue
@@ -384,6 +392,7 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 				continue
 			}
 
+			progress.addTotal(pruneUserFromGroups(&state, u.ID))
 			counts.deleted++
 			progress.reportUser(u, "delete", "Deleted")
 		case u.RemoteID == "":
@@ -429,6 +438,31 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 
 	state.Users = nextUsers
 	return state, counts, nil
+}
+
+func pruneUserFromGroups(state *AppState, userID string) int {
+	newlyDirty := 0
+	for i := range state.Groups {
+		memberIDs := make([]string, 0, len(state.Groups[i].MemberIDs))
+		removed := false
+		for _, memberID := range state.Groups[i].MemberIDs {
+			if memberID == userID {
+				removed = true
+				continue
+			}
+			memberIDs = append(memberIDs, memberID)
+		}
+		if !removed {
+			continue
+		}
+		state.Groups[i].MemberIDs = memberIDs
+		state.Groups[i].LastError = ""
+		if !state.Groups[i].Dirty {
+			state.Groups[i].Dirty = true
+			newlyDirty++
+		}
+	}
+	return newlyDirty
 }
 
 func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressReporter) (AppState, syncCounts, error) {
