@@ -333,3 +333,25 @@ func TestLoadStateOrdersOperationLogsNewestFirst(t *testing.T) {
 	r.Equal("Updated email", loaded.UserOperations["user-1"][0].Summary)
 	r.Equal("Synced", loaded.UserOperations["user-1"][1].Summary)
 }
+
+func TestUserGroupsExcludesDeletedGroups(t *testing.T) {
+	r := require.New(t)
+	state := AppState{
+		Groups: []Group{{
+			ID:          "g1",
+			DisplayName: "Study Group",
+			MemberIDs:   []string{"troy"},
+		}, {
+			ID:          "g2",
+			DisplayName: "Air Conditioning Repair",
+			MemberIDs:   []string{"troy"},
+			Deleted:     true,
+		}, {
+			ID:          "g3",
+			DisplayName: "Glee Club",
+			MemberIDs:   []string{"regionals"},
+		}},
+	}
+
+	r.Equal([]string{"Study Group"}, UserGroups(state, "troy"))
+}

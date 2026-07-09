@@ -1008,6 +1008,9 @@ func AppBySlug(apps []App, slug string) (App, bool) {
 func UserGroups(state AppState, userID string) []string {
 	var names []string
 	for _, group := range state.Groups {
+		if group.Deleted {
+			continue
+		}
 		for _, memberID := range group.MemberIDs {
 			if memberID == userID {
 				names = append(names, group.DisplayName)
