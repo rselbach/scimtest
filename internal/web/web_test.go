@@ -51,6 +51,7 @@ func TestIndexRendersDashboard(t *testing.T) {
 	r.Contains(userBody, "tbarnes")
 	r.Contains(userBody, "https://example.com/scim")
 	r.Contains(userBody, "SCIM Control Surface")
+	r.Contains(userBody, "window.location.reload()")
 
 	groupReq := httptest.NewRequest(http.MethodGet, "/?tab=groups", nil)
 	groupRec := httptest.NewRecorder()

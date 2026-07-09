@@ -1927,7 +1927,7 @@
     const syncCurrent = document.querySelector('[data-sync-current]');
     const syncTrace = document.querySelector('[data-sync-trace]');
     let syncPollTimer = null;
-    let refreshListWhenSyncFinishes = false;
+    let reloadWhenSyncFinishes = false;
 
     function setSyncProgress(job) {
       if (!syncProgress || !job) return;
@@ -1957,9 +1957,9 @@
           syncPollTimer = setTimeout(pollSyncStatus, 750);
           return;
         }
-        if (job && job.done && refreshListWhenSyncFinishes) {
-          refreshListWhenSyncFinishes = false;
-          replaceListCard(new URL(window.location.href));
+        if (job && job.done && reloadWhenSyncFinishes) {
+          reloadWhenSyncFinishes = false;
+          window.location.reload();
         }
       } catch (err) {
         console.error(err);
@@ -1973,7 +1973,7 @@
       syncForm.addEventListener('submit', async function (event) {
         event.preventDefault();
         if (syncPollTimer) clearTimeout(syncPollTimer);
-        refreshListWhenSyncFinishes = true;
+        reloadWhenSyncFinishes = true;
         if (syncSubmit) syncSubmit.disabled = true;
         setSyncProgress({ running: true, message: 'Starting sync', processed: 0, total: 0, percent: 0 });
         try {
@@ -1999,7 +1999,7 @@
     }
 
     if (syncProgress && syncProgress.dataset.syncActive === 'true') {
-      refreshListWhenSyncFinishes = true;
+      reloadWhenSyncFinishes = true;
       pollSyncStatus();
     }
 
