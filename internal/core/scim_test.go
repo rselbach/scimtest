@@ -276,6 +276,59 @@ func TestSCIMDeleteTreatsMissingResourcesAsSuccess(t *testing.T) {
 	}
 }
 
+func TestSCIMListRejectsNonAdvancingPagination(t *testing.T) {
+	tests := map[string]struct {
+		path string
+		list func(*SCIMClient) error
+	}{
+		"groups": {
+			path: "/Groups",
+			list: func(client *SCIMClient) error {
+				_, err := client.listGroups()
+				return err
+			},
+		},
+		"users": {
+			path: "/Users",
+			list: func(client *SCIMClient) error {
+				_, err := client.listUsers()
+				return err
+			},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				requests++
+				r.Equal(tc.path, req.URL.Path)
+				w.Header().Set("Content-Type", "application/scim+json")
+				r.NoError(json.NewEncoder(w).Encode(map[string]any{
+					"totalResults": 3,
+					"startIndex":   1,
+					"itemsPerPage": 1,
+					"Resources": []map[string]any{{
+						"id":          "remote-troy",
+						"userName":    "troys",
+						"displayName": "Study Group",
+					}},
+				}))
+			}))
+			defer server.Close()
+
+			client, err := NewSCIMClient(Config{
+				BaseURL:     server.URL,
+				BearerToken: "chang-secret",
+			})
+			r.NoError(err)
+			r.ErrorContains(tc.list(client), "pagination did not advance from startIndex 2")
+			r.Equal(2, requests)
+		})
+	}
+}
+
 func TestSyncDirtyStateRetriesRateLimit(t *testing.T) {
 	r := require.New(t)
 	sleeps := captureRateLimitSleeps(t)

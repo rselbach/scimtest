@@ -599,6 +599,9 @@ func (c *SCIMClient) listUsers() ([]SCIMUserResource, error) {
 		if response.TotalResults == 0 && response.ItemsPerPage == 0 && len(response.Resources) < count {
 			return resources, nil
 		}
+		if nextIndex <= startIndex {
+			return nil, fmt.Errorf("SCIM /Users pagination did not advance from startIndex %d", startIndex)
+		}
 
 		startIndex = nextIndex
 	}
@@ -637,6 +640,9 @@ func (c *SCIMClient) listGroups() ([]SCIMGroupResource, error) {
 		}
 		if response.TotalResults == 0 && response.ItemsPerPage == 0 && len(response.Resources) < count {
 			return resources, nil
+		}
+		if nextIndex <= startIndex {
+			return nil, fmt.Errorf("SCIM /Groups pagination did not advance from startIndex %d", startIndex)
 		}
 
 		startIndex = nextIndex
