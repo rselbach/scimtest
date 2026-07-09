@@ -193,8 +193,25 @@ func openStateDB() (*sql.DB, error) {
 		return nil, err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create state directory: %w", err)
+	}
+	if strings.TrimSpace(os.Getenv("SCIMTEST_STATE_FILE")) == "" {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("secure state directory: %w", err)
+		}
+	}
+
+	stateFile, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("create sqlite state db %s: %w", path, err)
+	}
+	if err := stateFile.Close(); err != nil {
+		return nil, fmt.Errorf("close sqlite state db %s after creation: %w", path, err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return nil, fmt.Errorf("secure sqlite state db %s: %w", path, err)
 	}
 
 	db, err := sql.Open("sqlite", path)
@@ -203,7 +220,9 @@ func openStateDB() (*sql.DB, error) {
 	}
 
 	if err := initStateDB(db); err != nil {
-		_ = db.Close()
+		if closeErr := db.Close(); closeErr != nil {
+			return nil, fmt.Errorf("%w; close sqlite state db: %v", err, closeErr)
+		}
 		return nil, err
 	}
 

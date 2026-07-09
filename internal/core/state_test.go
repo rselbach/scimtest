@@ -94,6 +94,45 @@ func TestSaveAndLoadState(t *testing.T) {
 	r.NotZero(info.Size())
 }
 
+func TestStateDatabaseUsesPrivatePermissions(t *testing.T) {
+	r := require.New(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "nested", "state.db")
+	t.Setenv("SCIMTEST_STATE_FILE", path)
+
+	r.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
+	r.NoError(os.WriteFile(path, nil, 0o644))
+	r.NoError(os.Chmod(path, 0o644))
+
+	_, err := LoadState()
+	r.NoError(err)
+
+	info, err := os.Stat(path)
+	r.NoError(err)
+	r.Equal(os.FileMode(0o600), info.Mode().Perm())
+}
+
+func TestDefaultStateDirectoryUsesPrivatePermissions(t *testing.T) {
+	r := require.New(t)
+	root := t.TempDir()
+	t.Setenv("SCIMTEST_STATE_FILE", "")
+	t.Setenv("HOME", root)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+
+	path, err := stateFilePath()
+	r.NoError(err)
+	dir := filepath.Dir(path)
+	r.NoError(os.MkdirAll(dir, 0o755))
+	r.NoError(os.Chmod(dir, 0o755))
+
+	_, err = LoadState()
+	r.NoError(err)
+
+	info, err := os.Stat(dir)
+	r.NoError(err)
+	r.Equal(os.FileMode(0o700), info.Mode().Perm())
+}
+
 func TestLoadStateMigratesNameFromUsername(t *testing.T) {
 	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
 	r := require.New(t)
