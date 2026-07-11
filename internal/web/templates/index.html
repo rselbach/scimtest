@@ -1100,10 +1100,6 @@
       scimtest
       <span class="sr-only">SCIM Control Surface</span>
     </a>
-	  <span class="topbar-pill" title="Configured SCIM endpoint">
-      <span class="icon" aria-hidden="true">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="4" rx="1"/><rect x="2.5" y="9" width="11" height="4" rx="1"/><circle cx="5" cy="5" r="0.6" fill="currentColor"/><circle cx="5" cy="11" r="0.6" fill="currentColor"/></svg>
-	  </span>
 	  <form class="environment-switcher" method="get" action="/">
 		<input type="hidden" name="tab" value="{{.Tab}}">
 		<label class="sr-only" for="environment-switcher">Environment</label>
@@ -1113,6 +1109,10 @@
 	  </form>
 	  <a class="btn btn-sm" href="/?tab={{.Tab}}&amp;modal=environment&amp;id={{.Environment.ID}}">Edit environment</a>
 	  <a class="btn btn-sm" href="/?tab={{.Tab}}&amp;modal=environment">+</a>
+	  <span class="topbar-pill" title="Configured SCIM endpoint">
+      <span class="icon" aria-hidden="true">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="4" rx="1"/><rect x="2.5" y="9" width="11" height="4" rx="1"/><circle cx="5" cy="5" r="0.6" fill="currentColor"/><circle cx="5" cy="11" r="0.6" fill="currentColor"/></svg>
+	  </span>
       <span class="k">SCIM</span>
       <span class="v">{{if .SCIMEnabled}}{{if .BaseURL}}{{.BaseURL}}{{else}}not configured{{end}}{{else}}disabled{{end}}</span>
     </span>
