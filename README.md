@@ -6,12 +6,11 @@
 - an OIDC authorization-code test IDP
 - a SAML HTTP-POST test IDP
 
-Within an environment, users and groups are stored once in SQLite and shared by SCIM sync, OIDC claims, and SAML attributes.
-
-State is organized into environments. Each environment has its own SCIM
-connection, users, groups, applications, sync state, and history. The rgrok
-tunnel, public IDP base URL, and signing material are shared globally. Existing
-databases are migrated automatically into an environment named `Default`.
+Users and groups form one global directory stored in SQLite. Every app uses that
+directory for OIDC claims, SAML attributes, and optional SCIM provisioning.
+Each app has independent SCIM credentials, remote IDs, sync state, and errors.
+Existing environment-based databases are flattened automatically; their apps and
+directory entries are preserved, and environment SCIM settings move onto apps.
 
 ## Run
 
@@ -33,12 +32,13 @@ its output is sensitive.
 
 ## Config
 
-The settings modal has two base URLs:
+The global settings modal configures the IDP base URL published in OIDC/SAML
+metadata and the optional rgrok tunnel.
 
-- SCIM base URL: the remote SCIM server to sync to and import from
-- IDP base URL: the issuer URL published in OIDC/SAML metadata
-
-SCIM can be disabled independently for each environment. When disabled, the users and groups pages hide SCIM sync actions, remote IDs, sync status, trace links, and sync errors; the local OIDC/SAML IDP continues to use that environment's users and groups.
+Enable `Sync` on an app to configure its SCIM base URL and bearer token. The app
+selector in the top bar chooses which server the sync, import, reset, remote ID,
+status, trace, and error views refer to. Apps without Sync enabled still use the
+global directory for OIDC and SAML.
 
 Leave IDP base URL empty when clients can reach the current request host. Set it when clients need a public tunnel or another externally reachable URL.
 
