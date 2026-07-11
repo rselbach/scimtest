@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -10,6 +11,12 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestReadSCIMResponseBodyRejectsOversizedBody(t *testing.T) {
+	r := require.New(t)
+	_, err := readSCIMResponseBody(bytes.NewReader(make([]byte, maxSCIMResponseBodyBytes+1)))
+	r.EqualError(err, "SCIM response body exceeds 10485760 bytes")
+}
 
 func TestSyncDirtyState(t *testing.T) {
 	r := require.New(t)

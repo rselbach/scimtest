@@ -1,12 +1,39 @@
 package web
 
 import (
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestDebugHandlerRejectsOversizedRequestBody(t *testing.T) {
+	r := require.New(t)
+	app := &webApp{debugRP: true}
+	handler := app.debugRPHandler(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	req := httptest.NewRequest(http.MethodPost, "/oidc/example/token", io.LimitReader(zeroReader{}, maxRPDebugBodyBytes+1))
+	req.ContentLength = maxRPDebugBodyBytes + 1
+	rec := httptest.NewRecorder()
+
+	handler(rec, req)
+
+	r.Equal(http.StatusRequestEntityTooLarge, rec.Code)
+	r.Contains(rec.Body.String(), "exceeds 10485760 bytes")
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 0
+	}
+	return len(p), nil
+}
 
 func TestDebugRedaction(t *testing.T) {
 	tests := map[string]struct {

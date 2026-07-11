@@ -141,6 +141,7 @@ type SCIMListResponse[T any] struct {
 const (
 	maxSCIMRateLimitRetries    = 3
 	maxAutomaticRateLimitDelay = 30 * time.Second
+	maxSCIMResponseBodyBytes   = 10 << 20
 )
 
 var rateLimitSleep = time.Sleep
@@ -818,7 +819,7 @@ func (c *SCIMClient) doJSONOnce(method string, path string, payload []byte, requ
 	}
 	trace.ResponseRetryAfter = strings.TrimSpace(resp.Header.Get("Retry-After"))
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := readSCIMResponseBody(resp.Body)
 	if err != nil {
 		trace.Status = resp.Status
 		if closeErr := resp.Body.Close(); closeErr != nil {
@@ -885,6 +886,18 @@ func (c *SCIMClient) doJSONOnce(method string, path string, payload []byte, requ
 
 	c.traces = append(c.traces, trace)
 	return nil
+}
+
+func readSCIMResponseBody(body io.Reader) ([]byte, error) {
+	limited := io.LimitReader(body, maxSCIMResponseBodyBytes+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxSCIMResponseBodyBytes {
+		return nil, fmt.Errorf("SCIM response body exceeds %d bytes", maxSCIMResponseBodyBytes)
+	}
+	return data, nil
 }
 
 func (c *SCIMClient) setLastTraceError(err error) {

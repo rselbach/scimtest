@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -19,6 +20,8 @@ import (
 )
 
 var rpDebugLogMu sync.Mutex
+
+const maxRPDebugBodyBytes = 10 << 20
 
 type debugResponseWriter struct {
 	http.ResponseWriter
@@ -50,9 +53,14 @@ func (a *webApp) debugRPHandler(next http.HandlerFunc) http.HandlerFunc {
 		return next
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		requestBody, err := io.ReadAll(r.Body)
+		requestBody, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRPDebugBodyBytes))
 		if err != nil {
-			http.Error(w, fmt.Sprintf("read RP debug request body: %v", err), http.StatusInternalServerError)
+			var maxBytesErr *http.MaxBytesError
+			if errors.As(err, &maxBytesErr) {
+				http.Error(w, fmt.Sprintf("RP request body exceeds %d bytes", maxBytesErr.Limit), http.StatusRequestEntityTooLarge)
+				return
+			}
+			http.Error(w, fmt.Sprintf("read RP debug request body: %v", err), http.StatusBadRequest)
 			return
 		}
 		if r.Body != nil {
