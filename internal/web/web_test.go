@@ -825,6 +825,44 @@ func TestInvalidUserFormPreservesSubmittedValues(t *testing.T) {
 	r.Contains(getRec.Body.String(), `value="Barnes"`)
 }
 
+func TestDashboardRendersCriticalFlowAffordances(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Users: []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.edu", Active: true}},
+		Apps: []app{{
+			ID:               "app-1",
+			Name:             "Greendale Portal",
+			Slug:             "greendale",
+			Protocol:         "both",
+			OIDCClientID:     "greendale-client",
+			OIDCRedirectURIs: []string{"http://localhost:3000/callback"},
+			SAMLACSURL:       "http://localhost:3000/saml/acs",
+			SAMLNameIDField:  "email",
+			SAMLNameIDFormat: "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress",
+		}},
+	}))
+	app := newTestIDPApp(t)
+	app.syncJob = &syncJobSnapshot{Running: true, Percent: 42, Message: "Creating Troy"}
+	rec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=apps", nil))
+
+	r.Equal(http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	r.Contains(body, ">Discovery</a>")
+	r.Contains(body, ">Test OIDC</a>")
+	r.Contains(body, ">Metadata</a>")
+	r.Contains(body, ">Test SAML</a>")
+	r.NotContains(body, "Get ready to test")
+
+	progressRec := httptest.NewRecorder()
+	app.routes().ServeHTTP(progressRec, httptest.NewRequest(http.MethodGet, "/?tab=users", nil))
+	r.Contains(progressRec.Body.String(), `role="progressbar"`)
+	r.Contains(progressRec.Body.String(), `aria-valuenow="42"`)
+	r.Contains(progressRec.Body.String(), `aria-live="polite"`)
+}
+
 func TestSyncRateLimitRendersReadableError(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
