@@ -453,9 +453,21 @@ func loadRequestState(r *http.Request) (appState, error) {
 		return state, nil
 	}
 	if requestEnvironmentID(r) == defaultEnvironmentID {
+		environments, loadErr := loadEnvironments()
+		if loadErr != nil || len(environments) == 0 {
+			return appState{}, err
+		}
+		return loadEnvironmentState(environments[0].ID)
+	}
+	state, defaultErr := loadEnvironmentState(defaultEnvironmentID)
+	if defaultErr == nil {
+		return state, nil
+	}
+	environments, loadErr := loadEnvironments()
+	if loadErr != nil || len(environments) == 0 {
 		return appState{}, err
 	}
-	return loadEnvironmentState(defaultEnvironmentID)
+	return loadEnvironmentState(environments[0].ID)
 }
 
 func rememberEnvironment(w http.ResponseWriter, environmentID string) {
@@ -1808,7 +1820,16 @@ func (a *webApp) handleEnvironmentDelete(w http.ResponseWriter, r *http.Request)
 		a.redirectFormError(w, r, tab, "environment", err)
 		return
 	}
-	rememberEnvironment(w, defaultEnvironmentID)
+	environments, err := loadEnvironments()
+	if err != nil {
+		a.redirectError(w, r, tab, fmt.Errorf("load remaining environments after deletion: %w", err))
+		return
+	}
+	if len(environments) == 0 {
+		a.redirectError(w, r, tab, fmt.Errorf("no environments remain after deletion"))
+		return
+	}
+	rememberEnvironment(w, environments[0].ID)
 	redirectWithFlash(w, r, dashboardURL(tab, nil), flashMessage{Kind: "success", Message: "environment deleted"})
 }
 
