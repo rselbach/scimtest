@@ -166,6 +166,24 @@ func TestOIDCPKCEValidation(t *testing.T) {
 	r.EqualError(err, "public clients must use PKCE")
 }
 
+func TestUserClaimsHonorScopes(t *testing.T) {
+	r := require.New(t)
+	state := appState{Groups: []group{{DisplayName: "Study Group", MemberIDs: []string{"troy"}}}}
+	configuredApp := app{IncludeGroupsClaim: true}
+	troy := user{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.edu"}
+
+	minimal := userClaims(state, configuredApp, troy, "openid")
+	r.Equal(map[string]any{"sub": "troy"}, minimal)
+
+	all := userClaims(state, configuredApp, troy, "openid profile email groups")
+	r.Equal("Troy Barnes", all["name"])
+	r.Equal("troy@greendale.edu", all["email"])
+	r.Equal([]string{"Study Group"}, all["groups"])
+
+	withoutConfiguredGroups := userClaims(state, app{}, troy, "openid groups")
+	r.NotContains(withoutConfiguredGroups, "groups")
+}
+
 func TestOIDCTokenPrunesExpiredCredentials(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)

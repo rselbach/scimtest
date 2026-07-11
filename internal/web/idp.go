@@ -340,7 +340,7 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims := userClaims(state, app, user)
+	claims := userClaims(state, app, user, code.Scope)
 	claims["iss"] = oidcIssuer(a.effectiveIDPBaseURL(r, state), app)
 	claims["aud"] = app.OIDCClientID
 	claims["iat"] = now.Unix()
@@ -393,7 +393,7 @@ func (a *webApp) handleOIDCUserinfo(w http.ResponseWriter, r *http.Request) {
 		writeOAuthError(w, http.StatusUnauthorized, "invalid_token", "user is inactive or missing")
 		return
 	}
-	writeJSON(w, userClaims(state, app, user))
+	writeJSON(w, userClaims(state, app, user, token.Scope))
 }
 
 func (a *webApp) pruneExpiredOIDCCredentials(now time.Time) {
@@ -675,20 +675,26 @@ func clientAuthenticated(r *http.Request, app app) bool {
 	return r.FormValue("client_id") == app.OIDCClientID && r.FormValue("client_secret") == app.OIDCClientSecret
 }
 
-func userClaims(state appState, app app, user user) map[string]any {
-	claims := map[string]any{
-		"sub":                user.ID,
-		"name":               userLabel(user),
-		"given_name":         user.GivenName,
-		"family_name":        user.FamilyName,
-		"preferred_username": user.Username,
-		"email":              user.Email,
-		"email_verified":     true,
+func userClaims(state appState, app app, user user, scope string) map[string]any {
+	claims := map[string]any{"sub": user.ID}
+	if hasOIDCScope(scope, "profile") {
+		claims["name"] = userLabel(user)
+		claims["given_name"] = user.GivenName
+		claims["family_name"] = user.FamilyName
+		claims["preferred_username"] = user.Username
 	}
-	if app.IncludeGroupsClaim {
+	if hasOIDCScope(scope, "email") {
+		claims["email"] = user.Email
+		claims["email_verified"] = true
+	}
+	if app.IncludeGroupsClaim && hasOIDCScope(scope, "groups") {
 		claims["groups"] = userGroups(state, user.ID)
 	}
 	return claims
+}
+
+func hasOIDCScope(scope string, target string) bool {
+	return stringIn(strings.Fields(scope), target)
 }
 
 func (a *webApp) signJWT(claims map[string]any) (string, error) {
