@@ -23,6 +23,13 @@ const DefaultSAMLEmailAttributeName = "http://schemas.xmlsoap.org/ws/2005/05/ide
 const DefaultSAMLNameIDField = "email"
 const SAMLNameIDFormatEmail = "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"
 const SAMLNameIDFormatUnspecified = "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified"
+const DefaultEnvironmentID = "env_default"
+
+type Environment struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+}
 
 type Config struct {
 	BaseURL               string `json:"base_url"`
@@ -90,6 +97,8 @@ func (u *User) UnmarshalJSON(data []byte) error {
 }
 
 type AppState struct {
+	Environment     Environment               `json:"environment"`
+	Environments    []Environment             `json:"environments,omitempty"`
 	Config          Config                    `json:"config"`
 	Users           []User                    `json:"users"`
 	Groups          []Group                   `json:"groups"`
@@ -142,13 +151,17 @@ type App struct {
 }
 
 func LoadState() (AppState, error) {
+	return LoadEnvironmentState(DefaultEnvironmentID)
+}
+
+func LoadEnvironmentState(environmentID string) (AppState, error) {
 	db, err := openStateDB()
 	if err != nil {
 		return AppState{}, err
 	}
 	defer closeDB(db)
 
-	state, err := loadStateFromDB(db)
+	state, err := loadStateFromDB(db, environmentID)
 	if err != nil {
 		return AppState{}, err
 	}
@@ -175,7 +188,154 @@ func LoadState() (AppState, error) {
 		return AppState{}, err
 	}
 
-	return loadStateFromDB(db)
+	return loadStateFromDB(db, DefaultEnvironmentID)
+}
+
+func LoadStateForAppSlug(slug string) (AppState, error) {
+	db, err := openStateDB()
+	if err != nil {
+		return AppState{}, err
+	}
+	defer closeDB(db)
+
+	var environmentID string
+	if err := db.QueryRow(`SELECT environment_id FROM apps WHERE slug = ?`, slug).Scan(&environmentID); err != nil {
+		if err == sql.ErrNoRows {
+			return AppState{}, fmt.Errorf("app slug %q not found", slug)
+		}
+		return AppState{}, fmt.Errorf("find app environment: %w", err)
+	}
+	return loadStateFromDB(db, environmentID)
+}
+
+func LoadEnvironments() ([]Environment, error) {
+	db, err := openStateDB()
+	if err != nil {
+		return nil, err
+	}
+	defer closeDB(db)
+	return loadEnvironmentsFromDB(db)
+}
+
+func CreateEnvironment(name string) (Environment, error) {
+	name = strings.TrimSpace(name)
+	slug := Slugify(name)
+	if name == "" || slug == "" {
+		return Environment{}, fmt.Errorf("environment name is required")
+	}
+	id, err := NewID("env")
+	if err != nil {
+		return Environment{}, err
+	}
+	environment := Environment{ID: id, Name: name, Slug: slug}
+	db, err := openStateDB()
+	if err != nil {
+		return Environment{}, err
+	}
+	defer closeDB(db)
+	tx, err := db.Begin()
+	if err != nil {
+		return Environment{}, fmt.Errorf("begin environment creation: %w", err)
+	}
+	committed := false
+	defer rollbackTx(tx, &committed)
+	if _, err := tx.Exec(`INSERT INTO environments(id, name, slug) VALUES(?, ?, ?)`, environment.ID, environment.Name, environment.Slug); err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return Environment{}, fmt.Errorf("environment slug %q is already in use", slug)
+		}
+		return Environment{}, fmt.Errorf("create environment: %w", err)
+	}
+	if _, err := tx.Exec(`INSERT INTO environment_config(environment_id, key, value) VALUES(?, 'scim_disabled', '1')`, environment.ID); err != nil {
+		return Environment{}, fmt.Errorf("initialize environment config: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return Environment{}, fmt.Errorf("commit environment creation: %w", err)
+	}
+	committed = true
+	return environment, nil
+}
+
+func UpdateEnvironment(environmentID string, name string) (Environment, error) {
+	name = strings.TrimSpace(name)
+	slug := Slugify(name)
+	if name == "" || slug == "" {
+		return Environment{}, fmt.Errorf("environment name is required")
+	}
+	db, err := openStateDB()
+	if err != nil {
+		return Environment{}, err
+	}
+	defer closeDB(db)
+	result, err := db.Exec(`UPDATE environments SET name = ?, slug = ? WHERE id = ?`, name, slug, environmentID)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return Environment{}, fmt.Errorf("environment slug %q is already in use", slug)
+		}
+		return Environment{}, fmt.Errorf("update environment: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return Environment{}, fmt.Errorf("read updated environment count: %w", err)
+	}
+	if rows == 0 {
+		return Environment{}, fmt.Errorf("environment %q not found", environmentID)
+	}
+	return Environment{ID: environmentID, Name: name, Slug: slug}, nil
+}
+
+func DeleteEnvironment(environmentID string) error {
+	db, err := openStateDB()
+	if err != nil {
+		return err
+	}
+	defer closeDB(db)
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM environments`).Scan(&count); err != nil {
+		return fmt.Errorf("count environments: %w", err)
+	}
+	if count <= 1 {
+		return fmt.Errorf("the final environment cannot be deleted")
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin environment deletion: %w", err)
+	}
+	committed := false
+	defer rollbackTx(tx, &committed)
+	for _, statement := range []string{
+		`DELETE FROM group_members WHERE environment_id = ?`,
+		`DELETE FROM operation_logs WHERE environment_id = ?`,
+		`DELETE FROM apps WHERE environment_id = ?`,
+		`DELETE FROM groups WHERE environment_id = ?`,
+		`DELETE FROM users WHERE environment_id = ?`,
+		`DELETE FROM environment_config WHERE environment_id = ?`,
+		`DELETE FROM environments WHERE id = ?`,
+	} {
+		if _, err := tx.Exec(statement, environmentID); err != nil {
+			return fmt.Errorf("delete environment data: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit environment deletion: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+func LoadAllApps() ([]App, error) {
+	environments, err := LoadEnvironments()
+	if err != nil {
+		return nil, err
+	}
+	var apps []App
+	for _, environment := range environments {
+		state, err := LoadEnvironmentState(environment.ID)
+		if err != nil {
+			return nil, err
+		}
+		apps = append(apps, state.Apps...)
+	}
+	return apps, nil
 }
 
 func SaveState(state AppState) error {
@@ -234,12 +394,24 @@ func openStateDB() (*sql.DB, error) {
 
 func initStateDB(db *sql.DB) error {
 	statements := []string{
+		`CREATE TABLE IF NOT EXISTS environments (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			slug TEXT NOT NULL UNIQUE
+		)`,
+		`CREATE TABLE IF NOT EXISTS environment_config (
+			environment_id TEXT NOT NULL,
+			key TEXT NOT NULL,
+			value TEXT NOT NULL,
+			PRIMARY KEY (environment_id, key)
+		)`,
 		`CREATE TABLE IF NOT EXISTS config (
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS users (
 			id TEXT PRIMARY KEY,
+			environment_id TEXT NOT NULL DEFAULT 'env_default',
 			given_name TEXT NOT NULL,
 			family_name TEXT NOT NULL,
 			email TEXT NOT NULL,
@@ -252,6 +424,7 @@ func initStateDB(db *sql.DB) error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS groups (
 			id TEXT PRIMARY KEY,
+			environment_id TEXT NOT NULL DEFAULT 'env_default',
 			display_name TEXT NOT NULL,
 			remote_id TEXT NOT NULL DEFAULT '',
 			dirty INTEGER NOT NULL,
@@ -260,6 +433,7 @@ func initStateDB(db *sql.DB) error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS apps (
 			id TEXT PRIMARY KEY,
+			environment_id TEXT NOT NULL DEFAULT 'env_default',
 			name TEXT NOT NULL,
 			slug TEXT NOT NULL,
 			protocol TEXT NOT NULL,
@@ -278,12 +452,14 @@ func initStateDB(db *sql.DB) error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS group_members (
 			group_id TEXT NOT NULL,
+			environment_id TEXT NOT NULL DEFAULT 'env_default',
 			user_id TEXT NOT NULL,
 			position INTEGER NOT NULL,
 			PRIMARY KEY (group_id, user_id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS operation_logs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			environment_id TEXT NOT NULL DEFAULT 'env_default',
 			resource_type TEXT NOT NULL,
 			resource_id TEXT NOT NULL,
 			label TEXT NOT NULL,
@@ -314,6 +490,11 @@ func initStateDB(db *sql.DB) error {
 		`ALTER TABLE apps ADD COLUMN saml_name_id_field TEXT NOT NULL DEFAULT 'email'`,
 		`ALTER TABLE apps ADD COLUMN allow_any_oidc_redirect INTEGER NOT NULL DEFAULT 1`,
 		`ALTER TABLE apps ADD COLUMN oidc_public_client INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE users ADD COLUMN environment_id TEXT NOT NULL DEFAULT 'env_default'`,
+		`ALTER TABLE groups ADD COLUMN environment_id TEXT NOT NULL DEFAULT 'env_default'`,
+		`ALTER TABLE apps ADD COLUMN environment_id TEXT NOT NULL DEFAULT 'env_default'`,
+		`ALTER TABLE operation_logs ADD COLUMN environment_id TEXT NOT NULL DEFAULT 'env_default'`,
+		`ALTER TABLE group_members ADD COLUMN environment_id TEXT NOT NULL DEFAULT 'env_default'`,
 	}
 	for _, migration := range migrations {
 		if _, err := db.Exec(migration); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -321,13 +502,55 @@ func initStateDB(db *sql.DB) error {
 		}
 	}
 
+	if err := migrateDefaultEnvironment(db); err != nil {
+		return err
+	}
+
 	return nil
 }
 
-func loadStateFromDB(db *sql.DB) (AppState, error) {
+func migrateDefaultEnvironment(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin default environment migration: %w", err)
+	}
+	committed := false
+	defer rollbackTx(tx, &committed)
+
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO environments(id, name, slug) VALUES(?, 'Default', 'default')`, DefaultEnvironmentID); err != nil {
+		return fmt.Errorf("create default environment: %w", err)
+	}
+	keys := []string{"base_url", "bearer_token", "auto_open_sync_trace", "scim_disabled"}
+	for _, key := range keys {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO environment_config(environment_id, key, value) SELECT ?, key, value FROM config WHERE key = ?`, DefaultEnvironmentID, key); err != nil {
+			return fmt.Errorf("migrate default environment config %s: %w", key, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit default environment migration: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 	state := AppState{}
 	state.UserOperations = make(map[string][]OperationLog)
 	state.GroupOperations = make(map[string][]OperationLog)
+	var err error
+	state.Environments, err = loadEnvironmentsFromDB(db)
+	if err != nil {
+		return AppState{}, err
+	}
+	for _, environment := range state.Environments {
+		if environment.ID == environmentID {
+			state.Environment = environment
+			break
+		}
+	}
+	if state.Environment.ID == "" {
+		return AppState{}, fmt.Errorf("environment %q not found", environmentID)
+	}
 
 	configRows, err := db.Query(`SELECT key, value FROM config`)
 	if err != nil {
@@ -368,8 +591,33 @@ func loadStateFromDB(db *sql.DB) (AppState, error) {
 	if err := configRows.Err(); err != nil {
 		return AppState{}, fmt.Errorf("iterate sqlite config rows: %w", err)
 	}
+	environmentConfigRows, err := db.Query(`SELECT key, value FROM environment_config WHERE environment_id = ?`, environmentID)
+	if err != nil {
+		return AppState{}, fmt.Errorf("load environment config from sqlite: %w", err)
+	}
+	defer closeRows(environmentConfigRows)
+	for environmentConfigRows.Next() {
+		var key string
+		var value string
+		if err := environmentConfigRows.Scan(&key, &value); err != nil {
+			return AppState{}, fmt.Errorf("scan environment config row: %w", err)
+		}
+		switch key {
+		case "base_url":
+			state.Config.BaseURL = value
+		case "bearer_token":
+			state.Config.BearerToken = value
+		case "auto_open_sync_trace":
+			state.Config.AutoOpenSyncTrace = value == "1"
+		case "scim_disabled":
+			state.Config.SCIMDisabled = value == "1"
+		}
+	}
+	if err := environmentConfigRows.Err(); err != nil {
+		return AppState{}, fmt.Errorf("iterate environment config rows: %w", err)
+	}
 
-	userRows, err := db.Query(`SELECT id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error FROM users ORDER BY rowid`)
+	userRows, err := db.Query(`SELECT id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error FROM users WHERE environment_id = ? ORDER BY rowid`, environmentID)
 	if err != nil {
 		return AppState{}, fmt.Errorf("load users from sqlite: %w", err)
 	}
@@ -392,7 +640,7 @@ func loadStateFromDB(db *sql.DB) (AppState, error) {
 		return AppState{}, fmt.Errorf("iterate sqlite user rows: %w", err)
 	}
 
-	groupRows, err := db.Query(`SELECT id, display_name, remote_id, dirty, deleted, last_error FROM groups ORDER BY rowid`)
+	groupRows, err := db.Query(`SELECT id, display_name, remote_id, dirty, deleted, last_error FROM groups WHERE environment_id = ? ORDER BY rowid`, environmentID)
 	if err != nil {
 		return AppState{}, fmt.Errorf("load groups from sqlite: %w", err)
 	}
@@ -415,7 +663,7 @@ func loadStateFromDB(db *sql.DB) (AppState, error) {
 		return AppState{}, fmt.Errorf("iterate sqlite group rows: %w", err)
 	}
 
-	memberRows, err := db.Query(`SELECT group_id, user_id FROM group_members ORDER BY group_id, position`)
+	memberRows, err := db.Query(`SELECT group_id, user_id FROM group_members WHERE environment_id = ? ORDER BY group_id, position`, environmentID)
 	if err != nil {
 		return AppState{}, fmt.Errorf("load group members from sqlite: %w", err)
 	}
@@ -438,7 +686,7 @@ func loadStateFromDB(db *sql.DB) (AppState, error) {
 		return AppState{}, fmt.Errorf("iterate sqlite group member rows: %w", err)
 	}
 
-	appRows, err := db.Query(`SELECT id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, include_groups_claim, allow_any_oidc_redirect FROM apps ORDER BY rowid`)
+	appRows, err := db.Query(`SELECT id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, include_groups_claim, allow_any_oidc_redirect FROM apps WHERE environment_id = ? ORDER BY rowid`, environmentID)
 	if err != nil {
 		return AppState{}, fmt.Errorf("load apps from sqlite: %w", err)
 	}
@@ -463,7 +711,7 @@ func loadStateFromDB(db *sql.DB) (AppState, error) {
 		return AppState{}, fmt.Errorf("iterate sqlite app rows: %w", err)
 	}
 
-	logRows, err := db.Query(`SELECT resource_type, resource_id, kind, summary, operation, method, path, request_body, status, response_retry_after, response_body, error_text, created_at FROM operation_logs ORDER BY resource_type, resource_id, created_at DESC, id ASC`)
+	logRows, err := db.Query(`SELECT resource_type, resource_id, kind, summary, operation, method, path, request_body, status, response_retry_after, response_body, error_text, created_at FROM operation_logs WHERE environment_id = ? ORDER BY resource_type, resource_id, created_at DESC, id ASC`, environmentID)
 	if err != nil {
 		return AppState{}, fmt.Errorf("load operation logs from sqlite: %w", err)
 	}
@@ -491,7 +739,31 @@ func loadStateFromDB(db *sql.DB) (AppState, error) {
 	return state, nil
 }
 
+func loadEnvironmentsFromDB(db *sql.DB) ([]Environment, error) {
+	rows, err := db.Query(`SELECT id, name, slug FROM environments ORDER BY rowid`)
+	if err != nil {
+		return nil, fmt.Errorf("load environments from sqlite: %w", err)
+	}
+	defer closeRows(rows)
+	var environments []Environment
+	for rows.Next() {
+		var environment Environment
+		if err := rows.Scan(&environment.ID, &environment.Name, &environment.Slug); err != nil {
+			return nil, fmt.Errorf("scan environment row: %w", err)
+		}
+		environments = append(environments, environment)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate environment rows: %w", err)
+	}
+	return environments, nil
+}
+
 func saveStateToDB(db *sql.DB, state AppState) error {
+	environmentID := state.Environment.ID
+	if environmentID == "" {
+		environmentID = DefaultEnvironmentID
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin sqlite state transaction: %w", err)
@@ -502,19 +774,22 @@ func saveStateToDB(db *sql.DB, state AppState) error {
 	if _, err := tx.Exec(`DELETE FROM config`); err != nil {
 		return fmt.Errorf("clear sqlite config: %w", err)
 	}
-	if _, err := tx.Exec(`DELETE FROM users`); err != nil {
+	if _, err := tx.Exec(`DELETE FROM environment_config WHERE environment_id = ?`, environmentID); err != nil {
+		return fmt.Errorf("clear sqlite environment config: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM users WHERE environment_id = ?`, environmentID); err != nil {
 		return fmt.Errorf("clear sqlite users: %w", err)
 	}
-	if _, err := tx.Exec(`DELETE FROM groups`); err != nil {
+	if _, err := tx.Exec(`DELETE FROM groups WHERE environment_id = ?`, environmentID); err != nil {
 		return fmt.Errorf("clear sqlite groups: %w", err)
 	}
-	if _, err := tx.Exec(`DELETE FROM apps`); err != nil {
+	if _, err := tx.Exec(`DELETE FROM apps WHERE environment_id = ?`, environmentID); err != nil {
 		return fmt.Errorf("clear sqlite apps: %w", err)
 	}
-	if _, err := tx.Exec(`DELETE FROM group_members`); err != nil {
+	if _, err := tx.Exec(`DELETE FROM group_members WHERE environment_id = ?`, environmentID); err != nil {
 		return fmt.Errorf("clear sqlite group members: %w", err)
 	}
-	if _, err := tx.Exec(`DELETE FROM operation_logs`); err != nil {
+	if _, err := tx.Exec(`DELETE FROM operation_logs WHERE environment_id = ?`, environmentID); err != nil {
 		return fmt.Errorf("clear sqlite operation logs: %w", err)
 	}
 
@@ -525,10 +800,6 @@ func saveStateToDB(db *sql.DB, state AppState) error {
 	defer closeStmt(configStmt)
 
 	configEntries := map[string]string{
-		"base_url":                state.Config.BaseURL,
-		"bearer_token":            state.Config.BearerToken,
-		"auto_open_sync_trace":    BoolString(state.Config.AutoOpenSyncTrace),
-		"scim_disabled":           BoolString(state.Config.SCIMDisabled),
 		"idp_base_url":            state.Config.IDPBaseURL,
 		"trust_forwarded_headers": BoolString(state.Config.TrustForwardedHeaders),
 		"rgrok_name":              state.Config.RgrokName,
@@ -541,57 +812,68 @@ func saveStateToDB(db *sql.DB, state AppState) error {
 			return fmt.Errorf("insert sqlite config %s: %w", key, err)
 		}
 	}
+	environmentConfigEntries := map[string]string{
+		"base_url":             state.Config.BaseURL,
+		"bearer_token":         state.Config.BearerToken,
+		"auto_open_sync_trace": BoolString(state.Config.AutoOpenSyncTrace),
+		"scim_disabled":        BoolString(state.Config.SCIMDisabled),
+	}
+	for key, value := range environmentConfigEntries {
+		if _, err := tx.Exec(`INSERT INTO environment_config(environment_id, key, value) VALUES(?, ?, ?)`, environmentID, key, value); err != nil {
+			return fmt.Errorf("insert environment config %s: %w", key, err)
+		}
+	}
 
-	userStmt, err := tx.Prepare(`INSERT INTO users(id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	userStmt, err := tx.Prepare(`INSERT INTO users(id, environment_id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("prepare sqlite user insert: %w", err)
 	}
 	defer closeStmt(userStmt)
 
 	for _, u := range state.Users {
-		if _, err := userStmt.Exec(u.ID, u.GivenName, u.FamilyName, u.Email, u.Username, boolToInt(u.Active), u.RemoteID, boolToInt(u.Dirty), boolToInt(u.Deleted), u.LastError); err != nil {
+		if _, err := userStmt.Exec(u.ID, environmentID, u.GivenName, u.FamilyName, u.Email, u.Username, boolToInt(u.Active), u.RemoteID, boolToInt(u.Dirty), boolToInt(u.Deleted), u.LastError); err != nil {
 			return fmt.Errorf("insert sqlite user %s: %w", u.ID, err)
 		}
 	}
 
-	groupStmt, err := tx.Prepare(`INSERT INTO groups(id, display_name, remote_id, dirty, deleted, last_error) VALUES(?, ?, ?, ?, ?, ?)`)
+	groupStmt, err := tx.Prepare(`INSERT INTO groups(id, environment_id, display_name, remote_id, dirty, deleted, last_error) VALUES(?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("prepare sqlite group insert: %w", err)
 	}
 	defer closeStmt(groupStmt)
 
-	memberStmt, err := tx.Prepare(`INSERT INTO group_members(group_id, user_id, position) VALUES(?, ?, ?)`)
+	memberStmt, err := tx.Prepare(`INSERT INTO group_members(group_id, environment_id, user_id, position) VALUES(?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("prepare sqlite group member insert: %w", err)
 	}
 	defer closeStmt(memberStmt)
 
-	logStmt, err := tx.Prepare(`INSERT INTO operation_logs(resource_type, resource_id, label, kind, summary, operation, method, path, request_body, status, response_retry_after, response_body, error_text, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	logStmt, err := tx.Prepare(`INSERT INTO operation_logs(environment_id, resource_type, resource_id, label, kind, summary, operation, method, path, request_body, status, response_retry_after, response_body, error_text, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("prepare sqlite operation log insert: %w", err)
 	}
 	defer closeStmt(logStmt)
 
 	for _, g := range state.Groups {
-		if _, err := groupStmt.Exec(g.ID, g.DisplayName, g.RemoteID, boolToInt(g.Dirty), boolToInt(g.Deleted), g.LastError); err != nil {
+		if _, err := groupStmt.Exec(g.ID, environmentID, g.DisplayName, g.RemoteID, boolToInt(g.Dirty), boolToInt(g.Deleted), g.LastError); err != nil {
 			return fmt.Errorf("insert sqlite group %s: %w", g.ID, err)
 		}
 
 		for position, userID := range g.MemberIDs {
-			if _, err := memberStmt.Exec(g.ID, userID, position); err != nil {
+			if _, err := memberStmt.Exec(g.ID, environmentID, userID, position); err != nil {
 				return fmt.Errorf("insert sqlite group member %s/%s: %w", g.ID, userID, err)
 			}
 		}
 	}
 
-	appStmt, err := tx.Prepare(`INSERT INTO apps(id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, include_groups_claim, allow_any_oidc_redirect) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	appStmt, err := tx.Prepare(`INSERT INTO apps(id, environment_id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, include_groups_claim, allow_any_oidc_redirect) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("prepare sqlite app insert: %w", err)
 	}
 	defer closeStmt(appStmt)
 
 	for _, app := range state.Apps {
-		if _, err := appStmt.Exec(app.ID, app.Name, app.Slug, app.Protocol, app.OIDCClientID, app.OIDCClientSecret, boolToInt(app.OIDCPublicClient), JoinLines(app.OIDCRedirectURIs), app.SAMLEntityID, app.SAMLACSURL, app.SAMLAudience, app.SAMLNameIDField, app.SAMLNameIDFormat, app.SAMLEmailAttributeName, boolToInt(app.IncludeGroupsClaim), boolToInt(app.AllowAnyOIDCRedirect)); err != nil {
+		if _, err := appStmt.Exec(app.ID, environmentID, app.Name, app.Slug, app.Protocol, app.OIDCClientID, app.OIDCClientSecret, boolToInt(app.OIDCPublicClient), JoinLines(app.OIDCRedirectURIs), app.SAMLEntityID, app.SAMLACSURL, app.SAMLAudience, app.SAMLNameIDField, app.SAMLNameIDFormat, app.SAMLEmailAttributeName, boolToInt(app.IncludeGroupsClaim), boolToInt(app.AllowAnyOIDCRedirect)); err != nil {
 			return fmt.Errorf("insert sqlite app %s: %w", app.ID, err)
 		}
 	}
@@ -602,7 +884,7 @@ func saveStateToDB(db *sql.DB, state AppState) error {
 			label = UserLabel(User)
 		}
 		for _, entry := range entries {
-			if _, err := logStmt.Exec("user", resourceID, label, entry.Kind, entry.Summary, entry.Operation, entry.Method, entry.Path, entry.RequestBody, entry.Status, entry.ResponseRetryAfter, entry.ResponseBody, entry.Err, entry.CreatedAt); err != nil {
+			if _, err := logStmt.Exec(environmentID, "user", resourceID, label, entry.Kind, entry.Summary, entry.Operation, entry.Method, entry.Path, entry.RequestBody, entry.Status, entry.ResponseRetryAfter, entry.ResponseBody, entry.Err, entry.CreatedAt); err != nil {
 				return fmt.Errorf("insert sqlite user operation log %s: %w", resourceID, err)
 			}
 		}
@@ -614,7 +896,7 @@ func saveStateToDB(db *sql.DB, state AppState) error {
 			label = Group.DisplayName
 		}
 		for _, entry := range entries {
-			if _, err := logStmt.Exec("group", resourceID, label, entry.Kind, entry.Summary, entry.Operation, entry.Method, entry.Path, entry.RequestBody, entry.Status, entry.ResponseRetryAfter, entry.ResponseBody, entry.Err, entry.CreatedAt); err != nil {
+			if _, err := logStmt.Exec(environmentID, "group", resourceID, label, entry.Kind, entry.Summary, entry.Operation, entry.Method, entry.Path, entry.RequestBody, entry.Status, entry.ResponseRetryAfter, entry.ResponseBody, entry.Err, entry.CreatedAt); err != nil {
 				return fmt.Errorf("insert sqlite group operation log %s: %w", resourceID, err)
 			}
 		}

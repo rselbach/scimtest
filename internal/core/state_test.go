@@ -81,6 +81,8 @@ func TestSaveAndLoadState(t *testing.T) {
 	}
 
 	r.NoError(SaveState(want))
+	want.Environment = Environment{ID: DefaultEnvironmentID, Name: "Default", Slug: "default"}
+	want.Environments = []Environment{want.Environment}
 
 	got, err := LoadState()
 	r.NoError(err)
@@ -110,6 +112,38 @@ func TestStateDatabaseUsesPrivatePermissions(t *testing.T) {
 	info, err := os.Stat(path)
 	r.NoError(err)
 	r.Equal(os.FileMode(0o600), info.Mode().Perm())
+}
+
+func TestEnvironmentStateIsIsolatedAndDefaultIsBackwardCompatible(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+
+	defaultState := AppState{
+		Config: Config{BaseURL: "https://default.test/scim", BearerToken: "default-token"},
+		Users:  []User{{ID: "default-user", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}},
+	}
+	r.NoError(SaveState(defaultState))
+	staging, err := CreateEnvironment("Staging Campus")
+	r.NoError(err)
+	stagingState, err := LoadEnvironmentState(staging.ID)
+	r.NoError(err)
+	stagingState.Config.BaseURL = "https://staging.test/scim"
+	stagingState.Config.BearerToken = "staging-token"
+	stagingState.Config.SCIMDisabled = false
+	stagingState.Users = []User{{ID: "staging-user", GivenName: "Abed", FamilyName: "Nadir", Email: "abed@greendale.edu", Username: "abed", Active: true}}
+	r.NoError(SaveState(stagingState))
+
+	gotDefault, err := LoadState()
+	r.NoError(err)
+	r.Equal(DefaultEnvironmentID, gotDefault.Environment.ID)
+	r.Equal("https://default.test/scim", gotDefault.Config.BaseURL)
+	r.Equal([]string{"default-user"}, []string{gotDefault.Users[0].ID})
+
+	gotStaging, err := LoadEnvironmentState(staging.ID)
+	r.NoError(err)
+	r.Equal("https://staging.test/scim", gotStaging.Config.BaseURL)
+	r.Equal([]string{"staging-user"}, []string{gotStaging.Users[0].ID})
+	r.Len(gotStaging.Environments, 2)
 }
 
 func TestDefaultStateDirectoryUsesPrivatePermissions(t *testing.T) {
