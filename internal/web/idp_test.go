@@ -96,6 +96,39 @@ func TestOIDCAuthorizationCodeFlowUsesSharedDirectory(t *testing.T) {
 	r.NotEmpty(tokenBody["id_token"])
 }
 
+func TestOIDCDiscoveryAdvertisesConfiguredClientAuthentication(t *testing.T) {
+	tests := map[string]struct {
+		public bool
+		want   []any
+	}{
+		"confidential": {want: []any{"client_secret_basic", "client_secret_post"}},
+		"public":       {public: true, want: []any{"none"}},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			setTestStateFile(t)
+			svc := newTestIDPApp(t)
+			r.NoError(saveState(appState{Apps: []app{{
+				ID:               "app-1",
+				Name:             "Greendale",
+				Slug:             "greendale",
+				Protocol:         "oidc",
+				OIDCClientID:     "greendale-client",
+				OIDCPublicClient: tc.public,
+			}}}))
+
+			rec := httptest.NewRecorder()
+			svc.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/oidc/greendale/.well-known/openid-configuration", nil))
+			r.Equal(http.StatusOK, rec.Code)
+			var discovery map[string]any
+			r.NoError(json.Unmarshal(rec.Body.Bytes(), &discovery))
+			r.Equal(tc.want, discovery["token_endpoint_auth_methods_supported"])
+		})
+	}
+}
+
 func TestOIDCTokenPrunesExpiredCredentials(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)

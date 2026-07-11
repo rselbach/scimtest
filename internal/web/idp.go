@@ -78,6 +78,7 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		Protocol:               strings.TrimSpace(r.FormValue("protocol")),
 		OIDCClientID:           strings.TrimSpace(r.FormValue("oidc_client_id")),
 		OIDCClientSecret:       strings.TrimSpace(r.FormValue("oidc_client_secret")),
+		OIDCPublicClient:       r.FormValue("oidc_public_client") == "on",
 		OIDCRedirectURIs:       lines(r.FormValue("oidc_redirect_uris")),
 		AllowAnyOIDCRedirect:   r.FormValue("allow_any_oidc_redirect") == "on",
 		SAMLEntityID:           strings.TrimSpace(r.FormValue("saml_entity_id")),
@@ -97,7 +98,9 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		if app.OIDCClientID == "" {
 			app.OIDCClientID = app.Slug
 		}
-		if app.OIDCClientSecret == "" {
+		if app.OIDCPublicClient {
+			app.OIDCClientSecret = ""
+		} else if app.OIDCClientSecret == "" {
 			app.OIDCClientSecret, err = randomSecret(24)
 			if err != nil {
 				a.redirectError(w, r, tab, err)
@@ -180,6 +183,10 @@ func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	issuer := oidcIssuer(a.effectiveIDPBaseURL(r, state), app)
+	authMethods := []string{"client_secret_basic", "client_secret_post"}
+	if app.OIDCPublicClient {
+		authMethods = []string{"none"}
+	}
 	writeJSON(w, map[string]any{
 		"issuer":                                issuer,
 		"authorization_endpoint":                issuer + "/authorize",
@@ -192,7 +199,7 @@ func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 		"id_token_signing_alg_values_supported": []string{"RS256"},
 		"scopes_supported":                      []string{"openid", "profile", "email", "groups"},
 		"claims_supported":                      []string{"sub", "name", "given_name", "family_name", "preferred_username", "email", "email_verified", "groups"},
-		"token_endpoint_auth_methods_supported": []string{"client_secret_basic", "client_secret_post", "none"},
+		"token_endpoint_auth_methods_supported": authMethods,
 	})
 }
 
@@ -622,7 +629,7 @@ func validateAuthorizeRequest(app app, values url.Values) error {
 }
 
 func clientAuthenticated(r *http.Request, app app) bool {
-	if app.OIDCClientSecret == "" {
+	if app.OIDCPublicClient {
 		return r.FormValue("client_id") == app.OIDCClientID
 	}
 	clientID, secret, ok := r.BasicAuth()

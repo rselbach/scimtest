@@ -128,6 +128,7 @@ type App struct {
 	Protocol               string   `json:"protocol"`
 	OIDCClientID           string   `json:"oidc_client_id,omitempty"`
 	OIDCClientSecret       string   `json:"oidc_client_secret,omitempty"`
+	OIDCPublicClient       bool     `json:"oidc_public_client,omitempty"`
 	OIDCRedirectURIs       []string `json:"oidc_redirect_uris,omitempty"`
 	AllowAnyOIDCRedirect   bool     `json:"allow_any_oidc_redirect,omitempty"`
 	SAMLEntityID           string   `json:"saml_entity_id,omitempty"`
@@ -263,6 +264,7 @@ func initStateDB(db *sql.DB) error {
 			protocol TEXT NOT NULL,
 			oidc_client_id TEXT NOT NULL DEFAULT '',
 			oidc_client_secret TEXT NOT NULL DEFAULT '',
+			oidc_public_client INTEGER NOT NULL DEFAULT 0,
 			oidc_redirect_uris TEXT NOT NULL DEFAULT '',
 			saml_entity_id TEXT NOT NULL DEFAULT '',
 			saml_acs_url TEXT NOT NULL DEFAULT '',
@@ -310,6 +312,7 @@ func initStateDB(db *sql.DB) error {
 		`ALTER TABLE operation_logs ADD COLUMN response_retry_after TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE apps ADD COLUMN saml_name_id_field TEXT NOT NULL DEFAULT 'email'`,
 		`ALTER TABLE apps ADD COLUMN allow_any_oidc_redirect INTEGER NOT NULL DEFAULT 1`,
+		`ALTER TABLE apps ADD COLUMN oidc_public_client INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, migration := range migrations {
 		if _, err := db.Exec(migration); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -432,7 +435,7 @@ func loadStateFromDB(db *sql.DB) (AppState, error) {
 		return AppState{}, fmt.Errorf("iterate sqlite group member rows: %w", err)
 	}
 
-	appRows, err := db.Query(`SELECT id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, include_groups_claim, allow_any_oidc_redirect FROM apps ORDER BY rowid`)
+	appRows, err := db.Query(`SELECT id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, include_groups_claim, allow_any_oidc_redirect FROM apps ORDER BY rowid`)
 	if err != nil {
 		return AppState{}, fmt.Errorf("load apps from sqlite: %w", err)
 	}
@@ -443,12 +446,14 @@ func loadStateFromDB(db *sql.DB) (AppState, error) {
 		var redirectURIs string
 		var includeGroups int
 		var allowAnyRedirect int
-		if err := appRows.Scan(&app.ID, &app.Name, &app.Slug, &app.Protocol, &app.OIDCClientID, &app.OIDCClientSecret, &redirectURIs, &app.SAMLEntityID, &app.SAMLACSURL, &app.SAMLAudience, &app.SAMLNameIDField, &app.SAMLNameIDFormat, &app.SAMLEmailAttributeName, &includeGroups, &allowAnyRedirect); err != nil {
+		var publicClient int
+		if err := appRows.Scan(&app.ID, &app.Name, &app.Slug, &app.Protocol, &app.OIDCClientID, &app.OIDCClientSecret, &publicClient, &redirectURIs, &app.SAMLEntityID, &app.SAMLACSURL, &app.SAMLAudience, &app.SAMLNameIDField, &app.SAMLNameIDFormat, &app.SAMLEmailAttributeName, &includeGroups, &allowAnyRedirect); err != nil {
 			return AppState{}, fmt.Errorf("scan sqlite app row: %w", err)
 		}
 		app.OIDCRedirectURIs = Lines(redirectURIs)
 		app.IncludeGroupsClaim = includeGroups != 0
 		app.AllowAnyOIDCRedirect = allowAnyRedirect != 0
+		app.OIDCPublicClient = publicClient != 0
 		state.Apps = append(state.Apps, app)
 	}
 	if err := appRows.Err(); err != nil {
@@ -575,14 +580,14 @@ func saveStateToDB(db *sql.DB, state AppState) error {
 		}
 	}
 
-	appStmt, err := tx.Prepare(`INSERT INTO apps(id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, include_groups_claim, allow_any_oidc_redirect) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	appStmt, err := tx.Prepare(`INSERT INTO apps(id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, include_groups_claim, allow_any_oidc_redirect) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("prepare sqlite app insert: %w", err)
 	}
 	defer closeStmt(appStmt)
 
 	for _, app := range state.Apps {
-		if _, err := appStmt.Exec(app.ID, app.Name, app.Slug, app.Protocol, app.OIDCClientID, app.OIDCClientSecret, JoinLines(app.OIDCRedirectURIs), app.SAMLEntityID, app.SAMLACSURL, app.SAMLAudience, app.SAMLNameIDField, app.SAMLNameIDFormat, app.SAMLEmailAttributeName, boolToInt(app.IncludeGroupsClaim), boolToInt(app.AllowAnyOIDCRedirect)); err != nil {
+		if _, err := appStmt.Exec(app.ID, app.Name, app.Slug, app.Protocol, app.OIDCClientID, app.OIDCClientSecret, boolToInt(app.OIDCPublicClient), JoinLines(app.OIDCRedirectURIs), app.SAMLEntityID, app.SAMLACSURL, app.SAMLAudience, app.SAMLNameIDField, app.SAMLNameIDFormat, app.SAMLEmailAttributeName, boolToInt(app.IncludeGroupsClaim), boolToInt(app.AllowAnyOIDCRedirect)); err != nil {
 			return fmt.Errorf("insert sqlite app %s: %w", app.ID, err)
 		}
 	}

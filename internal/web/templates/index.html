@@ -1480,10 +1480,14 @@
                 <span class="label">Client ID</span>
                 <input name="oidc_client_id" value="{{.AppForm.App.OIDCClientID}}" autocomplete="off">
               </label>
-              <label class="field">
-                <span class="label">Client secret</span>
-                <input name="oidc_client_secret" value="{{.AppForm.App.OIDCClientSecret}}" autocomplete="off">
-              </label>
+			  <label class="field">
+				<span class="label">Client secret</span>
+				<input type="password" name="oidc_client_secret" value="{{.AppForm.App.OIDCClientSecret}}" autocomplete="off">
+			  </label>
+			  <label class="field full">
+				<span class="label">Client type</span>
+				<span class="checkbox-row"><input type="checkbox" name="oidc_public_client" {{if .AppForm.App.OIDCPublicClient}}checked{{end}}> Public client (no client secret)</span>
+			  </label>
               <label class="field full">
                 <span class="label">Redirect URIs</span>
 				<textarea name="oidc_redirect_uris" placeholder="http://localhost:3000/callback">{{.AppForm.OIDCRedirectURIs}}</textarea>
