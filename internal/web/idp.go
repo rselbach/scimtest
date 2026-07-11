@@ -139,7 +139,7 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		app.SAMLEmailAttributeName = ""
 	}
 	if err := validateApp(app, state.Apps); err != nil {
-		a.redirectError(w, r, tab, err)
+		a.redirectFormError(w, r, tab, "app", err)
 		return
 	}
 

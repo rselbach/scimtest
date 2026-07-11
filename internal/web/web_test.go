@@ -793,6 +793,38 @@ func TestMutationIsRejectedWhileSyncRuns(t *testing.T) {
 	r.JSONEq(`{"error":"sync is running; wait for it to finish"}`, rec.Body.String())
 }
 
+func TestInvalidUserFormPreservesSubmittedValues(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+	app := &webApp{}
+	form := url.Values{
+		"tab":         {"users"},
+		"email":       {"troy@greendale.edu"},
+		"username":    {"troy"},
+		"family_name": {"Barnes"},
+	}
+	post := httptest.NewRequest(http.MethodPost, "/users/save", strings.NewReader(form.Encode()))
+	post.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	postRec := httptest.NewRecorder()
+	app.routes().ServeHTTP(postRec, post)
+
+	r.Equal(http.StatusSeeOther, postRec.Code)
+	cookies := postRec.Result().Cookies()
+	r.NotEmpty(cookies)
+	get := httptest.NewRequest(http.MethodGet, postRec.Header().Get("Location"), nil)
+	for _, cookie := range cookies {
+		get.AddCookie(cookie)
+	}
+	getRec := httptest.NewRecorder()
+	app.routes().ServeHTTP(getRec, get)
+
+	r.Equal(http.StatusOK, getRec.Code)
+	r.Contains(getRec.Body.String(), "given name is required")
+	r.Contains(getRec.Body.String(), `value="troy@greendale.edu"`)
+	r.Contains(getRec.Body.String(), `value="Barnes"`)
+}
+
 func TestSyncRateLimitRendersReadableError(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)

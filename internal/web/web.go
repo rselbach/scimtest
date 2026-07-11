@@ -45,6 +45,8 @@ type webApp struct {
 	accessTokens     map[string]accessToken
 	lastTrace        []syncTraceEntry
 	lastTraceContent string
+	formDraftMu      sync.Mutex
+	formDrafts       map[string]formDraft
 }
 
 type rgrokStarter func(context.Context, rgrokclient.Config) (*startedRgrokTunnel, error)
@@ -92,6 +94,13 @@ type rgrokFormView struct {
 type flashMessage struct {
 	Kind    string
 	Message string
+}
+
+type formDraft struct {
+	Modal     string
+	Values    url.Values
+	Error     string
+	CreatedAt time.Time
 }
 
 type syncJobSnapshot struct {
@@ -245,7 +254,9 @@ type configFormView struct {
 }
 
 type toolsFormView struct {
-	Close string
+	Close       string
+	Count       string
+	EmailDomain string
 }
 
 type pageData struct {
@@ -286,6 +297,7 @@ type pageData struct {
 	HasApps           bool
 	HasPublicIDP      bool
 	SCIMReady         bool
+	FormError         string
 }
 
 type RunOptions struct {
@@ -578,7 +590,11 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 	case "config":
 		data.ConfigForm = a.buildConfigFormView(state.Config, tab, page, pageSize, search, r.URL.Query())
 	case "tools":
-		data.ToolsForm = &toolsFormView{Close: dashboardURLWithPage(tab, page, pageSize, search, nil)}
+		data.ToolsForm = &toolsFormView{Close: dashboardURLWithPage(tab, page, pageSize, search, nil), Count: "10"}
+	}
+	if draft := a.consumeFormDraft(w, r); draft != nil {
+		applyFormDraft(&data, *draft)
+		data.FormError = draft.Error
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -608,7 +624,7 @@ func (a *webApp) handleUserSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := validateUser(givenName, familyName, email, username); err != nil {
-		a.redirectError(w, r, tab, err)
+		a.redirectFormError(w, r, tab, "user", err)
 		return
 	}
 
@@ -773,7 +789,7 @@ func (a *webApp) handleGroupSave(w http.ResponseWriter, r *http.Request) {
 	memberIDs := selectedMemberIDs(state.Users, r.Form["member_ids"])
 
 	if err := validateGroup(displayName); err != nil {
-		a.redirectError(w, r, tab, err)
+		a.redirectFormError(w, r, tab, "group", err)
 		return
 	}
 
@@ -881,11 +897,11 @@ func (a *webApp) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 	idpBaseURL := strings.TrimSpace(r.FormValue("idp_base_url"))
 	scimDisabled := r.FormValue("scim_enabled") != "on"
 	if err := validateHTTPBaseURL("SCIM base URL", baseURL, !scimDisabled); err != nil {
-		a.redirectError(w, r, tab, err)
+		a.redirectFormError(w, r, tab, "config", err)
 		return
 	}
 	if err := validateHTTPBaseURL("IDP base URL", idpBaseURL, false); err != nil {
-		a.redirectError(w, r, tab, err)
+		a.redirectFormError(w, r, tab, "config", err)
 		return
 	}
 	a.mu.Lock()
@@ -1687,7 +1703,117 @@ func (a *webApp) handleToolsCreateUsers(w http.ResponseWriter, r *http.Request) 
 }
 
 func (a *webApp) redirectToolsError(w http.ResponseWriter, r *http.Request, tab string, err error) {
-	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), map[string]string{"modal": "tools"}), flashMessage{Kind: "error", Message: err.Error()})
+	a.redirectFormError(w, r, tab, "tools", err)
+}
+
+const formDraftCookieName = "scimtest_form_draft"
+
+func (a *webApp) redirectFormError(w http.ResponseWriter, r *http.Request, tab string, modal string, err error) {
+	values := make(url.Values, len(r.Form))
+	for key, entries := range r.Form {
+		if key == "bearer_token" || key == "oidc_client_secret" || key == "rgrok_token" {
+			continue
+		}
+		values[key] = append([]string(nil), entries...)
+	}
+	token, tokenErr := randomSecret(18)
+	if tokenErr != nil {
+		a.redirectError(w, r, tab, fmt.Errorf("%v; preserve form: %w", err, tokenErr))
+		return
+	}
+	a.formDraftMu.Lock()
+	if a.formDrafts == nil {
+		a.formDrafts = make(map[string]formDraft)
+	}
+	cutoff := time.Now().Add(-5 * time.Minute)
+	for existingToken, draft := range a.formDrafts {
+		if draft.CreatedAt.Before(cutoff) {
+			delete(a.formDrafts, existingToken)
+		}
+	}
+	a.formDrafts[token] = formDraft{Modal: modal, Values: values, Error: err.Error(), CreatedAt: time.Now()}
+	a.formDraftMu.Unlock()
+	http.SetCookie(w, &http.Cookie{Name: formDraftCookieName, Value: token, Path: "/", MaxAge: 300, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	extra := map[string]string{"modal": modal}
+	if id := values.Get("id"); id != "" {
+		extra["id"] = id
+	}
+	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), extra), flashMessage{})
+}
+
+func (a *webApp) consumeFormDraft(w http.ResponseWriter, r *http.Request) *formDraft {
+	cookie, err := r.Cookie(formDraftCookieName)
+	if err != nil {
+		return nil
+	}
+	http.SetCookie(w, &http.Cookie{Name: formDraftCookieName, Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	a.formDraftMu.Lock()
+	defer a.formDraftMu.Unlock()
+	draft, ok := a.formDrafts[cookie.Value]
+	delete(a.formDrafts, cookie.Value)
+	if !ok {
+		return nil
+	}
+	return &draft
+}
+
+func applyFormDraft(data *pageData, draft formDraft) {
+	values := draft.Values
+	switch draft.Modal {
+	case "user":
+		if data.UserForm == nil {
+			return
+		}
+		data.UserForm.ID = values.Get("id")
+		data.UserForm.User.Username = values.Get("username")
+		data.UserForm.User.Email = values.Get("email")
+		data.UserForm.User.GivenName = values.Get("given_name")
+		data.UserForm.User.FamilyName = values.Get("family_name")
+	case "group":
+		if data.GroupForm == nil {
+			return
+		}
+		data.GroupForm.ID = values.Get("id")
+		data.GroupForm.Group.DisplayName = values.Get("display_name")
+		selected := values["member_ids"]
+		for i := range data.GroupForm.Members {
+			data.GroupForm.Members[i].Checked = stringIn(selected, data.GroupForm.Members[i].ID)
+		}
+	case "app":
+		if data.AppForm == nil {
+			return
+		}
+		data.AppForm.App.ID = values.Get("id")
+		data.AppForm.App.Name = values.Get("name")
+		data.AppForm.App.Slug = values.Get("slug")
+		data.AppForm.App.Protocol = values.Get("protocol")
+		data.AppForm.App.OIDCClientID = values.Get("oidc_client_id")
+		data.AppForm.OIDCRedirectURIs = values.Get("oidc_redirect_uris")
+		data.AppForm.App.OIDCPublicClient = values.Get("oidc_public_client") == "on"
+		data.AppForm.App.AllowAnyOIDCRedirect = values.Get("allow_any_oidc_redirect") == "on"
+		data.AppForm.App.SAMLEntityID = values.Get("saml_entity_id")
+		data.AppForm.App.SAMLACSURL = values.Get("saml_acs_url")
+		data.AppForm.App.SAMLAudience = values.Get("saml_audience")
+		data.AppForm.App.SAMLNameIDField = values.Get("saml_name_id_field")
+		data.AppForm.App.SAMLEmailAttributeName = values.Get("saml_email_attribute_name")
+		data.AppForm.App.IncludeGroupsClaim = values.Get("include_groups_claim") == "on"
+	case "config":
+		if data.ConfigForm == nil {
+			return
+		}
+		data.ConfigForm.Config.BaseURL = values.Get("base_url")
+		data.ConfigForm.Config.IDPBaseURL = values.Get("idp_base_url")
+		data.ConfigForm.Config.SCIMDisabled = values.Get("scim_enabled") != "on"
+		data.ConfigForm.Config.AutoOpenSyncTrace = values.Get("auto_open_sync_trace") == "on"
+		data.ConfigForm.Config.TrustForwardedHeaders = values.Get("trust_forwarded_headers") == "on"
+		data.ConfigForm.IDPBaseURLValue = values.Get("idp_base_url")
+	case "tools":
+		if data.ToolsForm == nil {
+			return
+		}
+		data.ToolsForm.Count = values.Get("count")
+		data.ToolsForm.EmailDomain = values.Get("email_domain")
+	}
 }
 
 func (a *webApp) redirectError(w http.ResponseWriter, r *http.Request, tab string, err error) {

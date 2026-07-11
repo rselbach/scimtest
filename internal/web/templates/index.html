@@ -1334,11 +1334,11 @@
               <div class="form-grid">
                 <label class="field">
                   <span class="label">Number</span>
-                  <input name="count" type="number" min="1" max="10000" value="10" inputmode="numeric">
+			  <input name="count" type="number" min="1" max="10000" value="{{.ToolsForm.Count}}" inputmode="numeric">
                 </label>
                 <label class="field">
                   <span class="label">Email domain</span>
-                  <input name="email_domain" placeholder="greendale.edu" autocomplete="off">
+			  <input name="email_domain" value="{{.ToolsForm.EmailDomain}}" placeholder="greendale.edu" autocomplete="off">
                 </label>
               </div>
               <div class="form-actions">
@@ -1713,7 +1713,8 @@
   {{end}}
   {{end}}
 
-  <script>
+	{{if .FormError}}<div class="inline-error" role="alert" data-form-error>{{.FormError}}</div>{{end}}
+	<script>
     // Flash toast: auto-dismiss + click-to-dismiss.
     (function () {
       const flash = document.querySelector('[data-flash]');
@@ -1799,7 +1800,12 @@
 	}
 
     const overlays = Array.from(document.querySelectorAll('[data-overlay]'));
-    const activeOverlay = overlays[overlays.length - 1];
+	const activeOverlay = overlays[overlays.length - 1];
+	const formError = document.querySelector('[data-form-error]');
+	if (activeOverlay && formError) {
+	  const modalBody = activeOverlay.querySelector('.modal-body');
+	  if (modalBody) modalBody.prepend(formError);
+	}
 
     function closeActiveOverlay() {
       if (!activeOverlay) return;
