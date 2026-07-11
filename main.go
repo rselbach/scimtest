@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	command, debug, help, err := parseArgs(os.Args[1:])
+	command, debug, debugSecrets, help, err := parseArgs(os.Args[1:])
 	if err != nil {
 		mustWriteOutput(os.Stderr, "%v\n\n", err)
 		usage(os.Stderr)
@@ -20,7 +20,7 @@ func main() {
 	}
 	switch command {
 	case "", "web":
-		if err := web.Run(web.RunOptions{Debug: debug}); err != nil {
+		if err := web.Run(web.RunOptions{Debug: debug, DebugSecrets: debugSecrets}); err != nil {
 			mustWriteOutput(os.Stderr, "run web: %v\n", err)
 			os.Exit(1)
 		}
@@ -31,25 +31,29 @@ func main() {
 	}
 }
 
-func parseArgs(args []string) (string, bool, bool, error) {
+func parseArgs(args []string) (string, bool, bool, bool, error) {
 	var command string
 	var debug bool
+	var debugSecrets bool
 	for _, arg := range args {
 		switch arg {
 		case "-h", "--help", "help":
-			return "", false, true, nil
+			return "", false, false, true, nil
 		case "--debug":
 			debug = true
+		case "--debug-secrets":
+			debug = true
+			debugSecrets = true
 		case "web":
 			if command != "" {
-				return "", false, false, fmt.Errorf("multiple commands provided")
+				return "", false, false, false, fmt.Errorf("multiple commands provided")
 			}
 			command = arg
 		default:
-			return "", false, false, fmt.Errorf("unknown argument %q", arg)
+			return "", false, false, false, fmt.Errorf("unknown argument %q", arg)
 		}
 	}
-	return command, debug, false, nil
+	return command, debug, debugSecrets, false, nil
 }
 
 func usage(w *os.File) {
@@ -58,6 +62,7 @@ func usage(w *os.File) {
 	mustWriteOutput(w, "  (no args)  launch the web UI and auth endpoints on $PORT (default 8080)\n")
 	mustWriteOutput(w, "  web        launch the web UI and auth endpoints on $PORT (default 8080)\n")
 	mustWriteOutput(w, "  --debug    print OIDC/SAML RP requests and responses to stdout\n")
+	mustWriteOutput(w, "  --debug-secrets  include credentials and tokens in debug output\n")
 }
 
 func mustWriteOutput(w *os.File, format string, args ...any) {

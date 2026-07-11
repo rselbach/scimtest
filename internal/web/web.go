@@ -32,6 +32,7 @@ type webApp struct {
 	signingKey       *rsa.PrivateKey
 	certDER          []byte
 	debugRP          bool
+	debugSecrets     bool
 	localPort        int
 	rgrokStart       rgrokStarter
 	rgrokLifecycleMu sync.Mutex
@@ -279,7 +280,8 @@ type pageData struct {
 }
 
 type RunOptions struct {
-	Debug bool
+	Debug        bool
+	DebugSecrets bool
 }
 
 type serverError struct {
@@ -340,6 +342,7 @@ func Run(options ...RunOptions) error {
 		signingKey:   key,
 		certDER:      certDER,
 		debugRP:      opts.Debug,
+		debugSecrets: opts.DebugSecrets,
 		localPort:    idpAddress.Port,
 		rgrokStart:   startRgrokTunnel,
 		authCodes:    make(map[string]authCode),

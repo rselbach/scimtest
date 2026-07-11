@@ -22,6 +22,10 @@ PORT=8090 go run .
 
 State is stored at the OS user config path under `scimtest/state.db`. Set `SCIMTEST_STATE_FILE` to use an isolated SQLite state file.
 
+Use `--debug` to log redacted OIDC and SAML interactions. Use
+`--debug-secrets` only when raw credentials, tokens, and assertions are required;
+its output is sensitive.
+
 ## Config
 
 The config modal has two base URLs:

@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"html"
 	"io"
@@ -69,8 +70,8 @@ func (a *webApp) debugRPHandler(next http.HandlerFunc) http.HandlerFunc {
 		defer rpDebugLogMu.Unlock()
 		writeDebugln(os.Stdout)
 		writeDebugf(os.Stdout, "===== RP interaction %s =====\n", time.Now().Format(time.RFC3339))
-		writeDebugHTTPRequest(os.Stdout, r, requestBody)
-		writeDebugHTTPResponse(os.Stdout, capture)
+		a.writeDebugHTTPRequest(os.Stdout, r, requestBody)
+		a.writeDebugHTTPResponse(os.Stdout, capture)
 		writeDebugln(os.Stdout, "===== end RP interaction =====")
 	}
 }
@@ -87,14 +88,14 @@ func writeDebugf(w io.Writer, format string, args ...any) {
 	}
 }
 
-func writeDebugHTTPRequest(w io.Writer, r *http.Request, body []byte) {
+func (a *webApp) writeDebugHTTPRequest(w io.Writer, r *http.Request, body []byte) {
 	writeDebugln(w, "----- request from RP -----")
 	writeDebugf(w, "%s %s %s\n", r.Method, r.URL.RequestURI(), r.Proto)
 	writeDebugf(w, "Host: %s\n", r.Host)
-	writeDebugHeaders(w, r.Header)
+	writeDebugHeaders(w, r.Header, a.debugSecrets)
 	if len(body) > 0 {
 		writeDebugln(w)
-		writeDebugln(w, string(body))
+		writeDebugln(w, debugBody(r.Header.Get("Content-Type"), body, a.debugSecrets))
 	}
 	writeDebugSAMLRequest(w, "query", r.URL.Query().Get("SAMLRequest"))
 	if isFormEncoded(r.Header.Get("Content-Type")) && len(body) > 0 {
@@ -104,7 +105,7 @@ func writeDebugHTTPRequest(w io.Writer, r *http.Request, body []byte) {
 	}
 }
 
-func writeDebugHTTPResponse(w io.Writer, response *debugResponseWriter) {
+func (a *webApp) writeDebugHTTPResponse(w io.Writer, response *debugResponseWriter) {
 	status := response.status
 	if status == 0 {
 		status = http.StatusOK
@@ -112,15 +113,15 @@ func writeDebugHTTPResponse(w io.Writer, response *debugResponseWriter) {
 	body := response.body.String()
 	writeDebugln(w, "----- response to RP -----")
 	writeDebugf(w, "HTTP %d %s\n", status, http.StatusText(status))
-	writeDebugHeaders(w, response.Header())
+	writeDebugHeaders(w, response.Header(), a.debugSecrets)
 	if body != "" {
 		writeDebugln(w)
-		writeDebugln(w, body)
+		writeDebugln(w, debugResponseBody(response.Header().Get("Content-Type"), body, a.debugSecrets))
 	}
 	writeDebugSAMLResponse(w, body)
 }
 
-func writeDebugHeaders(w io.Writer, headers http.Header) {
+func writeDebugHeaders(w io.Writer, headers http.Header, includeSecrets bool) {
 	keys := make([]string, 0, len(headers))
 	for key := range headers {
 		keys = append(keys, key)
@@ -128,9 +129,88 @@ func writeDebugHeaders(w io.Writer, headers http.Header) {
 	sort.Strings(keys)
 	for _, key := range keys {
 		for _, value := range headers.Values(key) {
+			if !includeSecrets && isSensitiveHeader(key) {
+				value = "[REDACTED]"
+			}
 			writeDebugf(w, "%s: %s\n", key, value)
 		}
 	}
+}
+
+func isSensitiveHeader(key string) bool {
+	switch http.CanonicalHeaderKey(key) {
+	case "Authorization", "Cookie", "Set-Cookie", "Proxy-Authorization":
+		return true
+	default:
+		return false
+	}
+}
+
+func debugBody(contentType string, body []byte, includeSecrets bool) string {
+	if includeSecrets || !isFormEncoded(contentType) {
+		return string(body)
+	}
+	values, err := url.ParseQuery(string(body))
+	if err != nil {
+		return string(body)
+	}
+	redactDebugValues(values)
+	return values.Encode()
+}
+
+func debugResponseBody(contentType string, body string, includeSecrets bool) string {
+	if includeSecrets {
+		return body
+	}
+	if strings.HasPrefix(strings.ToLower(contentType), "application/json") {
+		var value any
+		if err := json.Unmarshal([]byte(body), &value); err == nil {
+			redactJSONValue(value)
+			if redacted, err := json.MarshalIndent(value, "", "  "); err == nil {
+				return string(redacted)
+			}
+		}
+	}
+	return redactHiddenInputs(body)
+}
+
+func redactDebugValues(values url.Values) {
+	for key := range values {
+		if isSensitiveDebugKey(key) {
+			values[key] = []string{"[REDACTED]"}
+		}
+	}
+}
+
+func redactJSONValue(value any) {
+	switch value := value.(type) {
+	case map[string]any:
+		for key, child := range value {
+			if isSensitiveDebugKey(key) {
+				value[key] = "[REDACTED]"
+				continue
+			}
+			redactJSONValue(child)
+		}
+	case []any:
+		for _, child := range value {
+			redactJSONValue(child)
+		}
+	}
+}
+
+func isSensitiveDebugKey(key string) bool {
+	switch strings.ToLower(key) {
+	case "client_secret", "code", "access_token", "id_token", "refresh_token", "assertion", "samlrequest", "samlresponse":
+		return true
+	default:
+		return false
+	}
+}
+
+func redactHiddenInputs(body string) string {
+	pattern := regexp.MustCompile(`(?i)(<input[^>]+name="(?:SAMLResponse|code|access_token|id_token|client_secret)"[^>]+value=")[^"]*(")`)
+	return pattern.ReplaceAllString(body, `${1}[REDACTED]${2}`)
 }
 
 func writeDebugSAMLRequest(w io.Writer, source string, encodedRequest string) {
