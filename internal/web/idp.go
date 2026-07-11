@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
@@ -28,13 +29,14 @@ import (
 )
 
 type authCode struct {
-	AppSlug     string
-	ClientID    string
-	UserID      string
-	RedirectURI string
-	Nonce       string
-	Scope       string
-	ExpiresAt   time.Time
+	AppSlug       string
+	ClientID      string
+	UserID        string
+	RedirectURI   string
+	Nonce         string
+	Scope         string
+	CodeChallenge string
+	ExpiresAt     time.Time
 }
 
 type accessToken struct {
@@ -199,6 +201,7 @@ func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 		"id_token_signing_alg_values_supported": []string{"RS256"},
 		"scopes_supported":                      []string{"openid", "profile", "email", "groups"},
 		"claims_supported":                      []string{"sub", "name", "given_name", "family_name", "preferred_username", "email", "email_verified", "groups"},
+		"code_challenge_methods_supported":      []string{"S256"},
 		"token_endpoint_auth_methods_supported": authMethods,
 	})
 }
@@ -272,13 +275,14 @@ func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	a.authCodes[code] = authCode{
-		AppSlug:     app.Slug,
-		ClientID:    r.FormValue("client_id"),
-		UserID:      user.ID,
-		RedirectURI: r.FormValue("redirect_uri"),
-		Nonce:       r.FormValue("nonce"),
-		Scope:       r.FormValue("scope"),
-		ExpiresAt:   now.Add(5 * time.Minute),
+		AppSlug:       app.Slug,
+		ClientID:      r.FormValue("client_id"),
+		UserID:        user.ID,
+		RedirectURI:   r.FormValue("redirect_uri"),
+		Nonce:         r.FormValue("nonce"),
+		Scope:         r.FormValue("scope"),
+		CodeChallenge: r.FormValue("code_challenge"),
+		ExpiresAt:     now.Add(5 * time.Minute),
 	}
 
 	redirectURI, _ := url.Parse(r.FormValue("redirect_uri"))
@@ -324,6 +328,10 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 
 	if code.AppSlug != app.Slug || code.ClientID != app.OIDCClientID || code.RedirectURI != r.FormValue("redirect_uri") {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "authorization code does not match this request")
+		return
+	}
+	if code.CodeChallenge != "" && !validPKCEVerifier(code.CodeChallenge, r.FormValue("code_verifier")) {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "PKCE code verifier is invalid")
 		return
 	}
 	user, ok := userByID(state.Users, code.UserID)
@@ -625,7 +633,35 @@ func validateAuthorizeRequest(app app, values url.Values) error {
 	if !strings.Contains(" "+values.Get("scope")+" ", " openid ") {
 		return fmt.Errorf("scope must include openid")
 	}
+	challenge := values.Get("code_challenge")
+	method := values.Get("code_challenge_method")
+	if app.OIDCPublicClient && challenge == "" {
+		return fmt.Errorf("public clients must use PKCE")
+	}
+	if challenge != "" && method != "S256" {
+		return fmt.Errorf("code_challenge_method must be S256")
+	}
+	if challenge != "" && len(challenge) != 43 {
+		return fmt.Errorf("code_challenge must be a valid S256 challenge")
+	}
+	if challenge == "" && method != "" {
+		return fmt.Errorf("code_challenge is required when code_challenge_method is set")
+	}
 	return nil
+}
+
+func validPKCEVerifier(challenge string, verifier string) bool {
+	if len(verifier) < 43 || len(verifier) > 128 {
+		return false
+	}
+	for _, character := range verifier {
+		if !strings.ContainsRune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~", character) {
+			return false
+		}
+	}
+	digest := sha256.Sum256([]byte(verifier))
+	actual := base64.RawURLEncoding.EncodeToString(digest[:])
+	return subtle.ConstantTimeCompare([]byte(actual), []byte(challenge)) == 1
 }
 
 func clientAuthenticated(r *http.Request, app app) bool {

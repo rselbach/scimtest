@@ -5,6 +5,7 @@ import (
 	"compress/flate"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -127,6 +128,42 @@ func TestOIDCDiscoveryAdvertisesConfiguredClientAuthentication(t *testing.T) {
 			r.Equal(tc.want, discovery["token_endpoint_auth_methods_supported"])
 		})
 	}
+}
+
+func TestOIDCPKCEValidation(t *testing.T) {
+	r := require.New(t)
+	verifier := "a-long-enough-greendale-community-college-verifier"
+	digest := sha256.Sum256([]byte(verifier))
+	challenge := base64.RawURLEncoding.EncodeToString(digest[:])
+
+	r.NoError(validateAuthorizeRequest(app{
+		OIDCClientID:         "greendale-client",
+		OIDCPublicClient:     true,
+		OIDCRedirectURIs:     []string{"http://localhost/callback"},
+		AllowAnyOIDCRedirect: false,
+	}, url.Values{
+		"response_type":         {"code"},
+		"client_id":             {"greendale-client"},
+		"redirect_uri":          {"http://localhost/callback"},
+		"scope":                 {"openid"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}))
+	r.True(validPKCEVerifier(challenge, verifier))
+	r.False(validPKCEVerifier(challenge, "chang-cheated"))
+
+	err := validateAuthorizeRequest(app{
+		OIDCClientID:         "greendale-client",
+		OIDCPublicClient:     true,
+		OIDCRedirectURIs:     []string{"http://localhost/callback"},
+		AllowAnyOIDCRedirect: false,
+	}, url.Values{
+		"response_type": {"code"},
+		"client_id":     {"greendale-client"},
+		"redirect_uri":  {"http://localhost/callback"},
+		"scope":         {"openid"},
+	})
+	r.EqualError(err, "public clients must use PKCE")
 }
 
 func TestOIDCTokenPrunesExpiredCredentials(t *testing.T) {
