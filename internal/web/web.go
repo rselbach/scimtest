@@ -164,6 +164,8 @@ type appRowView struct {
 	SupportsSAML           bool
 	EditURL                string
 	HasRedirectURI         bool
+	OIDCTestURL            string
+	SAMLTestURL            string
 }
 
 type historyEntryView struct {
@@ -1849,10 +1851,20 @@ func buildAppRows(state appState, base string, certPEM string) []appRowView {
 			row.OIDCDiscovery = base + "/oidc/" + app.Slug + "/.well-known/openid-configuration"
 			row.OIDCAuthorize = base + "/oidc/" + app.Slug + "/authorize"
 			row.OIDCJWKS = base + "/oidc/" + app.Slug + "/jwks"
+			if len(app.OIDCRedirectURIs) > 0 && !app.OIDCPublicClient {
+				query := url.Values{
+					"response_type": {"code"},
+					"client_id":     {app.OIDCClientID},
+					"redirect_uri":  {app.OIDCRedirectURIs[0]},
+					"scope":         {"openid profile email groups"},
+				}
+				row.OIDCTestURL = row.OIDCAuthorize + "?" + query.Encode()
+			}
 		}
 		if row.SupportsSAML {
 			row.SAMLMetadata = base + "/saml/" + app.Slug + "/metadata"
 			row.SAMLSSO = base + "/saml/" + app.Slug + "/sso"
+			row.SAMLTestURL = row.SAMLSSO
 		}
 		rows = append(rows, row)
 	}

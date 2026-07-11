@@ -71,7 +71,7 @@
           </table>
           {{else if eq .Tab "apps"}}
           <table>
-            <colgroup><col><col style="width: 120px"><col style="width: 260px"><col style="width: 124px"></colgroup>
+			<colgroup><col><col style="width: 120px"><col style="width: 260px"><col style="width: 360px"></colgroup>
             <thead>
               <tr>
                 <th>Application</th>
@@ -87,7 +87,11 @@
                 <td><span class="status">{{.Protocol}}</span></td>
                 <td class="mono" title="{{.OIDCClientID}}">{{if .SupportsOIDC}}{{.OIDCClientID}}{{else}}-{{end}}</td>
                 <td class="col-actions cell-widget">
-                  <div class="row-actions">
+				  <div class="row-actions">
+					{{if .SupportsOIDC}}<a class="btn btn-sm" href="{{.OIDCDiscovery}}" target="_blank" rel="noreferrer">Discovery</a>{{end}}
+					{{if .OIDCTestURL}}<a class="btn btn-sm" href="{{.OIDCTestURL}}" target="_blank" rel="noreferrer">Test OIDC</a>{{end}}
+					{{if .SupportsSAML}}<a class="btn btn-sm" href="{{.SAMLMetadata}}" target="_blank" rel="noreferrer">Metadata</a>{{end}}
+					{{if .SAMLTestURL}}<a class="btn btn-sm" href="{{.SAMLTestURL}}" target="_blank" rel="noreferrer">Test SAML</a>{{end}}
                     <a class="icon-btn" href="{{.EditURL}}" title="Edit app" aria-label="Edit app">
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M10 4l2 2"/></svg>
                     </a>
