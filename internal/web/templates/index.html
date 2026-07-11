@@ -30,10 +30,6 @@
       --danger-soft: #fdecec;
       --topbar-bg: #0c0c0d;
       --topbar-fg: #ffffff;
-      --topbar-muted: #9ca3af;
-      --topbar-pill: #1c1d22;
-      --topbar-pill-line: #2a2c33;
-      --topbar-pill-hover: #25262c;
       --radius: 6px;
       --radius-lg: 8px;
       --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
@@ -92,41 +88,6 @@
       justify-content: center;
       color: var(--topbar-fg);
     }
-    .topbar-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      height: 30px;
-      padding: 0 10px;
-      border-radius: var(--radius);
-      background: var(--topbar-pill);
-      border: 1px solid var(--topbar-pill-line);
-      color: var(--topbar-fg);
-      font-size: 12.5px;
-      max-width: 320px;
-    }
-    .topbar-pill .k {
-      color: var(--topbar-muted);
-      font-size: 11.5px;
-      letter-spacing: 0.02em;
-    }
-    .topbar-pill .v {
-      font-family: var(--mono);
-      font-size: 12px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .topbar-pill .icon { color: var(--topbar-muted); }
-	.topbar-spacer { flex: 1; }
-    .topbar-meta {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      color: var(--topbar-muted);
-      font-size: 12px;
-    }
-    .topbar-meta b { color: var(--topbar-fg); font-weight: 500; }
 
     /* App grid */
     .app {
@@ -1084,7 +1045,6 @@
       .side-section + .side-section { margin-top: 8px; }
       .content { padding: 18px; }
       .form-grid, .members-grid { grid-template-columns: 1fr; }
-      .topbar-pill { max-width: 200px; }
     }
   </style>
 </head>
@@ -1102,19 +1062,6 @@
       scimtest
       <span class="sr-only">SCIM Control Surface</span>
     </a>
-	  <span class="topbar-pill" title="Configured SCIM endpoint">
-      <span class="icon" aria-hidden="true">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="4" rx="1"/><rect x="2.5" y="9" width="11" height="4" rx="1"/><circle cx="5" cy="5" r="0.6" fill="currentColor"/><circle cx="5" cy="11" r="0.6" fill="currentColor"/></svg>
-	  </span>
-      <span class="k">SCIM</span>
-      <span class="v">{{if .SCIMEnabled}}{{if .BaseURL}}{{.BaseURL}}{{else}}not configured{{end}}{{else}}disabled{{end}}</span>
-    </span>
-    <span class="topbar-pill" title="Configured IDP issuer base URL">
-      <span class="k">IDP</span>
-      <span class="v">{{.IDPBaseURL}}</span>
-    </span>
-    <span class="topbar-spacer"></span>
-    {{if .SCIMEnabled}}<span class="topbar-meta">Trace <b>{{if .TracePopupEnabled}}auto{{else}}manual{{end}}</b></span>{{end}}
   </header>
 
   <div class="app">

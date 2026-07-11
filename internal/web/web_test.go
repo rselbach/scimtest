@@ -976,6 +976,9 @@ func TestSyncAppSelectorRendersInResourceToolbar(t *testing.T) {
 		r.Equal(1, strings.Count(body, `id="sync-app-selector"`))
 		r.Contains(body, "Sync target")
 		r.Contains(body, "Greendale SCIM")
+		r.NotContains(body, "Configured SCIM endpoint")
+		r.NotContains(body, "Configured IDP issuer base URL")
+		r.NotContains(body, "Trace <b>")
 	}
 }
 

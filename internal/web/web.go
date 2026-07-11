@@ -273,7 +273,6 @@ type pageData struct {
 	BaseURL           string
 	IDPBaseURL        string
 	SCIMEnabled       bool
-	TracePopupEnabled bool
 	UsersURL          string
 	GroupsURL         string
 	AppsURL           string
@@ -602,7 +601,6 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		BaseURL:           configuredBaseURL(state.Config.BaseURL),
 		IDPBaseURL:        a.effectiveIDPBaseURL(r, state),
 		SCIMEnabled:       scimEnabled(state),
-		TracePopupEnabled: state.Config.AutoOpenSyncTrace,
 		UsersURL:          dashboardURL("users", nil),
 		GroupsURL:         dashboardURL("groups", nil),
 		AppsURL:           dashboardURL("apps", nil),
