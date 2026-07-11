@@ -54,7 +54,11 @@
     }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
-    button, input, textarea, select { font: inherit; color: inherit; }
+	button, input, textarea, select { font: inherit; color: inherit; }
+	a:focus-visible, button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+	  outline: 2px solid var(--accent);
+	  outline-offset: 2px;
+	}
 
     /* Topbar (black) */
     .topbar {
@@ -1220,12 +1224,12 @@
           <b>{{.Stats.Groups}}</b> groups{{if .Stats.DirtyGroups}} <span class="sep">·</span> <span class="dirty">{{.Stats.DirtyGroups}} dirty</span>{{end}}
         </span>
       </div>
-      <div class="sync-progress {{if not .SyncJob}}is-hidden{{else if .SyncJob.Error}}is-error{{else if .SyncJob.RateLimited}}is-rate-limited{{else if .SyncJob.Done}}is-success{{end}}" data-sync-progress data-sync-active="{{if and .SyncJob .SyncJob.Running}}true{{else}}false{{end}}">
+	  <div class="sync-progress {{if not .SyncJob}}is-hidden{{else if .SyncJob.Error}}is-error{{else if .SyncJob.RateLimited}}is-rate-limited{{else if .SyncJob.Done}}is-success{{end}}" role="status" aria-live="polite" data-sync-progress data-sync-active="{{if and .SyncJob .SyncJob.Running}}true{{else}}false{{end}}">
         <div class="sync-progress-head">
           <span class="sync-progress-title" data-sync-message>{{if .SyncJob}}{{.SyncJob.Message}}{{else}}Starting sync{{end}}</span>
           <span class="sync-progress-count" data-sync-count>{{if .SyncJob}}{{.SyncJob.Processed}} / {{.SyncJob.Total}}{{else}}0 / 0{{end}}</span>
         </div>
-        <div class="sync-progress-bar" aria-hidden="true">
+		<div class="sync-progress-bar" role="progressbar" aria-label="SCIM sync progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{if .SyncJob}}{{.SyncJob.Percent}}{{else}}0{{end}}" data-sync-progressbar>
           <div class="sync-progress-fill" data-sync-fill style="width: {{if .SyncJob}}{{.SyncJob.Percent}}{{else}}0{{end}}%"></div>
         </div>
         <div class="sync-progress-detail">
@@ -1243,7 +1247,8 @@
     <span class="ok">scimtest</span>
     <span class="copy">SCIM: {{if .SCIMEnabled}}{{if .BaseURL}}{{.BaseURL}}{{else}}enabled, not configured{{end}}{{else}}disabled{{end}}</span>
     <span>IDP base: {{.IDPBaseURL}}</span>
-  </footer>
+	</footer>
+	<div class="sr-only" aria-live="polite" data-copy-status></div>
 
   {{if .History}}
   <div class="overlay" data-overlay>
@@ -1709,7 +1714,7 @@
       };
       const closeBtn = flash.querySelector('.flash-close');
       if (closeBtn) closeBtn.addEventListener('click', dismiss);
-      setTimeout(dismiss, 4000);
+	  {{if ne .Flash.Kind "error"}}setTimeout(dismiss, 4000);{{end}}
     })();
 
     async function writeClipboard(text) {
@@ -1736,6 +1741,7 @@
     }
 
 	const copyButtons = document.querySelectorAll('[data-copy-button]');
+	const copyStatus = document.querySelector('[data-copy-status]');
     for (const button of copyButtons) {
       button.addEventListener('click', async function () {
         const field = button.closest('.copy-field');
@@ -1748,14 +1754,16 @@
           await writeClipboard(text);
           button.classList.add('is-copied');
           button.setAttribute('title', 'Copied');
-          button.setAttribute('aria-label', 'Copied');
+		  button.setAttribute('aria-label', 'Copied');
+		  if (copyStatus) copyStatus.textContent = 'Copied to clipboard';
           setTimeout(function () {
             button.classList.remove('is-copied');
             button.setAttribute('title', originalTitle);
             button.setAttribute('aria-label', originalTitle);
           }, 1200);
         } catch (err) {
-          button.setAttribute('title', 'Copy failed');
+		  button.setAttribute('title', 'Copy failed');
+		  if (copyStatus) copyStatus.textContent = 'Copy failed';
           setTimeout(function () {
             button.setAttribute('title', originalTitle);
           }, 1200);
@@ -1954,7 +1962,8 @@
     const syncProgress = document.querySelector('[data-sync-progress]');
     const syncMessage = document.querySelector('[data-sync-message]');
     const syncCount = document.querySelector('[data-sync-count]');
-    const syncFill = document.querySelector('[data-sync-fill]');
+	const syncFill = document.querySelector('[data-sync-fill]');
+	const syncProgressBar = document.querySelector('[data-sync-progressbar]');
     const syncCurrent = document.querySelector('[data-sync-current]');
     const syncTrace = document.querySelector('[data-sync-trace]');
     let syncPollTimer = null;
@@ -1968,7 +1977,8 @@
       if (job.done && !job.error) syncProgress.classList.add('is-success');
       if (syncMessage) syncMessage.textContent = job.message || job.error || 'Sync running';
       if (syncCount) syncCount.textContent = String(job.processed || 0) + ' / ' + String(job.total || 0);
-      if (syncFill) syncFill.style.width = String(job.percent || 0) + '%';
+	  if (syncFill) syncFill.style.width = String(job.percent || 0) + '%';
+	  if (syncProgressBar) syncProgressBar.setAttribute('aria-valuenow', String(job.percent || 0));
       if (syncCurrent) syncCurrent.textContent = job.current || '';
 		if (syncTrace) syncTrace.classList.toggle('is-hidden', !job.traceAvailable);
 		if (syncSubmit) syncSubmit.disabled = Boolean(job.running);
