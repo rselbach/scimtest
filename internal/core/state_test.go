@@ -403,3 +403,32 @@ func TestValidateAppRequiresSafeSAMLACSURL(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateHTTPBaseURL(t *testing.T) {
+	tests := map[string]struct {
+		value    string
+		required bool
+		wantErr  string
+	}{
+		"optional empty": {},
+		"required empty": {required: true, wantErr: "SCIM base URL is required"},
+		"relative":       {value: "/scim/v2", wantErr: "must be an absolute URL"},
+		"wrong scheme":   {value: "file:///tmp/scim", wantErr: "must use HTTP or HTTPS"},
+		"credentials":    {value: "https://dean:pelton@greendale.test/scim", wantErr: "must not contain credentials"},
+		"query":          {value: "https://greendale.test/scim?secret=chang", wantErr: "must not contain a query string"},
+		"fragment":       {value: "https://greendale.test/scim#users", wantErr: "must not contain a fragment"},
+		"valid":          {value: "https://greendale.test/scim/v2"},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			err := ValidateHTTPBaseURL("SCIM base URL", tc.value, tc.required)
+			if tc.wantErr == "" {
+				r.NoError(err)
+				return
+			}
+			r.ErrorContains(err, tc.wantErr)
+		})
+	}
+}

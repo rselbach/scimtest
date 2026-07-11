@@ -848,6 +848,17 @@ func (a *webApp) handleGroupDeletedState(w http.ResponseWriter, r *http.Request,
 
 func (a *webApp) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 	tab := normalizedTab(r.FormValue("tab"))
+	baseURL := strings.TrimSpace(r.FormValue("base_url"))
+	idpBaseURL := strings.TrimSpace(r.FormValue("idp_base_url"))
+	scimDisabled := r.FormValue("scim_enabled") != "on"
+	if err := validateHTTPBaseURL("SCIM base URL", baseURL, !scimDisabled); err != nil {
+		a.redirectError(w, r, tab, err)
+		return
+	}
+	if err := validateHTTPBaseURL("IDP base URL", idpBaseURL, false); err != nil {
+		a.redirectError(w, r, tab, err)
+		return
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -858,11 +869,11 @@ func (a *webApp) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	state.Config = config{
-		BaseURL:               strings.TrimSpace(r.FormValue("base_url")),
+		BaseURL:               baseURL,
 		BearerToken:           strings.TrimSpace(r.FormValue("bearer_token")),
 		AutoOpenSyncTrace:     r.FormValue("auto_open_sync_trace") == "on",
-		SCIMDisabled:          r.FormValue("scim_enabled") != "on",
-		IDPBaseURL:            strings.TrimSpace(r.FormValue("idp_base_url")),
+		SCIMDisabled:          scimDisabled,
+		IDPBaseURL:            idpBaseURL,
 		RgrokName:             state.Config.RgrokName,
 		RgrokToken:            state.Config.RgrokToken,
 		SigningPrivateKeyPEM:  state.Config.SigningPrivateKeyPEM,

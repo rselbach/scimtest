@@ -31,6 +31,7 @@ var (
 	joinLines                  = core.JoinLines
 	validateUser               = core.ValidateUser
 	validateGroup              = core.ValidateGroup
+	validateHTTPBaseURL        = core.ValidateHTTPBaseURL
 	validateApp                = core.ValidateApp
 	supportsOIDC               = core.SupportsOIDC
 	supportsSAML               = core.SupportsSAML

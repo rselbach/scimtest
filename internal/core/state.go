@@ -921,6 +921,38 @@ func ValidateGroup(displayName string) error {
 	return nil
 }
 
+// ValidateHTTPBaseURL validates a service base URL without restricting its path.
+func ValidateHTTPBaseURL(label string, rawURL string, required bool) error {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		if required {
+			return fmt.Errorf("%s is required", label)
+		}
+		return nil
+	}
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("%s is invalid: %w", label, err)
+	}
+	switch {
+	case parsed.Scheme == "":
+		return fmt.Errorf("%s must be an absolute URL", label)
+	case parsed.Scheme != "http" && parsed.Scheme != "https":
+		return fmt.Errorf("%s must use HTTP or HTTPS", label)
+	case !parsed.IsAbs() || parsed.Host == "":
+		return fmt.Errorf("%s must be an absolute URL", label)
+	case parsed.User != nil:
+		return fmt.Errorf("%s must not contain credentials", label)
+	case parsed.RawQuery != "":
+		return fmt.Errorf("%s must not contain a query string", label)
+	case parsed.Fragment != "":
+		return fmt.Errorf("%s must not contain a fragment", label)
+	default:
+		return nil
+	}
+}
+
 func ValidateApp(app App, apps []App) error {
 	if strings.TrimSpace(app.Name) == "" {
 		return fmt.Errorf("app name is required")

@@ -159,8 +159,8 @@ func NewSCIMClient(cfg Config) (*SCIMClient, error) {
 		return nil, fmt.Errorf("SCIM bearer token is required")
 	}
 
-	if _, err := url.Parse(baseURL); err != nil {
-		return nil, fmt.Errorf("parse SCIM base URL %q: %w", baseURL, err)
+	if err := ValidateHTTPBaseURL("SCIM base URL", baseURL, true); err != nil {
+		return nil, err
 	}
 
 	return &SCIMClient{
