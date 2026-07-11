@@ -915,6 +915,59 @@ func TestEnvironmentCreateAndGuardedDelete(t *testing.T) {
 	r.Len(environments, 2)
 }
 
+func TestSyncOnlyMutatesSelectedEnvironment(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		r.Equal("/Users", req.URL.Path)
+		w.Header().Set("Content-Type", "application/scim+json")
+		_, err := fmt.Fprint(w, `{"id":"remote-abed"}`)
+		r.NoError(err)
+	}))
+	defer server.Close()
+	r.NoError(saveState(appState{
+		Config: config{BaseURL: server.URL, BearerToken: "default-token"},
+		Users:  []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true, Dirty: true}},
+	}))
+	staging, err := createEnvironment("Staging")
+	r.NoError(err)
+	state, err := loadEnvironmentState(staging.ID)
+	r.NoError(err)
+	state.Config = config{BaseURL: server.URL, BearerToken: "staging-token"}
+	state.Users = []user{{ID: "abed", GivenName: "Abed", FamilyName: "Nadir", Email: "abed@greendale.edu", Username: "abed", Active: true, Dirty: true}}
+	r.NoError(saveState(state))
+	app := newTestIDPApp(t)
+	form := url.Values{"tab": {"users"}, "environment": {staging.ID}}
+	req := httptest.NewRequest(http.MethodPost, "/sync", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	rec := httptest.NewRecorder()
+	app.routes().ServeHTTP(rec, req)
+	r.Equal(http.StatusOK, rec.Code)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		job := app.currentSyncJob(staging.ID)
+		if job != nil && job.Done {
+			r.True(job.Success)
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("staging sync did not finish")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	defaultState, err := loadState()
+	r.NoError(err)
+	r.True(defaultState.Users[0].Dirty)
+	r.Empty(defaultState.Users[0].RemoteID)
+	stagingState, err := loadEnvironmentState(staging.ID)
+	r.NoError(err)
+	r.False(stagingState.Users[0].Dirty)
+	r.Equal("remote-abed", stagingState.Users[0].RemoteID)
+}
+
 func TestSyncRateLimitRendersReadableError(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)

@@ -132,6 +132,7 @@ type Group struct {
 }
 
 type App struct {
+	EnvironmentName        string   `json:"-"`
 	ID                     string   `json:"id"`
 	Name                   string   `json:"name"`
 	Slug                   string   `json:"slug"`
@@ -333,7 +334,10 @@ func LoadAllApps() ([]App, error) {
 		if err != nil {
 			return nil, err
 		}
-		apps = append(apps, state.Apps...)
+		for _, app := range state.Apps {
+			app.EnvironmentName = environment.Name
+			apps = append(apps, app)
+		}
 	}
 	return apps, nil
 }
@@ -1273,6 +1277,9 @@ func ValidateApp(app App, apps []App) error {
 	}
 	for _, existing := range apps {
 		if existing.ID != app.ID && strings.EqualFold(existing.Slug, app.Slug) {
+			if existing.EnvironmentName != "" {
+				return fmt.Errorf("app slug %q is already in use by environment %s", app.Slug, existing.EnvironmentName)
+			}
 			return fmt.Errorf("app slug %q is already in use", app.Slug)
 		}
 		if SupportsOIDC(app) && SupportsOIDC(existing) && existing.ID != app.ID && app.OIDCClientID != "" && app.OIDCClientID == existing.OIDCClientID {

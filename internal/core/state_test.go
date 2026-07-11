@@ -131,12 +131,14 @@ func TestEnvironmentStateIsIsolatedAndDefaultIsBackwardCompatible(t *testing.T) 
 	stagingState.Config.BearerToken = "staging-token"
 	stagingState.Config.SCIMDisabled = false
 	stagingState.Users = []User{{ID: "staging-user", GivenName: "Abed", FamilyName: "Nadir", Email: "abed@greendale.edu", Username: "abed", Active: true}}
+	stagingState.Config.IDPBaseURL = "https://global-idp.test"
 	r.NoError(SaveState(stagingState))
 
 	gotDefault, err := LoadState()
 	r.NoError(err)
 	r.Equal(DefaultEnvironmentID, gotDefault.Environment.ID)
 	r.Equal("https://default.test/scim", gotDefault.Config.BaseURL)
+	r.Equal("https://global-idp.test", gotDefault.Config.IDPBaseURL)
 	r.Equal([]string{"default-user"}, []string{gotDefault.Users[0].ID})
 
 	gotStaging, err := LoadEnvironmentState(staging.ID)
@@ -144,6 +146,29 @@ func TestEnvironmentStateIsIsolatedAndDefaultIsBackwardCompatible(t *testing.T) 
 	r.Equal("https://staging.test/scim", gotStaging.Config.BaseURL)
 	r.Equal([]string{"staging-user"}, []string{gotStaging.Users[0].ID})
 	r.Len(gotStaging.Environments, 2)
+}
+
+func TestDeleteEnvironmentRemovesOnlyItsState(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r.NoError(SaveState(AppState{Users: []User{{ID: "default-user", GivenName: "Troy", FamilyName: "Barnes", Email: "shared@greendale.edu", Username: "shared", Active: true}}}))
+	staging, err := CreateEnvironment("Staging")
+	r.NoError(err)
+	state, err := LoadEnvironmentState(staging.ID)
+	r.NoError(err)
+	state.Users = []User{{ID: "staging-user", GivenName: "Abed", FamilyName: "Nadir", Email: "shared@greendale.edu", Username: "shared", Active: true}}
+	state.Groups = []Group{{ID: "staging-group", DisplayName: "Study Group", MemberIDs: []string{"staging-user"}}}
+	state.Apps = []App{{ID: "staging-app", Name: "Portal", Slug: "portal", Protocol: "oidc", OIDCClientID: "portal", AllowAnyOIDCRedirect: true}}
+	r.NoError(SaveState(state))
+
+	r.NoError(DeleteEnvironment(staging.ID))
+	_, err = LoadEnvironmentState(staging.ID)
+	r.ErrorContains(err, "not found")
+	defaultState, err := LoadState()
+	r.NoError(err)
+	r.Len(defaultState.Users, 1)
+	r.Equal("default-user", defaultState.Users[0].ID)
+	r.ErrorContains(DeleteEnvironment(DefaultEnvironmentID), "final environment")
 }
 
 func TestDefaultStateDirectoryUsesPrivatePermissions(t *testing.T) {
