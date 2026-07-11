@@ -109,6 +109,7 @@ type AppState struct {
 	GroupSync       map[string]map[string]ResourceSyncState `json:"-"`
 }
 
+// ResourceSyncState is one app's remote state for a directory resource.
 type ResourceSyncState struct {
 	RemoteID  string
 	Dirty     bool
@@ -165,7 +166,37 @@ type App struct {
 }
 
 func LoadState() (AppState, error) {
-	return LoadEnvironmentState(DefaultEnvironmentID)
+	db, err := openStateDB()
+	if err != nil {
+		return AppState{}, err
+	}
+	defer closeDB(db)
+
+	state, err := loadGlobalStateFromDB(db)
+	if err != nil {
+		return AppState{}, err
+	}
+	NormalizeState(&state)
+	if !StateEmpty(state) {
+		return state, nil
+	}
+
+	legacyPath, err := legacyStateFilePath()
+	if err != nil {
+		return AppState{}, err
+	}
+	legacyState, ok, err := loadLegacyJSONState(legacyPath)
+	if err != nil {
+		return AppState{}, err
+	}
+	if !ok {
+		return state, nil
+	}
+	NormalizeState(&legacyState)
+	if err := saveStateToDB(db, legacyState, true); err != nil {
+		return AppState{}, err
+	}
+	return loadGlobalStateFromDB(db)
 }
 
 func LoadEnvironmentState(environmentID string) (AppState, error) {
@@ -198,7 +229,7 @@ func LoadEnvironmentState(environmentID string) (AppState, error) {
 	}
 	NormalizeState(&legacyState)
 
-	if err := saveStateToDB(db, legacyState); err != nil {
+	if err := saveStateToDB(db, legacyState, false); err != nil {
 		return AppState{}, err
 	}
 
@@ -206,20 +237,16 @@ func LoadEnvironmentState(environmentID string) (AppState, error) {
 }
 
 func LoadStateForAppSlug(slug string) (AppState, error) {
-	db, err := openStateDB()
+	state, err := LoadState()
 	if err != nil {
 		return AppState{}, err
 	}
-	defer closeDB(db)
-
-	var environmentID string
-	if err := db.QueryRow(`SELECT environment_id FROM apps WHERE slug = ?`, slug).Scan(&environmentID); err != nil {
-		if err == sql.ErrNoRows {
-			return AppState{}, fmt.Errorf("app slug %q not found", slug)
+	for _, app := range state.Apps {
+		if app.Slug == slug {
+			return state, nil
 		}
-		return AppState{}, fmt.Errorf("find app environment: %w", err)
 	}
-	return loadStateFromDB(db, environmentID)
+	return AppState{}, fmt.Errorf("app slug %q not found", slug)
 }
 
 func LoadEnvironments() ([]Environment, error) {
@@ -337,22 +364,11 @@ func DeleteEnvironment(environmentID string) error {
 }
 
 func LoadAllApps() ([]App, error) {
-	environments, err := LoadEnvironments()
+	state, err := LoadState()
 	if err != nil {
 		return nil, err
 	}
-	var apps []App
-	for _, environment := range environments {
-		state, err := LoadEnvironmentState(environment.ID)
-		if err != nil {
-			return nil, err
-		}
-		for _, app := range state.Apps {
-			app.EnvironmentName = environment.Name
-			apps = append(apps, app)
-		}
-	}
-	return apps, nil
+	return state.Apps, nil
 }
 
 func SaveState(state AppState) error {
@@ -364,7 +380,7 @@ func SaveState(state AppState) error {
 	}
 	defer closeDB(db)
 
-	return saveStateToDB(db, state)
+	return saveStateToDB(db, state, true)
 }
 
 func openStateDB() (*sql.DB, error) {
@@ -954,9 +970,66 @@ func loadEnvironmentsFromDB(db *sql.DB) ([]Environment, error) {
 	return environments, nil
 }
 
-func saveStateToDB(db *sql.DB, state AppState) error {
+func loadGlobalStateFromDB(db *sql.DB) (AppState, error) {
+	environments, err := loadEnvironmentsFromDB(db)
+	if err != nil {
+		return AppState{}, err
+	}
+	state := AppState{
+		Environment:     Environment{ID: DefaultEnvironmentID, Name: "Directory", Slug: "directory"},
+		UserOperations:  make(map[string][]OperationLog),
+		GroupOperations: make(map[string][]OperationLog),
+		UserSync:        make(map[string]map[string]ResourceSyncState),
+		GroupSync:       make(map[string]map[string]ResourceSyncState),
+	}
+	for _, environment := range environments {
+		environmentState, err := loadStateFromDB(db, environment.ID)
+		if err != nil {
+			return AppState{}, err
+		}
+		state.Config = environmentState.Config
+		state.Users = append(state.Users, environmentState.Users...)
+		state.Groups = append(state.Groups, environmentState.Groups...)
+		state.Apps = append(state.Apps, environmentState.Apps...)
+		for resourceID, entries := range environmentState.UserOperations {
+			state.UserOperations[resourceID] = append(state.UserOperations[resourceID], entries...)
+		}
+		for resourceID, entries := range environmentState.GroupOperations {
+			state.GroupOperations[resourceID] = append(state.GroupOperations[resourceID], entries...)
+		}
+		for appID, syncStates := range environmentState.UserSync {
+			state.UserSync[appID] = syncStates
+		}
+		for appID, syncStates := range environmentState.GroupSync {
+			state.GroupSync[appID] = syncStates
+		}
+	}
+	state.Config.BaseURL = ""
+	state.Config.BearerToken = ""
+	state.Config.AutoOpenSyncTrace = false
+	state.Config.SCIMDisabled = false
+	for i := range state.Users {
+		state.Users[i].RemoteID = ""
+		state.Users[i].Dirty = false
+		state.Users[i].LastError = ""
+	}
+	for i := range state.Groups {
+		state.Groups[i].RemoteID = ""
+		state.Groups[i].Dirty = false
+		state.Groups[i].LastError = ""
+	}
+	if len(state.UserSync) == 0 {
+		state.UserSync = nil
+	}
+	if len(state.GroupSync) == 0 {
+		state.GroupSync = nil
+	}
+	return state, nil
+}
+
+func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 	environmentID := state.Environment.ID
-	if environmentID == "" {
+	if environmentID == "" || global {
 		environmentID = DefaultEnvironmentID
 	}
 	tx, err := db.Begin()
@@ -969,29 +1042,40 @@ func saveStateToDB(db *sql.DB, state AppState) error {
 	if _, err := tx.Exec(`DELETE FROM config`); err != nil {
 		return fmt.Errorf("clear sqlite config: %w", err)
 	}
-	if _, err := tx.Exec(`DELETE FROM environment_config WHERE environment_id = ?`, environmentID); err != nil {
-		return fmt.Errorf("clear sqlite environment config: %w", err)
-	}
-	if _, err := tx.Exec(`DELETE FROM users WHERE environment_id = ?`, environmentID); err != nil {
-		return fmt.Errorf("clear sqlite users: %w", err)
-	}
-	if _, err := tx.Exec(`DELETE FROM groups WHERE environment_id = ?`, environmentID); err != nil {
-		return fmt.Errorf("clear sqlite groups: %w", err)
-	}
-	if _, err := tx.Exec(`DELETE FROM app_user_sync WHERE app_id IN (SELECT id FROM apps WHERE environment_id = ?)`, environmentID); err != nil {
-		return fmt.Errorf("clear sqlite app user sync: %w", err)
-	}
-	if _, err := tx.Exec(`DELETE FROM app_group_sync WHERE app_id IN (SELECT id FROM apps WHERE environment_id = ?)`, environmentID); err != nil {
-		return fmt.Errorf("clear sqlite app group sync: %w", err)
-	}
-	if _, err := tx.Exec(`DELETE FROM apps WHERE environment_id = ?`, environmentID); err != nil {
-		return fmt.Errorf("clear sqlite apps: %w", err)
-	}
-	if _, err := tx.Exec(`DELETE FROM group_members WHERE environment_id = ?`, environmentID); err != nil {
-		return fmt.Errorf("clear sqlite group members: %w", err)
-	}
-	if _, err := tx.Exec(`DELETE FROM operation_logs WHERE environment_id = ?`, environmentID); err != nil {
-		return fmt.Errorf("clear sqlite operation logs: %w", err)
+	if global {
+		for _, table := range []string{"environment_config", "app_user_sync", "app_group_sync", "group_members", "operation_logs", "apps", "groups", "users"} {
+			if _, err := tx.Exec(`DELETE FROM ` + table); err != nil {
+				return fmt.Errorf("clear sqlite %s: %w", table, err)
+			}
+		}
+		if _, err := tx.Exec(`DELETE FROM environments WHERE id != ?`, DefaultEnvironmentID); err != nil {
+			return fmt.Errorf("remove migrated environments: %w", err)
+		}
+	} else {
+		if _, err := tx.Exec(`DELETE FROM environment_config WHERE environment_id = ?`, environmentID); err != nil {
+			return fmt.Errorf("clear sqlite environment config: %w", err)
+		}
+		if _, err := tx.Exec(`DELETE FROM users WHERE environment_id = ?`, environmentID); err != nil {
+			return fmt.Errorf("clear sqlite users: %w", err)
+		}
+		if _, err := tx.Exec(`DELETE FROM groups WHERE environment_id = ?`, environmentID); err != nil {
+			return fmt.Errorf("clear sqlite groups: %w", err)
+		}
+		if _, err := tx.Exec(`DELETE FROM app_user_sync WHERE app_id IN (SELECT id FROM apps WHERE environment_id = ?)`, environmentID); err != nil {
+			return fmt.Errorf("clear sqlite app user sync: %w", err)
+		}
+		if _, err := tx.Exec(`DELETE FROM app_group_sync WHERE app_id IN (SELECT id FROM apps WHERE environment_id = ?)`, environmentID); err != nil {
+			return fmt.Errorf("clear sqlite app group sync: %w", err)
+		}
+		if _, err := tx.Exec(`DELETE FROM apps WHERE environment_id = ?`, environmentID); err != nil {
+			return fmt.Errorf("clear sqlite apps: %w", err)
+		}
+		if _, err := tx.Exec(`DELETE FROM group_members WHERE environment_id = ?`, environmentID); err != nil {
+			return fmt.Errorf("clear sqlite group members: %w", err)
+		}
+		if _, err := tx.Exec(`DELETE FROM operation_logs WHERE environment_id = ?`, environmentID); err != nil {
+			return fmt.Errorf("clear sqlite operation logs: %w", err)
+		}
 	}
 
 	configStmt, err := tx.Prepare(`INSERT INTO config(key, value) VALUES(?, ?)`)
@@ -1014,15 +1098,17 @@ func saveStateToDB(db *sql.DB, state AppState) error {
 			return fmt.Errorf("insert sqlite config %s: %w", key, err)
 		}
 	}
-	environmentConfigEntries := map[string]string{
-		"base_url":             state.Config.BaseURL,
-		"bearer_token":         state.Config.BearerToken,
-		"auto_open_sync_trace": BoolString(state.Config.AutoOpenSyncTrace),
-		"scim_disabled":        BoolString(state.Config.SCIMDisabled),
-	}
-	for key, value := range environmentConfigEntries {
-		if _, err := tx.Exec(`INSERT INTO environment_config(environment_id, key, value) VALUES(?, ?, ?)`, environmentID, key, value); err != nil {
-			return fmt.Errorf("insert environment config %s: %w", key, err)
+	if !global {
+		environmentConfigEntries := map[string]string{
+			"base_url":             state.Config.BaseURL,
+			"bearer_token":         state.Config.BearerToken,
+			"auto_open_sync_trace": BoolString(state.Config.AutoOpenSyncTrace),
+			"scim_disabled":        BoolString(state.Config.SCIMDisabled),
+		}
+		for key, value := range environmentConfigEntries {
+			if _, err := tx.Exec(`INSERT INTO environment_config(environment_id, key, value) VALUES(?, ?, ?)`, environmentID, key, value); err != nil {
+				return fmt.Errorf("insert environment config %s: %w", key, err)
+			}
 		}
 	}
 
@@ -1033,6 +1119,11 @@ func saveStateToDB(db *sql.DB, state AppState) error {
 	defer closeStmt(userStmt)
 
 	for _, u := range state.Users {
+		if global {
+			u.RemoteID = ""
+			u.Dirty = false
+			u.LastError = ""
+		}
 		if _, err := userStmt.Exec(u.ID, environmentID, u.GivenName, u.FamilyName, u.Email, u.Username, boolToInt(u.Active), u.RemoteID, boolToInt(u.Dirty), boolToInt(u.Deleted), u.LastError); err != nil {
 			return fmt.Errorf("insert sqlite user %s: %w", u.ID, err)
 		}
@@ -1057,6 +1148,11 @@ func saveStateToDB(db *sql.DB, state AppState) error {
 	defer closeStmt(logStmt)
 
 	for _, g := range state.Groups {
+		if global {
+			g.RemoteID = ""
+			g.Dirty = false
+			g.LastError = ""
+		}
 		if _, err := groupStmt.Exec(g.ID, environmentID, g.DisplayName, g.RemoteID, boolToInt(g.Dirty), boolToInt(g.Deleted), g.LastError); err != nil {
 			return fmt.Errorf("insert sqlite group %s: %w", g.ID, err)
 		}
@@ -1216,6 +1312,7 @@ func StateEmpty(state AppState) bool {
 }
 
 func NormalizeState(state *AppState) {
+	migrateLegacySCIMConfig(state)
 	state.Config.BaseURL = strings.TrimRight(strings.TrimSpace(state.Config.BaseURL), "/")
 	state.Config.IDPBaseURL = strings.TrimRight(strings.TrimSpace(state.Config.IDPBaseURL), "/")
 	state.Config.RgrokName = strings.TrimSpace(state.Config.RgrokName)
@@ -1247,7 +1344,342 @@ func NormalizeState(state *AppState) {
 			state.Apps[i].SAMLEmailAttributeName = DefaultSAMLEmailAttributeName
 		}
 		state.Apps[i].OIDCRedirectURIs = cleanLines(state.Apps[i].OIDCRedirectURIs)
+		state.Apps[i].SCIMBaseURL = strings.TrimRight(strings.TrimSpace(state.Apps[i].SCIMBaseURL), "/")
 	}
+}
+
+func migrateLegacySCIMConfig(state *AppState) {
+	baseURL := strings.TrimRight(strings.TrimSpace(state.Config.BaseURL), "/")
+	token := strings.TrimSpace(state.Config.BearerToken)
+	if baseURL != "" && !state.Config.SCIMDisabled {
+		if len(state.Apps) == 0 {
+			state.Apps = append(state.Apps, App{ID: "app_legacy_scim", Name: "SCIM", Slug: "scim", Protocol: "scim"})
+		}
+		for i := range state.Apps {
+			if state.Apps[i].SCIMEnabled {
+				continue
+			}
+			state.Apps[i].SCIMEnabled = true
+			state.Apps[i].SCIMBaseURL = baseURL
+			state.Apps[i].SCIMBearerToken = token
+			state.Apps[i].SCIMAutoOpenTrace = state.Config.AutoOpenSyncTrace
+			if state.UserSync == nil {
+				state.UserSync = make(map[string]map[string]ResourceSyncState)
+			}
+			state.UserSync[state.Apps[i].ID] = make(map[string]ResourceSyncState, len(state.Users))
+			for _, user := range state.Users {
+				state.UserSync[state.Apps[i].ID][user.ID] = ResourceSyncState{RemoteID: user.RemoteID, Dirty: user.Dirty, Deleted: user.Deleted, LastError: user.LastError}
+			}
+			if state.GroupSync == nil {
+				state.GroupSync = make(map[string]map[string]ResourceSyncState)
+			}
+			state.GroupSync[state.Apps[i].ID] = make(map[string]ResourceSyncState, len(state.Groups))
+			for _, group := range state.Groups {
+				state.GroupSync[state.Apps[i].ID][group.ID] = ResourceSyncState{RemoteID: group.RemoteID, Dirty: group.Dirty, Deleted: group.Deleted, LastError: group.LastError}
+			}
+		}
+	}
+	state.Config.BaseURL = ""
+	state.Config.BearerToken = ""
+	state.Config.AutoOpenSyncTrace = false
+	state.Config.SCIMDisabled = false
+}
+
+// AppByID finds an app by its stable local ID.
+func AppByID(apps []App, id string) (App, bool) {
+	for _, app := range apps {
+		if app.ID == id {
+			return app, true
+		}
+	}
+	return App{}, false
+}
+
+// StateForApp projects the global directory into the legacy shape consumed by
+// the SCIM engine. Remote IDs and sync status belong to the selected app.
+func StateForApp(state AppState, appID string) (AppState, error) {
+	app, ok := AppByID(state.Apps, appID)
+	if !ok {
+		return AppState{}, fmt.Errorf("app %q not found", appID)
+	}
+	if !app.SCIMEnabled {
+		return AppState{}, fmt.Errorf("SCIM is disabled for %s", app.Name)
+	}
+
+	projected := state
+	projected.Users = append([]User(nil), state.Users...)
+	projected.Groups = append([]Group(nil), state.Groups...)
+	for i := range projected.Groups {
+		projected.Groups[i].MemberIDs = append([]string(nil), state.Groups[i].MemberIDs...)
+	}
+	projected.Config.BaseURL = app.SCIMBaseURL
+	projected.Config.BearerToken = app.SCIMBearerToken
+	projected.Config.AutoOpenSyncTrace = app.SCIMAutoOpenTrace
+	projected.Config.SCIMDisabled = false
+	deletedUserIDs := make(map[string]bool)
+	for i := range projected.Users {
+		syncState, exists := state.UserSync[appID][projected.Users[i].ID]
+		if !exists {
+			syncState.Dirty = true
+		}
+		projected.Users[i].RemoteID = syncState.RemoteID
+		projected.Users[i].Dirty = syncState.Dirty
+		projected.Users[i].Deleted = projected.Users[i].Deleted || syncState.Deleted
+		projected.Users[i].LastError = syncState.LastError
+		if projected.Users[i].Deleted {
+			deletedUserIDs[projected.Users[i].ID] = true
+		}
+	}
+	for i := range projected.Groups {
+		syncState, exists := state.GroupSync[appID][projected.Groups[i].ID]
+		if !exists {
+			syncState.Dirty = true
+		}
+		projected.Groups[i].RemoteID = syncState.RemoteID
+		projected.Groups[i].Dirty = syncState.Dirty
+		projected.Groups[i].Deleted = projected.Groups[i].Deleted || syncState.Deleted
+		projected.Groups[i].LastError = syncState.LastError
+		members := make([]string, 0, len(projected.Groups[i].MemberIDs))
+		for _, userID := range projected.Groups[i].MemberIDs {
+			if !deletedUserIDs[userID] {
+				members = append(members, userID)
+			}
+		}
+		projected.Groups[i].MemberIDs = members
+	}
+	return projected, nil
+}
+
+// MarkUserDirtyForApps schedules a user change for every sync-enabled app.
+func MarkUserDirtyForApps(state *AppState, userID string, deleted bool) {
+	if state.UserSync == nil {
+		state.UserSync = make(map[string]map[string]ResourceSyncState)
+	}
+	for _, app := range state.Apps {
+		if !app.SCIMEnabled {
+			continue
+		}
+		if state.UserSync[app.ID] == nil {
+			state.UserSync[app.ID] = make(map[string]ResourceSyncState)
+		}
+		syncState := state.UserSync[app.ID][userID]
+		syncState.Dirty = true
+		syncState.Deleted = deleted
+		syncState.LastError = ""
+		state.UserSync[app.ID][userID] = syncState
+	}
+}
+
+// MarkGroupDirtyForApps schedules a group change for every sync-enabled app.
+func MarkGroupDirtyForApps(state *AppState, groupID string, deleted bool) {
+	if state.GroupSync == nil {
+		state.GroupSync = make(map[string]map[string]ResourceSyncState)
+	}
+	for _, app := range state.Apps {
+		if !app.SCIMEnabled {
+			continue
+		}
+		if state.GroupSync[app.ID] == nil {
+			state.GroupSync[app.ID] = make(map[string]ResourceSyncState)
+		}
+		syncState := state.GroupSync[app.ID][groupID]
+		syncState.Dirty = true
+		syncState.Deleted = deleted
+		syncState.LastError = ""
+		state.GroupSync[app.ID][groupID] = syncState
+	}
+}
+
+// InitializeAppSync resets one app so every directory resource is recreated.
+func InitializeAppSync(state *AppState, appID string) {
+	if state.UserSync == nil {
+		state.UserSync = make(map[string]map[string]ResourceSyncState)
+	}
+	if state.GroupSync == nil {
+		state.GroupSync = make(map[string]map[string]ResourceSyncState)
+	}
+	state.UserSync[appID] = make(map[string]ResourceSyncState, len(state.Users))
+	for _, user := range state.Users {
+		state.UserSync[appID][user.ID] = ResourceSyncState{Dirty: true, Deleted: user.Deleted}
+	}
+	state.GroupSync[appID] = make(map[string]ResourceSyncState, len(state.Groups))
+	for _, group := range state.Groups {
+		state.GroupSync[appID][group.ID] = ResourceSyncState{Dirty: true, Deleted: group.Deleted}
+	}
+}
+
+// MergeAppSyncState stores one SCIM result without changing other apps.
+func MergeAppSyncState(state *AppState, appID string, synced AppState) {
+	if state.UserSync == nil {
+		state.UserSync = make(map[string]map[string]ResourceSyncState)
+	}
+	if state.GroupSync == nil {
+		state.GroupSync = make(map[string]map[string]ResourceSyncState)
+	}
+	userSync := make(map[string]ResourceSyncState, len(state.Users))
+	for _, user := range synced.Users {
+		userSync[user.ID] = ResourceSyncState{RemoteID: user.RemoteID, Dirty: user.Dirty, Deleted: user.Deleted, LastError: user.LastError}
+	}
+	for _, user := range state.Users {
+		if _, ok := userSync[user.ID]; !ok && user.Deleted {
+			userSync[user.ID] = ResourceSyncState{Deleted: true}
+		}
+	}
+	state.UserSync[appID] = userSync
+
+	groupSync := make(map[string]ResourceSyncState, len(state.Groups))
+	for _, group := range synced.Groups {
+		groupSync[group.ID] = ResourceSyncState{RemoteID: group.RemoteID, Dirty: group.Dirty, Deleted: group.Deleted, LastError: group.LastError}
+	}
+	for _, group := range state.Groups {
+		if _, ok := groupSync[group.ID]; !ok && group.Deleted {
+			groupSync[group.ID] = ResourceSyncState{Deleted: true}
+		}
+	}
+	state.GroupSync[appID] = groupSync
+}
+
+// MergeAppImportState replaces the directory from one app and schedules the
+// resulting changes for every other sync-enabled app.
+func MergeAppImportState(state *AppState, appID string, imported AppState) {
+	MergeAppSyncState(state, appID, imported)
+	previousUsers := make(map[string]User, len(state.Users))
+	for _, user := range state.Users {
+		previousUsers[user.ID] = user
+	}
+	previousGroups := make(map[string]Group, len(state.Groups))
+	for _, group := range state.Groups {
+		previousGroups[group.ID] = group
+	}
+
+	state.Users = imported.Users
+	importedUserIDs := make(map[string]bool, len(imported.Users))
+	for i := range state.Users {
+		importedUserIDs[state.Users[i].ID] = true
+		state.Users[i].RemoteID = ""
+		state.Users[i].Dirty = false
+		state.Users[i].Deleted = false
+		state.Users[i].LastError = ""
+	}
+	for id, user := range previousUsers {
+		if importedUserIDs[id] {
+			continue
+		}
+		user.Deleted = true
+		user.RemoteID = ""
+		user.Dirty = false
+		user.LastError = ""
+		state.Users = append(state.Users, user)
+	}
+
+	state.Groups = imported.Groups
+	importedGroupIDs := make(map[string]bool, len(imported.Groups))
+	for i := range state.Groups {
+		importedGroupIDs[state.Groups[i].ID] = true
+		state.Groups[i].RemoteID = ""
+		state.Groups[i].Dirty = false
+		state.Groups[i].Deleted = false
+		state.Groups[i].LastError = ""
+	}
+	for id, group := range previousGroups {
+		if importedGroupIDs[id] {
+			continue
+		}
+		group.Deleted = true
+		group.RemoteID = ""
+		group.Dirty = false
+		group.LastError = ""
+		state.Groups = append(state.Groups, group)
+	}
+
+	for _, app := range state.Apps {
+		if !app.SCIMEnabled || app.ID == appID {
+			continue
+		}
+		for _, user := range state.Users {
+			markResourceDirty(state.UserSync, app.ID, user.ID, user.Deleted)
+		}
+		for _, group := range state.Groups {
+			markResourceDirty(state.GroupSync, app.ID, group.ID, group.Deleted)
+		}
+	}
+}
+
+func markResourceDirty(syncStates map[string]map[string]ResourceSyncState, appID string, resourceID string, deleted bool) {
+	if syncStates[appID] == nil {
+		syncStates[appID] = make(map[string]ResourceSyncState)
+	}
+	syncState := syncStates[appID][resourceID]
+	syncState.Dirty = true
+	syncState.Deleted = deleted
+	syncState.LastError = ""
+	syncStates[appID][resourceID] = syncState
+}
+
+// PurgeFullySyncedDeletions removes resources deleted from every enabled app.
+func PurgeFullySyncedDeletions(state *AppState) {
+	userDeletedEverywhere := func(userID string) bool {
+		for _, app := range state.Apps {
+			if !app.SCIMEnabled {
+				continue
+			}
+			syncState, ok := state.UserSync[app.ID][userID]
+			if !ok || syncState.Dirty {
+				return false
+			}
+		}
+		return true
+	}
+	keptUsers := state.Users[:0]
+	for _, user := range state.Users {
+		if user.Deleted && userDeletedEverywhere(user.ID) {
+			delete(state.UserOperations, user.ID)
+			for appID := range state.UserSync {
+				delete(state.UserSync[appID], user.ID)
+			}
+			for i := range state.Groups {
+				state.Groups[i].MemberIDs = removeValue(state.Groups[i].MemberIDs, user.ID)
+			}
+			continue
+		}
+		keptUsers = append(keptUsers, user)
+	}
+	state.Users = keptUsers
+
+	groupDeletedEverywhere := func(groupID string) bool {
+		for _, app := range state.Apps {
+			if !app.SCIMEnabled {
+				continue
+			}
+			syncState, ok := state.GroupSync[app.ID][groupID]
+			if !ok || syncState.Dirty {
+				return false
+			}
+		}
+		return true
+	}
+	keptGroups := state.Groups[:0]
+	for _, group := range state.Groups {
+		if group.Deleted && groupDeletedEverywhere(group.ID) {
+			delete(state.GroupOperations, group.ID)
+			for appID := range state.GroupSync {
+				delete(state.GroupSync[appID], group.ID)
+			}
+			continue
+		}
+		keptGroups = append(keptGroups, group)
+	}
+	state.Groups = keptGroups
+}
+
+func removeValue(values []string, value string) []string {
+	kept := values[:0]
+	for _, candidate := range values {
+		if candidate != value {
+			kept = append(kept, candidate)
+		}
+	}
+	return kept
 }
 
 func AppendOperationLogs(state *AppState, traces []SyncTraceEntry) {

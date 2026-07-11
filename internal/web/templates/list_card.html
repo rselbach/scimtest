@@ -63,7 +63,7 @@
               <tr><td colspan="{{if $.SCIMEnabled}}5{{else}}3{{end}}">
                 <div class="card-empty">
                   <div class="h">{{if and $.Pagination $.Pagination.SearchQuery}}No groups match search{{else}}No groups yet{{end}}</div>
-                  <div>{{if and $.Pagination $.Pagination.SearchQuery}}Try a different search.{{else}}Add one with the button above, or import from your SCIM server.{{end}}</div>
+                  <div>{{if and $.Pagination $.Pagination.SearchQuery}}Try a different search.{{else if $.SCIMEnabled}}Add one with the button above, or import from the selected app.{{else}}Add one with the button above.{{end}}</div>
                 </div>
               </td></tr>
               {{end}}
@@ -83,8 +83,8 @@
             <tbody>
               {{range .Apps}}
               <tr>
-                <td><div class="row-title">{{.Name}}</div><div class="mono">{{.Slug}}</div></td>
-                <td><span class="status">{{.Protocol}}</span></td>
+                <td><div class="row-title">{{.Name}}</div><div class="mono">{{.Slug}}</div>{{if .SCIMEnabled}}<div class="mono" title="{{.SCIMBaseURL}}">SCIM · {{.SCIMBaseURL}}</div>{{end}}</td>
+                <td><span class="status">{{.Protocol}}</span>{{if .SCIMEnabled}} <span class="status synced">SYNC</span>{{end}}</td>
                 <td class="mono" title="{{.OIDCClientID}}">{{if .SupportsOIDC}}{{.OIDCClientID}}{{else}}-{{end}}</td>
                 <td class="col-actions cell-widget">
 				  <div class="row-actions">
@@ -107,7 +107,7 @@
               <tr><td colspan="4">
                 <div class="card-empty">
                   <div class="h">No apps yet</div>
-                  <div>Add an app to expose OIDC and SAML endpoints.</div>
+                  <div>Add an app to configure OIDC, SAML, or SCIM.</div>
                 </div>
               </td></tr>
               {{end}}
@@ -200,7 +200,7 @@
               <tr><td colspan="{{if $.SCIMEnabled}}7{{else}}5{{end}}">
                 <div class="card-empty">
                   <div class="h">{{if and $.Pagination $.Pagination.SearchQuery}}No users match search{{else}}No users yet{{end}}</div>
-                  <div>{{if and $.Pagination $.Pagination.SearchQuery}}Try a different search.{{else}}Add one with the button above, or import from your SCIM server.{{end}}</div>
+                  <div>{{if and $.Pagination $.Pagination.SearchQuery}}Try a different search.{{else if $.SCIMEnabled}}Add one with the button above, or import from the selected app.{{else}}Add one with the button above.{{end}}</div>
                 </div>
               </td></tr>
               {{end}}

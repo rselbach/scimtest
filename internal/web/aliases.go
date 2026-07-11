@@ -3,25 +3,20 @@ package web
 import "scimtest/internal/core"
 
 type (
-	config         = core.Config
-	user           = core.User
-	app            = core.App
-	appState       = core.AppState
-	operationLog   = core.OperationLog
-	group          = core.Group
-	syncTraceEntry = core.SyncTraceEntry
-	syncProgress   = core.SyncProgress
-	environment    = core.Environment
+	config            = core.Config
+	user              = core.User
+	app               = core.App
+	appState          = core.AppState
+	operationLog      = core.OperationLog
+	group             = core.Group
+	syncTraceEntry    = core.SyncTraceEntry
+	syncProgress      = core.SyncProgress
+	resourceSyncState = core.ResourceSyncState
 )
 
 var (
 	loadState                  = core.LoadState
-	loadEnvironmentState       = core.LoadEnvironmentState
 	loadStateForAppSlug        = core.LoadStateForAppSlug
-	loadEnvironments           = core.LoadEnvironments
-	createEnvironment          = core.CreateEnvironment
-	updateEnvironment          = core.UpdateEnvironment
-	deleteEnvironment          = core.DeleteEnvironment
 	loadAllApps                = core.LoadAllApps
 	saveState                  = core.SaveState
 	appendOperationLogs        = core.AppendOperationLogs
@@ -47,6 +42,13 @@ var (
 	samlNameIDFormatForField   = core.SAMLNameIDFormatForField
 	samlNameIDValue            = core.SAMLNameIDValue
 	appBySlug                  = core.AppBySlug
+	stateForApp                = core.StateForApp
+	markUserDirtyForApps       = core.MarkUserDirtyForApps
+	markGroupDirtyForApps      = core.MarkGroupDirtyForApps
+	initializeAppSync          = core.InitializeAppSync
+	mergeAppSyncState          = core.MergeAppSyncState
+	mergeAppImportState        = core.MergeAppImportState
+	purgeFullySyncedDeletions  = core.PurgeFullySyncedDeletions
 	userGroups                 = core.UserGroups
 	syncStatus                 = core.SyncStatus
 	groupSyncStatus            = core.GroupSyncStatus
@@ -59,5 +61,4 @@ var (
 const (
 	defaultSAMLEmailAttributeName = core.DefaultSAMLEmailAttributeName
 	defaultSAMLNameIDField        = core.DefaultSAMLNameIDField
-	defaultEnvironmentID          = core.DefaultEnvironmentID
 )

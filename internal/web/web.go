@@ -175,6 +175,8 @@ type appRowView struct {
 	HasRedirectURI         bool
 	OIDCTestURL            string
 	SAMLTestURL            string
+	SCIMEnabled            bool
+	SCIMBaseURL            string
 }
 
 type historyEntryView struct {
@@ -259,17 +261,6 @@ type toolsFormView struct {
 	EmailDomain string
 }
 
-type environmentFormView struct {
-	Title     string
-	ID        string
-	Name      string
-	Close     string
-	Users     int
-	Groups    int
-	Apps      int
-	CanDelete bool
-}
-
 type pageData struct {
 	Tab               string
 	Flash             flashMessage
@@ -309,9 +300,8 @@ type pageData struct {
 	HasPublicIDP      bool
 	SCIMReady         bool
 	FormError         string
-	Environment       environment
-	Environments      []environment
-	EnvironmentForm   *environmentFormView
+	SyncApps          []app
+	SyncApp           app
 }
 
 type RunOptions struct {
@@ -435,43 +425,36 @@ func (a *webApp) routes() http.Handler {
 	return mux
 }
 
-const environmentCookieName = "scimtest_environment"
+const syncAppCookieName = "scimtest_sync_app"
 
-func requestEnvironmentID(r *http.Request) string {
-	if environmentID := strings.TrimSpace(r.FormValue("environment")); environmentID != "" {
-		return environmentID
+func requestSyncAppID(r *http.Request, state appState) string {
+	if appID := strings.TrimSpace(r.FormValue("app")); appID != "" {
+		if selected, ok := appByID(state.Apps, appID); ok && selected.SCIMEnabled {
+			return appID
+		}
 	}
-	if cookie, err := r.Cookie(environmentCookieName); err == nil && strings.TrimSpace(cookie.Value) != "" {
-		return cookie.Value
+	if cookie, err := r.Cookie(syncAppCookieName); err == nil {
+		if selected, ok := appByID(state.Apps, strings.TrimSpace(cookie.Value)); ok && selected.SCIMEnabled {
+			return selected.ID
+		}
 	}
-	return defaultEnvironmentID
+	for _, candidate := range state.Apps {
+		if candidate.SCIMEnabled {
+			return candidate.ID
+		}
+	}
+	return ""
 }
 
 func loadRequestState(r *http.Request) (appState, error) {
-	state, err := loadEnvironmentState(requestEnvironmentID(r))
-	if err == nil {
-		return state, nil
-	}
-	if requestEnvironmentID(r) == defaultEnvironmentID {
-		environments, loadErr := loadEnvironments()
-		if loadErr != nil || len(environments) == 0 {
-			return appState{}, err
-		}
-		return loadEnvironmentState(environments[0].ID)
-	}
-	state, defaultErr := loadEnvironmentState(defaultEnvironmentID)
-	if defaultErr == nil {
-		return state, nil
-	}
-	environments, loadErr := loadEnvironments()
-	if loadErr != nil || len(environments) == 0 {
-		return appState{}, err
-	}
-	return loadEnvironmentState(environments[0].ID)
+	return loadState()
 }
 
-func rememberEnvironment(w http.ResponseWriter, environmentID string) {
-	http.SetCookie(w, &http.Cookie{Name: environmentCookieName, Value: environmentID, Path: "/", MaxAge: 365 * 24 * 60 * 60, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+func rememberSyncApp(w http.ResponseWriter, appID string) {
+	if appID == "" {
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: syncAppCookieName, Value: appID, Path: "/", MaxAge: 365 * 24 * 60 * 60, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 }
 
 func (a *webApp) adminRoutes() http.Handler {
@@ -498,7 +481,6 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /apps/save", a.rejectWhileSyncing(a.handleAppSave))
 	mux.HandleFunc("POST /apps/{id}/delete", a.rejectWhileSyncing(a.handleAppDelete))
 	mux.HandleFunc("POST /config/save", a.rejectWhileSyncing(a.handleConfigSave))
-	mux.HandleFunc("POST /config/clear", a.rejectWhileSyncing(a.handleConfigClear))
 	mux.HandleFunc("POST /rgrok/setup", a.rejectWhileSyncing(a.handleRgrokSetup))
 	mux.HandleFunc("POST /rgrok/cancel", a.rejectWhileSyncing(a.handleRgrokCancel))
 	mux.HandleFunc("POST /tools/delete-all", a.rejectWhileSyncing(a.handleToolsDeleteAll))
@@ -506,8 +488,6 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /tools/deactivate-all", a.rejectWhileSyncing(a.handleToolsDeactivateAll))
 	mux.HandleFunc("POST /tools/activate-all", a.rejectWhileSyncing(a.handleToolsActivateAll))
 	mux.HandleFunc("POST /tools/create-users", a.rejectWhileSyncing(a.handleToolsCreateUsers))
-	mux.HandleFunc("POST /environments/save", a.rejectWhileSyncing(a.handleEnvironmentSave))
-	mux.HandleFunc("POST /environments/{id}/delete", a.rejectWhileSyncing(a.handleEnvironmentDelete))
 	mux.HandleFunc("GET /sync/status", a.handleSyncStatus)
 	mux.HandleFunc("POST /sync", a.handleSync)
 	mux.HandleFunc("POST /import", a.rejectWhileSyncing(a.handleImport))
@@ -516,7 +496,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 
 func (a *webApp) rejectWhileSyncing(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if job := a.currentSyncJob(requestEnvironmentID(r)); job != nil && job.Running {
+		if a.anySyncRunning() {
 			if wantsJSON(r) {
 				w.WriteHeader(http.StatusConflict)
 				writeJSON(w, map[string]string{"error": "sync is running; wait for it to finish"})
@@ -527,6 +507,17 @@ func (a *webApp) rejectWhileSyncing(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+func (a *webApp) anySyncRunning() bool {
+	a.syncJobMu.Lock()
+	defer a.syncJobMu.Unlock()
+	for _, job := range a.syncJobs {
+		if job != nil && job.Running {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *webApp) registerIDPRoutes(mux *http.ServeMux) {
@@ -548,7 +539,26 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	rememberEnvironment(w, state.Environment.ID)
+	globalState := state
+	syncAppID := requestSyncAppID(r, globalState)
+	var syncApp app
+	if syncAppID != "" {
+		syncApp, _ = appByID(globalState.Apps, syncAppID)
+		state, err = stateForApp(globalState, syncAppID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		rememberSyncApp(w, syncAppID)
+	} else {
+		state.Config.SCIMDisabled = true
+	}
+	var syncApps []app
+	for _, candidate := range globalState.Apps {
+		if candidate.SCIMEnabled {
+			syncApps = append(syncApps, candidate)
+		}
+	}
 
 	tab := normalizedTab(r.URL.Query().Get("tab"))
 	page := requestPage(r.URL.Query().Get("page"))
@@ -603,17 +613,17 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		ToolsURL:          dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"modal": "tools"}),
 		TraceURL:          dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"showTrace": "1"}),
 		TraceCloseURL:     dashboardURLWithPage(tab, page, pageSize, search, nil),
-		ShowTrace:         showTrace && a.hasTrace(state.Environment.ID),
-		HasTrace:          a.hasTrace(state.Environment.ID),
-		TraceContent:      a.traceContent(state.Environment.ID),
-		SyncJob:           a.currentSyncJob(state.Environment.ID),
+		ShowTrace:         showTrace && a.hasTrace(syncAppID),
+		HasTrace:          a.hasTrace(syncAppID),
+		TraceContent:      a.traceContent(syncAppID),
+		SyncJob:           a.currentSyncJob(syncAppID),
 		ShowSetupGuide:    len(state.Users) == 0 || len(state.Apps) == 0,
 		HasLocalUsers:     len(state.Users) > 0,
 		HasApps:           len(state.Apps) > 0,
 		HasPublicIDP:      a.rgrokPublicURL() != "" || strings.TrimSpace(state.Config.IDPBaseURL) != "",
-		SCIMReady:         state.Config.SCIMDisabled || (strings.TrimSpace(state.Config.BaseURL) != "" && strings.TrimSpace(state.Config.BearerToken) != ""),
-		Environment:       state.Environment,
-		Environments:      state.Environments,
+		SCIMReady:         syncAppID != "" && strings.TrimSpace(syncApp.SCIMBaseURL) != "" && strings.TrimSpace(syncApp.SCIMBearerToken) != "",
+		SyncApps:          syncApps,
+		SyncApp:           syncApp,
 	}
 	if !data.SCIMEnabled {
 		data.Errors = nil
@@ -647,28 +657,9 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 			data.AppForm = form
 		}
 	case "config":
-		data.ConfigForm = a.buildConfigFormView(state.Config, tab, page, pageSize, search, r.URL.Query())
+		data.ConfigForm = a.buildConfigFormView(globalState.Config, tab, page, pageSize, search, r.URL.Query())
 	case "tools":
 		data.ToolsForm = &toolsFormView{Close: dashboardURLWithPage(tab, page, pageSize, search, nil), Count: "10"}
-	case "environment":
-		form := &environmentFormView{Title: "Add environment", Close: dashboardURLWithPage(tab, page, pageSize, search, nil)}
-		if id := r.URL.Query().Get("id"); id != "" {
-			for _, candidate := range state.Environments {
-				if candidate.ID == id {
-					form.Title = "Edit environment"
-					form.ID = candidate.ID
-					form.Name = candidate.Name
-					form.CanDelete = len(state.Environments) > 1
-					if candidateState, loadErr := loadEnvironmentState(candidate.ID); loadErr == nil {
-						form.Users = len(candidateState.Users)
-						form.Groups = len(candidateState.Groups)
-						form.Apps = len(candidateState.Apps)
-					}
-					break
-				}
-			}
-		}
-		data.EnvironmentForm = form
 	}
 	if draft := a.consumeFormDraft(w, r); draft != nil {
 		applyFormDraft(&data, *draft)
@@ -744,6 +735,7 @@ func (a *webApp) handleUserSave(w http.ResponseWriter, r *http.Request) {
 			appendLocalOperationLog(&state, "user", state.Users[index].ID, summary)
 		}
 	}
+	markUserDirtyForApps(&state, id, false)
 
 	if err := saveState(state); err != nil {
 		a.redirectError(w, r, tab, err)
@@ -778,6 +770,7 @@ func (a *webApp) handleUserToggleActive(w http.ResponseWriter, r *http.Request) 
 	state.Users[index].Active = !state.Users[index].Active
 	state.Users[index].Dirty = true
 	state.Users[index].LastError = ""
+	markUserDirtyForApps(&state, id, false)
 	appendLocalOperationLog(&state, "user", state.Users[index].ID, summarizeActiveToggle(state.Users[index].Active))
 
 	if err := saveState(state); err != nil {
@@ -837,6 +830,7 @@ func (a *webApp) handleUserDeletedState(w http.ResponseWriter, r *http.Request, 
 	state.Users[index].Deleted = deleted
 	state.Users[index].Dirty = true
 	state.Users[index].LastError = ""
+	markUserDirtyForApps(&state, id, deleted)
 	appendLocalOperationLog(&state, "user", state.Users[index].ID, localDeleteSummary(deleted))
 
 	if err := saveState(state); err != nil {
@@ -904,6 +898,7 @@ func (a *webApp) handleGroupSave(w http.ResponseWriter, r *http.Request) {
 			appendLocalOperationLog(&state, "group", state.Groups[index].ID, summary)
 		}
 	}
+	markGroupDirtyForApps(&state, id, false)
 
 	if err := saveState(state); err != nil {
 		a.redirectError(w, r, tab, err)
@@ -955,6 +950,7 @@ func (a *webApp) handleGroupDeletedState(w http.ResponseWriter, r *http.Request,
 	state.Groups[index].Deleted = deleted
 	state.Groups[index].Dirty = true
 	state.Groups[index].LastError = ""
+	markGroupDirtyForApps(&state, id, deleted)
 	appendLocalOperationLog(&state, "group", state.Groups[index].ID, localDeleteSummary(deleted))
 
 	if err := saveState(state); err != nil {
@@ -971,13 +967,7 @@ func (a *webApp) handleGroupDeletedState(w http.ResponseWriter, r *http.Request,
 
 func (a *webApp) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 	tab := normalizedTab(r.FormValue("tab"))
-	baseURL := strings.TrimSpace(r.FormValue("base_url"))
 	idpBaseURL := strings.TrimSpace(r.FormValue("idp_base_url"))
-	scimDisabled := r.FormValue("scim_enabled") != "on"
-	if err := validateHTTPBaseURL("SCIM base URL", baseURL, !scimDisabled); err != nil {
-		a.redirectFormError(w, r, tab, "config", err)
-		return
-	}
 	if err := validateHTTPBaseURL("IDP base URL", idpBaseURL, false); err != nil {
 		a.redirectFormError(w, r, tab, "config", err)
 		return
@@ -990,16 +980,7 @@ func (a *webApp) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 		a.redirectError(w, r, tab, err)
 		return
 	}
-	bearerToken := strings.TrimSpace(r.FormValue("bearer_token"))
-	if bearerToken == "" {
-		bearerToken = state.Config.BearerToken
-	}
-
 	state.Config = config{
-		BaseURL:               baseURL,
-		BearerToken:           bearerToken,
-		AutoOpenSyncTrace:     r.FormValue("auto_open_sync_trace") == "on",
-		SCIMDisabled:          scimDisabled,
 		IDPBaseURL:            idpBaseURL,
 		TrustForwardedHeaders: r.FormValue("trust_forwarded_headers") == "on",
 		RgrokName:             state.Config.RgrokName,
@@ -1356,39 +1337,8 @@ func (a *webApp) rgrokError() string {
 	return a.rgrokLastError
 }
 
-func (a *webApp) handleConfigClear(w http.ResponseWriter, r *http.Request) {
-	tab := normalizedTab(r.FormValue("tab"))
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	state, err := loadRequestState(r)
-	if err != nil {
-		a.redirectError(w, r, tab, err)
-		return
-	}
-
-	state.Config = config{
-		SCIMDisabled:          true,
-		IDPBaseURL:            state.Config.IDPBaseURL,
-		TrustForwardedHeaders: state.Config.TrustForwardedHeaders,
-		RgrokName:             state.Config.RgrokName,
-		RgrokToken:            state.Config.RgrokToken,
-		SigningPrivateKeyPEM:  state.Config.SigningPrivateKeyPEM,
-		SigningCertificatePEM: state.Config.SigningCertificatePEM,
-	}
-	if err := saveState(state); err != nil {
-		a.redirectError(w, r, tab, err)
-		return
-	}
-	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: "environment SCIM settings cleared"})
-}
-
 func (a *webApp) handleSync(w http.ResponseWriter, r *http.Request) {
 	tab := normalizedTab(r.FormValue("tab"))
-	if job := a.currentSyncJob(requestEnvironmentID(r)); job != nil && job.Running {
-		a.respondSyncStartError(w, r, tab, fmt.Errorf("sync already running"))
-		return
-	}
-
 	a.mu.Lock()
 	state, err := loadRequestState(r)
 	a.mu.Unlock()
@@ -1396,12 +1346,16 @@ func (a *webApp) handleSync(w http.ResponseWriter, r *http.Request) {
 		a.respondSyncStartError(w, r, tab, err)
 		return
 	}
-	if !scimEnabled(state) {
-		a.respondSyncStartError(w, r, tab, fmt.Errorf("SCIM is disabled"))
+	appID := requestSyncAppID(r, state)
+	if appID == "" {
+		a.respondSyncStartError(w, r, tab, fmt.Errorf("select a sync-enabled app"))
 		return
 	}
-
-	job, err := a.startSyncJob(state.Environment.ID)
+	if job := a.currentSyncJob(appID); job != nil && job.Running {
+		a.respondSyncStartError(w, r, tab, fmt.Errorf("sync already running"))
+		return
+	}
+	job, err := a.startSyncJob(appID)
 	if err != nil {
 		a.respondSyncStartError(w, r, tab, err)
 		return
@@ -1416,7 +1370,13 @@ func (a *webApp) handleSync(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *webApp) handleSyncStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, a.currentSyncJob(requestEnvironmentID(r)))
+	state, err := loadRequestState(r)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		writeJSON(w, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, a.currentSyncJob(requestSyncAppID(r, state)))
 }
 
 func (a *webApp) respondSyncStartError(w http.ResponseWriter, r *http.Request, tab string, err error) {
@@ -1429,14 +1389,14 @@ func (a *webApp) respondSyncStartError(w http.ResponseWriter, r *http.Request, t
 	a.redirectError(w, r, tab, err)
 }
 
-func (a *webApp) startSyncJob(environmentID string) (*syncJobSnapshot, error) {
+func (a *webApp) startSyncJob(appID string) (*syncJobSnapshot, error) {
 	a.syncJobMu.Lock()
 	defer a.syncJobMu.Unlock()
 
 	if a.syncJobs == nil {
 		a.syncJobs = make(map[string]*syncJobSnapshot)
 	}
-	if a.syncJobs[environmentID] != nil && a.syncJobs[environmentID].Running {
+	if a.syncJobs[appID] != nil && a.syncJobs[appID].Running {
 		return nil, fmt.Errorf("sync already running")
 	}
 
@@ -1446,51 +1406,53 @@ func (a *webApp) startSyncJob(environmentID string) (*syncJobSnapshot, error) {
 		Message:   "Starting sync",
 		StartedAt: time.Now().UTC().Format(time.RFC3339),
 	}
-	a.syncJobs[environmentID] = job
-	go a.runSyncJob(job.ID, environmentID)
+	a.syncJobs[appID] = job
+	go a.runSyncJob(job.ID, appID)
 
 	return cloneSyncJob(job), nil
 }
 
-func (a *webApp) runSyncJob(id string, environmentID string) {
+func (a *webApp) runSyncJob(id string, appID string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	state, err := loadEnvironmentState(environmentID)
+	state, err := loadState()
 	if err != nil {
-		a.finishSyncJob(environmentID, id, false, err.Error(), false)
+		a.finishSyncJob(appID, id, false, err.Error(), false)
 		return
 	}
-	if !scimEnabled(state) {
-		a.finishSyncJob(environmentID, id, false, "SCIM is disabled", false)
+	projected, err := stateForApp(state, appID)
+	if err != nil {
+		a.finishSyncJob(appID, id, false, err.Error(), false)
 		return
 	}
 
-	result := syncDirtyStateWithProgress(state, func(progress syncProgress) {
-		a.updateSyncJobProgress(environmentID, id, progress)
+	result := syncDirtyStateWithProgress(projected, func(progress syncProgress) {
+		a.updateSyncJobProgress(appID, id, progress)
 	})
-	a.rememberTrace(environmentID, result.Traces)
+	a.rememberTrace(appID, result.Traces)
 	if result.Fatal != nil {
-		a.finishSyncJob(environmentID, id, false, result.Fatal.Error(), len(result.Traces) > 0)
+		a.finishSyncJob(appID, id, false, result.Fatal.Error(), len(result.Traces) > 0)
 		return
 	}
 
-	state = result.State
+	mergeAppSyncState(&state, appID, result.State)
 	appendOperationLogs(&state, result.Traces)
+	purgeFullySyncedDeletions(&state)
 	if err := saveState(state); err != nil {
-		a.finishSyncJob(environmentID, id, false, err.Error(), len(result.Traces) > 0)
+		a.finishSyncJob(appID, id, false, err.Error(), len(result.Traces) > 0)
 		return
 	}
 
 	success := result.Stopped == nil
-	a.finishSyncJob(environmentID, id, success, result.Status, len(result.Traces) > 0)
+	a.finishSyncJob(appID, id, success, result.Status, len(result.Traces) > 0)
 }
 
-func (a *webApp) updateSyncJobProgress(environmentID string, id string, progress syncProgress) {
+func (a *webApp) updateSyncJobProgress(appID string, id string, progress syncProgress) {
 	a.syncJobMu.Lock()
 	defer a.syncJobMu.Unlock()
 
-	job := a.syncJobs[environmentID]
+	job := a.syncJobs[appID]
 	if job == nil || job.ID != id {
 		return
 	}
@@ -1506,11 +1468,11 @@ func (a *webApp) updateSyncJobProgress(environmentID string, id string, progress
 	}
 }
 
-func (a *webApp) finishSyncJob(environmentID string, id string, success bool, message string, traceAvailable bool) {
+func (a *webApp) finishSyncJob(appID string, id string, success bool, message string, traceAvailable bool) {
 	a.syncJobMu.Lock()
 	defer a.syncJobMu.Unlock()
 
-	job := a.syncJobs[environmentID]
+	job := a.syncJobs[appID]
 	if job == nil || job.ID != id {
 		return
 	}
@@ -1527,11 +1489,11 @@ func (a *webApp) finishSyncJob(environmentID string, id string, success bool, me
 	}
 }
 
-func (a *webApp) currentSyncJob(environmentID string) *syncJobSnapshot {
+func (a *webApp) currentSyncJob(appID string) *syncJobSnapshot {
 	a.syncJobMu.Lock()
 	defer a.syncJobMu.Unlock()
 
-	return cloneSyncJob(a.syncJobs[environmentID])
+	return cloneSyncJob(a.syncJobs[appID])
 }
 
 func cloneSyncJob(job *syncJobSnapshot) *syncJobSnapshot {
@@ -1576,22 +1538,27 @@ func (a *webApp) handleImport(w http.ResponseWriter, r *http.Request) {
 		a.redirectError(w, r, tab, err)
 		return
 	}
-	if !scimEnabled(state) {
-		a.redirectError(w, r, tab, fmt.Errorf("SCIM is disabled"))
+	appID := requestSyncAppID(r, state)
+	projected, err := stateForApp(state, appID)
+	if err != nil {
+		a.redirectError(w, r, tab, err)
 		return
 	}
 
-	result := importStateFromSCIM(state)
-	a.rememberTrace(state.Environment.ID, result.Traces)
+	result := importStateFromSCIM(projected)
+	a.rememberTrace(appID, result.Traces)
 	if result.Fatal != nil {
-		if len(result.Traces) > 0 && state.Config.AutoOpenSyncTrace {
+		if len(result.Traces) > 0 && projected.Config.AutoOpenSyncTrace {
 			setShowTraceCookie(w)
 		}
 		redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "error", Message: result.Fatal.Error()})
 		return
 	}
 
-	if err := saveState(result.State); err != nil {
+	mergeAppImportState(&state, appID, result.State)
+	appendOperationLogs(&state, result.Traces)
+	purgeFullySyncedDeletions(&state)
+	if err := saveState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
@@ -1612,8 +1579,9 @@ func (a *webApp) handleReset(w http.ResponseWriter, r *http.Request) {
 		a.redirectError(w, r, tab, err)
 		return
 	}
-	if !scimEnabled(state) {
-		a.redirectError(w, r, tab, fmt.Errorf("SCIM is disabled"))
+	appID := requestSyncAppID(r, state)
+	if _, err := stateForApp(state, appID); err != nil {
+		a.redirectError(w, r, tab, err)
 		return
 	}
 
@@ -1622,21 +1590,9 @@ func (a *webApp) handleReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resetUsers := 0
-	for i := range state.Users {
-		state.Users[i].RemoteID = ""
-		state.Users[i].Dirty = true
-		state.Users[i].LastError = ""
-		resetUsers++
-	}
-
-	resetGroups := 0
-	for i := range state.Groups {
-		state.Groups[i].RemoteID = ""
-		state.Groups[i].Dirty = true
-		state.Groups[i].LastError = ""
-		resetGroups++
-	}
+	resetUsers := len(state.Users)
+	resetGroups := len(state.Groups)
+	initializeAppSync(&state, appID)
 
 	if err := saveState(state); err != nil {
 		a.redirectError(w, r, tab, err)
@@ -1668,6 +1624,7 @@ func (a *webApp) handleToolsDeleteAll(w http.ResponseWriter, r *http.Request) {
 			state.Users[i].Deleted = true
 			state.Users[i].Dirty = true
 			state.Users[i].LastError = ""
+			markUserDirtyForApps(&state, state.Users[i].ID, true)
 			appendLocalOperationLog(&state, "user", state.Users[i].ID, "Marked for deletion by tools")
 			changed++
 		}
@@ -1709,6 +1666,7 @@ func (a *webApp) handleToolsClearUsersLocal(w http.ResponseWriter, r *http.Reque
 	affectedGroups := 0
 	state.Users = nil
 	state.UserOperations = make(map[string][]operationLog)
+	state.UserSync = nil
 	for i := range state.Groups {
 		if len(state.Groups[i].MemberIDs) == 0 {
 			continue
@@ -1716,6 +1674,7 @@ func (a *webApp) handleToolsClearUsersLocal(w http.ResponseWriter, r *http.Reque
 		state.Groups[i].MemberIDs = nil
 		state.Groups[i].Dirty = true
 		state.Groups[i].LastError = ""
+		markGroupDirtyForApps(&state, state.Groups[i].ID, false)
 		affectedGroups++
 	}
 	if err := saveState(state); err != nil {
@@ -1754,6 +1713,7 @@ func (a *webApp) handleToolsSetAllActive(w http.ResponseWriter, r *http.Request,
 		state.Users[i].Active = active
 		state.Users[i].Dirty = true
 		state.Users[i].LastError = ""
+		markUserDirtyForApps(&state, state.Users[i].ID, false)
 		appendLocalOperationLog(&state, "user", state.Users[i].ID, summarizeActiveToggle(active))
 		changed++
 	}
@@ -1798,10 +1758,14 @@ func (a *webApp) handleToolsCreateUsers(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	firstNewUser := len(state.Users)
 	created, err := appendToolUsers(&state, count, domain)
 	if err != nil {
 		a.redirectToolsError(w, r, tab, err)
 		return
+	}
+	for _, createdUser := range state.Users[firstNewUser:] {
+		markUserDirtyForApps(&state, createdUser.ID, false)
 	}
 	if err := saveState(state); err != nil {
 		a.redirectError(w, r, tab, err)
@@ -1810,60 +1774,6 @@ func (a *webApp) handleToolsCreateUsers(w http.ResponseWriter, r *http.Request) 
 
 	message := fmt.Sprintf("created %d users for %s", created, domain)
 	redirectWithFlash(w, r, dashboardURL("users", nil), flashMessage{Kind: "success", Message: message})
-}
-
-func (a *webApp) handleEnvironmentSave(w http.ResponseWriter, r *http.Request) {
-	tab := normalizedTab(r.FormValue("tab"))
-	id := strings.TrimSpace(r.FormValue("id"))
-	name := strings.TrimSpace(r.FormValue("name"))
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	var saved environment
-	var err error
-	if id == "" {
-		saved, err = createEnvironment(name)
-	} else {
-		saved, err = updateEnvironment(id, name)
-	}
-	if err != nil {
-		a.redirectFormError(w, r, tab, "environment", err)
-		return
-	}
-	rememberEnvironment(w, saved.ID)
-	redirectWithFlash(w, r, dashboardURL(tab, nil), flashMessage{Kind: "success", Message: "environment saved"})
-}
-
-func (a *webApp) handleEnvironmentDelete(w http.ResponseWriter, r *http.Request) {
-	tab := normalizedTab(r.FormValue("tab"))
-	id := r.PathValue("id")
-	state, err := loadEnvironmentState(id)
-	if err != nil {
-		a.redirectError(w, r, tab, err)
-		return
-	}
-	if r.FormValue("confirmation") != state.Environment.Name {
-		a.redirectFormError(w, r, tab, "environment", fmt.Errorf("type the environment name exactly to confirm deletion"))
-		return
-	}
-	a.mu.Lock()
-	err = deleteEnvironment(id)
-	a.mu.Unlock()
-	if err != nil {
-		a.redirectFormError(w, r, tab, "environment", err)
-		return
-	}
-	environments, err := loadEnvironments()
-	if err != nil {
-		a.redirectError(w, r, tab, fmt.Errorf("load remaining environments after deletion: %w", err))
-		return
-	}
-	if len(environments) == 0 {
-		a.redirectError(w, r, tab, fmt.Errorf("no environments remain after deletion"))
-		return
-	}
-	rememberEnvironment(w, environments[0].ID)
-	redirectWithFlash(w, r, dashboardURL(tab, nil), flashMessage{Kind: "success", Message: "environment deleted"})
 }
 
 func (a *webApp) redirectToolsError(w http.ResponseWriter, r *http.Request, tab string, err error) {
@@ -1961,14 +1871,14 @@ func applyFormDraft(data *pageData, draft formDraft) {
 		data.AppForm.App.SAMLNameIDField = values.Get("saml_name_id_field")
 		data.AppForm.App.SAMLEmailAttributeName = values.Get("saml_email_attribute_name")
 		data.AppForm.App.IncludeGroupsClaim = values.Get("include_groups_claim") == "on"
+		data.AppForm.App.SCIMEnabled = values.Get("scim_enabled") == "on"
+		data.AppForm.App.SCIMBaseURL = values.Get("scim_base_url")
+		data.AppForm.App.SCIMAutoOpenTrace = values.Get("scim_auto_open_trace") == "on"
 	case "config":
 		if data.ConfigForm == nil {
 			return
 		}
-		data.ConfigForm.Config.BaseURL = values.Get("base_url")
 		data.ConfigForm.Config.IDPBaseURL = values.Get("idp_base_url")
-		data.ConfigForm.Config.SCIMDisabled = values.Get("scim_enabled") != "on"
-		data.ConfigForm.Config.AutoOpenSyncTrace = values.Get("auto_open_sync_trace") == "on"
 		data.ConfigForm.Config.TrustForwardedHeaders = values.Get("trust_forwarded_headers") == "on"
 		data.ConfigForm.IDPBaseURLValue = values.Get("idp_base_url")
 	case "tools":
@@ -1977,12 +1887,6 @@ func applyFormDraft(data *pageData, draft formDraft) {
 		}
 		data.ToolsForm.Count = values.Get("count")
 		data.ToolsForm.EmailDomain = values.Get("email_domain")
-	case "environment":
-		if data.EnvironmentForm == nil {
-			return
-		}
-		data.EnvironmentForm.ID = values.Get("id")
-		data.EnvironmentForm.Name = values.Get("name")
 	}
 }
 
@@ -1990,25 +1894,25 @@ func (a *webApp) redirectError(w http.ResponseWriter, r *http.Request, tab strin
 	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "error", Message: err.Error()})
 }
 
-func (a *webApp) rememberTrace(environmentID string, traces []syncTraceEntry) {
+func (a *webApp) rememberTrace(appID string, traces []syncTraceEntry) {
 	if a.lastTraces == nil {
 		a.lastTraces = make(map[string][]syncTraceEntry)
 		a.lastTraceContent = make(map[string]string)
 	}
-	a.lastTraces[environmentID] = append([]syncTraceEntry(nil), traces...)
-	a.lastTraceContent[environmentID] = formatSyncTraces(traces)
+	a.lastTraces[appID] = append([]syncTraceEntry(nil), traces...)
+	a.lastTraceContent[appID] = formatSyncTraces(traces)
 }
 
-func (a *webApp) hasTrace(environmentID string) bool {
+func (a *webApp) hasTrace(appID string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return len(a.lastTraces[environmentID]) > 0
+	return len(a.lastTraces[appID]) > 0
 }
 
-func (a *webApp) traceContent(environmentID string) string {
+func (a *webApp) traceContent(appID string) string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.lastTraceContent[environmentID]
+	return a.lastTraceContent[appID]
 }
 
 func buildStats(state appState) statsView {
@@ -2035,7 +1939,12 @@ func buildStats(state appState) statsView {
 }
 
 func scimEnabled(state appState) bool {
-	return !state.Config.SCIMDisabled
+	for _, candidate := range state.Apps {
+		if candidate.SCIMEnabled {
+			return true
+		}
+	}
+	return false
 }
 
 func buildUserRows(state appState, tab string, page int, pageSize int, search string) []userRowView {
@@ -2146,6 +2055,8 @@ func buildAppRows(state appState, base string, certPEM string) []appRowView {
 			SAMLEmailAttributeName: app.SAMLEmailAttributeName,
 			SAMLSPACSURL:           app.SAMLACSURL,
 			SAMLSPAudience:         samlAudience,
+			SCIMEnabled:            app.SCIMEnabled,
+			SCIMBaseURL:            app.SCIMBaseURL,
 		}
 		if row.SupportsOIDC {
 			row.OIDCDiscovery = base + "/oidc/" + app.Slug + "/.well-known/openid-configuration"

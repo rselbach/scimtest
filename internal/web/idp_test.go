@@ -203,33 +203,29 @@ func TestEffectiveIDPBaseURLOnlyTrustsForwardedProtoWhenConfigured(t *testing.T)
 	}
 }
 
-func TestOIDCAppUsesOwningEnvironmentDirectory(t *testing.T) {
+func TestOIDCAppUsesGlobalDirectory(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
-	r.NoError(saveState(appState{Users: []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}}}))
-	staging, err := createEnvironment("Staging Campus")
-	r.NoError(err)
-	state, err := loadEnvironmentState(staging.ID)
-	r.NoError(err)
-	state.Users = []user{{ID: "abed", GivenName: "Abed", FamilyName: "Nadir", Email: "abed@greendale.edu", Username: "abed", Active: true}}
-	state.Apps = []app{{
+	r.NoError(saveState(appState{Users: []user{
+		{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true},
+		{ID: "abed", GivenName: "Abed", FamilyName: "Nadir", Email: "abed@greendale.edu", Username: "abed", Active: true},
+	}, Apps: []app{{
 		ID:               "staging-app",
-		Name:             "Staging Portal",
-		Slug:             "staging-portal",
+		Name:             "Portal",
+		Slug:             "portal",
 		Protocol:         "oidc",
-		OIDCClientID:     "staging-client",
+		OIDCClientID:     "client",
 		OIDCClientSecret: "secret",
 		OIDCRedirectURIs: []string{"http://client.test/callback"},
-	}}
-	r.NoError(saveState(state))
+	}}}))
 	svc := newTestIDPApp(t)
 	rec := httptest.NewRecorder()
 
-	svc.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/oidc/staging-portal/authorize?response_type=code&client_id=staging-client&redirect_uri=http%3A%2F%2Fclient.test%2Fcallback&scope=openid", nil))
+	svc.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/oidc/portal/authorize?response_type=code&client_id=client&redirect_uri=http%3A%2F%2Fclient.test%2Fcallback&scope=openid", nil))
 
 	r.Equal(http.StatusOK, rec.Code)
 	r.Contains(rec.Body.String(), "Abed Nadir")
-	r.NotContains(rec.Body.String(), "Troy Barnes")
+	r.Contains(rec.Body.String(), "Troy Barnes")
 }
 
 func TestOIDCTokenPrunesExpiredCredentials(t *testing.T) {

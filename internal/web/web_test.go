@@ -423,7 +423,7 @@ func TestToggleActiveUpdatesStateAndHistory(t *testing.T) {
 	r.NoError(err)
 	r.Len(updated.Users, 1)
 	r.False(updated.Users[0].Active)
-	r.True(updated.Users[0].Dirty)
+	r.False(updated.Users[0].Dirty)
 	r.Equal("", updated.Users[0].LastError)
 	r.Equal("Deactivated", updated.UserOperations["u1"][0].Summary)
 }
@@ -488,7 +488,7 @@ func TestToolsCreateUsers(t *testing.T) {
 	r.Equal("user004", created[2].Username)
 	for _, u := range created {
 		r.True(u.Active)
-		r.True(u.Dirty)
+		r.False(u.Dirty)
 		r.Equal("Created by tools", updated.UserOperations[u.ID][0].Summary)
 	}
 }
@@ -535,7 +535,7 @@ func TestToolsActivateAndDeactivateAll(t *testing.T) {
 	updated, err := loadState()
 	r.NoError(err)
 	r.True(updated.Users[0].Active)
-	r.True(updated.Users[0].Dirty)
+	r.False(updated.Users[0].Dirty)
 	r.True(updated.Users[1].Active)
 	r.False(updated.Users[1].Dirty)
 	r.False(updated.Users[2].Active)
@@ -553,9 +553,9 @@ func TestToolsActivateAndDeactivateAll(t *testing.T) {
 	updated, err = loadState()
 	r.NoError(err)
 	r.False(updated.Users[0].Active)
-	r.True(updated.Users[0].Dirty)
+	r.False(updated.Users[0].Dirty)
 	r.False(updated.Users[1].Active)
-	r.True(updated.Users[1].Dirty)
+	r.False(updated.Users[1].Dirty)
 	r.False(updated.Users[2].Active)
 	r.False(updated.Users[2].Dirty)
 	r.Equal("Deactivated", updated.UserOperations["u2"][0].Summary)
@@ -566,6 +566,7 @@ func TestToolsDeleteAll(t *testing.T) {
 		r := require.New(t)
 		setTestStateFile(t)
 		r.NoError(saveState(appState{
+			Apps: []app{{ID: "app-1", Name: "Study App", Slug: "study-app", Protocol: "scim", SCIMEnabled: true, SCIMBaseURL: "https://example.test/scim", SCIMBearerToken: "token"}},
 			Users: []user{{
 				ID:         "u1",
 				GivenName:  "Jeff",
@@ -598,7 +599,8 @@ func TestToolsDeleteAll(t *testing.T) {
 		updated, err := loadState()
 		r.NoError(err)
 		r.True(updated.Users[0].Deleted)
-		r.True(updated.Users[0].Dirty)
+		r.False(updated.Users[0].Dirty)
+		r.True(updated.UserSync["app-1"]["u1"].Dirty)
 		r.True(updated.Users[1].Deleted)
 		r.False(updated.Users[1].Dirty)
 		r.Equal("Marked for deletion by tools", updated.UserOperations["u1"][0].Summary)
@@ -680,7 +682,8 @@ func TestToolsClearUsersLocalNeverContactsSCIM(t *testing.T) {
 	r.Empty(updated.Users)
 	r.Empty(updated.UserOperations)
 	r.Empty(updated.Groups[0].MemberIDs)
-	r.True(updated.Groups[0].Dirty)
+	r.False(updated.Groups[0].Dirty)
+	r.True(updated.GroupSync["app_legacy_scim"]["g1"].Dirty)
 	r.Empty(updated.Groups[0].LastError)
 	r.False(updated.Groups[1].Dirty)
 	r.Contains(rec.Header().Get("Set-Cookie"), "cleared")
@@ -733,10 +736,10 @@ func TestSyncPersistsRemoteStateAndTraceCookie(t *testing.T) {
 	r.True(job.TraceAvailable)
 	updated, err := loadState()
 	r.NoError(err)
-	r.Equal("remote-user-1", updated.Users[0].RemoteID)
-	r.False(updated.Users[0].Dirty)
+	r.Equal("remote-user-1", updated.UserSync["app_legacy_scim"]["u1"].RemoteID)
+	r.False(updated.UserSync["app_legacy_scim"]["u1"].Dirty)
 	r.NotEmpty(updated.UserOperations["u1"])
-	r.Contains(app.traceContent(defaultEnvironmentID), "POST /Users")
+	r.Contains(app.traceContent("app_legacy_scim"), "POST /Users")
 }
 
 func TestSyncStartsAsyncAndReportsStatus(t *testing.T) {
@@ -819,7 +822,7 @@ func TestSyncStartsAsyncAndReportsStatus(t *testing.T) {
 
 func TestMutationIsRejectedWhileSyncRuns(t *testing.T) {
 	r := require.New(t)
-	app := &webApp{syncJobs: map[string]*syncJobSnapshot{defaultEnvironmentID: {Running: true}}}
+	app := &webApp{syncJobs: map[string]*syncJobSnapshot{"app-1": {Running: true}}}
 	called := false
 	handler := app.rejectWhileSyncing(func(w http.ResponseWriter, _ *http.Request) {
 		called = true
@@ -887,7 +890,14 @@ func TestDashboardRendersCriticalFlowAffordances(t *testing.T) {
 		}},
 	}))
 	app := newTestIDPApp(t)
-	app.syncJobs = map[string]*syncJobSnapshot{defaultEnvironmentID: {Running: true, Percent: 42, Message: "Creating Troy"}}
+	state, err := loadState()
+	r.NoError(err)
+	state.Apps[0].SCIMEnabled = true
+	state.Apps[0].SCIMBaseURL = "https://scim.example.test"
+	state.Apps[0].SCIMBearerToken = "token"
+	initializeAppSync(&state, "app-1")
+	r.NoError(saveState(state))
+	app.syncJobs = map[string]*syncJobSnapshot{"app-1": {Running: true, Percent: 42, Message: "Creating Troy"}}
 	rec := httptest.NewRecorder()
 
 	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=apps", nil))
@@ -924,31 +934,72 @@ func TestDashboardJavaScriptDoesNotContainStyles(t *testing.T) {
 	r.NotContains(script, "grid-column:")
 }
 
-func TestEnvironmentSelectionScopesDashboardResources(t *testing.T) {
+func TestDashboardUsesOneGlobalDirectory(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
-	r.NoError(saveState(appState{Users: []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}}}))
-	staging, err := createEnvironment("Staging Campus")
-	r.NoError(err)
-	stagingState, err := loadEnvironmentState(staging.ID)
-	r.NoError(err)
-	stagingState.Users = []user{{ID: "abed", GivenName: "Abed", FamilyName: "Nadir", Email: "abed@greendale.edu", Username: "abed", Active: true}}
-	r.NoError(saveState(stagingState))
+	r.NoError(saveState(appState{Users: []user{
+		{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true},
+		{ID: "abed", GivenName: "Abed", FamilyName: "Nadir", Email: "abed@greendale.edu", Username: "abed", Active: true},
+	}}))
 	app := newTestIDPApp(t)
 
 	rec := httptest.NewRecorder()
-	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=users&environment="+url.QueryEscape(staging.ID), nil))
+	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=users&environment=obsolete", nil))
 
 	r.Equal(http.StatusOK, rec.Code)
 	body := rec.Body.String()
-	r.Contains(body, "Staging Campus")
 	r.Contains(body, "Abed Nadir")
-	r.NotContains(body, "Troy Barnes")
-	cookies := rec.Result().Cookies()
-	r.NotEmpty(cookies)
+	r.Contains(body, "Troy Barnes")
+	r.NotContains(body, "Edit environment")
 }
 
-func TestEnvironmentCreateAndGuardedDelete(t *testing.T) {
+func TestAppSaveStoresSCIMSettingsAndInitializesSyncState(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{Users: []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}}}))
+	appService := newTestIDPApp(t)
+	form := url.Values{
+		"tab":                     {"apps"},
+		"name":                    {"Greendale Portal"},
+		"slug":                    {"greendale-portal"},
+		"protocol":                {"oidc"},
+		"allow_any_oidc_redirect": {"on"},
+		"scim_enabled":            {"on"},
+		"scim_base_url":           {"https://portal.test/scim/v2"},
+		"scim_bearer_token":       {"chang-secret"},
+		"scim_auto_open_trace":    {"on"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/apps/save", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	appService.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	state, err := loadState()
+	r.NoError(err)
+	r.Len(state.Apps, 1)
+	savedApp := state.Apps[0]
+	r.True(savedApp.SCIMEnabled)
+	r.Equal("https://portal.test/scim/v2", savedApp.SCIMBaseURL)
+	r.Equal("chang-secret", savedApp.SCIMBearerToken)
+	r.True(savedApp.SCIMAutoOpenTrace)
+	r.True(state.UserSync[savedApp.ID]["troy"].Dirty)
+
+	form.Set("id", savedApp.ID)
+	form.Set("name", "Greendale Portal Updated")
+	form.Del("scim_bearer_token")
+	req = httptest.NewRequest(http.MethodPost, "/apps/save", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec = httptest.NewRecorder()
+	appService.routes().ServeHTTP(rec, req)
+	r.Equal(http.StatusSeeOther, rec.Code)
+	state, err = loadState()
+	r.NoError(err)
+	r.Equal("chang-secret", state.Apps[0].SCIMBearerToken)
+}
+
+func TestEnvironmentRoutesAreRemoved(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{}))
@@ -958,47 +1009,39 @@ func TestEnvironmentCreateAndGuardedDelete(t *testing.T) {
 	createReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	createRec := httptest.NewRecorder()
 	app.routes().ServeHTTP(createRec, createReq)
-	r.Equal(http.StatusSeeOther, createRec.Code)
+	r.Equal(http.StatusMethodNotAllowed, createRec.Code)
 
-	environments, err := loadEnvironments()
-	r.NoError(err)
-	r.Len(environments, 2)
-	created := environments[1]
 	deleteForm := url.Values{"tab": {"users"}, "confirmation": {"wrong"}}
-	deleteReq := httptest.NewRequest(http.MethodPost, "/environments/"+created.ID+"/delete", strings.NewReader(deleteForm.Encode()))
+	deleteReq := httptest.NewRequest(http.MethodPost, "/environments/obsolete/delete", strings.NewReader(deleteForm.Encode()))
 	deleteReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	deleteRec := httptest.NewRecorder()
 	app.routes().ServeHTTP(deleteRec, deleteReq)
-	r.Equal(http.StatusSeeOther, deleteRec.Code)
-
-	environments, err = loadEnvironments()
-	r.NoError(err)
-	r.Len(environments, 2)
+	r.Equal(http.StatusMethodNotAllowed, deleteRec.Code)
 }
 
-func TestSyncOnlyMutatesSelectedEnvironment(t *testing.T) {
+func TestSyncOnlyMutatesSelectedApp(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		r.Equal("/Users", req.URL.Path)
 		w.Header().Set("Content-Type", "application/scim+json")
-		_, err := fmt.Fprint(w, `{"id":"remote-abed"}`)
+		_, err := fmt.Fprint(w, `{"id":"remote-troy-b"}`)
 		r.NoError(err)
 	}))
 	defer server.Close()
 	r.NoError(saveState(appState{
-		Config: config{BaseURL: server.URL, BearerToken: "default-token"},
-		Users:  []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true, Dirty: true}},
+		Users: []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}},
+		Apps: []app{
+			{ID: "app-a", Name: "App A", Slug: "app-a", Protocol: "scim", SCIMEnabled: true, SCIMBaseURL: server.URL, SCIMBearerToken: "token-a"},
+			{ID: "app-b", Name: "App B", Slug: "app-b", Protocol: "scim", SCIMEnabled: true, SCIMBaseURL: server.URL, SCIMBearerToken: "token-b"},
+		},
+		UserSync: map[string]map[string]resourceSyncState{
+			"app-a": {"troy": {Dirty: true}},
+			"app-b": {"troy": {Dirty: true}},
+		},
 	}))
-	staging, err := createEnvironment("Staging")
-	r.NoError(err)
-	state, err := loadEnvironmentState(staging.ID)
-	r.NoError(err)
-	state.Config = config{BaseURL: server.URL, BearerToken: "staging-token"}
-	state.Users = []user{{ID: "abed", GivenName: "Abed", FamilyName: "Nadir", Email: "abed@greendale.edu", Username: "abed", Active: true, Dirty: true}}
-	r.NoError(saveState(state))
 	app := newTestIDPApp(t)
-	form := url.Values{"tab": {"users"}, "environment": {staging.ID}}
+	form := url.Values{"tab": {"users"}, "app": {"app-b"}}
 	req := httptest.NewRequest(http.MethodPost, "/sync", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
@@ -1008,25 +1051,23 @@ func TestSyncOnlyMutatesSelectedEnvironment(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		job := app.currentSyncJob(staging.ID)
+		job := app.currentSyncJob("app-b")
 		if job != nil && job.Done {
 			r.True(job.Success)
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("staging sync did not finish")
+			t.Fatal("app sync did not finish")
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	defaultState, err := loadState()
+	state, err := loadState()
 	r.NoError(err)
-	r.True(defaultState.Users[0].Dirty)
-	r.Empty(defaultState.Users[0].RemoteID)
-	stagingState, err := loadEnvironmentState(staging.ID)
-	r.NoError(err)
-	r.False(stagingState.Users[0].Dirty)
-	r.Equal("remote-abed", stagingState.Users[0].RemoteID)
+	r.True(state.UserSync["app-a"]["troy"].Dirty)
+	r.Empty(state.UserSync["app-a"]["troy"].RemoteID)
+	r.False(state.UserSync["app-b"]["troy"].Dirty)
+	r.Equal("remote-troy-b", state.UserSync["app-b"]["troy"].RemoteID)
 }
 
 func TestSyncRateLimitRendersReadableError(t *testing.T) {
@@ -1078,10 +1119,10 @@ func TestSyncRateLimitRendersReadableError(t *testing.T) {
 	r.True(job.TraceAvailable)
 	updated, err := loadState()
 	r.NoError(err)
-	r.Contains(updated.Users[0].LastError, "Try again now")
-	r.NotContains(updated.Users[0].LastError, "schemas")
+	r.Contains(updated.UserSync["app_legacy_scim"]["u1"].LastError, "Try again now")
+	r.NotContains(updated.UserSync["app_legacy_scim"]["u1"].LastError, "schemas")
 	r.Equal("0", updated.UserOperations["u1"][0].ResponseRetryAfter)
-	r.Contains(app.traceContent(defaultEnvironmentID), "Retry-After: 0")
+	r.Contains(app.traceContent("app_legacy_scim"), "Retry-After: 0")
 
 	indexReq := httptest.NewRequest(http.MethodGet, "/?tab=users", nil)
 	indexRec := httptest.NewRecorder()
@@ -1216,7 +1257,7 @@ func TestSCIMDisabledRejectsSync(t *testing.T) {
 	app.routes().ServeHTTP(rec, req)
 
 	r.Equal(http.StatusSeeOther, rec.Code)
-	r.Contains(rec.Header().Get("Set-Cookie"), "SCIM+is+disabled")
+	r.Contains(rec.Header().Get("Set-Cookie"), "select+a+sync-enabled+app")
 }
 
 func TestConfigRendersRgrokSetupLink(t *testing.T) {
@@ -1364,11 +1405,7 @@ func TestRgrokSetupDoesNotBlockConfigSave(t *testing.T) {
 		t.Fatal("rgrok setup did not start")
 	}
 
-	configForm := url.Values{
-		"tab":          {"apps"},
-		"base_url":     {"https://scim.greendale.test"},
-		"bearer_token": {"chang-secret"},
-	}
+	configForm := url.Values{"tab": {"apps"}, "trust_forwarded_headers": {"on"}}
 	configReq := httptest.NewRequest(http.MethodPost, "/config/save", strings.NewReader(configForm.Encode()))
 	configReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	configRec := httptest.NewRecorder()
@@ -1395,7 +1432,7 @@ func TestRgrokSetupDoesNotBlockConfigSave(t *testing.T) {
 
 	state, err := loadState()
 	r.NoError(err)
-	r.Equal("https://scim.greendale.test", state.Config.BaseURL)
+	r.True(state.Config.TrustForwardedHeaders)
 	r.Equal("demo", state.Config.RgrokName)
 }
 
@@ -1581,7 +1618,13 @@ func waitForSyncDone(t *testing.T, app *webApp) syncJobSnapshot {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		job := app.currentSyncJob(defaultEnvironmentID)
+		app.syncJobMu.Lock()
+		var job *syncJobSnapshot
+		for _, candidate := range app.syncJobs {
+			job = cloneSyncJob(candidate)
+			break
+		}
+		app.syncJobMu.Unlock()
 		if job != nil && job.Done {
 			return *job
 		}

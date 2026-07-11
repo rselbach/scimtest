@@ -17,12 +17,9 @@ func TestSaveAndLoadState(t *testing.T) {
 
 	want := AppState{
 		Config: Config{
-			BaseURL:           "https://example.com/scim/v2",
-			BearerToken:       "secret",
-			AutoOpenSyncTrace: true,
-			IDPBaseURL:        "https://demo.rgrok.rselbach.com",
-			RgrokName:         "demo",
-			RgrokToken:        "rgrok-token",
+			IDPBaseURL: "https://demo.rgrok.rselbach.com",
+			RgrokName:  "demo",
+			RgrokToken: "rgrok-token",
 		},
 		Users: []User{{
 			ID:         "local-1",
@@ -50,7 +47,17 @@ func TestSaveAndLoadState(t *testing.T) {
 			SAMLNameIDField:        "username",
 			SAMLNameIDFormat:       SAMLNameIDFormatUnspecified,
 			SAMLEmailAttributeName: DefaultSAMLEmailAttributeName,
+			SCIMEnabled:            true,
+			SCIMBaseURL:            "https://example.com/scim/v2",
+			SCIMBearerToken:        "secret",
+			SCIMAutoOpenTrace:      true,
 		}},
+		UserSync: map[string]map[string]ResourceSyncState{
+			"app-1": {"local-1": {RemoteID: "remote-1", Dirty: true}},
+		},
+		GroupSync: map[string]map[string]ResourceSyncState{
+			"app-1": {"group-1": {RemoteID: "remote-group-1", Dirty: true}},
+		},
 		UserOperations: map[string][]OperationLog{
 			"local-1": {{
 				Kind:               "sync",
@@ -81,8 +88,11 @@ func TestSaveAndLoadState(t *testing.T) {
 	}
 
 	r.NoError(SaveState(want))
-	want.Environment = Environment{ID: DefaultEnvironmentID, Name: "Default", Slug: "default"}
-	want.Environments = []Environment{want.Environment}
+	want.Users[0].RemoteID = ""
+	want.Users[0].Dirty = false
+	want.Groups[0].RemoteID = ""
+	want.Groups[0].Dirty = false
+	want.Environment = Environment{ID: DefaultEnvironmentID, Name: "Directory", Slug: "directory"}
 
 	got, err := LoadState()
 	r.NoError(err)
@@ -114,61 +124,32 @@ func TestStateDatabaseUsesPrivatePermissions(t *testing.T) {
 	r.Equal(os.FileMode(0o600), info.Mode().Perm())
 }
 
-func TestEnvironmentStateIsIsolatedAndDefaultIsBackwardCompatible(t *testing.T) {
+func TestLoadStateFlattensExistingEnvironmentDirectories(t *testing.T) {
 	r := require.New(t)
 	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
 
-	defaultState := AppState{
-		Config: Config{BaseURL: "https://default.test/scim", BearerToken: "default-token"},
-		Users:  []User{{ID: "default-user", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}},
-	}
+	defaultState := AppState{Users: []User{{ID: "default-user", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}}}
 	r.NoError(SaveState(defaultState))
 	staging, err := CreateEnvironment("Staging Campus")
 	r.NoError(err)
 	stagingState, err := LoadEnvironmentState(staging.ID)
 	r.NoError(err)
-	stagingState.Config.BaseURL = "https://staging.test/scim"
-	stagingState.Config.BearerToken = "staging-token"
-	stagingState.Config.SCIMDisabled = false
 	stagingState.Users = []User{{ID: "staging-user", GivenName: "Abed", FamilyName: "Nadir", Email: "abed@greendale.edu", Username: "abed", Active: true}}
-	stagingState.Config.IDPBaseURL = "https://global-idp.test"
-	r.NoError(SaveState(stagingState))
+	db, err := openStateDB()
+	r.NoError(err)
+	r.NoError(saveStateToDB(db, stagingState, false))
+	r.NoError(db.Close())
 
-	gotDefault, err := LoadState()
+	global, err := LoadState()
 	r.NoError(err)
-	r.Equal(DefaultEnvironmentID, gotDefault.Environment.ID)
-	r.Equal("https://default.test/scim", gotDefault.Config.BaseURL)
-	r.Equal("https://global-idp.test", gotDefault.Config.IDPBaseURL)
-	r.Equal([]string{"default-user"}, []string{gotDefault.Users[0].ID})
-
-	gotStaging, err := LoadEnvironmentState(staging.ID)
+	r.Len(global.Users, 2)
+	r.NoError(SaveState(global))
+	environments, err := LoadEnvironments()
 	r.NoError(err)
-	r.Equal("https://staging.test/scim", gotStaging.Config.BaseURL)
-	r.Equal([]string{"staging-user"}, []string{gotStaging.Users[0].ID})
-	r.Len(gotStaging.Environments, 2)
-}
-
-func TestDeleteEnvironmentRemovesOnlyItsState(t *testing.T) {
-	r := require.New(t)
-	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
-	r.NoError(SaveState(AppState{Users: []User{{ID: "default-user", GivenName: "Troy", FamilyName: "Barnes", Email: "shared@greendale.edu", Username: "shared", Active: true}}}))
-	staging, err := CreateEnvironment("Staging")
+	r.Len(environments, 1)
+	reloaded, err := LoadState()
 	r.NoError(err)
-	state, err := LoadEnvironmentState(staging.ID)
-	r.NoError(err)
-	state.Users = []User{{ID: "staging-user", GivenName: "Abed", FamilyName: "Nadir", Email: "shared@greendale.edu", Username: "shared", Active: true}}
-	state.Groups = []Group{{ID: "staging-group", DisplayName: "Study Group", MemberIDs: []string{"staging-user"}}}
-	state.Apps = []App{{ID: "staging-app", Name: "Portal", Slug: "portal", Protocol: "oidc", OIDCClientID: "portal", AllowAnyOIDCRedirect: true}}
-	r.NoError(SaveState(state))
-
-	r.NoError(DeleteEnvironment(staging.ID))
-	_, err = LoadEnvironmentState(staging.ID)
-	r.ErrorContains(err, "not found")
-	defaultState, err := LoadState()
-	r.NoError(err)
-	r.Len(defaultState.Users, 1)
-	r.Equal("default-user", defaultState.Users[0].ID)
-	r.ErrorContains(DeleteEnvironment(DefaultEnvironmentID), "final environment")
+	r.Len(reloaded.Users, 2)
 }
 
 func TestDefaultStateDirectoryUsesPrivatePermissions(t *testing.T) {
@@ -359,16 +340,21 @@ func TestLoadStateMigratesPreEnvironmentDatabaseIntoDefault(t *testing.T) {
 
 	state, err := LoadState()
 	r.NoError(err)
-	r.Equal(Environment{ID: DefaultEnvironmentID, Name: "Default", Slug: "default"}, state.Environment)
-	r.Equal("https://legacy.test/scim", state.Config.BaseURL)
-	r.Equal("legacy-token", state.Config.BearerToken)
+	r.Equal(Environment{ID: DefaultEnvironmentID, Name: "Directory", Slug: "directory"}, state.Environment)
+	r.Empty(state.Config.BaseURL)
+	r.Empty(state.Config.BearerToken)
 	r.Len(state.Users, 1)
-	r.Equal("remote-troy", state.Users[0].RemoteID)
+	r.Empty(state.Users[0].RemoteID)
+	r.Len(state.Apps, 1)
+	r.True(state.Apps[0].SCIMEnabled)
+	r.Equal("https://legacy.test/scim", state.Apps[0].SCIMBaseURL)
+	r.Equal("legacy-token", state.Apps[0].SCIMBearerToken)
+	r.Equal("remote-troy", state.UserSync[state.Apps[0].ID]["troy"].RemoteID)
 
 	stateAgain, err := LoadState()
 	r.NoError(err)
 	r.Equal(state.Environment, stateAgain.Environment)
-	r.Len(stateAgain.Environments, 1)
+	r.Empty(stateAgain.Environments)
 }
 
 func TestEnvironmentSCIMConfigurationMigratesToApps(t *testing.T) {
@@ -382,10 +368,13 @@ func TestEnvironmentSCIMConfigurationMigratesToApps(t *testing.T) {
 	legacy.Config = Config{BaseURL: "https://legacy.test/scim", BearerToken: "legacy-token", AutoOpenSyncTrace: true}
 	legacy.Users = []User{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true, RemoteID: "remote-troy"}}
 	legacy.Apps = []App{{ID: "legacy-app", Name: "Legacy Portal", Slug: "legacy-portal", Protocol: "saml", SAMLACSURL: "https://legacy.test/acs"}}
-	r.NoError(SaveState(legacy))
+	db, err := openStateDB()
+	r.NoError(err)
+	r.NoError(saveStateToDB(db, legacy, false))
+	r.NoError(db.Close())
 	path, err := stateFilePath()
 	r.NoError(err)
-	db, err := sql.Open("sqlite", path)
+	db, err = sql.Open("sqlite", path)
 	r.NoError(err)
 	_, err = db.Exec(`DELETE FROM config WHERE key = 'app_scim_migrated'`)
 	r.NoError(err)
@@ -403,6 +392,80 @@ func TestEnvironmentSCIMConfigurationMigratesToApps(t *testing.T) {
 	r.Equal("legacy-token", migrated.Apps[0].SCIMBearerToken)
 	r.True(migrated.Apps[0].SCIMAutoOpenTrace)
 	r.Equal(ResourceSyncState{RemoteID: "remote-troy"}, migrated.UserSync["legacy-app"]["troy"])
+}
+
+func TestStateForAppKeepsRemoteStateIndependent(t *testing.T) {
+	r := require.New(t)
+	state := AppState{
+		Users:  []User{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}},
+		Groups: []Group{{ID: "study-group", DisplayName: "Study Group", MemberIDs: []string{"troy"}}},
+		Apps: []App{
+			{ID: "app-a", Name: "Portal A", SCIMEnabled: true, SCIMBaseURL: "https://a.test/scim", SCIMBearerToken: "token-a"},
+			{ID: "app-b", Name: "Portal B", SCIMEnabled: true, SCIMBaseURL: "https://b.test/scim", SCIMBearerToken: "token-b"},
+		},
+		UserSync: map[string]map[string]ResourceSyncState{
+			"app-a": {"troy": {RemoteID: "remote-a"}},
+			"app-b": {"troy": {RemoteID: "remote-b", Dirty: true}},
+		},
+	}
+
+	projectedA, err := StateForApp(state, "app-a")
+	r.NoError(err)
+	r.Equal("https://a.test/scim", projectedA.Config.BaseURL)
+	r.Equal("remote-a", projectedA.Users[0].RemoteID)
+	r.False(projectedA.Users[0].Dirty)
+
+	projectedB, err := StateForApp(state, "app-b")
+	r.NoError(err)
+	r.Equal("https://b.test/scim", projectedB.Config.BaseURL)
+	r.Equal("remote-b", projectedB.Users[0].RemoteID)
+	r.True(projectedB.Users[0].Dirty)
+}
+
+func TestMarkDirtyUpdatesEverySyncApp(t *testing.T) {
+	r := require.New(t)
+	state := AppState{Apps: []App{
+		{ID: "app-a", SCIMEnabled: true},
+		{ID: "app-b", SCIMEnabled: true},
+		{ID: "app-c"},
+	}}
+
+	MarkUserDirtyForApps(&state, "troy", false)
+	MarkGroupDirtyForApps(&state, "study-group", false)
+
+	r.True(state.UserSync["app-a"]["troy"].Dirty)
+	r.True(state.UserSync["app-b"]["troy"].Dirty)
+	r.NotContains(state.UserSync, "app-c")
+	r.True(state.GroupSync["app-a"]["study-group"].Dirty)
+	r.True(state.GroupSync["app-b"]["study-group"].Dirty)
+	r.NotContains(state.GroupSync, "app-c")
+}
+
+func TestMergeAppImportPreservesOtherAppRemoteIDs(t *testing.T) {
+	r := require.New(t)
+	state := AppState{
+		Users: []User{
+			{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true},
+			{ID: "abed", GivenName: "Abed", FamilyName: "Nadir", Email: "abed@greendale.edu", Username: "abed", Active: true},
+		},
+		Apps: []App{{ID: "app-a", SCIMEnabled: true}, {ID: "app-b", SCIMEnabled: true}},
+		UserSync: map[string]map[string]ResourceSyncState{
+			"app-a": {"troy": {RemoteID: "a-troy"}, "abed": {RemoteID: "a-abed"}},
+			"app-b": {"troy": {RemoteID: "b-troy"}, "abed": {RemoteID: "b-abed"}},
+		},
+	}
+	imported := AppState{Users: []User{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true, RemoteID: "a-troy"}}}
+
+	MergeAppImportState(&state, "app-a", imported)
+
+	r.Len(state.Users, 2)
+	r.True(state.Users[1].Deleted)
+	r.Equal("a-troy", state.UserSync["app-a"]["troy"].RemoteID)
+	r.False(state.UserSync["app-a"]["troy"].Dirty)
+	r.Equal("b-troy", state.UserSync["app-b"]["troy"].RemoteID)
+	r.True(state.UserSync["app-b"]["troy"].Dirty)
+	r.Equal("b-abed", state.UserSync["app-b"]["abed"].RemoteID)
+	r.True(state.UserSync["app-b"]["abed"].Deleted)
 }
 
 func TestAppendLocalOperationLogPrependsEntry(t *testing.T) {

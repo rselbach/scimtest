@@ -75,8 +75,17 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 	}
 	id := strings.TrimSpace(r.FormValue("id"))
 	oidcClientSecret := strings.TrimSpace(r.FormValue("oidc_client_secret"))
-	if existingIndex, ok := appIndexByID(state.Apps, id); ok && oidcClientSecret == "" && r.FormValue("regenerate_oidc_secret") != "on" {
-		oidcClientSecret = state.Apps[existingIndex].OIDCClientSecret
+	scimBearerToken := strings.TrimSpace(r.FormValue("scim_bearer_token"))
+	existingIndex, appExists := appIndexByID(state.Apps, id)
+	wasSCIMEnabled := false
+	if appExists {
+		wasSCIMEnabled = state.Apps[existingIndex].SCIMEnabled
+		if oidcClientSecret == "" && r.FormValue("regenerate_oidc_secret") != "on" {
+			oidcClientSecret = state.Apps[existingIndex].OIDCClientSecret
+		}
+		if scimBearerToken == "" {
+			scimBearerToken = state.Apps[existingIndex].SCIMBearerToken
+		}
 	}
 	app := app{
 		ID:                     id,
@@ -94,12 +103,19 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		SAMLNameIDField:        normalizeSAMLNameIDField(r.FormValue("saml_name_id_field")),
 		SAMLEmailAttributeName: strings.TrimSpace(r.FormValue("saml_email_attribute_name")),
 		IncludeGroupsClaim:     r.FormValue("include_groups_claim") == "on",
+		SCIMEnabled:            r.FormValue("scim_enabled") == "on",
+		SCIMBaseURL:            strings.TrimSpace(r.FormValue("scim_base_url")),
+		SCIMBearerToken:        scimBearerToken,
+		SCIMAutoOpenTrace:      r.FormValue("scim_auto_open_trace") == "on",
 	}
 	if app.Slug == "" {
 		app.Slug = slugify(app.Name)
 	}
 	if app.Protocol == "" {
 		app.Protocol = "oidc"
+	}
+	if app.Protocol == "scim" {
+		app.SCIMEnabled = true
 	}
 	if supportsOIDC(app) {
 		if app.OIDCClientID == "" {
@@ -138,6 +154,14 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		app.SAMLNameIDFormat = ""
 		app.SAMLEmailAttributeName = ""
 	}
+	if err := validateHTTPBaseURL("SCIM base URL", app.SCIMBaseURL, app.SCIMEnabled); err != nil {
+		a.redirectFormError(w, r, tab, "app", err)
+		return
+	}
+	if app.SCIMEnabled && app.SCIMBearerToken == "" {
+		a.redirectFormError(w, r, tab, "app", fmt.Errorf("SCIM bearer token is required"))
+		return
+	}
 	allApps, err := loadAllApps()
 	if err != nil {
 		a.redirectError(w, r, tab, err)
@@ -163,6 +187,9 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		a.redirectError(w, r, tab, fmt.Errorf("app %s not found", id))
 		return
 	}
+	if app.SCIMEnabled && !wasSCIMEnabled {
+		initializeAppSync(&state, app.ID)
+	}
 	if err := saveState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
@@ -184,7 +211,10 @@ func (a *webApp) handleAppDelete(w http.ResponseWriter, r *http.Request) {
 		a.redirectError(w, r, "apps", fmt.Errorf("app not found"))
 		return
 	}
+	appID := state.Apps[index].ID
 	state.Apps = append(state.Apps[:index], state.Apps[index+1:]...)
+	delete(state.UserSync, appID)
+	delete(state.GroupSync, appID)
 	if err := saveState(state); err != nil {
 		a.redirectError(w, r, "apps", err)
 		return

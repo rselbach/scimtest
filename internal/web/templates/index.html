@@ -119,7 +119,7 @@
     }
     .topbar-pill .icon { color: var(--topbar-muted); }
 	.topbar-spacer { flex: 1; }
-	.environment-switcher select { height: 30px; max-width: 220px; border: 1px solid var(--topbar-pill-line); border-radius: var(--radius); background: var(--topbar-pill); color: var(--topbar-fg); padding: 0 28px 0 9px; }
+	.sync-app-switcher select { height: 30px; max-width: 220px; border: 1px solid var(--topbar-pill-line); border-radius: var(--radius); background: var(--topbar-pill); color: var(--topbar-fg); padding: 0 28px 0 9px; }
     .topbar-meta {
       display: inline-flex;
       align-items: center;
@@ -975,7 +975,7 @@
     }
     .segmented {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 4px;
       min-height: 38px;
       padding: 4px;
@@ -1101,15 +1101,13 @@
       scimtest
       <span class="sr-only">SCIM Control Surface</span>
     </a>
-	  <form class="environment-switcher" method="get" action="/">
+	  {{if .SyncApps}}<form class="sync-app-switcher" method="get" action="/">
 		<input type="hidden" name="tab" value="{{.Tab}}">
-		<label class="sr-only" for="environment-switcher">Environment</label>
-		<select id="environment-switcher" name="environment" onchange="this.form.submit()">
-		  {{range .Environments}}<option value="{{.ID}}" {{if eq .ID $.Environment.ID}}selected{{end}}>{{.Name}}</option>{{end}}
+		<label class="sr-only" for="sync-app-switcher">SCIM app</label>
+		<select id="sync-app-switcher" name="app" onchange="this.form.submit()">
+		  {{range .SyncApps}}<option value="{{.ID}}" {{if eq .ID $.SyncApp.ID}}selected{{end}}>{{.Name}}</option>{{end}}
 		</select>
-	  </form>
-	  <a class="btn btn-sm" href="/?tab={{.Tab}}&amp;modal=environment&amp;id={{.Environment.ID}}">Edit environment</a>
-	  <a class="btn btn-sm" href="/?tab={{.Tab}}&amp;modal=environment">+</a>
+	  </form>{{end}}
 	  <span class="topbar-pill" title="Configured SCIM endpoint">
       <span class="icon" aria-hidden="true">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="4" rx="1"/><rect x="2.5" y="9" width="11" height="4" rx="1"/><circle cx="5" cy="5" r="0.6" fill="currentColor"/><circle cx="5" cy="11" r="0.6" fill="currentColor"/></svg>
@@ -1195,7 +1193,7 @@
 	  <section class="setup-guide" aria-label="Getting started">
 		<strong>Get ready to test</strong>
 		<ol>
-		  <li {{if .SCIMReady}}class="done"{{end}}><a href="{{.ConfigURL}}">Configure or disable SCIM</a></li>
+		  <li {{if .SCIMReady}}class="done"{{end}}><a href="{{.NewAppURL}}">Configure SCIM on an app</a></li>
 		  <li {{if .HasLocalUsers}}class="done"{{end}}><a href="{{.NewUserURL}}">Create a user</a> or import from SCIM</li>
 		  <li {{if .HasApps}}class="done"{{end}}><a href="{{.NewAppURL}}">Create an OIDC or SAML app</a></li>
 		  <li {{if .HasPublicIDP}}class="done"{{end}}><a href="{{.ConfigURL}}">Connect the public tunnel</a> when your client requires TLS</li>
@@ -1232,16 +1230,19 @@
       <div class="actionbar">
         <form method="post" action="/sync" data-sync-form>
           <input type="hidden" name="tab" value="{{.Tab}}">
+		  <input type="hidden" name="app" value="{{.SyncApp.ID}}">
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
           <button class="btn" type="submit" data-sync-submit {{if and .SyncJob .SyncJob.Running}}disabled{{end}}>Sync</button>
         </form>
-        <form method="post" action="/import" onsubmit="return confirm('This replaces local users, groups, and operation history with the SCIM server state. Continue?')">
+        <form method="post" action="/import" onsubmit="return confirm('This replaces local users and groups with the selected app’s SCIM state. Other sync apps will be marked dirty. Continue?')">
           <input type="hidden" name="tab" value="{{.Tab}}">
+		  <input type="hidden" name="app" value="{{.SyncApp.ID}}">
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
           <button class="btn" type="submit">Import</button>
         </form>
-        <form method="post" action="/reset" onsubmit="return confirm('This clears all remote IDs and marks everything dirty. Continue?')">
+        <form method="post" action="/reset" onsubmit="return confirm('This clears remote IDs for the selected app and marks its users and groups dirty. Continue?')">
           <input type="hidden" name="tab" value="{{.Tab}}">
+		  <input type="hidden" name="app" value="{{.SyncApp.ID}}">
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
           <button class="btn btn-danger" type="submit">Reset</button>
         </form>
@@ -1379,7 +1380,7 @@
 			  <form method="post" action="/tools/clear-users-local">
 				<input type="hidden" name="tab" value="{{.Tab}}">
 				{{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
-				<button class="btn btn-danger" type="submit" onclick="return confirm('Immediately clear every local user in {{.Environment.Name}}? The SCIM server will not be contacted. Group memberships and user history will also be cleared.')">Clear Users Locally</button>
+				<button class="btn btn-danger" type="submit" onclick="return confirm('Immediately clear every local user? No SCIM server will be contacted. Group memberships and user history will also be cleared.')">Clear Users Locally</button>
 			  </form>
             </div>
           </section>
@@ -1479,7 +1480,7 @@
       <div class="modal-header">
         <div>
           <div class="modal-title">{{.AppForm.Title}}</div>
-          <div class="modal-sub">OIDC and SAML test client</div>
+          <div class="modal-sub">Authentication and provisioning target</div>
         </div>
         <a class="btn btn-sm btn-ghost" href="{{.AppForm.Close}}" data-autofocus>Close</a>
       </div>
@@ -1502,6 +1503,7 @@
                 <label><input type="radio" name="protocol" value="oidc" {{if eq .AppForm.App.Protocol "oidc"}}checked{{end}}><span>OIDC</span></label>
                 <label><input type="radio" name="protocol" value="saml" {{if eq .AppForm.App.Protocol "saml"}}checked{{end}}><span>SAML</span></label>
                 <label><input type="radio" name="protocol" value="both" {{if eq .AppForm.App.Protocol "both"}}checked{{end}}><span>Both</span></label>
+				<label><input type="radio" name="protocol" value="scim" {{if eq .AppForm.App.Protocol "scim"}}checked{{end}}><span>SCIM only</span></label>
               </div>
             </div>
             <label class="field full">
@@ -1511,6 +1513,29 @@
                 Include groups claim or SAML attribute
               </span>
             </label>
+			<label class="field full">
+			  <span class="label">Sync</span>
+			  <span class="checkbox-row">
+				<input type="checkbox" name="scim_enabled" data-scim-toggle {{if .AppForm.App.SCIMEnabled}}checked{{end}}>
+				Enable SCIM sync for this app
+			  </span>
+			</label>
+			<div class="protocol-section {{if not .AppForm.App.SCIMEnabled}}is-hidden{{end}}" data-scim-section>
+			  <div class="section-label">SCIM</div>
+			  <label class="field full">
+				<span class="label">Base URL</span>
+				<input name="scim_base_url" value="{{.AppForm.App.SCIMBaseURL}}" placeholder="https://service.example/scim/v2" autocomplete="off">
+			  </label>
+			  <label class="field full">
+				<span class="label">Bearer token</span>
+				<input type="password" name="scim_bearer_token" placeholder="{{if .AppForm.App.SCIMBearerToken}}Leave blank to keep existing{{end}}" autocomplete="new-password" data-secret-input>
+				<button class="link-button" type="button" data-secret-toggle>Show</button>
+			  </label>
+			  <label class="field full">
+				<span class="label">Trace</span>
+				<span class="checkbox-row"><input type="checkbox" name="scim_auto_open_trace" {{if .AppForm.App.SCIMAutoOpenTrace}}checked{{end}}> Auto-open after sync and import</span>
+			  </label>
+			</div>
             <div class="protocol-section" data-protocol-section="oidc">
               <div class="section-label">OIDC</div>
               <label class="field">
@@ -1609,38 +1634,11 @@
   </div>
   {{end}}
 
-	{{if .EnvironmentForm}}
-	<div class="overlay" data-overlay>
-	  <div class="modal" role="dialog" aria-modal="true" aria-label="{{.EnvironmentForm.Title}}" tabindex="-1">
-		<div class="modal-header"><div class="modal-title">{{.EnvironmentForm.Title}}</div><a class="btn btn-sm btn-ghost" href="{{.EnvironmentForm.Close}}" data-autofocus>Close</a></div>
-		<form method="post" action="/environments/save">
-		  <input type="hidden" name="tab" value="{{.Tab}}">
-		  <input type="hidden" name="id" value="{{.EnvironmentForm.ID}}">
-		  <div class="modal-body">
-			<label class="field"><span class="label">Name</span><input name="name" value="{{.EnvironmentForm.Name}}" autocomplete="off"></label>
-			<div class="form-actions"><a class="btn btn-ghost" href="{{.EnvironmentForm.Close}}">Cancel</a><button class="btn btn-primary" type="submit">Save environment</button></div>
-		  </div>
-		</form>
-		{{if .EnvironmentForm.CanDelete}}
-		<form method="post" action="/environments/{{.EnvironmentForm.ID}}/delete">
-		  <input type="hidden" name="tab" value="{{.Tab}}">
-		  <input type="hidden" name="id" value="{{.EnvironmentForm.ID}}">
-		  <div class="modal-body">
-			<p class="hint">Deletes {{.EnvironmentForm.Users}} users, {{.EnvironmentForm.Groups}} groups, and {{.EnvironmentForm.Apps}} apps locally. No remote SCIM resources are changed.</p>
-			<label class="field"><span class="label">Type {{.EnvironmentForm.Name}} to confirm</span><input name="confirmation" autocomplete="off"></label>
-			<div class="form-actions"><button class="btn btn-danger" type="submit">Delete environment</button></div>
-		  </div>
-		</form>
-		{{end}}
-	  </div>
-	</div>
-	{{end}}
-
 	{{if .ConfigForm}}
   <div class="overlay" data-overlay>
     <div class="modal" role="dialog" aria-modal="true" tabindex="-1">
       <div class="modal-header">
-		  <div class="modal-title">Settings · {{.Environment.Name}}</div>
+		  <div class="modal-title">IDP and tunnel settings</div>
         <a class="btn btn-sm btn-ghost" href="{{.ConfigForm.Close}}" data-autofocus>Close</a>
       </div>
       <form method="post" action="/config/save">
@@ -1648,27 +1646,6 @@
         {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
         <div class="modal-body">
 		  <div class="form-grid">
-			<div class="section-label full">Environment SCIM settings</div>
-            <label class="field full">
-              <span class="label">SCIM</span>
-              <span class="checkbox-row">
-                <input type="checkbox" name="scim_enabled" {{if not .ConfigForm.Config.SCIMDisabled}}checked{{end}}>
-                Enable SCIM sync controls
-              </span>
-            </label>
-			<label class="field full">
-			  <span class="label">SCIM base URL</span>
-			  <input name="base_url" value="{{.ConfigForm.Config.BaseURL}}" autocomplete="off">
-			</label>
-			<label class="field full">
-			  <span class="label">Bearer token</span>
-			  <input type="password" name="bearer_token" placeholder="{{if .ConfigForm.Config.BearerToken}}Leave blank to keep existing{{end}}" autocomplete="new-password" data-secret-input>
-			  <button class="link-button" type="button" data-secret-toggle>Show</button>
-			</label>
-			<label class="field full">
-			  <span class="label">Sync trace</span>
-			  <span class="checkbox-row"><input type="checkbox" name="auto_open_sync_trace" {{if .ConfigForm.Config.AutoOpenSyncTrace}}checked{{end}}> Auto-open the last trace after sync and import</span>
-			</label>
 			<div class="section-label full">Global IDP and tunnel settings</div>
             <div class="field full">
 			{{if .ConfigForm.Tunnel}}
@@ -1696,16 +1673,10 @@
 			</label>
           </div>
           <div class="form-actions">
-			<button class="btn btn-danger" type="submit" form="config-clear-form" onclick="return confirm('Clear SCIM settings for {{.Environment.Name}}?')">Clear environment SCIM settings</button>
-            <span class="spacer"></span>
             <a class="btn btn-ghost" href="{{.ConfigForm.Close}}">Cancel</a>
             <button class="btn btn-primary" type="submit">Save config</button>
           </div>
         </div>
-      </form>
-      <form id="config-clear-form" method="post" action="/config/clear" style="margin:0">
-        <input type="hidden" name="tab" value="{{.Tab}}">
-        {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
       </form>
       <form id="rgrok-cancel-form" method="post" action="/rgrok/cancel" style="margin:0">
         <input type="hidden" name="tab" value="{{.Tab}}">
@@ -1940,6 +1911,27 @@
       }
       syncProtocolSections();
     }
+
+	const scimToggle = document.querySelector('[data-scim-toggle]');
+	const scimSection = document.querySelector('[data-scim-section]');
+	function syncSCIMSection() {
+	  if (!scimToggle || !scimSection) return;
+	  const selectedProtocol = document.querySelector('input[name="protocol"]:checked');
+	  if (selectedProtocol && selectedProtocol.value === 'scim') {
+		scimToggle.checked = true;
+	  }
+	  scimSection.classList.toggle('is-hidden', !scimToggle.checked);
+	  for (const control of scimSection.querySelectorAll('input, textarea, select')) {
+		control.disabled = !scimToggle.checked;
+	  }
+	}
+	if (scimToggle) {
+	  scimToggle.addEventListener('change', syncSCIMSection);
+	  for (const control of protocolControls) {
+		control.addEventListener('change', syncSCIMSection);
+	  }
+	  syncSCIMSection();
+	}
 
     function listURLFromForm(form) {
       const url = new URL(form.action, window.location.href);
