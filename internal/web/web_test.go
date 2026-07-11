@@ -953,6 +953,32 @@ func TestDashboardUsesOneGlobalDirectory(t *testing.T) {
 	r.NotContains(body, "Edit environment")
 }
 
+func TestSyncAppSelectorRendersInResourceToolbar(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{Apps: []app{{
+		ID: "app-1", Name: "Greendale SCIM", Slug: "greendale-scim", Protocol: "scim",
+		SCIMEnabled: true, SCIMBaseURL: "https://greendale.test/scim", SCIMBearerToken: "token",
+	}}}))
+	appService := newTestIDPApp(t)
+
+	for _, tab := range []string{"users", "groups"} {
+		rec := httptest.NewRecorder()
+		appService.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab="+tab, nil))
+
+		r.Equal(http.StatusOK, rec.Code)
+		body := rec.Body.String()
+		selectorIndex := strings.Index(body, `id="sync-app-selector"`)
+		actionbarIndex := strings.Index(body, `class="actionbar"`)
+		topbarEnd := strings.Index(body, `</header>`)
+		r.Greater(selectorIndex, actionbarIndex)
+		r.Greater(selectorIndex, topbarEnd)
+		r.Equal(1, strings.Count(body, `id="sync-app-selector"`))
+		r.Contains(body, "Sync target")
+		r.Contains(body, "Greendale SCIM")
+	}
+}
+
 func TestAppSaveStoresSCIMSettingsAndInitializesSyncState(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)

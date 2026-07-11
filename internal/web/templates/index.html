@@ -119,7 +119,6 @@
     }
     .topbar-pill .icon { color: var(--topbar-muted); }
 	.topbar-spacer { flex: 1; }
-	.sync-app-switcher select { height: 30px; max-width: 220px; border: 1px solid var(--topbar-pill-line); border-radius: var(--radius); background: var(--topbar-pill); color: var(--topbar-fg); padding: 0 28px 0 9px; }
     .topbar-meta {
       display: inline-flex;
       align-items: center;
@@ -369,6 +368,8 @@
       flex-wrap: wrap;
     }
     .actionbar form { margin: 0; }
+	.actionbar-selector { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12.5px; }
+	.actionbar-selector select { height: 32px; max-width: 240px; padding: 0 30px 0 10px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--card); color: var(--text); }
     .actionbar-meta {
       margin-left: auto;
       color: var(--muted);
@@ -1101,13 +1102,6 @@
       scimtest
       <span class="sr-only">SCIM Control Surface</span>
     </a>
-	  {{if .SyncApps}}<form class="sync-app-switcher" method="get" action="/">
-		<input type="hidden" name="tab" value="{{.Tab}}">
-		<label class="sr-only" for="sync-app-switcher">SCIM app</label>
-		<select id="sync-app-switcher" name="app" onchange="this.form.submit()">
-		  {{range .SyncApps}}<option value="{{.ID}}" {{if eq .ID $.SyncApp.ID}}selected{{end}}>{{.Name}}</option>{{end}}
-		</select>
-	  </form>{{end}}
 	  <span class="topbar-pill" title="Configured SCIM endpoint">
       <span class="icon" aria-hidden="true">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="4" rx="1"/><rect x="2.5" y="9" width="11" height="4" rx="1"/><circle cx="5" cy="5" r="0.6" fill="currentColor"/><circle cx="5" cy="11" r="0.6" fill="currentColor"/></svg>
@@ -1228,6 +1222,14 @@
 
       {{if and .SCIMEnabled (ne .Tab "apps")}}
       <div class="actionbar">
+		<form class="actionbar-selector" method="get" action="/">
+		  <input type="hidden" name="tab" value="{{.Tab}}">
+		  {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
+		  <label for="sync-app-selector">Sync target</label>
+		  <select id="sync-app-selector" name="app" onchange="this.form.submit()">
+			{{range .SyncApps}}<option value="{{.ID}}" {{if eq .ID $.SyncApp.ID}}selected{{end}}>{{.Name}}</option>{{end}}
+		  </select>
+		</form>
         <form method="post" action="/sync" data-sync-form>
           <input type="hidden" name="tab" value="{{.Tab}}">
 		  <input type="hidden" name="app" value="{{.SyncApp.ID}}">
