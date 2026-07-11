@@ -1628,7 +1628,7 @@
             </label>
           </div>
           <div class="form-actions">
-            <button class="btn btn-danger" type="submit" form="config-clear-form">Clear saved config</button>
+			<button class="btn btn-danger" type="submit" form="config-clear-form" onclick="return confirm('Clear SCIM, IDP, tunnel, and signing configuration?')">Clear saved config</button>
             <span class="spacer"></span>
             <a class="btn btn-ghost" href="{{.ConfigForm.Close}}">Cancel</a>
             <button class="btn btn-primary" type="submit">Save config</button>
