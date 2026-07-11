@@ -38,6 +38,7 @@ type webApp struct {
 	rgrokLifecycleMu sync.Mutex
 	rgrokMu          sync.Mutex
 	rgrokTunnel      *activeRgrokTunnel
+	rgrokLastError   string
 	syncJobMu        sync.Mutex
 	syncJob          *syncJobSnapshot
 	authCodes        map[string]authCode
@@ -238,6 +239,7 @@ type configFormView struct {
 	IDPBaseURLDisabled bool
 	Tunnel             *rgrokTunnelView
 	RgrokForm          *rgrokFormView
+	TunnelError        string
 }
 
 type toolsFormView struct {
@@ -964,6 +966,7 @@ func (a *webApp) handleRgrokSetup(w http.ResponseWriter, r *http.Request) {
 		PublicURL: publicURL,
 		Tunnel:    started.Tunnel,
 	}
+	a.rgrokLastError = ""
 	a.rgrokMu.Unlock()
 	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), map[string]string{"modal": "config"}), flashMessage{Kind: "success", Message: "tunnel established"})
 }
@@ -988,6 +991,7 @@ func (a *webApp) closeActiveRgrokTunnel() error {
 	a.rgrokMu.Lock()
 	tunnel := a.rgrokTunnel
 	a.rgrokTunnel = nil
+	a.rgrokLastError = ""
 	a.rgrokMu.Unlock()
 
 	if tunnel == nil || tunnel.Tunnel == nil {
@@ -1002,6 +1006,7 @@ func (a *webApp) restoreSavedRgrokTunnel() {
 
 	state, err := loadState()
 	if err != nil {
+		a.setRgrokError(fmt.Sprintf("load saved tunnel configuration: %v", err))
 		log.Printf("restore rgrok tunnel: load state: %v", err)
 		return
 	}
@@ -1011,6 +1016,7 @@ func (a *webApp) restoreSavedRgrokTunnel() {
 		return
 	}
 	if err := validateRgrokSetup(name, token, a.localPort); err != nil {
+		a.setRgrokError(err.Error())
 		log.Printf("restore rgrok tunnel: %v", err)
 		return
 	}
@@ -1025,10 +1031,12 @@ func (a *webApp) restoreSavedRgrokTunnel() {
 		LocalPort:     a.localPort,
 	}, 20*time.Second)
 	if err != nil {
+		a.setRgrokError(err.Error())
 		log.Printf("restore rgrok tunnel: %v", err)
 		return
 	}
 	if started == nil || started.Tunnel == nil || strings.TrimSpace(started.PublicURL) == "" {
+		a.setRgrokError("rgrok did not return a public URL")
 		log.Printf("restore rgrok tunnel: rgrok did not return a public URL")
 		return
 	}
@@ -1044,6 +1052,7 @@ func (a *webApp) restoreSavedRgrokTunnel() {
 		return
 	}
 	if err := a.saveRgrokConfig(name, token, publicURL); err != nil {
+		a.setRgrokError(fmt.Sprintf("save public URL: %v", err))
 		log.Printf("restore rgrok tunnel: save public URL: %v", err)
 		if closeErr := started.Tunnel.Close(); closeErr != nil {
 			log.Printf("restore rgrok tunnel: close after save failure: %v", closeErr)
@@ -1056,6 +1065,7 @@ func (a *webApp) restoreSavedRgrokTunnel() {
 		PublicURL: publicURL,
 		Tunnel:    started.Tunnel,
 	}
+	a.rgrokLastError = ""
 	a.rgrokMu.Unlock()
 	log.Printf("restored rgrok tunnel at %s", publicURL)
 }
@@ -1170,6 +1180,7 @@ func (a *webApp) buildConfigFormView(cfg config, tab string, page int, pageSize 
 		Close:           closeURL,
 		RgrokSetupURL:   dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"modal": "config", "rgrok": "1"}),
 		IDPBaseURLValue: cfg.IDPBaseURL,
+		TunnelError:     a.rgrokError(),
 	}
 	if tunnel := a.rgrokTunnelView(); tunnel != nil {
 		form.Tunnel = tunnel
@@ -1225,6 +1236,18 @@ func (a *webApp) rgrokTunnelView() *rgrokTunnelView {
 		Name:      a.rgrokTunnel.Name,
 		PublicURL: a.rgrokTunnel.PublicURL,
 	}
+}
+
+func (a *webApp) setRgrokError(message string) {
+	a.rgrokMu.Lock()
+	defer a.rgrokMu.Unlock()
+	a.rgrokLastError = message
+}
+
+func (a *webApp) rgrokError() string {
+	a.rgrokMu.Lock()
+	defer a.rgrokMu.Unlock()
+	return a.rgrokLastError
 }
 
 func (a *webApp) handleConfigClear(w http.ResponseWriter, r *http.Request) {

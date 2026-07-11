@@ -1021,11 +1021,25 @@ func TestConfigRendersEstablishedRgrokTunnel(t *testing.T) {
 
 	r.Equal(http.StatusOK, rec.Code)
 	body := rec.Body.String()
-	r.Contains(body, "Tunnel established.")
+	r.Contains(body, "Tunnel connected:")
 	r.Contains(body, `form="rgrok-cancel-form">Cancel</button>`)
 	r.Contains(body, `value="https://demo.rgrok.rselbach.com"`)
 	r.Contains(body, `autocomplete="off" disabled`)
 	r.NotContains(body, "Set up rgrok tunnel")
+}
+
+func TestConfigRendersTunnelRestoreFailure(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+	app := &webApp{rgrokLastError: "token rejected by the air conditioning repair school"}
+	rec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=users&modal=config", nil))
+
+	r.Equal(http.StatusOK, rec.Code)
+	r.Contains(rec.Body.String(), "Tunnel connection failed: token rejected by the air conditioning repair school")
+	r.Contains(rec.Body.String(), "Set up rgrok tunnel")
 }
 
 func TestRgrokSetupStartsTunnel(t *testing.T) {

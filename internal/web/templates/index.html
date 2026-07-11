@@ -1596,15 +1596,17 @@
               <input name="base_url" value="{{.ConfigForm.Config.BaseURL}}" autocomplete="off">
             </label>
             <div class="field full">
-              {{if .ConfigForm.Tunnel}}
-              <div class="tunnel-row">
-                <strong>Tunnel established.</strong>
-                <button class="link-button" type="submit" form="rgrok-cancel-form">Cancel</button>
-              </div>
-              {{else}}
-              <div class="tunnel-row">
-                <a href="{{.ConfigForm.RgrokSetupURL}}">Set up rgrok tunnel</a>
-              </div>
+			{{if .ConfigForm.Tunnel}}
+			<div class="tunnel-row">
+			  <strong>Tunnel connected:</strong> <span class="mono">{{.ConfigForm.Tunnel.PublicURL}}</span>
+			  <button class="link-button" type="submit" form="rgrok-cancel-form">Cancel</button>
+			</div>
+			<span class="hint">Only OIDC and SAML endpoints are exposed through the tunnel.</span>
+			{{else}}
+			<div class="tunnel-row">
+			  <a href="{{.ConfigForm.RgrokSetupURL}}">Set up rgrok tunnel</a>
+			</div>
+			{{if .ConfigForm.TunnelError}}<div class="inline-error" role="alert">Tunnel connection failed: {{.ConfigForm.TunnelError}}</div>{{end}}
               {{end}}
             </div>
             <label class="field full">
@@ -1757,7 +1759,9 @@
           setTimeout(function () {
             button.setAttribute('title', originalTitle);
           }, 1200);
-	}
+		}
+	      });
+	    }
 
 	for (const button of document.querySelectorAll('[data-secret-toggle]')) {
 	  button.addEventListener('click', function () {
@@ -1769,8 +1773,6 @@
 		button.textContent = showing ? 'Show' : 'Hide';
 	  });
 	}
-      });
-    }
 
     const overlays = Array.from(document.querySelectorAll('[data-overlay]'));
     const activeOverlay = overlays[overlays.length - 1];
