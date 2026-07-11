@@ -68,7 +68,7 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	state, err := loadState()
+	state, err := loadRequestState(r)
 	if err != nil {
 		a.redirectError(w, r, tab, err)
 		return
@@ -138,7 +138,12 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		app.SAMLNameIDFormat = ""
 		app.SAMLEmailAttributeName = ""
 	}
-	if err := validateApp(app, state.Apps); err != nil {
+	allApps, err := loadAllApps()
+	if err != nil {
+		a.redirectError(w, r, tab, err)
+		return
+	}
+	if err := validateApp(app, allApps); err != nil {
 		a.redirectFormError(w, r, tab, "app", err)
 		return
 	}
@@ -169,7 +174,7 @@ func (a *webApp) handleAppDelete(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	state, err := loadState()
+	state, err := loadRequestState(r)
 	if err != nil {
 		a.redirectError(w, r, "apps", err)
 		return
@@ -513,8 +518,12 @@ func (a *webApp) handleSAMLSSOPost(w http.ResponseWriter, r *http.Request) {
 }
 
 func appForProtocol(w http.ResponseWriter, r *http.Request, supports func(app) bool) (appState, app, bool) {
-	state, err := loadState()
+	state, err := loadStateForAppSlug(r.PathValue("slug"))
 	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			http.NotFound(w, r)
+			return appState{}, app{}, false
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return appState{}, app{}, false
 	}

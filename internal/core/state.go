@@ -501,6 +501,18 @@ func initStateDB(db *sql.DB) error {
 			return fmt.Errorf("migrate sqlite schema: %w", err)
 		}
 	}
+	indexes := []string{
+		`CREATE INDEX IF NOT EXISTS users_environment_id ON users(environment_id)`,
+		`CREATE INDEX IF NOT EXISTS groups_environment_id ON groups(environment_id)`,
+		`CREATE INDEX IF NOT EXISTS apps_environment_id ON apps(environment_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS apps_slug ON apps(slug)`,
+		`CREATE INDEX IF NOT EXISTS operation_logs_environment_id ON operation_logs(environment_id)`,
+	}
+	for _, statement := range indexes {
+		if _, err := db.Exec(statement); err != nil {
+			return fmt.Errorf("initialize environment index: %w", err)
+		}
+	}
 
 	if err := migrateDefaultEnvironment(db); err != nil {
 		return err

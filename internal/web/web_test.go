@@ -692,7 +692,7 @@ func TestSyncPersistsRemoteStateAndTraceCookie(t *testing.T) {
 	r.Equal("remote-user-1", updated.Users[0].RemoteID)
 	r.False(updated.Users[0].Dirty)
 	r.NotEmpty(updated.UserOperations["u1"])
-	r.Contains(app.traceContent(), "POST /Users")
+	r.Contains(app.traceContent(defaultEnvironmentID), "POST /Users")
 }
 
 func TestSyncStartsAsyncAndReportsStatus(t *testing.T) {
@@ -775,7 +775,7 @@ func TestSyncStartsAsyncAndReportsStatus(t *testing.T) {
 
 func TestMutationIsRejectedWhileSyncRuns(t *testing.T) {
 	r := require.New(t)
-	app := &webApp{syncJob: &syncJobSnapshot{Running: true}}
+	app := &webApp{syncJobs: map[string]*syncJobSnapshot{defaultEnvironmentID: {Running: true}}}
 	called := false
 	handler := app.rejectWhileSyncing(func(w http.ResponseWriter, _ *http.Request) {
 		called = true
@@ -843,7 +843,7 @@ func TestDashboardRendersCriticalFlowAffordances(t *testing.T) {
 		}},
 	}))
 	app := newTestIDPApp(t)
-	app.syncJob = &syncJobSnapshot{Running: true, Percent: 42, Message: "Creating Troy"}
+	app.syncJobs = map[string]*syncJobSnapshot{defaultEnvironmentID: {Running: true, Percent: 42, Message: "Creating Troy"}}
 	rec := httptest.NewRecorder()
 
 	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=apps", nil))
@@ -861,6 +861,58 @@ func TestDashboardRendersCriticalFlowAffordances(t *testing.T) {
 	r.Contains(progressRec.Body.String(), `role="progressbar"`)
 	r.Contains(progressRec.Body.String(), `aria-valuenow="42"`)
 	r.Contains(progressRec.Body.String(), `aria-live="polite"`)
+}
+
+func TestEnvironmentSelectionScopesDashboardResources(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{Users: []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}}}))
+	staging, err := createEnvironment("Staging Campus")
+	r.NoError(err)
+	stagingState, err := loadEnvironmentState(staging.ID)
+	r.NoError(err)
+	stagingState.Users = []user{{ID: "abed", GivenName: "Abed", FamilyName: "Nadir", Email: "abed@greendale.edu", Username: "abed", Active: true}}
+	r.NoError(saveState(stagingState))
+	app := newTestIDPApp(t)
+
+	rec := httptest.NewRecorder()
+	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=users&environment="+url.QueryEscape(staging.ID), nil))
+
+	r.Equal(http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	r.Contains(body, "Staging Campus")
+	r.Contains(body, "Abed Nadir")
+	r.NotContains(body, "Troy Barnes")
+	cookies := rec.Result().Cookies()
+	r.NotEmpty(cookies)
+}
+
+func TestEnvironmentCreateAndGuardedDelete(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+	app := newTestIDPApp(t)
+	form := url.Values{"tab": {"users"}, "name": {"Greendale Staging"}}
+	createReq := httptest.NewRequest(http.MethodPost, "/environments/save", strings.NewReader(form.Encode()))
+	createReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	createRec := httptest.NewRecorder()
+	app.routes().ServeHTTP(createRec, createReq)
+	r.Equal(http.StatusSeeOther, createRec.Code)
+
+	environments, err := loadEnvironments()
+	r.NoError(err)
+	r.Len(environments, 2)
+	created := environments[1]
+	deleteForm := url.Values{"tab": {"users"}, "confirmation": {"wrong"}}
+	deleteReq := httptest.NewRequest(http.MethodPost, "/environments/"+created.ID+"/delete", strings.NewReader(deleteForm.Encode()))
+	deleteReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	deleteRec := httptest.NewRecorder()
+	app.routes().ServeHTTP(deleteRec, deleteReq)
+	r.Equal(http.StatusSeeOther, deleteRec.Code)
+
+	environments, err = loadEnvironments()
+	r.NoError(err)
+	r.Len(environments, 2)
 }
 
 func TestSyncRateLimitRendersReadableError(t *testing.T) {
@@ -915,7 +967,7 @@ func TestSyncRateLimitRendersReadableError(t *testing.T) {
 	r.Contains(updated.Users[0].LastError, "Try again now")
 	r.NotContains(updated.Users[0].LastError, "schemas")
 	r.Equal("0", updated.UserOperations["u1"][0].ResponseRetryAfter)
-	r.Contains(app.traceContent(), "Retry-After: 0")
+	r.Contains(app.traceContent(defaultEnvironmentID), "Retry-After: 0")
 
 	indexReq := httptest.NewRequest(http.MethodGet, "/?tab=users", nil)
 	indexRec := httptest.NewRecorder()
@@ -1415,7 +1467,7 @@ func waitForSyncDone(t *testing.T, app *webApp) syncJobSnapshot {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		job := app.currentSyncJob()
+		job := app.currentSyncJob(defaultEnvironmentID)
 		if job != nil && job.Done {
 			return *job
 		}

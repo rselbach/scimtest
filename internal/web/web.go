@@ -40,11 +40,11 @@ type webApp struct {
 	rgrokTunnel      *activeRgrokTunnel
 	rgrokLastError   string
 	syncJobMu        sync.Mutex
-	syncJob          *syncJobSnapshot
+	syncJobs         map[string]*syncJobSnapshot
 	authCodes        map[string]authCode
 	accessTokens     map[string]accessToken
-	lastTrace        []syncTraceEntry
-	lastTraceContent string
+	lastTraces       map[string][]syncTraceEntry
+	lastTraceContent map[string]string
 	formDraftMu      sync.Mutex
 	formDrafts       map[string]formDraft
 }
@@ -259,6 +259,17 @@ type toolsFormView struct {
 	EmailDomain string
 }
 
+type environmentFormView struct {
+	Title     string
+	ID        string
+	Name      string
+	Close     string
+	Users     int
+	Groups    int
+	Apps      int
+	CanDelete bool
+}
+
 type pageData struct {
 	Tab               string
 	Flash             flashMessage
@@ -298,6 +309,9 @@ type pageData struct {
 	HasPublicIDP      bool
 	SCIMReady         bool
 	FormError         string
+	Environment       environment
+	Environments      []environment
+	EnvironmentForm   *environmentFormView
 }
 
 type RunOptions struct {
@@ -421,6 +435,33 @@ func (a *webApp) routes() http.Handler {
 	return mux
 }
 
+const environmentCookieName = "scimtest_environment"
+
+func requestEnvironmentID(r *http.Request) string {
+	if environmentID := strings.TrimSpace(r.FormValue("environment")); environmentID != "" {
+		return environmentID
+	}
+	if cookie, err := r.Cookie(environmentCookieName); err == nil && strings.TrimSpace(cookie.Value) != "" {
+		return cookie.Value
+	}
+	return defaultEnvironmentID
+}
+
+func loadRequestState(r *http.Request) (appState, error) {
+	state, err := loadEnvironmentState(requestEnvironmentID(r))
+	if err == nil {
+		return state, nil
+	}
+	if requestEnvironmentID(r) == defaultEnvironmentID {
+		return appState{}, err
+	}
+	return loadEnvironmentState(defaultEnvironmentID)
+}
+
+func rememberEnvironment(w http.ResponseWriter, environmentID string) {
+	http.SetCookie(w, &http.Cookie{Name: environmentCookieName, Value: environmentID, Path: "/", MaxAge: 365 * 24 * 60 * 60, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+}
+
 func (a *webApp) adminRoutes() http.Handler {
 	mux := http.NewServeMux()
 	a.registerAdminRoutes(mux)
@@ -452,6 +493,8 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /tools/deactivate-all", a.rejectWhileSyncing(a.handleToolsDeactivateAll))
 	mux.HandleFunc("POST /tools/activate-all", a.rejectWhileSyncing(a.handleToolsActivateAll))
 	mux.HandleFunc("POST /tools/create-users", a.rejectWhileSyncing(a.handleToolsCreateUsers))
+	mux.HandleFunc("POST /environments/save", a.rejectWhileSyncing(a.handleEnvironmentSave))
+	mux.HandleFunc("POST /environments/{id}/delete", a.rejectWhileSyncing(a.handleEnvironmentDelete))
 	mux.HandleFunc("GET /sync/status", a.handleSyncStatus)
 	mux.HandleFunc("POST /sync", a.handleSync)
 	mux.HandleFunc("POST /import", a.rejectWhileSyncing(a.handleImport))
@@ -460,7 +503,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 
 func (a *webApp) rejectWhileSyncing(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if job := a.currentSyncJob(); job != nil && job.Running {
+		if job := a.currentSyncJob(requestEnvironmentID(r)); job != nil && job.Running {
 			if wantsJSON(r) {
 				w.WriteHeader(http.StatusConflict)
 				writeJSON(w, map[string]string{"error": "sync is running; wait for it to finish"})
@@ -487,11 +530,12 @@ func (a *webApp) registerIDPRoutes(mux *http.ServeMux) {
 }
 
 func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
-	state, err := loadState()
+	state, err := loadRequestState(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	rememberEnvironment(w, state.Environment.ID)
 
 	tab := normalizedTab(r.URL.Query().Get("tab"))
 	page := requestPage(r.URL.Query().Get("page"))
@@ -546,15 +590,17 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		ToolsURL:          dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"modal": "tools"}),
 		TraceURL:          dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"showTrace": "1"}),
 		TraceCloseURL:     dashboardURLWithPage(tab, page, pageSize, search, nil),
-		ShowTrace:         showTrace && a.hasTrace(),
-		HasTrace:          a.hasTrace(),
-		TraceContent:      a.traceContent(),
-		SyncJob:           a.currentSyncJob(),
+		ShowTrace:         showTrace && a.hasTrace(state.Environment.ID),
+		HasTrace:          a.hasTrace(state.Environment.ID),
+		TraceContent:      a.traceContent(state.Environment.ID),
+		SyncJob:           a.currentSyncJob(state.Environment.ID),
 		ShowSetupGuide:    len(state.Users) == 0 || len(state.Apps) == 0,
 		HasLocalUsers:     len(state.Users) > 0,
 		HasApps:           len(state.Apps) > 0,
 		HasPublicIDP:      a.rgrokPublicURL() != "" || strings.TrimSpace(state.Config.IDPBaseURL) != "",
 		SCIMReady:         state.Config.SCIMDisabled || (strings.TrimSpace(state.Config.BaseURL) != "" && strings.TrimSpace(state.Config.BearerToken) != ""),
+		Environment:       state.Environment,
+		Environments:      state.Environments,
 	}
 	if !data.SCIMEnabled {
 		data.Errors = nil
@@ -591,6 +637,25 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		data.ConfigForm = a.buildConfigFormView(state.Config, tab, page, pageSize, search, r.URL.Query())
 	case "tools":
 		data.ToolsForm = &toolsFormView{Close: dashboardURLWithPage(tab, page, pageSize, search, nil), Count: "10"}
+	case "environment":
+		form := &environmentFormView{Title: "Add environment", Close: dashboardURLWithPage(tab, page, pageSize, search, nil)}
+		if id := r.URL.Query().Get("id"); id != "" {
+			for _, candidate := range state.Environments {
+				if candidate.ID == id {
+					form.Title = "Edit environment"
+					form.ID = candidate.ID
+					form.Name = candidate.Name
+					form.CanDelete = len(state.Environments) > 1
+					if candidateState, loadErr := loadEnvironmentState(candidate.ID); loadErr == nil {
+						form.Users = len(candidateState.Users)
+						form.Groups = len(candidateState.Groups)
+						form.Apps = len(candidateState.Apps)
+					}
+					break
+				}
+			}
+		}
+		data.EnvironmentForm = form
 	}
 	if draft := a.consumeFormDraft(w, r); draft != nil {
 		applyFormDraft(&data, *draft)
@@ -608,7 +673,7 @@ func (a *webApp) handleUserSave(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	state, err := loadState()
+	state, err := loadRequestState(r)
 	if err != nil {
 		a.redirectError(w, r, tab, err)
 		return
@@ -681,7 +746,7 @@ func (a *webApp) handleUserToggleActive(w http.ResponseWriter, r *http.Request) 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	state, err := loadState()
+	state, err := loadRequestState(r)
 	if err != nil {
 		a.redirectError(w, r, tab, err)
 		return
@@ -728,7 +793,7 @@ func (a *webApp) handleUserDeletedState(w http.ResponseWriter, r *http.Request, 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	state, err := loadState()
+	state, err := loadRequestState(r)
 	if err != nil {
 		a.redirectError(w, r, tab, err)
 		return
@@ -778,7 +843,7 @@ func (a *webApp) handleGroupSave(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	state, err := loadState()
+	state, err := loadRequestState(r)
 	if err != nil {
 		a.redirectError(w, r, tab, err)
 		return
@@ -849,7 +914,7 @@ func (a *webApp) handleGroupDeletedState(w http.ResponseWriter, r *http.Request,
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	state, err := loadState()
+	state, err := loadRequestState(r)
 	if err != nil {
 		a.redirectError(w, r, tab, err)
 		return
@@ -907,7 +972,7 @@ func (a *webApp) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	state, err := loadState()
+	state, err := loadRequestState(r)
 	if err != nil {
 		a.redirectError(w, r, tab, err)
 		return
@@ -1280,44 +1345,39 @@ func (a *webApp) rgrokError() string {
 
 func (a *webApp) handleConfigClear(w http.ResponseWriter, r *http.Request) {
 	tab := normalizedTab(r.FormValue("tab"))
-	a.rgrokLifecycleMu.Lock()
-	defer a.rgrokLifecycleMu.Unlock()
-
 	a.mu.Lock()
-	state, err := loadState()
+	defer a.mu.Unlock()
+	state, err := loadRequestState(r)
 	if err != nil {
-		a.mu.Unlock()
 		a.redirectError(w, r, tab, err)
 		return
 	}
 
 	state.Config = config{
+		SCIMDisabled:          true,
+		IDPBaseURL:            state.Config.IDPBaseURL,
+		TrustForwardedHeaders: state.Config.TrustForwardedHeaders,
+		RgrokName:             state.Config.RgrokName,
+		RgrokToken:            state.Config.RgrokToken,
 		SigningPrivateKeyPEM:  state.Config.SigningPrivateKeyPEM,
 		SigningCertificatePEM: state.Config.SigningCertificatePEM,
 	}
 	if err := saveState(state); err != nil {
-		a.mu.Unlock()
 		a.redirectError(w, r, tab, err)
 		return
 	}
-	a.mu.Unlock()
-	if err := a.closeActiveRgrokTunnel(); err != nil {
-		redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "error", Message: fmt.Sprintf("config cleared; disconnect tunnel: %v", err)})
-		return
-	}
-
-	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: "config cleared"})
+	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: "environment SCIM settings cleared"})
 }
 
 func (a *webApp) handleSync(w http.ResponseWriter, r *http.Request) {
 	tab := normalizedTab(r.FormValue("tab"))
-	if job := a.currentSyncJob(); job != nil && job.Running {
+	if job := a.currentSyncJob(requestEnvironmentID(r)); job != nil && job.Running {
 		a.respondSyncStartError(w, r, tab, fmt.Errorf("sync already running"))
 		return
 	}
 
 	a.mu.Lock()
-	state, err := loadState()
+	state, err := loadRequestState(r)
 	a.mu.Unlock()
 	if err != nil {
 		a.respondSyncStartError(w, r, tab, err)
@@ -1328,7 +1388,7 @@ func (a *webApp) handleSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	job, err := a.startSyncJob()
+	job, err := a.startSyncJob(state.Environment.ID)
 	if err != nil {
 		a.respondSyncStartError(w, r, tab, err)
 		return
@@ -1342,8 +1402,8 @@ func (a *webApp) handleSync(w http.ResponseWriter, r *http.Request) {
 	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: "sync started"})
 }
 
-func (a *webApp) handleSyncStatus(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, a.currentSyncJob())
+func (a *webApp) handleSyncStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, a.currentSyncJob(requestEnvironmentID(r)))
 }
 
 func (a *webApp) respondSyncStartError(w http.ResponseWriter, r *http.Request, tab string, err error) {
@@ -1356,11 +1416,14 @@ func (a *webApp) respondSyncStartError(w http.ResponseWriter, r *http.Request, t
 	a.redirectError(w, r, tab, err)
 }
 
-func (a *webApp) startSyncJob() (*syncJobSnapshot, error) {
+func (a *webApp) startSyncJob(environmentID string) (*syncJobSnapshot, error) {
 	a.syncJobMu.Lock()
 	defer a.syncJobMu.Unlock()
 
-	if a.syncJob != nil && a.syncJob.Running {
+	if a.syncJobs == nil {
+		a.syncJobs = make(map[string]*syncJobSnapshot)
+	}
+	if a.syncJobs[environmentID] != nil && a.syncJobs[environmentID].Running {
 		return nil, fmt.Errorf("sync already running")
 	}
 
@@ -1370,90 +1433,92 @@ func (a *webApp) startSyncJob() (*syncJobSnapshot, error) {
 		Message:   "Starting sync",
 		StartedAt: time.Now().UTC().Format(time.RFC3339),
 	}
-	a.syncJob = job
-	go a.runSyncJob(job.ID)
+	a.syncJobs[environmentID] = job
+	go a.runSyncJob(job.ID, environmentID)
 
 	return cloneSyncJob(job), nil
 }
 
-func (a *webApp) runSyncJob(id string) {
+func (a *webApp) runSyncJob(id string, environmentID string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	state, err := loadState()
+	state, err := loadEnvironmentState(environmentID)
 	if err != nil {
-		a.finishSyncJob(id, false, err.Error(), false)
+		a.finishSyncJob(environmentID, id, false, err.Error(), false)
 		return
 	}
 	if !scimEnabled(state) {
-		a.finishSyncJob(id, false, "SCIM is disabled", false)
+		a.finishSyncJob(environmentID, id, false, "SCIM is disabled", false)
 		return
 	}
 
 	result := syncDirtyStateWithProgress(state, func(progress syncProgress) {
-		a.updateSyncJobProgress(id, progress)
+		a.updateSyncJobProgress(environmentID, id, progress)
 	})
-	a.rememberTrace(result.Traces)
+	a.rememberTrace(environmentID, result.Traces)
 	if result.Fatal != nil {
-		a.finishSyncJob(id, false, result.Fatal.Error(), len(result.Traces) > 0)
+		a.finishSyncJob(environmentID, id, false, result.Fatal.Error(), len(result.Traces) > 0)
 		return
 	}
 
 	state = result.State
 	appendOperationLogs(&state, result.Traces)
 	if err := saveState(state); err != nil {
-		a.finishSyncJob(id, false, err.Error(), len(result.Traces) > 0)
+		a.finishSyncJob(environmentID, id, false, err.Error(), len(result.Traces) > 0)
 		return
 	}
 
 	success := result.Stopped == nil
-	a.finishSyncJob(id, success, result.Status, len(result.Traces) > 0)
+	a.finishSyncJob(environmentID, id, success, result.Status, len(result.Traces) > 0)
 }
 
-func (a *webApp) updateSyncJobProgress(id string, progress syncProgress) {
+func (a *webApp) updateSyncJobProgress(environmentID string, id string, progress syncProgress) {
 	a.syncJobMu.Lock()
 	defer a.syncJobMu.Unlock()
 
-	if a.syncJob == nil || a.syncJob.ID != id {
+	job := a.syncJobs[environmentID]
+	if job == nil || job.ID != id {
 		return
 	}
-	a.syncJob.Total = progress.Total
-	a.syncJob.Processed = progress.Processed
-	a.syncJob.Percent = syncProgressPercent(progress.Processed, progress.Total, false)
+	job.Total = progress.Total
+	job.Processed = progress.Processed
+	job.Percent = syncProgressPercent(progress.Processed, progress.Total, false)
 	if progress.Label != "" {
-		a.syncJob.Current = strings.TrimSpace(strings.Join([]string{progress.Operation, progress.ResourceType, progress.Label}, " "))
+		job.Current = strings.TrimSpace(strings.Join([]string{progress.Operation, progress.ResourceType, progress.Label}, " "))
 	}
-	a.syncJob.RateLimited = progress.RateLimited
+	job.RateLimited = progress.RateLimited
 	if progress.Status != "" {
-		a.syncJob.Message = progress.Status
+		job.Message = progress.Status
 	}
 }
 
-func (a *webApp) finishSyncJob(id string, success bool, message string, traceAvailable bool) {
+func (a *webApp) finishSyncJob(environmentID string, id string, success bool, message string, traceAvailable bool) {
 	a.syncJobMu.Lock()
 	defer a.syncJobMu.Unlock()
 
-	if a.syncJob == nil || a.syncJob.ID != id {
+	job := a.syncJobs[environmentID]
+	if job == nil || job.ID != id {
 		return
 	}
-	a.syncJob.Running = false
-	a.syncJob.Done = true
-	a.syncJob.Success = success
-	a.syncJob.TraceAvailable = traceAvailable
-	a.syncJob.RateLimited = false
-	a.syncJob.Message = message
-	a.syncJob.Percent = syncProgressPercent(a.syncJob.Processed, a.syncJob.Total, true)
-	a.syncJob.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+	job.Running = false
+	job.Done = true
+	job.Success = success
+	job.TraceAvailable = traceAvailable
+	job.RateLimited = false
+	job.Message = message
+	job.Percent = syncProgressPercent(job.Processed, job.Total, true)
+	job.FinishedAt = time.Now().UTC().Format(time.RFC3339)
 	if !success {
-		a.syncJob.Error = message
+		job.Error = message
 	}
 }
 
-func (a *webApp) currentSyncJob() *syncJobSnapshot {
+func (a *webApp) currentSyncJob(environmentID string) *syncJobSnapshot {
 	a.syncJobMu.Lock()
 	defer a.syncJobMu.Unlock()
 
-	return cloneSyncJob(a.syncJob)
+	return cloneSyncJob(a.syncJobs[environmentID])
 }
 
 func cloneSyncJob(job *syncJobSnapshot) *syncJobSnapshot {
@@ -1493,7 +1558,7 @@ func (a *webApp) handleImport(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	state, err := loadState()
+	state, err := loadRequestState(r)
 	if err != nil {
 		a.redirectError(w, r, tab, err)
 		return
@@ -1504,7 +1569,7 @@ func (a *webApp) handleImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result := importStateFromSCIM(state)
-	a.rememberTrace(result.Traces)
+	a.rememberTrace(state.Environment.ID, result.Traces)
 	if result.Fatal != nil {
 		if len(result.Traces) > 0 && state.Config.AutoOpenSyncTrace {
 			setShowTraceCookie(w)
@@ -1529,7 +1594,7 @@ func (a *webApp) handleReset(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	state, err := loadState()
+	state, err := loadRequestState(r)
 	if err != nil {
 		a.redirectError(w, r, tab, err)
 		return
@@ -1574,7 +1639,7 @@ func (a *webApp) handleToolsDeleteAll(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	state, err := loadState()
+	state, err := loadRequestState(r)
 	if err != nil {
 		a.redirectError(w, r, tab, err)
 		return
@@ -1630,7 +1695,7 @@ func (a *webApp) handleToolsSetAllActive(w http.ResponseWriter, r *http.Request,
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	state, err := loadState()
+	state, err := loadRequestState(r)
 	if err != nil {
 		a.redirectError(w, r, tab, err)
 		return
@@ -1682,7 +1747,7 @@ func (a *webApp) handleToolsCreateUsers(w http.ResponseWriter, r *http.Request) 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	state, err := loadState()
+	state, err := loadRequestState(r)
 	if err != nil {
 		a.redirectError(w, r, tab, err)
 		return
@@ -1700,6 +1765,51 @@ func (a *webApp) handleToolsCreateUsers(w http.ResponseWriter, r *http.Request) 
 
 	message := fmt.Sprintf("created %d users for %s", created, domain)
 	redirectWithFlash(w, r, dashboardURL("users", nil), flashMessage{Kind: "success", Message: message})
+}
+
+func (a *webApp) handleEnvironmentSave(w http.ResponseWriter, r *http.Request) {
+	tab := normalizedTab(r.FormValue("tab"))
+	id := strings.TrimSpace(r.FormValue("id"))
+	name := strings.TrimSpace(r.FormValue("name"))
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	var saved environment
+	var err error
+	if id == "" {
+		saved, err = createEnvironment(name)
+	} else {
+		saved, err = updateEnvironment(id, name)
+	}
+	if err != nil {
+		a.redirectFormError(w, r, tab, "environment", err)
+		return
+	}
+	rememberEnvironment(w, saved.ID)
+	redirectWithFlash(w, r, dashboardURL(tab, nil), flashMessage{Kind: "success", Message: "environment saved"})
+}
+
+func (a *webApp) handleEnvironmentDelete(w http.ResponseWriter, r *http.Request) {
+	tab := normalizedTab(r.FormValue("tab"))
+	id := r.PathValue("id")
+	state, err := loadEnvironmentState(id)
+	if err != nil {
+		a.redirectError(w, r, tab, err)
+		return
+	}
+	if r.FormValue("confirmation") != state.Environment.Name {
+		a.redirectFormError(w, r, tab, "environment", fmt.Errorf("type the environment name exactly to confirm deletion"))
+		return
+	}
+	a.mu.Lock()
+	err = deleteEnvironment(id)
+	a.mu.Unlock()
+	if err != nil {
+		a.redirectFormError(w, r, tab, "environment", err)
+		return
+	}
+	rememberEnvironment(w, defaultEnvironmentID)
+	redirectWithFlash(w, r, dashboardURL(tab, nil), flashMessage{Kind: "success", Message: "environment deleted"})
 }
 
 func (a *webApp) redirectToolsError(w http.ResponseWriter, r *http.Request, tab string, err error) {
@@ -1813,6 +1923,12 @@ func applyFormDraft(data *pageData, draft formDraft) {
 		}
 		data.ToolsForm.Count = values.Get("count")
 		data.ToolsForm.EmailDomain = values.Get("email_domain")
+	case "environment":
+		if data.EnvironmentForm == nil {
+			return
+		}
+		data.EnvironmentForm.ID = values.Get("id")
+		data.EnvironmentForm.Name = values.Get("name")
 	}
 }
 
@@ -1820,21 +1936,25 @@ func (a *webApp) redirectError(w http.ResponseWriter, r *http.Request, tab strin
 	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "error", Message: err.Error()})
 }
 
-func (a *webApp) rememberTrace(traces []syncTraceEntry) {
-	a.lastTrace = append([]syncTraceEntry(nil), traces...)
-	a.lastTraceContent = formatSyncTraces(traces)
+func (a *webApp) rememberTrace(environmentID string, traces []syncTraceEntry) {
+	if a.lastTraces == nil {
+		a.lastTraces = make(map[string][]syncTraceEntry)
+		a.lastTraceContent = make(map[string]string)
+	}
+	a.lastTraces[environmentID] = append([]syncTraceEntry(nil), traces...)
+	a.lastTraceContent[environmentID] = formatSyncTraces(traces)
 }
 
-func (a *webApp) hasTrace() bool {
+func (a *webApp) hasTrace(environmentID string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return len(a.lastTrace) > 0
+	return len(a.lastTraces[environmentID]) > 0
 }
 
-func (a *webApp) traceContent() string {
+func (a *webApp) traceContent(environmentID string) string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.lastTraceContent
+	return a.lastTraceContent[environmentID]
 }
 
 func buildStats(state appState) statsView {

@@ -11,10 +11,18 @@ type (
 	group          = core.Group
 	syncTraceEntry = core.SyncTraceEntry
 	syncProgress   = core.SyncProgress
+	environment    = core.Environment
 )
 
 var (
 	loadState                  = core.LoadState
+	loadEnvironmentState       = core.LoadEnvironmentState
+	loadStateForAppSlug        = core.LoadStateForAppSlug
+	loadEnvironments           = core.LoadEnvironments
+	createEnvironment          = core.CreateEnvironment
+	updateEnvironment          = core.UpdateEnvironment
+	deleteEnvironment          = core.DeleteEnvironment
+	loadAllApps                = core.LoadAllApps
 	saveState                  = core.SaveState
 	appendOperationLogs        = core.AppendOperationLogs
 	appendLocalOperationLog    = core.AppendLocalOperationLog
@@ -51,4 +59,5 @@ var (
 const (
 	defaultSAMLEmailAttributeName = core.DefaultSAMLEmailAttributeName
 	defaultSAMLNameIDField        = core.DefaultSAMLNameIDField
+	defaultEnvironmentID          = core.DefaultEnvironmentID
 )

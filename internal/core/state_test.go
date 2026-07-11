@@ -311,6 +311,41 @@ func TestLoadStateMigratesLegacyOperationLogsTable(t *testing.T) {
 	r.Equal("", state.UserOperations["local-1"][0].ResponseRetryAfter)
 }
 
+func TestLoadStateMigratesPreEnvironmentDatabaseIntoDefault(t *testing.T) {
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r := require.New(t)
+	path, err := stateFilePath()
+	r.NoError(err)
+	db, err := sql.Open("sqlite", path)
+	r.NoError(err)
+	_, err = db.Exec(`CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`)
+	r.NoError(err)
+	_, err = db.Exec(`CREATE TABLE users (
+		id TEXT PRIMARY KEY, given_name TEXT NOT NULL, family_name TEXT NOT NULL,
+		email TEXT NOT NULL, username TEXT NOT NULL, active INTEGER NOT NULL,
+		remote_id TEXT NOT NULL DEFAULT '', dirty INTEGER NOT NULL,
+		deleted INTEGER NOT NULL, last_error TEXT NOT NULL DEFAULT '')`)
+	r.NoError(err)
+	_, err = db.Exec(`INSERT INTO config(key, value) VALUES ('base_url', 'https://legacy.test/scim'), ('bearer_token', 'legacy-token')`)
+	r.NoError(err)
+	_, err = db.Exec(`INSERT INTO users(id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error) VALUES ('troy', 'Troy', 'Barnes', 'troy@greendale.edu', 'troy', 1, 'remote-troy', 0, 0, '')`)
+	r.NoError(err)
+	r.NoError(db.Close())
+
+	state, err := LoadState()
+	r.NoError(err)
+	r.Equal(Environment{ID: DefaultEnvironmentID, Name: "Default", Slug: "default"}, state.Environment)
+	r.Equal("https://legacy.test/scim", state.Config.BaseURL)
+	r.Equal("legacy-token", state.Config.BearerToken)
+	r.Len(state.Users, 1)
+	r.Equal("remote-troy", state.Users[0].RemoteID)
+
+	stateAgain, err := LoadState()
+	r.NoError(err)
+	r.Equal(state.Environment, stateAgain.Environment)
+	r.Len(stateAgain.Environments, 1)
+}
+
 func TestAppendLocalOperationLogPrependsEntry(t *testing.T) {
 	r := require.New(t)
 	previousTime := currentTime

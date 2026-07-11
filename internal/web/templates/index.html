@@ -118,7 +118,8 @@
       white-space: nowrap;
     }
     .topbar-pill .icon { color: var(--topbar-muted); }
-    .topbar-spacer { flex: 1; }
+	.topbar-spacer { flex: 1; }
+	.environment-switcher select { height: 30px; max-width: 220px; border: 1px solid var(--topbar-pill-line); border-radius: var(--radius); background: var(--topbar-pill); color: var(--topbar-fg); padding: 0 28px 0 9px; }
     .topbar-meta {
       display: inline-flex;
       align-items: center;
@@ -1013,7 +1014,7 @@
     }
     .protocol-section { display: contents; }
     .protocol-section.is-hidden { display: none; }
-    .section-label {
+	.section-label {
       grid-column: 1 / -1;
       margin-top: 4px;
       padding-top: 12px;
@@ -1099,10 +1100,19 @@
       scimtest
       <span class="sr-only">SCIM Control Surface</span>
     </a>
-    <span class="topbar-pill" title="Configured SCIM endpoint">
+	  <span class="topbar-pill" title="Configured SCIM endpoint">
       <span class="icon" aria-hidden="true">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="4" rx="1"/><rect x="2.5" y="9" width="11" height="4" rx="1"/><circle cx="5" cy="5" r="0.6" fill="currentColor"/><circle cx="5" cy="11" r="0.6" fill="currentColor"/></svg>
-      </span>
+	  </span>
+	  <form class="environment-switcher" method="get" action="/">
+		<input type="hidden" name="tab" value="{{.Tab}}">
+		<label class="sr-only" for="environment-switcher">Environment</label>
+		<select id="environment-switcher" name="environment" onchange="this.form.submit()">
+		  {{range .Environments}}<option value="{{.ID}}" {{if eq .ID $.Environment.ID}}selected{{end}}>{{.Name}}</option>{{end}}
+		</select>
+	  </form>
+	  <a class="btn btn-sm" href="/?tab={{.Tab}}&amp;modal=environment&amp;id={{.Environment.ID}}">Edit environment</a>
+	  <a class="btn btn-sm" href="/?tab={{.Tab}}&amp;modal=environment">+</a>
       <span class="k">SCIM</span>
       <span class="v">{{if .SCIMEnabled}}{{if .BaseURL}}{{.BaseURL}}{{else}}not configured{{end}}{{else}}disabled{{end}}</span>
     </span>
@@ -1593,18 +1603,46 @@
   </div>
   {{end}}
 
-  {{if .ConfigForm}}
+	{{if .EnvironmentForm}}
+	<div class="overlay" data-overlay>
+	  <div class="modal" role="dialog" aria-modal="true" aria-label="{{.EnvironmentForm.Title}}" tabindex="-1">
+		<div class="modal-header"><div class="modal-title">{{.EnvironmentForm.Title}}</div><a class="btn btn-sm btn-ghost" href="{{.EnvironmentForm.Close}}" data-autofocus>Close</a></div>
+		<form method="post" action="/environments/save">
+		  <input type="hidden" name="tab" value="{{.Tab}}">
+		  <input type="hidden" name="id" value="{{.EnvironmentForm.ID}}">
+		  <div class="modal-body">
+			<label class="field"><span class="label">Name</span><input name="name" value="{{.EnvironmentForm.Name}}" autocomplete="off"></label>
+			<div class="form-actions"><a class="btn btn-ghost" href="{{.EnvironmentForm.Close}}">Cancel</a><button class="btn btn-primary" type="submit">Save environment</button></div>
+		  </div>
+		</form>
+		{{if .EnvironmentForm.CanDelete}}
+		<form method="post" action="/environments/{{.EnvironmentForm.ID}}/delete">
+		  <input type="hidden" name="tab" value="{{.Tab}}">
+		  <input type="hidden" name="id" value="{{.EnvironmentForm.ID}}">
+		  <div class="modal-body">
+			<p class="hint">Deletes {{.EnvironmentForm.Users}} users, {{.EnvironmentForm.Groups}} groups, and {{.EnvironmentForm.Apps}} apps locally. No remote SCIM resources are changed.</p>
+			<label class="field"><span class="label">Type {{.EnvironmentForm.Name}} to confirm</span><input name="confirmation" autocomplete="off"></label>
+			<div class="form-actions"><button class="btn btn-danger" type="submit">Delete environment</button></div>
+		  </div>
+		</form>
+		{{end}}
+	  </div>
+	</div>
+	{{end}}
+
+	{{if .ConfigForm}}
   <div class="overlay" data-overlay>
     <div class="modal" role="dialog" aria-modal="true" tabindex="-1">
       <div class="modal-header">
-          <div class="modal-title">Config</div>
+		  <div class="modal-title">Settings · {{.Environment.Name}}</div>
         <a class="btn btn-sm btn-ghost" href="{{.ConfigForm.Close}}" data-autofocus>Close</a>
       </div>
       <form method="post" action="/config/save">
         <input type="hidden" name="tab" value="{{.Tab}}">
         {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
         <div class="modal-body">
-          <div class="form-grid">
+		  <div class="form-grid">
+			<div class="section-label full">Environment SCIM settings</div>
             <label class="field full">
               <span class="label">SCIM</span>
               <span class="checkbox-row">
@@ -1612,10 +1650,20 @@
                 Enable SCIM sync controls
               </span>
             </label>
-            <label class="field full">
-              <span class="label">SCIM base URL</span>
-              <input name="base_url" value="{{.ConfigForm.Config.BaseURL}}" autocomplete="off">
-            </label>
+			<label class="field full">
+			  <span class="label">SCIM base URL</span>
+			  <input name="base_url" value="{{.ConfigForm.Config.BaseURL}}" autocomplete="off">
+			</label>
+			<label class="field full">
+			  <span class="label">Bearer token</span>
+			  <input type="password" name="bearer_token" placeholder="{{if .ConfigForm.Config.BearerToken}}Leave blank to keep existing{{end}}" autocomplete="new-password" data-secret-input>
+			  <button class="link-button" type="button" data-secret-toggle>Show</button>
+			</label>
+			<label class="field full">
+			  <span class="label">Sync trace</span>
+			  <span class="checkbox-row"><input type="checkbox" name="auto_open_sync_trace" {{if .ConfigForm.Config.AutoOpenSyncTrace}}checked{{end}}> Auto-open the last trace after sync and import</span>
+			</label>
+			<div class="section-label full">Global IDP and tunnel settings</div>
             <div class="field full">
 			{{if .ConfigForm.Tunnel}}
 			<div class="tunnel-row">
@@ -1640,21 +1688,9 @@
 			  <span class="label">Reverse proxy</span>
 			  <span class="checkbox-row"><input type="checkbox" name="trust_forwarded_headers" {{if .ConfigForm.Config.TrustForwardedHeaders}}checked{{end}}> Trust X-Forwarded-Proto from a local reverse proxy</span>
 			</label>
-            <label class="field full">
-              <span class="label">Bearer token</span>
-			  <input type="password" name="bearer_token" placeholder="{{if .ConfigForm.Config.BearerToken}}Leave blank to keep existing{{end}}" autocomplete="new-password" data-secret-input>
-			  <button class="link-button" type="button" data-secret-toggle>Show</button>
-            </label>
-            <label class="field full">
-              <span class="label">Sync trace</span>
-              <span class="checkbox-row">
-                <input type="checkbox" name="auto_open_sync_trace" {{if .ConfigForm.Config.AutoOpenSyncTrace}}checked{{end}}>
-                Auto-open the last trace after sync and import
-              </span>
-            </label>
           </div>
           <div class="form-actions">
-			<button class="btn btn-danger" type="submit" form="config-clear-form" onclick="return confirm('Clear SCIM, IDP, tunnel, and signing configuration?')">Clear saved config</button>
+			<button class="btn btn-danger" type="submit" form="config-clear-form" onclick="return confirm('Clear SCIM settings for {{.Environment.Name}}?')">Clear environment SCIM settings</button>
             <span class="spacer"></span>
             <a class="btn btn-ghost" href="{{.ConfigForm.Close}}">Cancel</a>
             <button class="btn btn-primary" type="submit">Save config</button>
@@ -1798,6 +1834,7 @@
 		button.textContent = showing ? 'Show' : 'Hide';
 	  });
 	}
+	.section-label.full { grid-column: 1 / -1; }
 
     const overlays = Array.from(document.querySelectorAll('[data-overlay]'));
 	const activeOverlay = overlays[overlays.length - 1];
