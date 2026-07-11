@@ -1954,8 +1954,11 @@
       if (syncCount) syncCount.textContent = String(job.processed || 0) + ' / ' + String(job.total || 0);
       if (syncFill) syncFill.style.width = String(job.percent || 0) + '%';
       if (syncCurrent) syncCurrent.textContent = job.current || '';
-      if (syncTrace) syncTrace.classList.toggle('is-hidden', !job.traceAvailable);
-      if (syncSubmit) syncSubmit.disabled = Boolean(job.running);
+		if (syncTrace) syncTrace.classList.toggle('is-hidden', !job.traceAvailable);
+		if (syncSubmit) syncSubmit.disabled = Boolean(job.running);
+		for (const button of document.querySelectorAll('form[method="post"] button[type="submit"]')) {
+		  if (button !== syncSubmit) button.disabled = Boolean(job.running);
+		}
     }
 
     async function pollSyncStatus() {

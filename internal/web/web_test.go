@@ -773,6 +773,26 @@ func TestSyncStartsAsyncAndReportsStatus(t *testing.T) {
 	r.Equal("create user Shirley Bennett (sbennett)", finishedJob.Current)
 }
 
+func TestMutationIsRejectedWhileSyncRuns(t *testing.T) {
+	r := require.New(t)
+	app := &webApp{syncJob: &syncJobSnapshot{Running: true}}
+	called := false
+	handler := app.rejectWhileSyncing(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	})
+	req := httptest.NewRequest(http.MethodPost, "/users/save", strings.NewReader("tab=users"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler(rec, req)
+
+	r.False(called)
+	r.Equal(http.StatusConflict, rec.Code)
+	r.JSONEq(`{"error":"sync is running; wait for it to finish"}`, rec.Body.String())
+}
+
 func TestSyncRateLimitRendersReadableError(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)

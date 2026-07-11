@@ -414,27 +414,42 @@ func (a *webApp) idpRoutes() http.Handler {
 
 func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /", a.handleIndex)
-	mux.HandleFunc("POST /users/save", a.handleUserSave)
-	mux.HandleFunc("POST /users/{id}/toggle-active", a.handleUserToggleActive)
-	mux.HandleFunc("POST /users/{id}/delete", a.handleUserDelete)
-	mux.HandleFunc("POST /users/{id}/restore", a.handleUserRestore)
-	mux.HandleFunc("POST /groups/save", a.handleGroupSave)
-	mux.HandleFunc("POST /groups/{id}/delete", a.handleGroupDelete)
-	mux.HandleFunc("POST /groups/{id}/restore", a.handleGroupRestore)
-	mux.HandleFunc("POST /apps/save", a.handleAppSave)
-	mux.HandleFunc("POST /apps/{id}/delete", a.handleAppDelete)
-	mux.HandleFunc("POST /config/save", a.handleConfigSave)
-	mux.HandleFunc("POST /config/clear", a.handleConfigClear)
-	mux.HandleFunc("POST /rgrok/setup", a.handleRgrokSetup)
-	mux.HandleFunc("POST /rgrok/cancel", a.handleRgrokCancel)
-	mux.HandleFunc("POST /tools/delete-all", a.handleToolsDeleteAll)
-	mux.HandleFunc("POST /tools/deactivate-all", a.handleToolsDeactivateAll)
-	mux.HandleFunc("POST /tools/activate-all", a.handleToolsActivateAll)
-	mux.HandleFunc("POST /tools/create-users", a.handleToolsCreateUsers)
+	mux.HandleFunc("POST /users/save", a.rejectWhileSyncing(a.handleUserSave))
+	mux.HandleFunc("POST /users/{id}/toggle-active", a.rejectWhileSyncing(a.handleUserToggleActive))
+	mux.HandleFunc("POST /users/{id}/delete", a.rejectWhileSyncing(a.handleUserDelete))
+	mux.HandleFunc("POST /users/{id}/restore", a.rejectWhileSyncing(a.handleUserRestore))
+	mux.HandleFunc("POST /groups/save", a.rejectWhileSyncing(a.handleGroupSave))
+	mux.HandleFunc("POST /groups/{id}/delete", a.rejectWhileSyncing(a.handleGroupDelete))
+	mux.HandleFunc("POST /groups/{id}/restore", a.rejectWhileSyncing(a.handleGroupRestore))
+	mux.HandleFunc("POST /apps/save", a.rejectWhileSyncing(a.handleAppSave))
+	mux.HandleFunc("POST /apps/{id}/delete", a.rejectWhileSyncing(a.handleAppDelete))
+	mux.HandleFunc("POST /config/save", a.rejectWhileSyncing(a.handleConfigSave))
+	mux.HandleFunc("POST /config/clear", a.rejectWhileSyncing(a.handleConfigClear))
+	mux.HandleFunc("POST /rgrok/setup", a.rejectWhileSyncing(a.handleRgrokSetup))
+	mux.HandleFunc("POST /rgrok/cancel", a.rejectWhileSyncing(a.handleRgrokCancel))
+	mux.HandleFunc("POST /tools/delete-all", a.rejectWhileSyncing(a.handleToolsDeleteAll))
+	mux.HandleFunc("POST /tools/deactivate-all", a.rejectWhileSyncing(a.handleToolsDeactivateAll))
+	mux.HandleFunc("POST /tools/activate-all", a.rejectWhileSyncing(a.handleToolsActivateAll))
+	mux.HandleFunc("POST /tools/create-users", a.rejectWhileSyncing(a.handleToolsCreateUsers))
 	mux.HandleFunc("GET /sync/status", a.handleSyncStatus)
 	mux.HandleFunc("POST /sync", a.handleSync)
-	mux.HandleFunc("POST /import", a.handleImport)
-	mux.HandleFunc("POST /reset", a.handleReset)
+	mux.HandleFunc("POST /import", a.rejectWhileSyncing(a.handleImport))
+	mux.HandleFunc("POST /reset", a.rejectWhileSyncing(a.handleReset))
+}
+
+func (a *webApp) rejectWhileSyncing(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if job := a.currentSyncJob(); job != nil && job.Running {
+			if wantsJSON(r) {
+				w.WriteHeader(http.StatusConflict)
+				writeJSON(w, map[string]string{"error": "sync is running; wait for it to finish"})
+				return
+			}
+			a.redirectError(w, r, normalizedTab(r.FormValue("tab")), fmt.Errorf("sync is running; wait for it to finish"))
+			return
+		}
+		next(w, r)
+	}
 }
 
 func (a *webApp) registerIDPRoutes(mux *http.ServeMux) {
