@@ -1482,12 +1482,14 @@
               </label>
 			  <label class="field">
 				<span class="label">Client secret</span>
-				<input type="password" name="oidc_client_secret" value="{{.AppForm.App.OIDCClientSecret}}" autocomplete="off">
+				<input type="password" name="oidc_client_secret" placeholder="{{if .AppForm.App.OIDCClientSecret}}Leave blank to keep existing{{else}}Generated when saved{{end}}" autocomplete="new-password" data-secret-input>
+				<button class="link-button" type="button" data-secret-toggle>Show</button>
 			  </label>
 			  <label class="field full">
 				<span class="label">Client type</span>
 				<span class="checkbox-row"><input type="checkbox" name="oidc_public_client" {{if .AppForm.App.OIDCPublicClient}}checked{{end}}> Public client (no client secret)</span>
 			  </label>
+			  {{if and .AppForm.App.ID (not .AppForm.App.OIDCPublicClient)}}<label class="field full"><span class="checkbox-row"><input type="checkbox" name="regenerate_oidc_secret"> Generate a new client secret</span></label>{{end}}
               <label class="field full">
                 <span class="label">Redirect URIs</span>
 				<textarea name="oidc_redirect_uris" placeholder="http://localhost:3000/callback">{{.AppForm.OIDCRedirectURIs}}</textarea>
@@ -1617,7 +1619,8 @@
 			</label>
             <label class="field full">
               <span class="label">Bearer token</span>
-              <input name="bearer_token" value="{{.ConfigForm.Config.BearerToken}}" autocomplete="off">
+			  <input type="password" name="bearer_token" placeholder="{{if .ConfigForm.Config.BearerToken}}Leave blank to keep existing{{end}}" autocomplete="new-password" data-secret-input>
+			  <button class="link-button" type="button" data-secret-toggle>Show</button>
             </label>
             <label class="field full">
               <span class="label">Sync trace</span>
@@ -1730,7 +1733,7 @@
       }
     }
 
-    const copyButtons = document.querySelectorAll('[data-copy-button]');
+	const copyButtons = document.querySelectorAll('[data-copy-button]');
     for (const button of copyButtons) {
       button.addEventListener('click', async function () {
         const field = button.closest('.copy-field');
@@ -1754,7 +1757,18 @@
           setTimeout(function () {
             button.setAttribute('title', originalTitle);
           }, 1200);
-        }
+	}
+
+	for (const button of document.querySelectorAll('[data-secret-toggle]')) {
+	  button.addEventListener('click', function () {
+		const field = button.closest('.field');
+		const input = field ? field.querySelector('[data-secret-input]') : null;
+		if (!input) return;
+		const showing = input.type === 'text';
+		input.type = showing ? 'password' : 'text';
+		button.textContent = showing ? 'Show' : 'Hide';
+	  });
+	}
       });
     }
 

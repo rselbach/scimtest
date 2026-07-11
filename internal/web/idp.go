@@ -74,13 +74,17 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.TrimSpace(r.FormValue("id"))
+	oidcClientSecret := strings.TrimSpace(r.FormValue("oidc_client_secret"))
+	if existingIndex, ok := appIndexByID(state.Apps, id); ok && oidcClientSecret == "" && r.FormValue("regenerate_oidc_secret") != "on" {
+		oidcClientSecret = state.Apps[existingIndex].OIDCClientSecret
+	}
 	app := app{
 		ID:                     id,
 		Name:                   strings.TrimSpace(r.FormValue("name")),
 		Slug:                   slugify(r.FormValue("slug")),
 		Protocol:               strings.TrimSpace(r.FormValue("protocol")),
 		OIDCClientID:           strings.TrimSpace(r.FormValue("oidc_client_id")),
-		OIDCClientSecret:       strings.TrimSpace(r.FormValue("oidc_client_secret")),
+		OIDCClientSecret:       oidcClientSecret,
 		OIDCPublicClient:       r.FormValue("oidc_public_client") == "on",
 		OIDCRedirectURIs:       lines(r.FormValue("oidc_redirect_uris")),
 		AllowAnyOIDCRedirect:   r.FormValue("allow_any_oidc_redirect") == "on",
@@ -100,6 +104,9 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 	if supportsOIDC(app) {
 		if app.OIDCClientID == "" {
 			app.OIDCClientID = app.Slug
+		}
+		if r.FormValue("regenerate_oidc_secret") == "on" {
+			app.OIDCClientSecret = ""
 		}
 		if app.OIDCPublicClient {
 			app.OIDCClientSecret = ""

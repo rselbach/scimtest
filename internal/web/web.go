@@ -882,10 +882,14 @@ func (a *webApp) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 		a.redirectError(w, r, tab, err)
 		return
 	}
+	bearerToken := strings.TrimSpace(r.FormValue("bearer_token"))
+	if bearerToken == "" {
+		bearerToken = state.Config.BearerToken
+	}
 
 	state.Config = config{
 		BaseURL:               baseURL,
-		BearerToken:           strings.TrimSpace(r.FormValue("bearer_token")),
+		BearerToken:           bearerToken,
 		AutoOpenSyncTrace:     r.FormValue("auto_open_sync_trace") == "on",
 		SCIMDisabled:          scimDisabled,
 		IDPBaseURL:            idpBaseURL,
