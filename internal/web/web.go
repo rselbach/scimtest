@@ -874,6 +874,7 @@ func (a *webApp) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 		AutoOpenSyncTrace:     r.FormValue("auto_open_sync_trace") == "on",
 		SCIMDisabled:          scimDisabled,
 		IDPBaseURL:            idpBaseURL,
+		TrustForwardedHeaders: r.FormValue("trust_forwarded_headers") == "on",
 		RgrokName:             state.Config.RgrokName,
 		RgrokToken:            state.Config.RgrokToken,
 		SigningPrivateKeyPEM:  state.Config.SigningPrivateKeyPEM,

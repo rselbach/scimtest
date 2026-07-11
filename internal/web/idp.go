@@ -521,11 +521,13 @@ func effectiveIDPBaseURL(r *http.Request, state appState) string {
 	if configured != "" {
 		return configured
 	}
-	proto := r.Header.Get("X-Forwarded-Proto")
-	if proto == "" {
-		proto = "http"
-		if r.TLS != nil {
-			proto = "https"
+	proto := "http"
+	if r.TLS != nil {
+		proto = "https"
+	}
+	if state.Config.TrustForwardedHeaders {
+		if forwardedProto := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0]); forwardedProto == "http" || forwardedProto == "https" {
+			proto = forwardedProto
 		}
 	}
 	host := r.Host

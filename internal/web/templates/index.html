@@ -1609,8 +1609,12 @@
               <span class="label">IDP base URL</span>
               {{if .ConfigForm.IDPBaseURLDisabled}}<input type="hidden" name="idp_base_url" value="{{.ConfigForm.IDPBaseURLValue}}">{{end}}
               <input name="idp_base_url" value="{{.ConfigForm.IDPBaseURLValue}}" placeholder="{{.IDPBaseURL}}" autocomplete="off" {{if .ConfigForm.IDPBaseURLDisabled}}disabled{{end}}>
-              <span class="hint">Set this only when OIDC/SAML clients need a public issuer URL different from the current request host.</span>
-            </label>
+			  <span class="hint">Set this only when OIDC/SAML clients need a public issuer URL different from the current request host.</span>
+			</label>
+			<label class="field full">
+			  <span class="label">Reverse proxy</span>
+			  <span class="checkbox-row"><input type="checkbox" name="trust_forwarded_headers" {{if .ConfigForm.Config.TrustForwardedHeaders}}checked{{end}}> Trust X-Forwarded-Proto from a local reverse proxy</span>
+			</label>
             <label class="field full">
               <span class="label">Bearer token</span>
               <input name="bearer_token" value="{{.ConfigForm.Config.BearerToken}}" autocomplete="off">

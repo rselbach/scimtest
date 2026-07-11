@@ -30,6 +30,7 @@ type Config struct {
 	AutoOpenSyncTrace     bool   `json:"auto_open_sync_trace"`
 	SCIMDisabled          bool   `json:"scim_disabled,omitempty"`
 	IDPBaseURL            string `json:"idp_base_url,omitempty"`
+	TrustForwardedHeaders bool   `json:"trust_forwarded_headers,omitempty"`
 	RgrokName             string `json:"rgrok_name,omitempty"`
 	RgrokToken            string `json:"rgrok_token,omitempty"`
 	SigningPrivateKeyPEM  string `json:"signing_private_key_pem,omitempty"`
@@ -352,6 +353,8 @@ func loadStateFromDB(db *sql.DB) (AppState, error) {
 			state.Config.SCIMDisabled = value == "1"
 		case "idp_base_url":
 			state.Config.IDPBaseURL = value
+		case "trust_forwarded_headers":
+			state.Config.TrustForwardedHeaders = value == "1"
 		case "rgrok_name":
 			state.Config.RgrokName = value
 		case "rgrok_token":
@@ -527,6 +530,7 @@ func saveStateToDB(db *sql.DB, state AppState) error {
 		"auto_open_sync_trace":    BoolString(state.Config.AutoOpenSyncTrace),
 		"scim_disabled":           BoolString(state.Config.SCIMDisabled),
 		"idp_base_url":            state.Config.IDPBaseURL,
+		"trust_forwarded_headers": BoolString(state.Config.TrustForwardedHeaders),
 		"rgrok_name":              state.Config.RgrokName,
 		"rgrok_token":             state.Config.RgrokToken,
 		"signing_private_key_pem": state.Config.SigningPrivateKeyPEM,

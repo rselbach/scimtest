@@ -184,6 +184,25 @@ func TestUserClaimsHonorScopes(t *testing.T) {
 	r.NotContains(withoutConfiguredGroups, "groups")
 }
 
+func TestEffectiveIDPBaseURLOnlyTrustsForwardedProtoWhenConfigured(t *testing.T) {
+	tests := map[string]struct {
+		trust bool
+		want  string
+	}{
+		"ignored by default": {want: "http://idp.test"},
+		"explicitly trusted": {trust: true, want: "https://idp.test"},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "http://idp.test/oidc/example/jwks", nil)
+			r.Header.Set("X-Forwarded-Proto", "https")
+			got := effectiveIDPBaseURL(r, appState{Config: config{TrustForwardedHeaders: tc.trust}})
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestOIDCTokenPrunesExpiredCredentials(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
