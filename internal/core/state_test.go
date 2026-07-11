@@ -371,6 +371,40 @@ func TestLoadStateMigratesPreEnvironmentDatabaseIntoDefault(t *testing.T) {
 	r.Len(stateAgain.Environments, 1)
 }
 
+func TestEnvironmentSCIMConfigurationMigratesToApps(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r.NoError(SaveState(AppState{}))
+	legacyEnvironment, err := CreateEnvironment("Legacy Staging")
+	r.NoError(err)
+	legacy, err := LoadEnvironmentState(legacyEnvironment.ID)
+	r.NoError(err)
+	legacy.Config = Config{BaseURL: "https://legacy.test/scim", BearerToken: "legacy-token", AutoOpenSyncTrace: true}
+	legacy.Users = []User{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true, RemoteID: "remote-troy"}}
+	legacy.Apps = []App{{ID: "legacy-app", Name: "Legacy Portal", Slug: "legacy-portal", Protocol: "saml", SAMLACSURL: "https://legacy.test/acs"}}
+	r.NoError(SaveState(legacy))
+	path, err := stateFilePath()
+	r.NoError(err)
+	db, err := sql.Open("sqlite", path)
+	r.NoError(err)
+	_, err = db.Exec(`DELETE FROM config WHERE key = 'app_scim_migrated'`)
+	r.NoError(err)
+	_, err = db.Exec(`UPDATE apps SET scim_enabled = 0, scim_base_url = '', scim_bearer_token = '', scim_auto_open_trace = 0`)
+	r.NoError(err)
+	_, err = db.Exec(`DELETE FROM app_user_sync`)
+	r.NoError(err)
+	r.NoError(db.Close())
+
+	migrated, err := LoadEnvironmentState(legacyEnvironment.ID)
+	r.NoError(err)
+	r.Len(migrated.Apps, 1)
+	r.True(migrated.Apps[0].SCIMEnabled)
+	r.Equal("https://legacy.test/scim", migrated.Apps[0].SCIMBaseURL)
+	r.Equal("legacy-token", migrated.Apps[0].SCIMBearerToken)
+	r.True(migrated.Apps[0].SCIMAutoOpenTrace)
+	r.Equal(ResourceSyncState{RemoteID: "remote-troy"}, migrated.UserSync["legacy-app"]["troy"])
+}
+
 func TestAppendLocalOperationLogPrependsEntry(t *testing.T) {
 	r := require.New(t)
 	previousTime := currentTime

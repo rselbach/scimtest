@@ -97,14 +97,23 @@ func (u *User) UnmarshalJSON(data []byte) error {
 }
 
 type AppState struct {
-	Environment     Environment               `json:"environment"`
-	Environments    []Environment             `json:"environments,omitempty"`
-	Config          Config                    `json:"config"`
-	Users           []User                    `json:"users"`
-	Groups          []Group                   `json:"groups"`
-	Apps            []App                     `json:"apps"`
-	UserOperations  map[string][]OperationLog `json:"-"`
-	GroupOperations map[string][]OperationLog `json:"-"`
+	Environment     Environment                             `json:"environment"`
+	Environments    []Environment                           `json:"environments,omitempty"`
+	Config          Config                                  `json:"config"`
+	Users           []User                                  `json:"users"`
+	Groups          []Group                                 `json:"groups"`
+	Apps            []App                                   `json:"apps"`
+	UserOperations  map[string][]OperationLog               `json:"-"`
+	GroupOperations map[string][]OperationLog               `json:"-"`
+	UserSync        map[string]map[string]ResourceSyncState `json:"-"`
+	GroupSync       map[string]map[string]ResourceSyncState `json:"-"`
+}
+
+type ResourceSyncState struct {
+	RemoteID  string
+	Dirty     bool
+	Deleted   bool
+	LastError string
 }
 
 type OperationLog struct {
@@ -149,6 +158,10 @@ type App struct {
 	SAMLNameIDFormat       string   `json:"saml_name_id_format,omitempty"`
 	SAMLEmailAttributeName string   `json:"saml_email_attribute_name,omitempty"`
 	IncludeGroupsClaim     bool     `json:"include_groups_claim"`
+	SCIMEnabled            bool     `json:"scim_enabled,omitempty"`
+	SCIMBaseURL            string   `json:"scim_base_url,omitempty"`
+	SCIMBearerToken        string   `json:"scim_bearer_token,omitempty"`
+	SCIMAutoOpenTrace      bool     `json:"scim_auto_open_trace,omitempty"`
 }
 
 func LoadState() (AppState, error) {
@@ -452,7 +465,29 @@ func initStateDB(db *sql.DB) error {
 			saml_name_id_format TEXT NOT NULL DEFAULT '',
 			saml_email_attribute_name TEXT NOT NULL DEFAULT '',
 			include_groups_claim INTEGER NOT NULL DEFAULT 0,
-			allow_any_oidc_redirect INTEGER NOT NULL DEFAULT 1
+			allow_any_oidc_redirect INTEGER NOT NULL DEFAULT 1,
+			scim_enabled INTEGER NOT NULL DEFAULT 0,
+			scim_base_url TEXT NOT NULL DEFAULT '',
+			scim_bearer_token TEXT NOT NULL DEFAULT '',
+			scim_auto_open_trace INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE IF NOT EXISTS app_user_sync (
+			app_id TEXT NOT NULL,
+			user_id TEXT NOT NULL,
+			remote_id TEXT NOT NULL DEFAULT '',
+			dirty INTEGER NOT NULL DEFAULT 1,
+			deleted INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (app_id, user_id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS app_group_sync (
+			app_id TEXT NOT NULL,
+			group_id TEXT NOT NULL,
+			remote_id TEXT NOT NULL DEFAULT '',
+			dirty INTEGER NOT NULL DEFAULT 1,
+			deleted INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (app_id, group_id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS group_members (
 			group_id TEXT NOT NULL,
@@ -499,6 +534,10 @@ func initStateDB(db *sql.DB) error {
 		`ALTER TABLE apps ADD COLUMN environment_id TEXT NOT NULL DEFAULT 'env_default'`,
 		`ALTER TABLE operation_logs ADD COLUMN environment_id TEXT NOT NULL DEFAULT 'env_default'`,
 		`ALTER TABLE group_members ADD COLUMN environment_id TEXT NOT NULL DEFAULT 'env_default'`,
+		`ALTER TABLE apps ADD COLUMN scim_enabled INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE apps ADD COLUMN scim_base_url TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE apps ADD COLUMN scim_bearer_token TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE apps ADD COLUMN scim_auto_open_trace INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, migration := range migrations {
 		if _, err := db.Exec(migration); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -519,6 +558,9 @@ func initStateDB(db *sql.DB) error {
 	}
 
 	if err := migrateDefaultEnvironment(db); err != nil {
+		return err
+	}
+	if err := migrateEnvironmentSCIMToApps(db); err != nil {
 		return err
 	}
 
@@ -544,6 +586,85 @@ func migrateDefaultEnvironment(db *sql.DB) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit default environment migration: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+func migrateEnvironmentSCIMToApps(db *sql.DB) error {
+	var migrated string
+	err := db.QueryRow(`SELECT value FROM config WHERE key = 'app_scim_migrated'`).Scan(&migrated)
+	if err == nil && migrated == "1" {
+		return nil
+	}
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("check app SCIM migration: %w", err)
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin app SCIM migration: %w", err)
+	}
+	committed := false
+	defer rollbackTx(tx, &committed)
+
+	_, err = tx.Exec(`INSERT OR IGNORE INTO apps(id, environment_id, name, slug, protocol, scim_enabled, scim_base_url, scim_bearer_token, scim_auto_open_trace)
+		SELECT 'migrated_scim_' || environments.id,
+			environments.id,
+			environments.name || ' SCIM',
+			environments.slug || '-scim-' || substr(environments.id, -6),
+			'scim', 1,
+			base.value,
+			COALESCE(token.value, ''),
+			COALESCE(trace.value = '1', 0)
+		FROM environments
+		JOIN environment_config base ON base.environment_id = environments.id AND base.key = 'base_url' AND base.value != ''
+		LEFT JOIN environment_config token ON token.environment_id = environments.id AND token.key = 'bearer_token'
+		LEFT JOIN environment_config trace ON trace.environment_id = environments.id AND trace.key = 'auto_open_sync_trace'
+		LEFT JOIN environment_config disabled ON disabled.environment_id = environments.id AND disabled.key = 'scim_disabled'
+		WHERE COALESCE(disabled.value, '0') != '1'
+		AND NOT EXISTS (SELECT 1 FROM apps WHERE apps.environment_id = environments.id)`)
+	if err != nil {
+		return fmt.Errorf("create apps for orphaned environment SCIM config: %w", err)
+	}
+
+	_, err = tx.Exec(`UPDATE apps SET
+		scim_base_url = COALESCE((SELECT value FROM environment_config WHERE environment_id = apps.environment_id AND key = 'base_url'), ''),
+		scim_bearer_token = COALESCE((SELECT value FROM environment_config WHERE environment_id = apps.environment_id AND key = 'bearer_token'), ''),
+		scim_auto_open_trace = COALESCE((SELECT value = '1' FROM environment_config WHERE environment_id = apps.environment_id AND key = 'auto_open_sync_trace'), 0),
+		scim_enabled = CASE
+			WHEN COALESCE((SELECT value FROM environment_config WHERE environment_id = apps.environment_id AND key = 'base_url'), '') != ''
+			 AND COALESCE((SELECT value FROM environment_config WHERE environment_id = apps.environment_id AND key = 'scim_disabled'), '0') != '1'
+			THEN 1 ELSE 0 END`)
+	if err != nil {
+		return fmt.Errorf("move environment SCIM config to apps: %w", err)
+	}
+
+	_, err = tx.Exec(`INSERT OR IGNORE INTO app_user_sync(app_id, user_id, remote_id, dirty, deleted, last_error)
+		SELECT apps.id, users.id,
+			CASE WHEN apps.environment_id = users.environment_id THEN users.remote_id ELSE '' END,
+			CASE WHEN apps.environment_id = users.environment_id THEN users.dirty ELSE 1 END,
+			users.deleted,
+			CASE WHEN apps.environment_id = users.environment_id THEN users.last_error ELSE '' END
+		FROM apps CROSS JOIN users WHERE apps.scim_enabled = 1`)
+	if err != nil {
+		return fmt.Errorf("migrate app user sync state: %w", err)
+	}
+	_, err = tx.Exec(`INSERT OR IGNORE INTO app_group_sync(app_id, group_id, remote_id, dirty, deleted, last_error)
+		SELECT apps.id, groups.id,
+			CASE WHEN apps.environment_id = groups.environment_id THEN groups.remote_id ELSE '' END,
+			CASE WHEN apps.environment_id = groups.environment_id THEN groups.dirty ELSE 1 END,
+			groups.deleted,
+			CASE WHEN apps.environment_id = groups.environment_id THEN groups.last_error ELSE '' END
+		FROM apps CROSS JOIN groups WHERE apps.scim_enabled = 1`)
+	if err != nil {
+		return fmt.Errorf("migrate app group sync state: %w", err)
+	}
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO config(key, value) VALUES('app_scim_migrated', '1')`); err != nil {
+		return fmt.Errorf("mark app SCIM migration complete: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit app SCIM migration: %w", err)
 	}
 	committed = true
 	return nil
@@ -702,7 +823,7 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 		return AppState{}, fmt.Errorf("iterate sqlite group member rows: %w", err)
 	}
 
-	appRows, err := db.Query(`SELECT id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, include_groups_claim, allow_any_oidc_redirect FROM apps WHERE environment_id = ? ORDER BY rowid`, environmentID)
+	appRows, err := db.Query(`SELECT id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, include_groups_claim, allow_any_oidc_redirect, scim_enabled, scim_base_url, scim_bearer_token, scim_auto_open_trace FROM apps WHERE environment_id = ? ORDER BY rowid`, environmentID)
 	if err != nil {
 		return AppState{}, fmt.Errorf("load apps from sqlite: %w", err)
 	}
@@ -714,17 +835,75 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 		var includeGroups int
 		var allowAnyRedirect int
 		var publicClient int
-		if err := appRows.Scan(&app.ID, &app.Name, &app.Slug, &app.Protocol, &app.OIDCClientID, &app.OIDCClientSecret, &publicClient, &redirectURIs, &app.SAMLEntityID, &app.SAMLACSURL, &app.SAMLAudience, &app.SAMLNameIDField, &app.SAMLNameIDFormat, &app.SAMLEmailAttributeName, &includeGroups, &allowAnyRedirect); err != nil {
+		var scimEnabled int
+		var scimAutoOpenTrace int
+		if err := appRows.Scan(&app.ID, &app.Name, &app.Slug, &app.Protocol, &app.OIDCClientID, &app.OIDCClientSecret, &publicClient, &redirectURIs, &app.SAMLEntityID, &app.SAMLACSURL, &app.SAMLAudience, &app.SAMLNameIDField, &app.SAMLNameIDFormat, &app.SAMLEmailAttributeName, &includeGroups, &allowAnyRedirect, &scimEnabled, &app.SCIMBaseURL, &app.SCIMBearerToken, &scimAutoOpenTrace); err != nil {
 			return AppState{}, fmt.Errorf("scan sqlite app row: %w", err)
 		}
 		app.OIDCRedirectURIs = Lines(redirectURIs)
 		app.IncludeGroupsClaim = includeGroups != 0
 		app.AllowAnyOIDCRedirect = allowAnyRedirect != 0
 		app.OIDCPublicClient = publicClient != 0
+		app.SCIMEnabled = scimEnabled != 0
+		app.SCIMAutoOpenTrace = scimAutoOpenTrace != 0
 		state.Apps = append(state.Apps, app)
 	}
 	if err := appRows.Err(); err != nil {
 		return AppState{}, fmt.Errorf("iterate sqlite app rows: %w", err)
+	}
+	userSyncRows, err := db.Query(`SELECT sync.app_id, sync.user_id, sync.remote_id, sync.dirty, sync.deleted, sync.last_error FROM app_user_sync sync JOIN apps ON apps.id = sync.app_id WHERE apps.environment_id = ?`, environmentID)
+	if err != nil {
+		return AppState{}, fmt.Errorf("load app user sync state: %w", err)
+	}
+	defer closeRows(userSyncRows)
+	for userSyncRows.Next() {
+		var appID string
+		var userID string
+		var syncState ResourceSyncState
+		var dirty int
+		var deleted int
+		if err := userSyncRows.Scan(&appID, &userID, &syncState.RemoteID, &dirty, &deleted, &syncState.LastError); err != nil {
+			return AppState{}, fmt.Errorf("scan app user sync state: %w", err)
+		}
+		syncState.Dirty = dirty != 0
+		syncState.Deleted = deleted != 0
+		if state.UserSync == nil {
+			state.UserSync = make(map[string]map[string]ResourceSyncState)
+		}
+		if state.UserSync[appID] == nil {
+			state.UserSync[appID] = make(map[string]ResourceSyncState)
+		}
+		state.UserSync[appID][userID] = syncState
+	}
+	if err := userSyncRows.Err(); err != nil {
+		return AppState{}, fmt.Errorf("iterate app user sync state: %w", err)
+	}
+	groupSyncRows, err := db.Query(`SELECT sync.app_id, sync.group_id, sync.remote_id, sync.dirty, sync.deleted, sync.last_error FROM app_group_sync sync JOIN apps ON apps.id = sync.app_id WHERE apps.environment_id = ?`, environmentID)
+	if err != nil {
+		return AppState{}, fmt.Errorf("load app group sync state: %w", err)
+	}
+	defer closeRows(groupSyncRows)
+	for groupSyncRows.Next() {
+		var appID string
+		var groupID string
+		var syncState ResourceSyncState
+		var dirty int
+		var deleted int
+		if err := groupSyncRows.Scan(&appID, &groupID, &syncState.RemoteID, &dirty, &deleted, &syncState.LastError); err != nil {
+			return AppState{}, fmt.Errorf("scan app group sync state: %w", err)
+		}
+		syncState.Dirty = dirty != 0
+		syncState.Deleted = deleted != 0
+		if state.GroupSync == nil {
+			state.GroupSync = make(map[string]map[string]ResourceSyncState)
+		}
+		if state.GroupSync[appID] == nil {
+			state.GroupSync[appID] = make(map[string]ResourceSyncState)
+		}
+		state.GroupSync[appID][groupID] = syncState
+	}
+	if err := groupSyncRows.Err(); err != nil {
+		return AppState{}, fmt.Errorf("iterate app group sync state: %w", err)
 	}
 
 	logRows, err := db.Query(`SELECT resource_type, resource_id, kind, summary, operation, method, path, request_body, status, response_retry_after, response_body, error_text, created_at FROM operation_logs WHERE environment_id = ? ORDER BY resource_type, resource_id, created_at DESC, id ASC`, environmentID)
@@ -799,6 +978,12 @@ func saveStateToDB(db *sql.DB, state AppState) error {
 	if _, err := tx.Exec(`DELETE FROM groups WHERE environment_id = ?`, environmentID); err != nil {
 		return fmt.Errorf("clear sqlite groups: %w", err)
 	}
+	if _, err := tx.Exec(`DELETE FROM app_user_sync WHERE app_id IN (SELECT id FROM apps WHERE environment_id = ?)`, environmentID); err != nil {
+		return fmt.Errorf("clear sqlite app user sync: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM app_group_sync WHERE app_id IN (SELECT id FROM apps WHERE environment_id = ?)`, environmentID); err != nil {
+		return fmt.Errorf("clear sqlite app group sync: %w", err)
+	}
 	if _, err := tx.Exec(`DELETE FROM apps WHERE environment_id = ?`, environmentID); err != nil {
 		return fmt.Errorf("clear sqlite apps: %w", err)
 	}
@@ -816,6 +1001,7 @@ func saveStateToDB(db *sql.DB, state AppState) error {
 	defer closeStmt(configStmt)
 
 	configEntries := map[string]string{
+		"app_scim_migrated":       "1",
 		"idp_base_url":            state.Config.IDPBaseURL,
 		"trust_forwarded_headers": BoolString(state.Config.TrustForwardedHeaders),
 		"rgrok_name":              state.Config.RgrokName,
@@ -882,15 +1068,39 @@ func saveStateToDB(db *sql.DB, state AppState) error {
 		}
 	}
 
-	appStmt, err := tx.Prepare(`INSERT INTO apps(id, environment_id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, include_groups_claim, allow_any_oidc_redirect) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	appStmt, err := tx.Prepare(`INSERT INTO apps(id, environment_id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, include_groups_claim, allow_any_oidc_redirect, scim_enabled, scim_base_url, scim_bearer_token, scim_auto_open_trace) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("prepare sqlite app insert: %w", err)
 	}
 	defer closeStmt(appStmt)
 
 	for _, app := range state.Apps {
-		if _, err := appStmt.Exec(app.ID, environmentID, app.Name, app.Slug, app.Protocol, app.OIDCClientID, app.OIDCClientSecret, boolToInt(app.OIDCPublicClient), JoinLines(app.OIDCRedirectURIs), app.SAMLEntityID, app.SAMLACSURL, app.SAMLAudience, app.SAMLNameIDField, app.SAMLNameIDFormat, app.SAMLEmailAttributeName, boolToInt(app.IncludeGroupsClaim), boolToInt(app.AllowAnyOIDCRedirect)); err != nil {
+		if _, err := appStmt.Exec(app.ID, environmentID, app.Name, app.Slug, app.Protocol, app.OIDCClientID, app.OIDCClientSecret, boolToInt(app.OIDCPublicClient), JoinLines(app.OIDCRedirectURIs), app.SAMLEntityID, app.SAMLACSURL, app.SAMLAudience, app.SAMLNameIDField, app.SAMLNameIDFormat, app.SAMLEmailAttributeName, boolToInt(app.IncludeGroupsClaim), boolToInt(app.AllowAnyOIDCRedirect), boolToInt(app.SCIMEnabled), app.SCIMBaseURL, app.SCIMBearerToken, boolToInt(app.SCIMAutoOpenTrace)); err != nil {
 			return fmt.Errorf("insert sqlite app %s: %w", app.ID, err)
+		}
+	}
+	userSyncStmt, err := tx.Prepare(`INSERT INTO app_user_sync(app_id, user_id, remote_id, dirty, deleted, last_error) VALUES(?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("prepare app user sync insert: %w", err)
+	}
+	defer closeStmt(userSyncStmt)
+	for appID, syncStates := range state.UserSync {
+		for userID, syncState := range syncStates {
+			if _, err := userSyncStmt.Exec(appID, userID, syncState.RemoteID, boolToInt(syncState.Dirty), boolToInt(syncState.Deleted), syncState.LastError); err != nil {
+				return fmt.Errorf("insert app user sync %s/%s: %w", appID, userID, err)
+			}
+		}
+	}
+	groupSyncStmt, err := tx.Prepare(`INSERT INTO app_group_sync(app_id, group_id, remote_id, dirty, deleted, last_error) VALUES(?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("prepare app group sync insert: %w", err)
+	}
+	defer closeStmt(groupSyncStmt)
+	for appID, syncStates := range state.GroupSync {
+		for groupID, syncState := range syncStates {
+			if _, err := groupSyncStmt.Exec(appID, groupID, syncState.RemoteID, boolToInt(syncState.Dirty), boolToInt(syncState.Deleted), syncState.LastError); err != nil {
+				return fmt.Errorf("insert app group sync %s/%s: %w", appID, groupID, err)
+			}
 		}
 	}
 
@@ -1272,8 +1482,8 @@ func ValidateApp(app App, apps []App) error {
 	if strings.TrimSpace(app.Slug) == "" {
 		return fmt.Errorf("app slug is required")
 	}
-	if app.Protocol != "oidc" && app.Protocol != "saml" && app.Protocol != "both" {
-		return fmt.Errorf("protocol must be oidc, saml, or both")
+	if app.Protocol != "oidc" && app.Protocol != "saml" && app.Protocol != "both" && app.Protocol != "scim" {
+		return fmt.Errorf("protocol must be oidc, saml, both, or scim")
 	}
 	for _, existing := range apps {
 		if existing.ID != app.ID && strings.EqualFold(existing.Slug, app.Slug) {
