@@ -432,3 +432,38 @@ func TestValidateHTTPBaseURL(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateAppRequiresSafeOIDCRedirect(t *testing.T) {
+	tests := map[string]struct {
+		redirects []string
+		allowAny  bool
+		wantErr   string
+	}{
+		"missing":       {wantErr: "at least one OIDC redirect URI is required"},
+		"explicit any":  {allowAny: true},
+		"relative":      {redirects: []string{"/callback"}, wantErr: "absolute HTTP(S) URL"},
+		"custom scheme": {redirects: []string{"greendale://callback"}, wantErr: "absolute HTTP(S) URL"},
+		"fragment":      {redirects: []string{"https://greendale.test/callback#fragment"}, wantErr: "absolute HTTP(S) URL"},
+		"valid":         {redirects: []string{"http://localhost:3000/callback"}},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			err := ValidateApp(App{
+				ID:                   "app-1",
+				Name:                 "Greendale",
+				Slug:                 "greendale",
+				Protocol:             "oidc",
+				OIDCClientID:         "greendale-client",
+				OIDCRedirectURIs:     tc.redirects,
+				AllowAnyOIDCRedirect: tc.allowAny,
+			}, nil)
+			if tc.wantErr == "" {
+				r.NoError(err)
+				return
+			}
+			r.ErrorContains(err, tc.wantErr)
+		})
+	}
+}

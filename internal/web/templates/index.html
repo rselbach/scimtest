@@ -1486,9 +1486,16 @@
               </label>
               <label class="field full">
                 <span class="label">Redirect URIs</span>
-                <textarea name="oidc_redirect_uris" placeholder="http://localhost:3000/callback">{{.AppForm.OIDCRedirectURIs}}</textarea>
-                <span class="hint">One URI per line. Leave empty to allow any redirect URI during local testing.</span>
-              </label>
+				<textarea name="oidc_redirect_uris" placeholder="http://localhost:3000/callback">{{.AppForm.OIDCRedirectURIs}}</textarea>
+				<span class="hint">One absolute HTTP(S) URI per line.</span>
+			  </label>
+			  <label class="field full">
+				<span class="label">Unsafe redirect testing</span>
+				<span class="checkbox-row">
+				  <input type="checkbox" name="allow_any_oidc_redirect" {{if .AppForm.App.AllowAnyOIDCRedirect}}checked{{end}}>
+				  Allow arbitrary redirect URIs (unsafe when tunneled publicly)
+				</span>
+			  </label>
             </div>
             <div class="protocol-section" data-protocol-section="saml">
               <div class="section-label">SAML</div>

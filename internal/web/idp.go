@@ -79,6 +79,7 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		OIDCClientID:           strings.TrimSpace(r.FormValue("oidc_client_id")),
 		OIDCClientSecret:       strings.TrimSpace(r.FormValue("oidc_client_secret")),
 		OIDCRedirectURIs:       lines(r.FormValue("oidc_redirect_uris")),
+		AllowAnyOIDCRedirect:   r.FormValue("allow_any_oidc_redirect") == "on",
 		SAMLEntityID:           strings.TrimSpace(r.FormValue("saml_entity_id")),
 		SAMLACSURL:             strings.TrimSpace(r.FormValue("saml_acs_url")),
 		SAMLAudience:           strings.TrimSpace(r.FormValue("saml_audience")),
@@ -611,7 +612,7 @@ func validateAuthorizeRequest(app app, values url.Values) error {
 	if redirectURI == "" {
 		return fmt.Errorf("redirect_uri is required")
 	}
-	if len(app.OIDCRedirectURIs) > 0 && !stringIn(app.OIDCRedirectURIs, redirectURI) {
+	if !app.AllowAnyOIDCRedirect && !stringIn(app.OIDCRedirectURIs, redirectURI) {
 		return fmt.Errorf("redirect_uri is not registered for this app")
 	}
 	if !strings.Contains(" "+values.Get("scope")+" ", " openid ") {
