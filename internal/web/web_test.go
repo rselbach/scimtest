@@ -863,6 +863,23 @@ func TestDashboardRendersCriticalFlowAffordances(t *testing.T) {
 	r.Contains(progressRec.Body.String(), `aria-live="polite"`)
 }
 
+func TestDashboardJavaScriptDoesNotContainStyles(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+	rec := httptest.NewRecorder()
+	newTestIDPApp(t).routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	r.Equal(http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	start := strings.Index(body, "<script>")
+	end := strings.LastIndex(body, "</script>")
+	r.NotEqual(-1, start)
+	r.Greater(end, start)
+	script := body[start:end]
+	r.NotContains(script, ".section-label")
+	r.NotContains(script, "grid-column:")
+}
+
 func TestEnvironmentSelectionScopesDashboardResources(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)

@@ -1021,8 +1021,9 @@
       border-top: 1px solid var(--line);
       color: var(--text-strong);
       font-size: 12px;
-      font-weight: 700;
-    }
+	  font-weight: 700;
+	}
+	.section-label.full { grid-column: 1 / -1; }
 
     /* History */
     .history-list { display: grid; gap: 10px; }
@@ -1834,7 +1835,6 @@
 		button.textContent = showing ? 'Show' : 'Hide';
 	  });
 	}
-	.section-label.full { grid-column: 1 / -1; }
 
     const overlays = Array.from(document.querySelectorAll('[data-overlay]'));
 	const activeOverlay = overlays[overlays.length - 1];
