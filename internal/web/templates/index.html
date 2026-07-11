@@ -270,7 +270,12 @@
       background: var(--danger);
     }
     .errors ul { margin: 0; padding: 0 0 0 16px; }
-    .errors li { font-size: 12.5px; color: #4d1419; padding: 2px 0; }
+	.errors li { font-size: 12.5px; color: #4d1419; padding: 2px 0; }
+	.setup-guide { margin-bottom: 14px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg-soft); }
+	.setup-guide strong { display: block; margin-bottom: 6px; }
+	.setup-guide ol { margin: 0; padding-left: 20px; }
+	.setup-guide li { padding: 2px 0; color: var(--muted); }
+	.setup-guide li.done { color: var(--success); text-decoration: line-through; }
 
     /* Page header */
     .page-header {
@@ -1167,14 +1172,25 @@
       </div>
       {{end}}
 
-      {{if .Errors}}
+	  {{if .Errors}}
       <div class="errors">
         <div class="errors-head">Sync errors ({{len .Errors}})</div>
         <ul>
           {{range .Errors}}<li>{{.}}</li>{{end}}
         </ul>
       </div>
-      {{end}}
+	  {{end}}
+	  {{if .ShowSetupGuide}}
+	  <section class="setup-guide" aria-label="Getting started">
+		<strong>Get ready to test</strong>
+		<ol>
+		  <li {{if .SCIMReady}}class="done"{{end}}><a href="{{.ConfigURL}}">Configure or disable SCIM</a></li>
+		  <li {{if .HasLocalUsers}}class="done"{{end}}><a href="{{.NewUserURL}}">Create a user</a> or import from SCIM</li>
+		  <li {{if .HasApps}}class="done"{{end}}><a href="{{.NewAppURL}}">Create an OIDC or SAML app</a></li>
+		  <li {{if .HasPublicIDP}}class="done"{{end}}><a href="{{.ConfigURL}}">Connect the public tunnel</a> when your client requires TLS</li>
+		</ol>
+	  </section>
+	  {{end}}
 
       <header class="page-header">
         <div class="page-icon" aria-hidden="true">

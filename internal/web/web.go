@@ -279,6 +279,11 @@ type pageData struct {
 	ConfigForm        *configFormView
 	ToolsForm         *toolsFormView
 	SyncJob           *syncJobSnapshot
+	ShowSetupGuide    bool
+	HasLocalUsers     bool
+	HasApps           bool
+	HasPublicIDP      bool
+	SCIMReady         bool
 }
 
 type RunOptions struct {
@@ -531,6 +536,11 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		HasTrace:          a.hasTrace(),
 		TraceContent:      a.traceContent(),
 		SyncJob:           a.currentSyncJob(),
+		ShowSetupGuide:    len(state.Users) == 0 || len(state.Apps) == 0,
+		HasLocalUsers:     len(state.Users) > 0,
+		HasApps:           len(state.Apps) > 0,
+		HasPublicIDP:      a.rgrokPublicURL() != "" || strings.TrimSpace(state.Config.IDPBaseURL) != "",
+		SCIMReady:         state.Config.SCIMDisabled || (strings.TrimSpace(state.Config.BaseURL) != "" && strings.TrimSpace(state.Config.BearerToken) != ""),
 	}
 	if !data.SCIMEnabled {
 		data.Errors = nil
