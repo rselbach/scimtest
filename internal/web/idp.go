@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"log"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -431,7 +432,9 @@ func (a *webApp) handleSAMLMetadata(w http.ResponseWriter, r *http.Request) {
   </IDPSSODescriptor>
 </EntityDescriptor>`, xmlEscape(entityID), cert, xmlEscape(nameIDFormat), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(baseURL), xmlEscape(app.Slug))
 	w.Header().Set("Content-Type", "application/samlmetadata+xml; charset=utf-8")
-	_, _ = w.Write([]byte(metadata))
+	if _, err := w.Write([]byte(metadata)); err != nil {
+		log.Printf("write SAML metadata response: %v", err)
+	}
 }
 
 func (a *webApp) handleSAMLSSO(w http.ResponseWriter, r *http.Request) {
@@ -720,13 +723,17 @@ func (a *webApp) signJWT(claims map[string]any) (string, error) {
 
 func writeJSON(w http.ResponseWriter, value any) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(value)
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		log.Printf("write JSON response: %v", err)
+	}
 }
 
 func writeOAuthError(w http.ResponseWriter, status int, code string, description string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": code, "error_description": description})
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": code, "error_description": description}); err != nil {
+		log.Printf("write OAuth error response: %v", err)
+	}
 }
 
 func stringIn(values []string, target string) bool {
@@ -949,7 +956,9 @@ func hiddenValues(values url.Values) map[string][]string {
 
 func renderChooser(w http.ResponseWriter, data chooserData) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = chooserTemplate.Execute(w, data)
+	if err := chooserTemplate.Execute(w, data); err != nil {
+		log.Printf("render login chooser: %v", err)
+	}
 }
 
 var chooserTemplate = template.Must(template.New("chooser").Funcs(template.FuncMap{
@@ -1147,10 +1156,12 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user, respo
 
 func renderPostBack(w http.ResponseWriter, target string, values map[string]string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = postBackTemplate.Execute(w, struct {
+	if err := postBackTemplate.Execute(w, struct {
 		Target string
 		Values map[string]string
-	}{Target: target, Values: values})
+	}{Target: target, Values: values}); err != nil {
+		log.Printf("render SAML postback: %v", err)
+	}
 }
 
 var postBackTemplate = template.Must(template.New("postback").Parse(`<!DOCTYPE html>
@@ -1167,7 +1178,10 @@ var postBackTemplate = template.Must(template.New("postback").Parse(`<!DOCTYPE h
 
 func xmlEscape(value string) string {
 	var b strings.Builder
-	_ = xml.EscapeText(&b, []byte(value))
+	if err := xml.EscapeText(&b, []byte(value)); err != nil {
+		log.Printf("escape XML text: %v", err)
+		return ""
+	}
 	return b.String()
 }
 
