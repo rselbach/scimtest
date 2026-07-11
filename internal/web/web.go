@@ -502,6 +502,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /rgrok/setup", a.rejectWhileSyncing(a.handleRgrokSetup))
 	mux.HandleFunc("POST /rgrok/cancel", a.rejectWhileSyncing(a.handleRgrokCancel))
 	mux.HandleFunc("POST /tools/delete-all", a.rejectWhileSyncing(a.handleToolsDeleteAll))
+	mux.HandleFunc("POST /tools/clear-users-local", a.rejectWhileSyncing(a.handleToolsClearUsersLocal))
 	mux.HandleFunc("POST /tools/deactivate-all", a.rejectWhileSyncing(a.handleToolsDeactivateAll))
 	mux.HandleFunc("POST /tools/activate-all", a.rejectWhileSyncing(a.handleToolsActivateAll))
 	mux.HandleFunc("POST /tools/create-users", a.rejectWhileSyncing(a.handleToolsCreateUsers))
@@ -1691,6 +1692,38 @@ func (a *webApp) handleToolsDeleteAll(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	redirectWithFlash(w, r, dashboardURL("users", nil), flashMessage{Kind: "success", Message: message})
+}
+
+func (a *webApp) handleToolsClearUsersLocal(w http.ResponseWriter, r *http.Request) {
+	tab := normalizedTab(r.FormValue("tab"))
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	state, err := loadRequestState(r)
+	if err != nil {
+		a.redirectError(w, r, tab, err)
+		return
+	}
+	clearedUsers := len(state.Users)
+	affectedGroups := 0
+	state.Users = nil
+	state.UserOperations = make(map[string][]operationLog)
+	for i := range state.Groups {
+		if len(state.Groups[i].MemberIDs) == 0 {
+			continue
+		}
+		state.Groups[i].MemberIDs = nil
+		state.Groups[i].Dirty = true
+		state.Groups[i].LastError = ""
+		affectedGroups++
+	}
+	if err := saveState(state); err != nil {
+		a.redirectError(w, r, tab, err)
+		return
+	}
+
+	message := fmt.Sprintf("cleared %d local users without syncing; updated %d groups", clearedUsers, affectedGroups)
 	redirectWithFlash(w, r, dashboardURL("users", nil), flashMessage{Kind: "success", Message: message})
 }
 

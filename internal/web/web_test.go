@@ -642,6 +642,50 @@ func TestToolsDeleteAll(t *testing.T) {
 	})
 }
 
+func TestToolsClearUsersLocalNeverContactsSCIM(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requests++
+	}))
+	defer server.Close()
+	r.NoError(saveState(appState{
+		Config: config{BaseURL: server.URL, BearerToken: "chang-secret"},
+		Users: []user{
+			{ID: "u1", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.edu", Active: true, RemoteID: "remote-troy"},
+			{ID: "u2", GivenName: "Abed", FamilyName: "Nadir", Username: "abed", Email: "abed@greendale.edu", Active: true, RemoteID: "remote-abed"},
+		},
+		Groups: []group{
+			{ID: "g1", DisplayName: "Study Group", MemberIDs: []string{"u1", "u2"}, RemoteID: "remote-group"},
+			{ID: "g2", DisplayName: "Empty Group", RemoteID: "remote-empty"},
+		},
+		UserOperations: map[string][]operationLog{
+			"u1": {{Kind: "sync", Summary: "Created"}},
+		},
+		GroupOperations: map[string][]operationLog{},
+	}))
+	app := &webApp{}
+	form := url.Values{"tab": {"users"}}
+	req := httptest.NewRequest(http.MethodPost, "/tools/clear-users-local", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	r.Zero(requests)
+	updated, err := loadState()
+	r.NoError(err)
+	r.Empty(updated.Users)
+	r.Empty(updated.UserOperations)
+	r.Empty(updated.Groups[0].MemberIDs)
+	r.True(updated.Groups[0].Dirty)
+	r.Empty(updated.Groups[0].LastError)
+	r.False(updated.Groups[1].Dirty)
+	r.Contains(rec.Header().Get("Set-Cookie"), "cleared")
+}
+
 func TestSyncPersistsRemoteStateAndTraceCookie(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)

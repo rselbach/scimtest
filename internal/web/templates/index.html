@@ -1371,11 +1371,16 @@
                 {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
                 <button class="btn" type="submit" onclick="return confirm('Deactivate all non-deleted users?')">Deactivate All</button>
               </form>
-              <form method="post" action="/tools/delete-all">
+			  <form method="post" action="/tools/delete-all">
                 <input type="hidden" name="tab" value="{{.Tab}}">
                 {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
                 <button class="btn btn-danger" type="submit" onclick="return confirm('Delete all users? This is a big red button, my dude.')">Delete All</button>
-              </form>
+			  </form>
+			  <form method="post" action="/tools/clear-users-local">
+				<input type="hidden" name="tab" value="{{.Tab}}">
+				{{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
+				<button class="btn btn-danger" type="submit" onclick="return confirm('Immediately clear every local user in {{.Environment.Name}}? The SCIM server will not be contacted. Group memberships and user history will also be cleared.')">Clear Users Locally</button>
+			  </form>
             </div>
           </section>
         </div>
