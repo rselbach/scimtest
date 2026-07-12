@@ -55,7 +55,6 @@ type samlAuthnRequest struct {
 	Destination     string
 	ACSURL          string
 	ProtocolBinding string
-	Signed          bool
 }
 
 type samlResponseContext struct {
@@ -620,15 +619,11 @@ func resolveSAMLResponseContext(values url.Values, app app, baseURL string, requ
 	context := samlResponseContext{ACSURL: configuredACS}
 	encodedRequest := strings.TrimSpace(values.Get("SAMLRequest"))
 	if encodedRequest != "" {
-		if values.Get("Signature") != "" || values.Get("SigAlg") != "" {
-			return samlResponseContext{}, fmt.Errorf("signed SAML AuthnRequest is not supported")
-		}
+		// This test IDP has no SP certificates, so request signatures are accepted
+		// as opaque input while the request's configured endpoints are validated.
 		request, err := parseSAMLAuthnRequest(encodedRequest)
 		if err != nil {
 			return samlResponseContext{}, err
-		}
-		if request.Signed {
-			return samlResponseContext{}, fmt.Errorf("signed SAML AuthnRequest is not supported")
 		}
 		if request.ID == "" {
 			return samlResponseContext{}, fmt.Errorf("SAML AuthnRequest ID is required")
@@ -669,7 +664,6 @@ func parseSAMLAuthnRequest(encodedRequest string) (samlAuthnRequest, error) {
 		Destination:     strings.TrimSpace(root.SelectAttrValue("Destination", "")),
 		ACSURL:          strings.TrimSpace(root.SelectAttrValue("AssertionConsumerServiceURL", "")),
 		ProtocolBinding: strings.TrimSpace(root.SelectAttrValue("ProtocolBinding", "")),
-		Signed:          findElementByLocalName(root, "Signature") != nil,
 	}, nil
 }
 
@@ -1033,18 +1027,27 @@ var chooserTemplate = template.Must(template.New("chooser").Funcs(template.FuncM
   <style>
     :root { --bg:#f4f5f7; --card:#fff; --line:#d1d5db; --text:#1f2328; --muted:#6b7280; --accent:#1563ff; --accent-strong:#1051d8; --radius:8px; }
     * { box-sizing: border-box; }
-    body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg); color:var(--text); font:13.5px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif; }
-    main { width:min(460px, calc(100vw - 32px)); background:var(--card); border:1px solid var(--line); border-radius:var(--radius); box-shadow:0 20px 50px rgba(15,23,42,.16); overflow:hidden; }
+    body { margin:0; min-height:100vh; min-height:100dvh; display:grid; place-items:center; padding:16px; background:var(--bg); color:var(--text); font:13.5px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif; }
+    main { width:min(460px, 100%); max-height:calc(100vh - 32px); max-height:calc(100dvh - 32px); display:grid; grid-template-rows:auto minmax(0, 1fr); background:var(--card); border:1px solid var(--line); border-radius:var(--radius); box-shadow:0 20px 50px rgba(15,23,42,.16); overflow:hidden; }
     header { padding:18px 20px; border-bottom:1px solid #e5e7eb; }
     h1 { margin:0; font-size:18px; line-height:1.2; }
     p { margin:4px 0 0; color:var(--muted); }
-    form { padding:18px 20px 20px; display:grid; gap:12px; }
-    label { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid #e5e7eb; border-radius:6px; cursor:pointer; }
-    label:hover { border-color:var(--line); background:#f9fafb; }
+    form { min-height:0; padding:18px 20px 20px; display:grid; grid-template-rows:auto minmax(0, 1fr) auto; gap:12px; overflow:hidden; }
+    .search-row { display:grid; grid-template-columns:minmax(0, 1fr) auto; align-items:center; gap:10px; }
+    .search-row input { width:100%; height:36px; padding:0 11px; border:1px solid var(--line); border-radius:6px; color:var(--text); font:inherit; }
+    .search-row input:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(21,99,255,.15); }
+    .match-count { color:var(--muted); font-size:12px; white-space:nowrap; }
+    .user-list { min-height:0; max-height:520px; overflow-y:auto; display:grid; align-content:start; gap:8px; padding-right:4px; scrollbar-gutter:stable; }
+    .user-option { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid #e5e7eb; border-radius:6px; cursor:pointer; }
+    .user-option:hover { border-color:var(--line); background:#f9fafb; }
+    .user-option:has(input:checked) { border-color:var(--accent); background:#f5f8ff; }
     strong { display:block; font-weight:600; }
-    span { color:var(--muted); font-size:12.5px; }
+    .user-meta { color:var(--muted); font-size:12.5px; }
+    .no-matches { padding:24px 12px; text-align:center; color:var(--muted); }
+    [hidden] { display:none !important; }
     button { height:34px; border:1px solid var(--accent); background:var(--accent); color:#fff; border-radius:6px; font-weight:600; cursor:pointer; }
     button:hover { background:var(--accent-strong); border-color:var(--accent-strong); }
+    button:disabled { opacity:.5; cursor:not-allowed; }
     .empty { color:var(--muted); padding:18px 20px 20px; }
   </style>
 </head>
@@ -1057,18 +1060,55 @@ var chooserTemplate = template.Must(template.New("chooser").Funcs(template.FuncM
     {{if .Users}}
     <form method="post" action="{{.Action}}">
       {{range $key, $values := .Hidden}}{{range $values}}<input type="hidden" name="{{$key}}" value="{{.}}">{{end}}{{end}}
-      {{range .Users}}
-      <label>
-        <input type="radio" name="user_id" value="{{.ID}}" required {{if eq .ID $.SelectedUserID}}checked{{end}}>
-        <div><strong>{{userDisplayName .}}</strong><span>{{.Email}}</span></div>
-      </label>
-      {{end}}
-      <button type="submit">Continue</button>
+      <div class="search-row">
+        <input type="search" placeholder="Search name, username, or email" aria-label="Search users" aria-controls="user-list" autocomplete="off" autofocus data-user-search>
+        <span class="match-count" aria-live="polite" data-match-count></span>
+      </div>
+      <div class="user-list" id="user-list" role="radiogroup" aria-label="Users" data-user-list>
+        {{range .Users}}
+        <label class="user-option" data-user-option data-search="{{userDisplayName .}} {{.Username}} {{.Email}}">
+          <input type="radio" name="user_id" value="{{.ID}}" required {{if eq .ID $.SelectedUserID}}checked{{end}}>
+          <div><strong>{{userDisplayName .}}</strong><span class="user-meta">{{.Email}}</span></div>
+        </label>
+        {{end}}
+        <div class="no-matches" hidden data-no-matches>No users match your search.</div>
+      </div>
+      <button type="submit" data-continue>Continue</button>
     </form>
     {{else}}
     <div class="empty">{{.NoUsersHint}}</div>
     {{end}}
   </main>
+  {{if .Users}}
+  <script>
+    const search = document.querySelector('[data-user-search]');
+    const options = Array.from(document.querySelectorAll('[data-user-option]'));
+    const matchCount = document.querySelector('[data-match-count]');
+    const noMatches = document.querySelector('[data-no-matches]');
+    const continueButton = document.querySelector('[data-continue]');
+    function filterUsers() {
+      const terms = search.value.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
+      let visible = 0;
+      for (const option of options) {
+        const value = option.dataset.search.toLocaleLowerCase();
+        const matches = terms.every(function (term) { return value.includes(term); });
+        option.hidden = !matches;
+        const radio = option.querySelector('input[type="radio"]');
+        if (radio) radio.disabled = !matches;
+        if (matches) {
+          visible++;
+        } else {
+          if (radio) radio.checked = false;
+        }
+      }
+      matchCount.textContent = String(visible) + (visible === 1 ? ' user' : ' users');
+      noMatches.hidden = visible !== 0;
+      continueButton.disabled = visible === 0;
+    }
+    search.addEventListener('input', filterUsers);
+    filterUsers();
+  </script>
+  {{end}}
 </body>
 </html>`))
 

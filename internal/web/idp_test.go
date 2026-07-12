@@ -298,6 +298,33 @@ func TestOIDCAuthorizeLoginHintPreselectsUniqueUser(t *testing.T) {
 	r.Contains(body, `value="usr-beta" required checked`)
 }
 
+func TestChooserRendersScrollableSearchableUserList(t *testing.T) {
+	r := require.New(t)
+	rec := httptest.NewRecorder()
+	renderChooser(rec, chooserData{
+		Title:   "SAML sign-in",
+		AppName: "Greendale",
+		Action:  "/saml/greendale/sso",
+		Users: []user{{
+			ID:         "usr-troy",
+			GivenName:  "Troy",
+			FamilyName: "Barnes",
+			Username:   "tbarnes",
+			Email:      "troy@greendale.edu",
+			Active:     true,
+		}},
+	})
+
+	body := rec.Body.String()
+	r.Contains(body, `type="search"`)
+	r.Contains(body, `placeholder="Search name, username, or email"`)
+	r.Contains(body, `class="user-list"`)
+	r.Contains(body, `overflow-y:auto`)
+	r.Contains(body, `data-search="Troy Barnes tbarnes troy@greendale.edu"`)
+	r.Contains(body, `terms.every`)
+	r.Contains(body, `data-no-matches`)
+}
+
 func TestOIDCAuthorizeLoginHintUsesDefaultBehaviorForMultipleMatches(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
@@ -325,7 +352,7 @@ func TestOIDCAuthorizeLoginHintUsesDefaultBehaviorForMultipleMatches(t *testing.
 	r.Contains(body, `value="usr-alpha"`)
 	r.Contains(body, `value="usr-beta"`)
 	r.Less(strings.Index(body, `value="usr-alpha"`), strings.Index(body, `value="usr-beta"`))
-	r.NotContains(body, "checked")
+	r.NotContains(body, "required checked")
 }
 
 func TestSAMLSSOLoginHintPreselectsUniqueUser(t *testing.T) {
@@ -470,30 +497,52 @@ func TestSAMLResponseMatchesAuthnRequest(t *testing.T) {
 	}
 	r.NoError(saveState(state))
 	authnRequest := `<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_request-troy" Destination="http://idp.test/saml/greendale/sso" AssertionConsumerServiceURL="https://sp.greendale.test/acs" ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"><saml:Issuer>urn:greendale:sp</saml:Issuer></samlp:AuthnRequest>`
-	form := url.Values{
-		"SAMLRequest": {base64.StdEncoding.EncodeToString([]byte(authnRequest))},
-		"RelayState":  {"study-room-f"},
-		"user_id":     {"usr-troy"},
+	tests := map[string]struct {
+		requestXML string
+		signature  url.Values
+	}{
+		"unsigned": {requestXML: authnRequest},
+		"redirect signature is ignored": {
+			requestXML: authnRequest,
+			signature:  url.Values{"SigAlg": {"rsa-sha256"}, "Signature": {"not-validated"}},
+		},
+		"embedded signature is ignored": {
+			requestXML: strings.Replace(authnRequest, "</samlp:AuthnRequest>", `<ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#"></ds:Signature></samlp:AuthnRequest>`, 1),
+		},
 	}
-	req := httptest.NewRequest(http.MethodPost, "/saml/greendale/sso", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rec := httptest.NewRecorder()
-	svc.routes().ServeHTTP(rec, req)
 
-	r.Equal(http.StatusOK, rec.Code)
-	r.Contains(rec.Body.String(), `action="https://sp.greendale.test/acs"`)
-	encodedResponse := hiddenInputValue(rec.Body.String(), "SAMLResponse")
-	r.NotEmpty(encodedResponse)
-	responseXML, err := base64.StdEncoding.DecodeString(encodedResponse)
-	r.NoError(err)
-	doc := etree.NewDocument()
-	r.NoError(doc.ReadFromBytes(responseXML))
-	r.Equal("https://sp.greendale.test/acs", doc.Root().SelectAttrValue("Destination", ""))
-	r.Equal("_request-troy", doc.Root().SelectAttrValue("InResponseTo", ""))
-	subjectConfirmation := findElementByLocalName(doc.Root(), "SubjectConfirmationData")
-	r.NotNil(subjectConfirmation)
-	r.Equal("https://sp.greendale.test/acs", subjectConfirmation.SelectAttrValue("Recipient", ""))
-	r.Equal("_request-troy", subjectConfirmation.SelectAttrValue("InResponseTo", ""))
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			form := url.Values{
+				"SAMLRequest": {base64.StdEncoding.EncodeToString([]byte(tc.requestXML))},
+				"RelayState":  {"study-room-f"},
+				"user_id":     {"usr-troy"},
+			}
+			for key, values := range tc.signature {
+				form[key] = values
+			}
+			req := httptest.NewRequest(http.MethodPost, "/saml/greendale/sso", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			rec := httptest.NewRecorder()
+			svc.routes().ServeHTTP(rec, req)
+
+			r.Equal(http.StatusOK, rec.Code)
+			r.Contains(rec.Body.String(), `action="https://sp.greendale.test/acs"`)
+			encodedResponse := hiddenInputValue(rec.Body.String(), "SAMLResponse")
+			r.NotEmpty(encodedResponse)
+			responseXML, err := base64.StdEncoding.DecodeString(encodedResponse)
+			r.NoError(err)
+			doc := etree.NewDocument()
+			r.NoError(doc.ReadFromBytes(responseXML))
+			r.Equal("https://sp.greendale.test/acs", doc.Root().SelectAttrValue("Destination", ""))
+			r.Equal("_request-troy", doc.Root().SelectAttrValue("InResponseTo", ""))
+			subjectConfirmation := findElementByLocalName(doc.Root(), "SubjectConfirmationData")
+			r.NotNil(subjectConfirmation)
+			r.Equal("https://sp.greendale.test/acs", subjectConfirmation.SelectAttrValue("Recipient", ""))
+			r.Equal("_request-troy", subjectConfirmation.SelectAttrValue("InResponseTo", ""))
+		})
+	}
 }
 
 func TestSAMLAuthnRequestValidation(t *testing.T) {
@@ -538,6 +587,11 @@ func TestSAMLAuthnRequestValidation(t *testing.T) {
 			requestXML: strings.Replace(validRequest, "http://idp.test/saml/greendale/sso", "https://evil.example/sso", 1),
 			want:       "destination does not match",
 		},
+		"redirect-signed destination mismatch": {
+			requestXML: strings.Replace(validRequest, "http://idp.test/saml/greendale/sso", "https://evil.example/sso", 1),
+			values:     url.Values{"SigAlg": {"rsa-sha256"}, "Signature": {"not-validated"}},
+			want:       "destination does not match",
+		},
 		"response binding mismatch": {
 			requestXML: strings.Replace(validRequest, samlHTTPPostBinding, "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect", 1),
 			want:       "HTTP-POST response binding",
@@ -545,18 +599,6 @@ func TestSAMLAuthnRequestValidation(t *testing.T) {
 		"missing ID": {
 			requestXML: strings.Replace(validRequest, ` ID="_request-abed"`, "", 1),
 			want:       "ID is required",
-		},
-		"redirect signature": {
-			requestXML: validRequest,
-			values: url.Values{
-				"SigAlg":    {"rsa-sha256"},
-				"Signature": {"not-validated"},
-			},
-			want: "signed SAML AuthnRequest is not supported",
-		},
-		"embedded signature": {
-			requestXML: strings.Replace(validRequest, "</samlp:AuthnRequest>", `<ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#"></ds:Signature></samlp:AuthnRequest>`, 1),
-			want:       "signed SAML AuthnRequest is not supported",
 		},
 	}
 
