@@ -202,9 +202,9 @@ type appRowView struct {
 	// page script generates a PKCE pair on click and appends the challenge.
 	OIDCPKCETestURL string
 	SAMLTestURL     string
-	SCIMEnabled   bool
-	Active        bool
-	OpenURL       string
+	SCIMEnabled     bool
+	Active          bool
+	OpenURL         string
 }
 
 type historyEntryView struct {
