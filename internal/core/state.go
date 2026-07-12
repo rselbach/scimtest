@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -50,8 +51,6 @@ func EnsureRgrokInstanceID() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer closeDB(db)
-
 	instanceID, err := newUUID()
 	if err != nil {
 		return "", err
@@ -233,8 +232,6 @@ func LoadState() (AppState, error) {
 	if err != nil {
 		return AppState{}, err
 	}
-	defer closeDB(db)
-
 	state, err := loadGlobalStateFromDB(db)
 	if err != nil {
 		return AppState{}, err
@@ -267,8 +264,6 @@ func LoadEnvironmentState(environmentID string) (AppState, error) {
 	if err != nil {
 		return AppState{}, err
 	}
-	defer closeDB(db)
-
 	state, err := loadStateFromDB(db, environmentID)
 	if err != nil {
 		return AppState{}, err
@@ -317,7 +312,6 @@ func LoadEnvironments() ([]Environment, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer closeDB(db)
 	return loadEnvironmentsFromDB(db)
 }
 
@@ -336,7 +330,6 @@ func CreateEnvironment(name string) (Environment, error) {
 	if err != nil {
 		return Environment{}, err
 	}
-	defer closeDB(db)
 	tx, err := db.Begin()
 	if err != nil {
 		return Environment{}, fmt.Errorf("begin environment creation: %w", err)
@@ -369,7 +362,6 @@ func UpdateEnvironment(environmentID string, name string) (Environment, error) {
 	if err != nil {
 		return Environment{}, err
 	}
-	defer closeDB(db)
 	result, err := db.Exec(`UPDATE environments SET name = ?, slug = ? WHERE id = ?`, name, slug, environmentID)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
@@ -392,7 +384,6 @@ func DeleteEnvironment(environmentID string) error {
 	if err != nil {
 		return err
 	}
-	defer closeDB(db)
 	var count int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM environments`).Scan(&count); err != nil {
 		return fmt.Errorf("count environments: %w", err)
@@ -441,17 +432,61 @@ func SaveState(state AppState) error {
 	if err != nil {
 		return err
 	}
-	defer closeDB(db)
-
 	return saveStateToDB(db, state, true)
 }
 
+var stateDBMu sync.Mutex
+var cachedStateDB *sql.DB
+var cachedStateDBPath string
+
+// openStateDB returns a process-wide cached handle so the schema setup runs
+// once per state file instead of on every request. The cache is keyed by the
+// resolved path because tests point SCIMTEST_STATE_FILE at fresh files.
 func openStateDB() (*sql.DB, error) {
 	path, err := stateFilePath()
 	if err != nil {
 		return nil, err
 	}
 
+	stateDBMu.Lock()
+	defer stateDBMu.Unlock()
+	if cachedStateDB != nil && cachedStateDBPath == path {
+		return cachedStateDB, nil
+	}
+	if cachedStateDB != nil {
+		previous := cachedStateDB
+		cachedStateDB = nil
+		cachedStateDBPath = ""
+		if err := previous.Close(); err != nil {
+			return nil, fmt.Errorf("close previous sqlite state db: %w", err)
+		}
+	}
+
+	db, err := openStateDBAt(path)
+	if err != nil {
+		return nil, err
+	}
+	cachedStateDB = db
+	cachedStateDBPath = path
+	return db, nil
+}
+
+// resetStateDBCache closes and forgets the cached handle so the next open
+// re-runs the schema setup. Used by tests that mutate the database file
+// behind the cache.
+func resetStateDBCache() error {
+	stateDBMu.Lock()
+	defer stateDBMu.Unlock()
+	if cachedStateDB == nil {
+		return nil
+	}
+	db := cachedStateDB
+	cachedStateDB = nil
+	cachedStateDBPath = ""
+	return db.Close()
+}
+
+func openStateDBAt(path string) (*sql.DB, error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create state directory: %w", err)
@@ -1292,12 +1327,6 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 	committed = true
 
 	return nil
-}
-
-func closeDB(db *sql.DB) {
-	if err := db.Close(); err != nil {
-		panic(fmt.Sprintf("close sqlite db: %v", err))
-	}
 }
 
 func closeRows(rows *sql.Rows) {

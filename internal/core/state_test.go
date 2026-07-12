@@ -141,7 +141,6 @@ func TestEnsureRgrokInstanceIDIgnoresLegacyTokenAndName(t *testing.T) {
 	r.NoError(err)
 	_, err = db.Exec(`INSERT INTO config(key, value) VALUES ('rgrok_name', 'legacy-name'), ('rgrok_token', 'legacy-token')`)
 	r.NoError(err)
-	r.NoError(db.Close())
 
 	instanceID, err := EnsureRgrokInstanceID()
 	r.NoError(err)
@@ -193,7 +192,6 @@ func TestLoadStateFlattensExistingEnvironmentDirectories(t *testing.T) {
 	db, err := openStateDB()
 	r.NoError(err)
 	r.NoError(saveStateToDB(db, stagingState, false))
-	r.NoError(db.Close())
 
 	global, err := LoadState()
 	r.NoError(err)
@@ -455,7 +453,6 @@ func TestEnvironmentSCIMConfigurationMigratesToApps(t *testing.T) {
 	db, err := openStateDB()
 	r.NoError(err)
 	r.NoError(saveStateToDB(db, legacy, false))
-	r.NoError(db.Close())
 	path, err := stateFilePath()
 	r.NoError(err)
 	db, err = sql.Open("sqlite", path)
@@ -467,6 +464,7 @@ func TestEnvironmentSCIMConfigurationMigratesToApps(t *testing.T) {
 	_, err = db.Exec(`DELETE FROM app_user_sync`)
 	r.NoError(err)
 	r.NoError(db.Close())
+	r.NoError(resetStateDBCache())
 
 	migrated, err := LoadEnvironmentState(legacyEnvironment.ID)
 	r.NoError(err)
