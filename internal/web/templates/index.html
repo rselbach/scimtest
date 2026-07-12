@@ -786,7 +786,9 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 14px;
     }
-    .field { display: grid; gap: 5px; }
+    /* align-content keeps rows content-sized at the top so a field with an
+       extra row (e.g. a Show toggle) doesn't stretch its grid neighbors. */
+    .field { display: grid; gap: 5px; align-content: start; }
     .field.full { grid-column: 1 / -1; }
     .field label, .label {
       color: var(--text);
@@ -840,6 +842,7 @@
       font: inherit;
     }
     .link-button:hover { text-decoration: underline; }
+    .field > .link-button { justify-self: start; }
     .tunnel-row {
       display: flex;
       align-items: center;
