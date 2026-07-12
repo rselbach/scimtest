@@ -1783,6 +1783,49 @@ func waitForSyncDone(t *testing.T, app *webApp) syncJobSnapshot {
 	return syncJobSnapshot{}
 }
 
+func TestUserSaveRejectsDuplicateEmailAndUsername(t *testing.T) {
+	tests := map[string]struct {
+		form    url.Values
+		wantErr string
+	}{
+		"duplicate email": {
+			form:    url.Values{"given_name": {"Kevin"}, "family_name": {"Chang"}, "email": {"TROY@greendale.edu"}, "username": {"kevin"}},
+			wantErr: "already used by Troy Barnes",
+		},
+		"duplicate username": {
+			form:    url.Values{"given_name": {"Kevin"}, "family_name": {"Chang"}, "email": {"kevin@greendale.edu"}, "username": {"Troy"}},
+			wantErr: "already used by Troy Barnes",
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			setTestStateFile(t)
+			r.NoError(saveState(appState{
+				Users: []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}},
+			}))
+			appService := newTestIDPApp(t)
+			tc.form.Set("tab", "users")
+			req := httptest.NewRequest(http.MethodPost, "/users/save", strings.NewReader(tc.form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			rec := httptest.NewRecorder()
+
+			appService.routes().ServeHTTP(rec, req)
+
+			r.Equal(http.StatusSeeOther, rec.Code)
+			r.Contains(rec.Header().Get("Location"), "modal=user")
+			state, err := loadState()
+			r.NoError(err)
+			r.Len(state.Users, 1)
+			appService.formDraftMu.Lock()
+			defer appService.formDraftMu.Unlock()
+			for _, draft := range appService.formDrafts {
+				r.Contains(draft.Error, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestDeletingEnvironmentDropsItsOperationLogs(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)

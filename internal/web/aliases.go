@@ -34,6 +34,7 @@ var (
 	lines                      = core.Lines
 	joinLines                  = core.JoinLines
 	validateUser               = core.ValidateUser
+	validateUserUnique         = core.ValidateUserUnique
 	validateGroup              = core.ValidateGroup
 	validateHTTPBaseURL        = core.ValidateHTTPBaseURL
 	validateApp                = core.ValidateApp

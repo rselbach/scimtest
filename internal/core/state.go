@@ -1968,6 +1968,26 @@ func ValidateUser(givenName string, familyName string, email string, username st
 	}
 }
 
+// ValidateUserUnique rejects emails and usernames already used by another
+// non-deleted user, so duplicates fail at save time instead of as SCIM
+// conflicts during sync.
+func ValidateUserUnique(users []User, id string, email string, username string) error {
+	email = strings.TrimSpace(email)
+	username = strings.TrimSpace(username)
+	for _, existing := range users {
+		if existing.ID == id || existing.Deleted {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(existing.Email), email) {
+			return fmt.Errorf("email %q is already used by %s", email, UserLabel(existing))
+		}
+		if strings.EqualFold(strings.TrimSpace(existing.Username), username) {
+			return fmt.Errorf("username %q is already used by %s", username, UserLabel(existing))
+		}
+	}
+	return nil
+}
+
 func ValidateGroup(displayName string) error {
 	if strings.TrimSpace(displayName) == "" {
 		return fmt.Errorf("group name is required")

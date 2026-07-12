@@ -773,6 +773,10 @@ func (a *webApp) handleUserSave(w http.ResponseWriter, r *http.Request) {
 		a.redirectFormError(w, r, tab, "user", err)
 		return
 	}
+	if err := validateUserUnique(state.Users, id, email, username); err != nil {
+		a.redirectFormError(w, r, tab, "user", err)
+		return
+	}
 
 	status := "user updated"
 	if id == "" {
