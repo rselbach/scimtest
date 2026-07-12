@@ -1783,6 +1783,36 @@ func waitForSyncDone(t *testing.T, app *webApp) syncJobSnapshot {
 	return syncJobSnapshot{}
 }
 
+func TestFormDraftRedactsSecrets(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+	appService := newTestIDPApp(t)
+	form := url.Values{
+		"tab":                {"apps"},
+		"name":               {"Greendale Portal"},
+		"protocol":           {"oidc"},
+		"scim_enabled":       {"on"},
+		"scim_bearer_token":  {"chang-secret"},
+		"oidc_client_secret": {"winger-secret"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/apps/save", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	appService.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	appService.formDraftMu.Lock()
+	defer appService.formDraftMu.Unlock()
+	r.Len(appService.formDrafts, 1)
+	for _, draft := range appService.formDrafts {
+		r.Empty(draft.Values.Get("scim_bearer_token"))
+		r.Empty(draft.Values.Get("oidc_client_secret"))
+		r.Equal("Greendale Portal", draft.Values.Get("name"))
+	}
+}
+
 func setTestStateFile(t *testing.T) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "state.db")

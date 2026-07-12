@@ -1830,7 +1830,7 @@ const formDraftCookieName = "scimtest_form_draft"
 func (a *webApp) redirectFormError(w http.ResponseWriter, r *http.Request, tab string, modal string, err error) {
 	values := make(url.Values, len(r.Form))
 	for key, entries := range r.Form {
-		if key == "bearer_token" || key == "oidc_client_secret" {
+		if key == "bearer_token" || key == "scim_bearer_token" || key == "oidc_client_secret" {
 			continue
 		}
 		values[key] = append([]string(nil), entries...)

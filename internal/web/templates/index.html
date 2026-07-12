@@ -1643,6 +1643,7 @@
 				<span class="label">Bearer token</span>
 				<input type="password" name="scim_bearer_token" placeholder="{{if .AppForm.App.SCIMBearerToken}}Leave blank to keep existing{{end}}" autocomplete="new-password" data-secret-input>
 				<button class="link-button" type="button" data-secret-toggle>Show</button>
+				{{if .AppForm.App.SCIMBearerToken}}<span class="hint">The saved token stays hidden; Show reveals only what you type here.</span>{{end}}
 			  </label>
 			  <label class="field full">
 				<span class="label">Trace</span>
