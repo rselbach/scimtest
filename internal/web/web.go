@@ -187,30 +187,21 @@ type groupRowView struct {
 }
 
 type appRowView struct {
-	ID                     string
-	Name                   string
-	Slug                   string
-	Protocol               string
-	OIDCClientID           string
-	OIDCDiscovery          string
-	OIDCAuthorize          string
-	OIDCJWKS               string
-	SAMLMetadata           string
-	SAMLSSO                string
-	SAMLIDPEntityID        string
-	SAMLCertificatePEM     string
-	SAMLEmailAttributeName string
-	SAMLSPACSURL           string
-	SAMLSPAudience         string
-	SupportsOIDC           bool
-	SupportsSAML           bool
-	EditURL                string
-	HasRedirectURI         bool
-	OIDCTestURL            string
-	SAMLTestURL            string
-	SCIMEnabled            bool
-	Active                 bool
-	OpenURL                string
+	ID            string
+	Name          string
+	Slug          string
+	Protocol      string
+	OIDCClientID  string
+	OIDCDiscovery string
+	SAMLMetadata  string
+	SupportsOIDC  bool
+	SupportsSAML  bool
+	EditURL       string
+	OIDCTestURL   string
+	SAMLTestURL   string
+	SCIMEnabled   bool
+	Active        bool
+	OpenURL       string
 }
 
 type historyEntryView struct {
@@ -272,6 +263,11 @@ type appFormView struct {
 	Title              string
 	App                app
 	OIDCRedirectURIs   string
+	OIDCIssuer         string
+	OIDCDiscoveryURL   string
+	OIDCAuthorizeURL   string
+	OIDCTokenURL       string
+	OIDCJWKSURL        string
 	SAMLCertificatePEM string
 	SAMLIDPEntityID    string
 	SAMLIDPSSO         string
@@ -671,7 +667,7 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		Stats:                  buildStats(state),
 		Users:                  users,
 		Groups:                 groups,
-		Apps:                   buildAppRows(state, environmentID, a.effectiveIDPBaseURL(r, state), certificatePEM(a.certDER)),
+		Apps:                   buildAppRows(state, environmentID, a.effectiveIDPBaseURL(r, state)),
 		Pagination:             pagination,
 		Errors:                 buildErrorList(state),
 		BaseURL:                configuredBaseURL(state.Config.BaseURL),
@@ -2103,37 +2099,24 @@ func filterGroupRows(rows []groupRowView, query string) []groupRowView {
 	return filtered
 }
 
-func buildAppRows(state appState, environmentID string, base string, certPEM string) []appRowView {
+func buildAppRows(state appState, environmentID string, base string) []appRowView {
 	rows := make([]appRowView, 0, len(state.Apps))
 	for _, app := range state.Apps {
-		samlIDPEntityID := base + "/saml/" + app.Slug + "/metadata"
-		samlAudience := app.SAMLAudience
-		if samlAudience == "" {
-			samlAudience = app.SAMLEntityID
-		}
 		row := appRowView{
-			ID:                     app.ID,
-			Name:                   app.Name,
-			Slug:                   app.Slug,
-			Protocol:               strings.ToUpper(app.Protocol),
-			OIDCClientID:           app.OIDCClientID,
-			SupportsOIDC:           supportsOIDC(app),
-			SupportsSAML:           supportsSAML(app),
-			EditURL:                dashboardURL("apps", map[string]string{"modal": "app", "id": app.ID}),
-			HasRedirectURI:         len(app.OIDCRedirectURIs) > 0,
-			SAMLIDPEntityID:        samlIDPEntityID,
-			SAMLCertificatePEM:     certPEM,
-			SAMLEmailAttributeName: app.SAMLEmailAttributeName,
-			SAMLSPACSURL:           app.SAMLACSURL,
-			SAMLSPAudience:         samlAudience,
-			SCIMEnabled:            app.SCIMEnabled,
-			Active:                 app.ID == environmentID,
-			OpenURL:                addEnvironmentToURL(dashboardURL("users", nil), app.ID),
+			ID:           app.ID,
+			Name:         app.Name,
+			Slug:         app.Slug,
+			Protocol:     strings.ToUpper(app.Protocol),
+			OIDCClientID: app.OIDCClientID,
+			SupportsOIDC: supportsOIDC(app),
+			SupportsSAML: supportsSAML(app),
+			EditURL:      dashboardURL("apps", map[string]string{"modal": "app", "id": app.ID}),
+			SCIMEnabled:  app.SCIMEnabled,
+			Active:       app.ID == environmentID,
+			OpenURL:      addEnvironmentToURL(dashboardURL("users", nil), app.ID),
 		}
 		if row.SupportsOIDC {
 			row.OIDCDiscovery = base + "/oidc/" + app.Slug + "/.well-known/openid-configuration"
-			row.OIDCAuthorize = base + "/oidc/" + app.Slug + "/authorize"
-			row.OIDCJWKS = base + "/oidc/" + app.Slug + "/jwks"
 			if len(app.OIDCRedirectURIs) > 0 && !app.OIDCPublicClient {
 				query := url.Values{
 					"response_type": {"code"},
@@ -2141,13 +2124,12 @@ func buildAppRows(state appState, environmentID string, base string, certPEM str
 					"redirect_uri":  {app.OIDCRedirectURIs[0]},
 					"scope":         {"openid profile email groups"},
 				}
-				row.OIDCTestURL = row.OIDCAuthorize + "?" + query.Encode()
+				row.OIDCTestURL = base + "/oidc/" + app.Slug + "/authorize?" + query.Encode()
 			}
 		}
 		if row.SupportsSAML {
 			row.SAMLMetadata = base + "/saml/" + app.Slug + "/metadata"
-			row.SAMLSSO = base + "/saml/" + app.Slug + "/sso"
-			row.SAMLTestURL = row.SAMLSSO
+			row.SAMLTestURL = base + "/saml/" + app.Slug + "/sso"
 		}
 		rows = append(rows, row)
 	}
@@ -2387,6 +2369,11 @@ func buildAppFormView(state appState, tab string, id string, baseURL string, cer
 	if form.App.Slug != "" {
 		form.SAMLIDPEntityID = baseURL + "/saml/" + form.App.Slug + "/metadata"
 		form.SAMLIDPSSO = baseURL + "/saml/" + form.App.Slug + "/sso"
+		form.OIDCIssuer = baseURL + "/oidc/" + form.App.Slug
+		form.OIDCDiscoveryURL = form.OIDCIssuer + "/.well-known/openid-configuration"
+		form.OIDCAuthorizeURL = form.OIDCIssuer + "/authorize"
+		form.OIDCTokenURL = form.OIDCIssuer + "/token"
+		form.OIDCJWKSURL = form.OIDCIssuer + "/jwks"
 	}
 	return form, nil
 }

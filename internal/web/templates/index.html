@@ -1678,6 +1678,66 @@
 				  Allow arbitrary redirect URIs (unsafe when tunneled publicly)
 				</span>
 			  </label>
+              {{if .AppForm.OIDCIssuer}}
+              <div class="field full">
+                <div class="saml-setup">
+                  <div class="saml-setup-title">Paste into the RP</div>
+                  <div class="copy-field">
+                    <span class="k">Issuer</span>
+                    <span class="v" title="{{.AppForm.OIDCIssuer}}">{{.AppForm.OIDCIssuer}}</span>
+                    <button class="copy-btn" type="button" data-copy-button aria-label="Copy issuer" title="Copy issuer">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="7" height="8" rx="1.2"/><path d="M3 10.5V4a1 1 0 0 1 1-1h6.5"/></svg>
+                    </button>
+                  </div>
+                  <div class="copy-field">
+                    <span class="k">Discovery</span>
+                    <span class="v" title="{{.AppForm.OIDCDiscoveryURL}}">{{.AppForm.OIDCDiscoveryURL}}</span>
+                    <button class="copy-btn" type="button" data-copy-button aria-label="Copy discovery URL" title="Copy discovery URL">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="7" height="8" rx="1.2"/><path d="M3 10.5V4a1 1 0 0 1 1-1h6.5"/></svg>
+                    </button>
+                  </div>
+                  <div class="copy-field">
+                    <span class="k">Authorize URL</span>
+                    <span class="v" title="{{.AppForm.OIDCAuthorizeURL}}">{{.AppForm.OIDCAuthorizeURL}}</span>
+                    <button class="copy-btn" type="button" data-copy-button aria-label="Copy authorize URL" title="Copy authorize URL">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="7" height="8" rx="1.2"/><path d="M3 10.5V4a1 1 0 0 1 1-1h6.5"/></svg>
+                    </button>
+                  </div>
+                  <div class="copy-field">
+                    <span class="k">Token URL</span>
+                    <span class="v" title="{{.AppForm.OIDCTokenURL}}">{{.AppForm.OIDCTokenURL}}</span>
+                    <button class="copy-btn" type="button" data-copy-button aria-label="Copy token URL" title="Copy token URL">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="7" height="8" rx="1.2"/><path d="M3 10.5V4a1 1 0 0 1 1-1h6.5"/></svg>
+                    </button>
+                  </div>
+                  <div class="copy-field">
+                    <span class="k">JWKS URL</span>
+                    <span class="v" title="{{.AppForm.OIDCJWKSURL}}">{{.AppForm.OIDCJWKSURL}}</span>
+                    <button class="copy-btn" type="button" data-copy-button aria-label="Copy JWKS URL" title="Copy JWKS URL">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="7" height="8" rx="1.2"/><path d="M3 10.5V4a1 1 0 0 1 1-1h6.5"/></svg>
+                    </button>
+                  </div>
+                  {{if .AppForm.App.OIDCClientID}}
+                  <div class="copy-field">
+                    <span class="k">Client ID</span>
+                    <span class="v" title="{{.AppForm.App.OIDCClientID}}">{{.AppForm.App.OIDCClientID}}</span>
+                    <button class="copy-btn" type="button" data-copy-button aria-label="Copy client ID" title="Copy client ID">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="7" height="8" rx="1.2"/><path d="M3 10.5V4a1 1 0 0 1 1-1h6.5"/></svg>
+                    </button>
+                  </div>
+                  {{end}}
+                  {{if .AppForm.App.OIDCClientSecret}}
+                  <div class="copy-field">
+                    <span class="k">Client secret</span>
+                    <span class="v" title="Client secret">{{.AppForm.App.OIDCClientSecret}}</span>
+                    <button class="copy-btn" type="button" data-copy-button aria-label="Copy client secret" title="Copy client secret">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="7" height="8" rx="1.2"/><path d="M3 10.5V4a1 1 0 0 1 1-1h6.5"/></svg>
+                    </button>
+                  </div>
+                  {{end}}
+                </div>
+              </div>
+              {{end}}
             </div>
             <div class="protocol-section" data-protocol-section="saml">
               <div class="section-label">SAML</div>

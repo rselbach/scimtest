@@ -1783,6 +1783,34 @@ func waitForSyncDone(t *testing.T, app *webApp) syncJobSnapshot {
 	return syncJobSnapshot{}
 }
 
+func TestAppFormShowsOIDCSetupPanel(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Config: config{IDPBaseURL: "http://idp.test"},
+		Apps: []app{{
+			ID:               "app-1",
+			Name:             "Example",
+			Slug:             "example",
+			Protocol:         "oidc",
+			OIDCClientID:     "example-client",
+			OIDCClientSecret: "generated-secret",
+			OIDCRedirectURIs: []string{"http://client.test/callback"},
+		}},
+	}))
+	appService := newTestIDPApp(t)
+	rec := httptest.NewRecorder()
+	appService.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=apps&modal=app&id=app-1", nil))
+
+	r.Equal(http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	r.Contains(body, "http://idp.test/oidc/example/.well-known/openid-configuration")
+	r.Contains(body, "http://idp.test/oidc/example/token")
+	r.Contains(body, "http://idp.test/oidc/example/jwks")
+	r.Contains(body, "example-client")
+	r.Contains(body, "generated-secret")
+}
+
 func TestUserSaveRejectsDuplicateEmailAndUsername(t *testing.T) {
 	tests := map[string]struct {
 		form    url.Values
