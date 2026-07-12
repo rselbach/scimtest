@@ -179,17 +179,33 @@ func TestStateDatabaseUsesPrivatePermissions(t *testing.T) {
 	r.Equal(os.FileMode(0o600), info.Mode().Perm())
 }
 
+// createTestEnvironment inserts an environment row directly; the product no
+// longer creates environments, but migration tests need legacy-shaped
+// databases.
+func createTestEnvironment(t *testing.T, name string) Environment {
+	t.Helper()
+	r := require.New(t)
+	id, err := NewID("env")
+	r.NoError(err)
+	env := Environment{ID: id, Name: name, Slug: Slugify(name)}
+	db, err := openStateDB()
+	r.NoError(err)
+	_, err = db.Exec(`INSERT INTO environments(id, name, slug) VALUES(?, ?, ?)`, env.ID, env.Name, env.Slug)
+	r.NoError(err)
+	return env
+}
+
 func TestLoadStateFlattensExistingEnvironmentDirectories(t *testing.T) {
 	r := require.New(t)
 	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
 
 	defaultState := AppState{Users: []User{{ID: "default-user", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}}}
 	r.NoError(SaveState(defaultState))
-	staging, err := CreateEnvironment("Staging Campus")
-	r.NoError(err)
-	stagingState, err := LoadEnvironmentState(staging.ID)
-	r.NoError(err)
-	stagingState.Users = []User{{ID: "staging-user", GivenName: "Abed", FamilyName: "Nadir", Email: "abed@greendale.edu", Username: "abed", Active: true}}
+	staging := createTestEnvironment(t, "Staging Campus")
+	stagingState := AppState{
+		Environment: staging,
+		Users:       []User{{ID: "staging-user", GivenName: "Abed", FamilyName: "Nadir", Email: "abed@greendale.edu", Username: "abed", Active: true}},
+	}
 	db, err := openStateDB()
 	r.NoError(err)
 	r.NoError(saveStateToDB(db, stagingState, false))
@@ -198,7 +214,7 @@ func TestLoadStateFlattensExistingEnvironmentDirectories(t *testing.T) {
 	r.NoError(err)
 	r.Len(global.Users, 2)
 	r.NoError(SaveState(global))
-	environments, err := LoadEnvironments()
+	environments, err := loadEnvironmentsFromDB(db)
 	r.NoError(err)
 	r.Len(environments, 1)
 	reloaded, err := LoadState()
@@ -471,13 +487,13 @@ func TestEnvironmentSCIMConfigurationMigratesToApps(t *testing.T) {
 	r := require.New(t)
 	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
 	r.NoError(SaveState(AppState{}))
-	legacyEnvironment, err := CreateEnvironment("Legacy Staging")
-	r.NoError(err)
-	legacy, err := LoadEnvironmentState(legacyEnvironment.ID)
-	r.NoError(err)
-	legacy.Config = Config{BaseURL: "https://legacy.test/scim", BearerToken: "legacy-token", AutoOpenSyncTrace: true}
-	legacy.Users = []User{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true, RemoteID: "remote-troy"}}
-	legacy.Apps = []App{{ID: "legacy-app", Name: "Legacy Portal", Slug: "legacy-portal", Protocol: "saml", SAMLACSURL: "https://legacy.test/acs"}}
+	legacyEnvironment := createTestEnvironment(t, "Legacy Staging")
+	legacy := AppState{
+		Environment: legacyEnvironment,
+		Config:      Config{BaseURL: "https://legacy.test/scim", BearerToken: "legacy-token", AutoOpenSyncTrace: true},
+		Users:       []User{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true, RemoteID: "remote-troy"}},
+		Apps:        []App{{ID: "legacy-app", Name: "Legacy Portal", Slug: "legacy-portal", Protocol: "saml", SAMLACSURL: "https://legacy.test/acs"}},
+	}
 	db, err := openStateDB()
 	r.NoError(err)
 	r.NoError(saveStateToDB(db, legacy, false))
@@ -494,7 +510,9 @@ func TestEnvironmentSCIMConfigurationMigratesToApps(t *testing.T) {
 	r.NoError(db.Close())
 	r.NoError(resetStateDBCache())
 
-	migrated, err := LoadEnvironmentState(legacyEnvironment.ID)
+	db, err = openStateDB()
+	r.NoError(err)
+	migrated, err := loadStateFromDB(db, legacyEnvironment.ID)
 	r.NoError(err)
 	r.Len(migrated.Apps, 1)
 	r.True(migrated.Apps[0].SCIMEnabled)
