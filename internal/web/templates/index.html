@@ -1362,7 +1362,7 @@
         </div>
         <div class="sync-activity-summary">
           <span data-sync-activity-complete>{{if .SyncJob}}{{.SyncJob.Processed}} completed{{else}}No operations started{{end}}</span>
-          <span data-sync-activity-remaining>{{if .SyncJob}}{{.SyncJob.Total}} remaining{{end}}</span>
+          <span data-sync-activity-remaining>{{if .SyncJob}}{{.SyncJob.Remaining}} remaining{{end}}</span>
         </div>
         <div class="sync-activity-list" data-sync-activity-list>
           <div class="sync-activity-empty" data-sync-activity-empty>Operations will appear here as they start.</div>

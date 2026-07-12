@@ -130,6 +130,15 @@ type syncJobSnapshot struct {
 	Events          []syncJobEvent `json:"events,omitempty"`
 }
 
+// Remaining reports how many operations have not finished yet.
+func (j *syncJobSnapshot) Remaining() int {
+	remaining := j.Total - j.Processed
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
 type syncJobEvent struct {
 	Sequence     int    `json:"sequence"`
 	ID           string `json:"id"`
