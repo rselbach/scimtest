@@ -1667,7 +1667,7 @@
               </label>
 			  <label class="field">
 				<span class="label">Client secret</span>
-				<input type="password" name="oidc_client_secret" placeholder="{{if .AppForm.App.OIDCClientSecret}}Leave blank to keep existing{{else}}Generated when saved{{end}}" autocomplete="new-password" data-secret-input>
+				<input type="password" name="oidc_client_secret" placeholder="{{if .AppForm.App.OIDCClientSecret}}Leave blank to keep existing{{else}}Leave blank to generate on save{{end}}" autocomplete="new-password" data-secret-input>
 				<button class="link-button" type="button" data-secret-toggle>Show</button>
 			  </label>
 			  <label class="field full">
