@@ -20,11 +20,12 @@ go run .
 ```
 
 The admin server opens in your browser at `http://127.0.0.1:8080` by default. If
-that port is occupied, it tries successively higher ports. Set `PORT` to require
-a specific port from 1 through 65535 (startup fails if that port cannot be bound):
+that port is occupied, it tries successively higher ports. Use `--port` (or the
+`PORT` environment variable) to require a specific port from 1 through 65535
+(startup fails if that port cannot be bound):
 
 ```sh
-PORT=8090 go run .
+go run . --port 8090
 ```
 
 State is stored at the OS user config path under `scimtest/state.db`. Set `SCIMTEST_STATE_FILE` to use an isolated SQLite state file.

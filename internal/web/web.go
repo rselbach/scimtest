@@ -339,6 +339,7 @@ type pageData struct {
 type RunOptions struct {
 	Debug        bool
 	DebugSecrets bool
+	Port         string
 	browserOpen  browserOpener
 }
 
@@ -378,7 +379,10 @@ func Run(options ...RunOptions) error {
 		return err
 	}
 
-	port := strings.TrimSpace(os.Getenv("PORT"))
+	port := strings.TrimSpace(opts.Port)
+	if port == "" {
+		port = strings.TrimSpace(os.Getenv("PORT"))
+	}
 	portSpecified := port != ""
 	if !portSpecified {
 		port = strconv.Itoa(defaultPort)
