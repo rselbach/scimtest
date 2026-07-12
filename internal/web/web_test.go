@@ -443,7 +443,7 @@ func TestIndexRendersBulkUserSelection(t *testing.T) {
 	r.Equal(http.StatusOK, rec.Code)
 	body := rec.Body.String()
 	r.Contains(body, `action="/users/delete"`)
-	r.Contains(body, `data-select-all-users`)
+	r.Contains(body, `data-select-all`)
 	r.Contains(body, `name="user_ids" value="u1"`)
 	r.NotContains(body, `name="user_ids" value="u2"`)
 }
@@ -1781,6 +1781,79 @@ func waitForSyncDone(t *testing.T, app *webApp) syncJobSnapshot {
 
 	t.Fatalf("sync job did not finish")
 	return syncJobSnapshot{}
+}
+
+func TestBulkDeleteGroups(t *testing.T) {
+	tests := map[string]struct {
+		apps        []app
+		wantDeleted bool
+	}{
+		"SCIM enabled marks selected groups for deletion": {
+			apps:        []app{{ID: "app-1", Name: "Study App", Slug: "study-app", Protocol: "scim", SCIMEnabled: true, SCIMBaseURL: "https://study.example.test/scim", SCIMBearerToken: "token"}},
+			wantDeleted: true,
+		},
+		"SCIM disabled removes selected groups": {
+			apps: []app{{ID: "app-1", Name: "Study App", Slug: "study-app", Protocol: "oidc"}},
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			setTestStateFile(t)
+			r.NoError(saveState(appState{
+				Apps: tc.apps,
+				Groups: []group{
+					{ID: "g1", DisplayName: "Study Group"},
+					{ID: "g2", DisplayName: "Glee Club"},
+				},
+			}))
+			appService := newTestIDPApp(t)
+			form := url.Values{"tab": {"groups"}, "group_ids": {"g1"}}
+			req := httptest.NewRequest(http.MethodPost, "/groups/delete", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			rec := httptest.NewRecorder()
+
+			appService.routes().ServeHTTP(rec, req)
+
+			r.Equal(http.StatusSeeOther, rec.Code)
+			state, err := loadState()
+			r.NoError(err)
+			if !tc.wantDeleted {
+				r.Len(state.Groups, 1)
+				r.Equal("g2", state.Groups[0].ID)
+				return
+			}
+			r.Len(state.Groups, 2)
+			deleted := map[string]bool{}
+			for _, g := range state.Groups {
+				deleted[g.ID] = g.Deleted
+			}
+			r.True(deleted["g1"])
+			r.False(deleted["g2"])
+			r.True(state.GroupSync["app-1"]["g1"].Deleted)
+		})
+	}
+}
+
+func TestIndexRendersBulkGroupSelection(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Groups: []group{
+			{ID: "g1", DisplayName: "Study Group"},
+			{ID: "g2", DisplayName: "Glee Club", Deleted: true},
+		},
+		Apps: []app{{ID: "app-1", Name: "Study App", Slug: "study-app", Protocol: "scim", SCIMEnabled: true, SCIMBaseURL: "https://study.example.test/scim", SCIMBearerToken: "token"}},
+	}))
+	appService := newTestIDPApp(t)
+	rec := httptest.NewRecorder()
+	appService.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=groups", nil))
+
+	r.Equal(http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	r.Contains(body, `action="/groups/delete"`)
+	r.Contains(body, `name="group_ids" value="g1"`)
+	r.NotContains(body, `name="group_ids" value="g2"`)
 }
 
 func TestAppFormShowsOIDCSetupPanel(t *testing.T) {

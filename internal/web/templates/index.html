@@ -2133,7 +2133,7 @@
         const html = await response.text();
         if (updateID !== listUpdateID) return;
         card.outerHTML = html;
-        updateBulkUserSelection(document.querySelector('[data-list-card]'));
+        updateBulkSelection(document.querySelector('[data-list-card]'));
         if (restoreSearchFocus) {
           const nextSearch = document.querySelector('[data-list-search]');
           if (nextSearch) {
@@ -2172,10 +2172,15 @@
       replaceListCard(new URL(link.href, window.location.href));
     });
 
-    function updateBulkUserSelection(card) {
-      const selections = Array.from(card.querySelectorAll('[data-user-selection]'));
+    function bulkNoun() {
+      const form = document.querySelector('[data-bulk-delete-form]');
+      return form && form.dataset.bulkNoun ? form.dataset.bulkNoun : 'item';
+    }
+
+    function updateBulkSelection(card) {
+      const selections = Array.from(card.querySelectorAll('[data-bulk-selection]'));
       const selected = selections.filter(function (checkbox) { return checkbox.checked; });
-      const selectAll = card.querySelector('[data-select-all-users]');
+      const selectAll = card.querySelector('[data-select-all]');
       const button = card.querySelector('[data-bulk-delete-button]');
       const count = card.querySelector('[data-bulk-selection-count]');
       if (selectAll) {
@@ -2183,34 +2188,35 @@
         selectAll.indeterminate = selected.length > 0 && selected.length < selections.length;
       }
       if (button) button.disabled = selected.length === 0;
-      if (count) count.textContent = String(selected.length) + (selected.length === 1 ? ' user selected' : ' users selected');
+      if (count) count.textContent = String(selected.length) + ' ' + bulkNoun() + (selected.length === 1 ? '' : 's') + ' selected';
     }
 
     document.addEventListener('change', function (event) {
       const card = event.target.closest('[data-list-card]');
       if (!card) return;
-      if (event.target.matches('[data-select-all-users]')) {
-        for (const checkbox of card.querySelectorAll('[data-user-selection]')) {
+      if (event.target.matches('[data-select-all]')) {
+        for (const checkbox of card.querySelectorAll('[data-bulk-selection]')) {
           checkbox.checked = event.target.checked;
         }
-      } else if (!event.target.matches('[data-user-selection]')) {
+      } else if (!event.target.matches('[data-bulk-selection]')) {
         return;
       }
-      updateBulkUserSelection(card);
+      updateBulkSelection(card);
     });
 
     document.addEventListener('submit', function (event) {
       const form = event.target.closest('[data-bulk-delete-form]');
       if (!form) return;
-      const selected = document.querySelectorAll('[data-user-selection]:checked').length;
+      const noun = form.dataset.bulkNoun || 'item';
+      const selected = document.querySelectorAll('[data-bulk-selection]:checked').length;
       const message = selected === 1
-        ? 'Delete this user from the shared directory?'
-        : 'Delete ' + String(selected) + ' users from the shared directory?';
-      const scope = '{{if .HasSCIMEnvironments}} The deletion will be scheduled in every SCIM environment.{{else}} This permanently deletes the selected users.{{end}}';
+        ? 'Delete this ' + noun + ' from the shared directory?'
+        : 'Delete ' + String(selected) + ' ' + noun + 's from the shared directory?';
+      const scope = '{{if .HasSCIMEnvironments}} The deletion will be scheduled in every SCIM environment.{{else}} This permanently deletes the selected ' + noun + 's.{{end}}';
       if (!window.confirm(message + scope)) event.preventDefault();
     });
     const initialListCard = document.querySelector('[data-list-card]');
-    if (initialListCard) updateBulkUserSelection(initialListCard);
+    if (initialListCard) updateBulkSelection(initialListCard);
 
     const syncForm = document.querySelector('[data-sync-form]');
     const syncSubmit = document.querySelector('[data-sync-submit]');

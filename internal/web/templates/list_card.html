@@ -1,11 +1,20 @@
 {{define "list-card.html"}}
       <section class="card" data-list-card>
         {{if and (eq .Tab "users") .Users}}
-        <form id="bulk-delete-users" class="bulk-actions" method="post" action="/users/delete" data-bulk-delete-form>
+        <form id="bulk-delete-users" class="bulk-actions" method="post" action="/users/delete" data-bulk-delete-form data-bulk-noun="user">
           <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
           <input type="hidden" name="tab" value="users">
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
           <span data-bulk-selection-count>0 users selected</span>
+          <button class="btn btn-sm btn-danger" type="submit" data-bulk-delete-button>Delete selected</button>
+        </form>
+        {{end}}
+        {{if and (eq .Tab "groups") .Groups}}
+        <form id="bulk-delete-groups" class="bulk-actions" method="post" action="/groups/delete" data-bulk-delete-form data-bulk-noun="group">
+          <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
+          <input type="hidden" name="tab" value="groups">
+          {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
+          <span data-bulk-selection-count>0 groups selected</span>
           <button class="btn btn-sm btn-danger" type="submit" data-bulk-delete-button>Delete selected</button>
         </form>
         {{end}}
@@ -14,6 +23,7 @@
           <table class="groups-table">
             <thead>
               <tr>
+                <th class="col-select"><input type="checkbox" aria-label="Select all groups on this page" data-select-all></th>
                 <th>Group</th>
                 <th>Members</th>
                 {{if .SCIMEnabled}}
@@ -26,6 +36,7 @@
             <tbody>
               {{range .Groups}}
               <tr {{if .Deleted}}class="is-deleted"{{end}}>
+                <td class="col-select">{{if not .Deleted}}<input type="checkbox" name="group_ids" value="{{.ID}}" form="bulk-delete-groups" aria-label="Select {{.Name}}" data-bulk-selection>{{end}}</td>
                 <td>
                   <div class="row-title" {{if .Deleted}}title="marked for deletion"{{end}}>{{.Name}}</div>
                 </td>
@@ -71,7 +82,7 @@
                 </td>
               </tr>
               {{else}}
-              <tr><td colspan="{{if $.SCIMEnabled}}5{{else}}3{{end}}">
+              <tr><td colspan="{{if $.SCIMEnabled}}6{{else}}4{{end}}">
                 <div class="card-empty">
                   <div class="h">{{if and $.Pagination $.Pagination.SearchQuery}}No groups match search{{else}}No groups yet{{end}}</div>
                   <div>{{if and $.Pagination $.Pagination.SearchQuery}}Try a different search.{{else if $.SCIMEnabled}}Add one with the button above, or import from {{$.ActiveEnvironment.Name}}.{{else}}Add one with the button above.{{end}}</div>
@@ -141,7 +152,7 @@
             </colgroup>
             <thead>
               <tr>
-                <th class="col-select"><input type="checkbox" aria-label="Select all users on this page" data-select-all-users></th>
+                <th class="col-select"><input type="checkbox" aria-label="Select all users on this page" data-select-all></th>
                 <th>Name</th>
                 <th>Username</th>
                 <th>Email</th>
@@ -156,7 +167,7 @@
             <tbody>
               {{range .Users}}
               <tr {{if .Deleted}}class="is-deleted"{{end}}>
-                <td class="col-select">{{if not .Deleted}}<input type="checkbox" name="user_ids" value="{{.ID}}" form="bulk-delete-users" aria-label="Select {{.Name}}" data-user-selection>{{end}}</td>
+                <td class="col-select">{{if not .Deleted}}<input type="checkbox" name="user_ids" value="{{.ID}}" form="bulk-delete-users" aria-label="Select {{.Name}}" data-bulk-selection>{{end}}</td>
                 <td>
                   <div class="row-title" {{if .Deleted}}title="marked for deletion"{{end}}>{{.Name}}</div>
                 </td>

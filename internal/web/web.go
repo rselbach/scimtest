@@ -555,6 +555,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /users/{id}/delete", a.rejectWhileSyncing(a.handleUserDelete))
 	mux.HandleFunc("POST /users/{id}/restore", a.rejectWhileSyncing(a.handleUserRestore))
 	mux.HandleFunc("POST /groups/save", a.rejectWhileSyncing(a.handleGroupSave))
+	mux.HandleFunc("POST /groups/delete", a.rejectWhileSyncing(a.handleGroupsDelete))
 	mux.HandleFunc("POST /groups/{id}/delete", a.rejectWhileSyncing(a.handleGroupDelete))
 	mux.HandleFunc("POST /groups/{id}/restore", a.rejectWhileSyncing(a.handleGroupRestore))
 	mux.HandleFunc("POST /apps/save", a.rejectWhileSyncing(a.handleAppSave))
@@ -1053,6 +1054,67 @@ func (a *webApp) handleGroupSave(w http.ResponseWriter, r *http.Request) {
 
 func (a *webApp) handleGroupDelete(w http.ResponseWriter, r *http.Request) {
 	a.handleGroupDeletedState(w, r, true)
+}
+
+func (a *webApp) handleGroupsDelete(w http.ResponseWriter, r *http.Request) {
+	tab := normalizedTab(r.FormValue("tab"))
+	groupIDs := r.Form["group_ids"]
+	if len(groupIDs) == 0 {
+		a.redirectError(w, r, tab, fmt.Errorf("select at least one group to delete"))
+		return
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	state, err := loadRequestState(r)
+	if err != nil {
+		a.redirectError(w, r, tab, err)
+		return
+	}
+
+	selected := make(map[string]bool, len(groupIDs))
+	for _, id := range groupIDs {
+		id = strings.TrimSpace(id)
+		index, ok := groupIndexByID(state.Groups, id)
+		if !ok || state.Groups[index].Deleted {
+			a.redirectError(w, r, tab, fmt.Errorf("group %s is not available for deletion", id))
+			return
+		}
+		selected[id] = true
+	}
+
+	if scimEnabled(state) {
+		for i := range state.Groups {
+			if !selected[state.Groups[i].ID] {
+				continue
+			}
+			state.Groups[i].Deleted = true
+			state.Groups[i].Dirty = true
+			state.Groups[i].LastError = ""
+			markGroupDirtyForApps(&state, state.Groups[i].ID, true)
+			appendLocalOperationLog(&state, "group", state.Groups[i].ID, "Marked for deletion in bulk")
+		}
+	} else {
+		keptGroups := make([]group, 0, len(state.Groups)-len(selected))
+		for _, g := range state.Groups {
+			if !selected[g.ID] {
+				keptGroups = append(keptGroups, g)
+			}
+		}
+		state.Groups = keptGroups
+	}
+
+	if err := saveState(state); err != nil {
+		a.redirectError(w, r, tab, err)
+		return
+	}
+
+	message := fmt.Sprintf("deleted %d groups", len(selected))
+	if scimEnabled(state) {
+		message = fmt.Sprintf("marked %d groups for deletion", len(selected))
+	}
+	redirectWithFlash(w, r, dashboardURLWithPage("groups", formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: message})
 }
 
 func (a *webApp) handleGroupRestore(w http.ResponseWriter, r *http.Request) {
