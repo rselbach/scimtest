@@ -1783,6 +1783,29 @@ func waitForSyncDone(t *testing.T, app *webApp) syncJobSnapshot {
 	return syncJobSnapshot{}
 }
 
+func TestSyncRejectedWhileAnotherEnvironmentSyncs(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{Apps: []app{
+		{ID: "app-a", Name: "Alpha", Slug: "alpha", Protocol: "scim", SCIMEnabled: true, SCIMBaseURL: "https://alpha.test", SCIMBearerToken: "token"},
+		{ID: "app-b", Name: "Beta", Slug: "beta", Protocol: "scim", SCIMEnabled: true, SCIMBaseURL: "https://beta.test", SCIMBearerToken: "token"},
+	}}))
+	appService := newTestIDPApp(t)
+	appService.syncJobs = map[string]*syncJobSnapshot{
+		"app-a": {ID: "job-a", EnvironmentName: "Alpha", Running: true},
+	}
+	form := url.Values{"tab": {"users"}, "environment": {"app-b"}}
+	req := httptest.NewRequest(http.MethodPost, "/sync", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	rec := httptest.NewRecorder()
+
+	appService.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusConflict, rec.Code)
+	r.Contains(rec.Body.String(), "a sync is already running for Alpha")
+}
+
 func TestFormDraftRedactsSecrets(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)

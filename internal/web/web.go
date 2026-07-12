@@ -1409,8 +1409,14 @@ func (a *webApp) startSyncJob(appID string, environmentName string) (*syncJobSna
 	if a.syncJobs == nil {
 		a.syncJobs = make(map[string]*syncJobSnapshot)
 	}
-	if a.syncJobs[appID] != nil && a.syncJobs[appID].Running {
-		return nil, fmt.Errorf("sync already running")
+	for jobAppID, job := range a.syncJobs {
+		if job == nil || !job.Running {
+			continue
+		}
+		if jobAppID == appID {
+			return nil, fmt.Errorf("sync already running")
+		}
+		return nil, fmt.Errorf("a sync is already running for %s; wait for it to finish", job.EnvironmentName)
 	}
 
 	job := &syncJobSnapshot{
