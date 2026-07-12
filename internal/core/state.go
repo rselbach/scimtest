@@ -1402,8 +1402,15 @@ func StateEmpty(state AppState) bool {
 	return state.Config == (Config{}) && len(state.Users) == 0 && len(state.Groups) == 0 && len(state.Apps) == 0
 }
 
+// maxOperationLogsPerResource bounds per-resource history; logs are ordered
+// newest first and rewritten on every save, so unbounded growth slows every
+// state write.
+const maxOperationLogsPerResource = 100
+
 func NormalizeState(state *AppState) {
 	migrateLegacySCIMConfig(state)
+	capOperationLogs(state.UserOperations)
+	capOperationLogs(state.GroupOperations)
 	state.Config.BaseURL = strings.TrimRight(strings.TrimSpace(state.Config.BaseURL), "/")
 	state.Config.IDPBaseURL = strings.TrimRight(strings.TrimSpace(state.Config.IDPBaseURL), "/")
 	state.Config.RgrokInstanceID = strings.TrimSpace(state.Config.RgrokInstanceID)
@@ -1435,6 +1442,14 @@ func NormalizeState(state *AppState) {
 		}
 		state.Apps[i].OIDCRedirectURIs = cleanLines(state.Apps[i].OIDCRedirectURIs)
 		state.Apps[i].SCIMBaseURL = strings.TrimRight(strings.TrimSpace(state.Apps[i].SCIMBaseURL), "/")
+	}
+}
+
+func capOperationLogs(logs map[string][]OperationLog) {
+	for resourceID, entries := range logs {
+		if len(entries) > maxOperationLogsPerResource {
+			logs[resourceID] = entries[:maxOperationLogsPerResource]
+		}
 	}
 }
 

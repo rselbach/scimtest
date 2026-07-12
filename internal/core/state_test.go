@@ -2,6 +2,7 @@ package core
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -253,6 +254,33 @@ func TestLoadStateMigratesNameFromUsername(t *testing.T) {
 	r.Equal("Perry", got.Users[0].FamilyName)
 	r.Equal("britta", got.Users[0].Username)
 	r.True(got.Users[0].Active)
+}
+
+func TestSaveStateCapsOperationLogs(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	entries := make([]OperationLog, 0, maxOperationLogsPerResource+50)
+	total := maxOperationLogsPerResource + 50
+	for i := 0; i < total; i++ {
+		// Newest first, matching how AppendOperationLogs prepends entries.
+		age := total - 1 - i
+		entries = append(entries, OperationLog{
+			Kind:      "local",
+			Summary:   fmt.Sprintf("Update %d", i),
+			CreatedAt: fmt.Sprintf("2026-07-12T%02d:%02d:00Z", age/60, age%60),
+		})
+	}
+	state := AppState{
+		Users:          []User{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}},
+		UserOperations: map[string][]OperationLog{"troy": entries},
+	}
+
+	r.NoError(SaveState(state))
+
+	loaded, err := LoadState()
+	r.NoError(err)
+	r.Len(loaded.UserOperations["troy"], maxOperationLogsPerResource)
+	r.Equal("Update 0", loaded.UserOperations["troy"][0].Summary)
 }
 
 func TestValidateUserAllowsEmptyFamilyName(t *testing.T) {
