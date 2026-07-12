@@ -1135,6 +1135,15 @@ func TestDashboardRendersCriticalFlowAffordances(t *testing.T) {
 	r.Contains(body, ">Metadata</a>")
 	r.Contains(body, ">Test SAML</a>")
 	r.NotContains(body, "Get ready to test")
+	listRec := httptest.NewRecorder()
+	app.routes().ServeHTTP(listRec, httptest.NewRequest(http.MethodGet, "/?tab=apps&partial=list", nil))
+	r.Equal(http.StatusOK, listRec.Code)
+	r.NotContains(listRec.Body.String(), "https://scim.example.test")
+
+	editRec := httptest.NewRecorder()
+	app.routes().ServeHTTP(editRec, httptest.NewRequest(http.MethodGet, "/?tab=apps&modal=app&id=app-1", nil))
+	r.Equal(http.StatusOK, editRec.Code)
+	r.Contains(editRec.Body.String(), `value="https://scim.example.test"`)
 
 	progressRec := httptest.NewRecorder()
 	app.routes().ServeHTTP(progressRec, httptest.NewRequest(http.MethodGet, "/?tab=users", nil))

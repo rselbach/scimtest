@@ -93,7 +93,7 @@
             <tbody>
               {{range .Apps}}
               <tr>
-                <td><div class="row-title">{{.Name}} {{if .Active}}<span class="status synced">ACTIVE</span>{{end}}</div><div class="mono">{{.Slug}}</div>{{if .SCIMEnabled}}<div class="mono" title="{{.SCIMBaseURL}}">SCIM · {{.SCIMBaseURL}}</div>{{end}}</td>
+                <td><div class="row-title">{{.Name}} {{if .Active}}<span class="status synced">ACTIVE</span>{{end}}</div><div class="mono">{{.Slug}}</div></td>
                 <td><span class="status">{{.Protocol}}</span>{{if and .SCIMEnabled (ne .Protocol "SCIM")}} <span class="status synced">SCIM</span>{{end}}</td>
                 <td class="mono" title="{{.OIDCClientID}}">{{if .SupportsOIDC}}{{.OIDCClientID}}{{else}}-{{end}}</td>
                 <td class="col-actions cell-widget">

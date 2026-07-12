@@ -197,7 +197,6 @@ type appRowView struct {
 	OIDCTestURL            string
 	SAMLTestURL            string
 	SCIMEnabled            bool
-	SCIMBaseURL            string
 	Active                 bool
 	OpenURL                string
 }
@@ -2102,7 +2101,6 @@ func buildAppRows(state appState, environmentID string, base string, certPEM str
 			SAMLSPACSURL:           app.SAMLACSURL,
 			SAMLSPAudience:         samlAudience,
 			SCIMEnabled:            app.SCIMEnabled,
-			SCIMBaseURL:            app.SCIMBaseURL,
 			Active:                 app.ID == environmentID,
 			OpenURL:                addEnvironmentToURL(dashboardURL("users", nil), app.ID),
 		}
