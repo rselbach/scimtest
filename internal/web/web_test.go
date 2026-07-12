@@ -1173,6 +1173,22 @@ func TestDashboardJavaScriptDoesNotContainStyles(t *testing.T) {
 	r.NotContains(script, "grid-column:")
 }
 
+func TestNewEnvironmentFormGeneratesSlugLocally(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+	rec := httptest.NewRecorder()
+	newTestIDPApp(t).routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=apps&modal=app", nil))
+
+	r.Equal(http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	r.Contains(body, `data-environment-form`)
+	r.Contains(body, `data-environment-name`)
+	r.Contains(body, `data-environment-slug`)
+	r.Contains(body, `if (environmentForm && !environmentForm.elements.id.value)`)
+	r.Contains(body, `.replace(/[^a-z0-9]+/g, '-')`)
+}
+
 func TestDashboardUsesOneGlobalDirectory(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)

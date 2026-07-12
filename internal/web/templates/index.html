@@ -1596,7 +1596,7 @@
         </div>
         <a class="btn btn-sm btn-ghost" href="{{.AppForm.Close}}" data-autofocus>Close</a>
       </div>
-      <form method="post" action="/apps/save">
+      <form method="post" action="/apps/save" data-environment-form>
         <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
         <input type="hidden" name="tab" value="apps">
         <input type="hidden" name="id" value="{{.AppForm.App.ID}}">
@@ -1604,11 +1604,11 @@
           <div class="form-grid">
             <label class="field">
               <span class="label">Environment name</span>
-              <input name="name" value="{{.AppForm.App.Name}}" autocomplete="off">
+              <input name="name" value="{{.AppForm.App.Name}}" autocomplete="off" data-environment-name>
             </label>
             <label class="field">
               <span class="label">Slug</span>
-              <input name="slug" value="{{.AppForm.App.Slug}}" placeholder="my-app" autocomplete="off">
+              <input name="slug" value="{{.AppForm.App.Slug}}" placeholder="my-app" autocomplete="off" data-environment-slug>
             </label>
             <div class="field full protocol-field">
               <span class="label">Protocol</span>
@@ -2002,6 +2002,33 @@
 	  }
 	  syncSCIMSection();
 	}
+
+    const environmentForm = document.querySelector('[data-environment-form]');
+    if (environmentForm && !environmentForm.elements.id.value) {
+      const environmentName = environmentForm.querySelector('[data-environment-name]');
+      const environmentSlug = environmentForm.querySelector('[data-environment-slug]');
+      let slugIsAutomatic = environmentSlug && environmentSlug.value.trim() === '';
+
+      function slugifyEnvironmentName(name) {
+        return name.toLowerCase().trim()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '');
+      }
+
+      function syncEnvironmentSlug() {
+        if (!slugIsAutomatic || !environmentName || !environmentSlug) return;
+        environmentSlug.value = slugifyEnvironmentName(environmentName.value);
+      }
+
+      if (environmentName && environmentSlug) {
+        environmentName.addEventListener('input', syncEnvironmentSlug);
+        environmentSlug.addEventListener('input', function () {
+          slugIsAutomatic = environmentSlug.value.trim() === '';
+          syncEnvironmentSlug();
+        });
+        syncEnvironmentSlug();
+      }
+    }
 
     function listURLFromForm(form) {
       const url = new URL(form.action, window.location.href);
