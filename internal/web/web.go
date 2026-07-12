@@ -198,7 +198,10 @@ type appRowView struct {
 	SupportsSAML  bool
 	EditURL       string
 	OIDCTestURL   string
-	SAMLTestURL   string
+	// OIDCPKCETestURL is an authorize URL missing its code_challenge; the
+	// page script generates a PKCE pair on click and appends the challenge.
+	OIDCPKCETestURL string
+	SAMLTestURL     string
 	SCIMEnabled   bool
 	Active        bool
 	OpenURL       string
@@ -2179,14 +2182,19 @@ func buildAppRows(state appState, environmentID string, base string) []appRowVie
 		}
 		if row.SupportsOIDC {
 			row.OIDCDiscovery = base + "/oidc/" + app.Slug + "/.well-known/openid-configuration"
-			if len(app.OIDCRedirectURIs) > 0 && !app.OIDCPublicClient {
+			if len(app.OIDCRedirectURIs) > 0 {
 				query := url.Values{
 					"response_type": {"code"},
 					"client_id":     {app.OIDCClientID},
 					"redirect_uri":  {app.OIDCRedirectURIs[0]},
 					"scope":         {"openid profile email groups"},
 				}
-				row.OIDCTestURL = base + "/oidc/" + app.Slug + "/authorize?" + query.Encode()
+				testURL := base + "/oidc/" + app.Slug + "/authorize?" + query.Encode()
+				if app.OIDCPublicClient {
+					row.OIDCPKCETestURL = testURL
+				} else {
+					row.OIDCTestURL = testURL
+				}
 			}
 		}
 		if row.SupportsSAML {

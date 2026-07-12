@@ -1856,6 +1856,31 @@ func TestIndexRendersBulkGroupSelection(t *testing.T) {
 	r.NotContains(body, `name="group_ids" value="g2"`)
 }
 
+func TestAppsTabRendersPKCETestLinkForPublicClients(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Config: config{IDPBaseURL: "http://idp.test"},
+		Apps: []app{{
+			ID:               "app-1",
+			Name:             "Public SPA",
+			Slug:             "public-spa",
+			Protocol:         "oidc",
+			OIDCClientID:     "spa-client",
+			OIDCPublicClient: true,
+			OIDCRedirectURIs: []string{"http://client.test/callback"},
+		}},
+	}))
+	appService := newTestIDPApp(t)
+	rec := httptest.NewRecorder()
+	appService.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=apps", nil))
+
+	r.Equal(http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	r.Contains(body, "data-pkce-test")
+	r.Contains(body, "http://idp.test/oidc/public-spa/authorize?")
+}
+
 func TestAppFormShowsOIDCSetupPanel(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
