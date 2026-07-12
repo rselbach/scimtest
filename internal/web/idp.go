@@ -1113,7 +1113,10 @@ var chooserTemplate = template.Must(template.New("chooser").Funcs(template.FuncM
 </html>`))
 
 func (a *webApp) buildSignedSAMLResponse(state appState, baseURL string, app app, user user, responseContext samlResponseContext) (string, error) {
-	response := buildSAMLResponse(state, baseURL, app, user, responseContext)
+	response, err := buildSAMLResponse(state, baseURL, app, user, responseContext)
+	if err != nil {
+		return "", err
+	}
 	doc := etree.NewDocument()
 	if err := doc.ReadFromString(response); err != nil {
 		return "", fmt.Errorf("parse SAML response for signing: %w", err)
@@ -1191,10 +1194,16 @@ func elementLocalName(el *etree.Element) string {
 	return el.Tag
 }
 
-func buildSAMLResponse(state appState, baseURL string, app app, user user, responseContext samlResponseContext) string {
+func buildSAMLResponse(state appState, baseURL string, app app, user user, responseContext samlResponseContext) (string, error) {
 	now := time.Now().UTC()
-	responseID, _ := newID("saml-response")
-	assertionID, _ := newID("saml-assertion")
+	responseID, err := newID("saml-response")
+	if err != nil {
+		return "", fmt.Errorf("generate SAML response ID: %w", err)
+	}
+	assertionID, err := newID("saml-assertion")
+	if err != nil {
+		return "", fmt.Errorf("generate SAML assertion ID: %w", err)
+	}
 	issuer := baseURL + "/saml/" + app.Slug + "/metadata"
 	audience := app.SAMLAudience
 	if audience == "" {
@@ -1252,7 +1261,7 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user, respo
 		xmlEscape(assertionID), now.Format(time.RFC3339), xmlEscape(issuer),
 		xmlEscape(nameIDFormat), xmlEscape(nameIDValue), subjectInResponseTo, now.Add(5*time.Minute).Format(time.RFC3339), xmlEscape(responseContext.ACSURL),
 		now.Add(-time.Minute).Format(time.RFC3339), now.Add(5*time.Minute).Format(time.RFC3339), xmlEscape(audience),
-		now.Format(time.RFC3339), xmlEscape(app.SAMLEmailAttributeName), xmlEscape(user.Email), xmlEscape(user.Username), xmlEscape(user.GivenName), xmlEscape(user.FamilyName), groupAttribute)
+		now.Format(time.RFC3339), xmlEscape(app.SAMLEmailAttributeName), xmlEscape(user.Email), xmlEscape(user.Username), xmlEscape(user.GivenName), xmlEscape(user.FamilyName), groupAttribute), nil
 }
 
 func renderPostBack(w http.ResponseWriter, target string, values map[string]string) {
