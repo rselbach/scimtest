@@ -257,10 +257,39 @@ func TestLoadStateMigratesNameFromUsername(t *testing.T) {
 	r.True(got.Users[0].Active)
 }
 
+func TestValidateUserAllowsEmptyFamilyName(t *testing.T) {
+	r := require.New(t)
+
+	r.NoError(ValidateUser("Magnitude", "magnitude@greendale.edu", "magnitude"))
+	r.ErrorContains(ValidateUser("", "pop@greendale.edu", "pop"), "given name is required")
+}
+
+func TestSplitName(t *testing.T) {
+	tests := map[string]struct {
+		input      string
+		wantGiven  string
+		wantFamily string
+	}{
+		"empty":        {input: "  ", wantGiven: "", wantFamily: ""},
+		"single token": {input: "Magnitude", wantGiven: "Magnitude", wantFamily: ""},
+		"two tokens":   {input: "Troy Barnes", wantGiven: "Troy", wantFamily: "Barnes"},
+		"many tokens":  {input: "Señor Ben Chang", wantGiven: "Señor", wantFamily: "Ben Chang"},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			given, family := SplitName(tc.input)
+			r.Equal(tc.wantGiven, given)
+			r.Equal(tc.wantFamily, family)
+		})
+	}
+}
+
 func TestValidateUserAllowsEmptyUsername(t *testing.T) {
 	r := require.New(t)
 
-	err := ValidateUser("Jeff", "Winger", "jeff@greendale.edu", "")
+	err := ValidateUser("Jeff", "jeff@greendale.edu", "")
 	r.NoError(err)
 }
 

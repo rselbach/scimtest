@@ -769,7 +769,7 @@ func (a *webApp) handleUserSave(w http.ResponseWriter, r *http.Request) {
 		username = email
 	}
 
-	if err := validateUser(givenName, familyName, email, username); err != nil {
+	if err := validateUser(givenName, email, username); err != nil {
 		a.redirectFormError(w, r, tab, "user", err)
 		return
 	}
@@ -2441,7 +2441,7 @@ func appendToolUsers(state *appState, count int, domain string) (int, error) {
 		}
 
 		name := toolUserNames[created%len(toolUserNames)]
-		if err := validateUser(name.given, name.family, email, username); err != nil {
+		if err := validateUser(name.given, email, username); err != nil {
 			return created, err
 		}
 		id, err := newUserID()

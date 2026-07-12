@@ -1949,16 +1949,13 @@ func RandomSecret(byteCount int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-func ValidateUser(givenName string, familyName string, email string, username string) error {
+func ValidateUser(givenName string, email string, username string) error {
 	givenName = strings.TrimSpace(givenName)
-	familyName = strings.TrimSpace(familyName)
 	email = strings.TrimSpace(email)
 
 	switch {
 	case givenName == "":
 		return fmt.Errorf("given name is required")
-	case familyName == "":
-		return fmt.Errorf("family name is required")
 	case email == "":
 		return fmt.Errorf("email is required")
 	case !strings.Contains(email, "@"):
@@ -2210,7 +2207,7 @@ func SplitName(FullName string) (string, string) {
 	case 0:
 		return "", ""
 	case 1:
-		return parts[0], parts[0]
+		return parts[0], ""
 	default:
 		return parts[0], strings.Join(parts[1:], " ")
 	}
