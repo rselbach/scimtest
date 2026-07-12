@@ -303,8 +303,8 @@ func (a *webApp) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.oidcMu.Lock()
+	defer a.oidcMu.Unlock()
 
 	state, app, ok := appForProtocol(w, r, supportsOIDC)
 	if !ok {
@@ -353,8 +353,8 @@ func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request)
 }
 
 func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.oidcMu.Lock()
+	defer a.oidcMu.Unlock()
 
 	state, app, ok := appForProtocol(w, r, supportsOIDC)
 	if !ok {
@@ -431,8 +431,8 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *webApp) handleOIDCUserinfo(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.oidcMu.Lock()
+	defer a.oidcMu.Unlock()
 
 	state, app, ok := appForProtocol(w, r, supportsOIDC)
 	if !ok {

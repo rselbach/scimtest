@@ -43,6 +43,9 @@ type webApp struct {
 	rgrokLastError   string
 	syncJobMu        sync.Mutex
 	syncJobs         map[string]*syncJobSnapshot
+	// oidcMu guards authCodes and accessTokens so sign-in flows never
+	// wait on mu, which is held for the full duration of a SCIM sync.
+	oidcMu           sync.Mutex
 	authCodes        map[string]authCode
 	accessTokens     map[string]accessToken
 	lastTraces       map[string][]syncTraceEntry

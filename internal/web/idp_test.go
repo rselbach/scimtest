@@ -97,6 +97,60 @@ func TestOIDCAuthorizationCodeFlowUsesSharedDirectory(t *testing.T) {
 	r.NotEmpty(tokenBody["id_token"])
 }
 
+func TestOIDCFlowProceedsWhileStateLockHeld(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	svc := newTestIDPApp(t)
+	r.NoError(saveState(appState{
+		Users: []user{{ID: "usr-1", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}},
+		Apps: []app{{
+			ID:               "app-1",
+			Name:             "Example",
+			Slug:             "example",
+			Protocol:         "oidc",
+			OIDCClientID:     "example-client",
+			OIDCClientSecret: "secret",
+			OIDCRedirectURIs: []string{"http://client.test/callback"},
+		}},
+	}))
+
+	// Simulate a long-running SCIM sync, which holds mu for its full duration.
+	svc.mu.Lock()
+	defer svc.mu.Unlock()
+
+	done := make(chan string, 1)
+	go func() {
+		form := url.Values{
+			"response_type": {"code"},
+			"client_id":     {"example-client"},
+			"redirect_uri":  {"http://client.test/callback"},
+			"scope":         {"openid"},
+			"user_id":       {"usr-1"},
+		}
+		authorize := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/oidc/example/authorize", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		svc.routes().ServeHTTP(authorize, req)
+		if authorize.Code != http.StatusFound {
+			done <- ""
+			return
+		}
+		location, err := url.Parse(authorize.Header().Get("Location"))
+		if err != nil {
+			done <- ""
+			return
+		}
+		done <- location.Query().Get("code")
+	}()
+
+	select {
+	case code := <-done:
+		r.NotEmpty(code)
+	case <-time.After(5 * time.Second):
+		t.Fatal("OIDC authorize blocked on the state lock")
+	}
+}
+
 func TestOIDCDiscoveryAdvertisesConfiguredClientAuthentication(t *testing.T) {
 	tests := map[string]struct {
 		public bool
