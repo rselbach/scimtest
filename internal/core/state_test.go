@@ -17,9 +17,8 @@ func TestSaveAndLoadState(t *testing.T) {
 
 	want := AppState{
 		Config: Config{
-			IDPBaseURL: "https://demo.rgrok.rselbach.com",
-			RgrokName:  "demo",
-			RgrokToken: "rgrok-token",
+			IDPBaseURL:      "https://demo.rgrok.rselbach.com",
+			RgrokInstanceID: "12345678-1234-4234-8234-123456789abc",
 		},
 		Users: []User{{
 			ID:         "local-1",
@@ -104,6 +103,62 @@ func TestSaveAndLoadState(t *testing.T) {
 	info, err := os.Stat(path)
 	r.NoError(err)
 	r.NotZero(info.Size())
+}
+
+func TestEnsureRgrokInstanceIDGeneratesAndReusesUUID(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r.NoError(SaveState(AppState{}))
+
+	first, err := EnsureRgrokInstanceID()
+	r.NoError(err)
+	r.True(validUUID(first))
+	second, err := EnsureRgrokInstanceID()
+	r.NoError(err)
+	r.Equal(first, second)
+
+	state, err := LoadState()
+	r.NoError(err)
+	r.Equal(first, state.Config.RgrokInstanceID)
+}
+
+func TestEnsureRgrokInstanceIDRepairsInvalidLegacyValue(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r.NoError(SaveState(AppState{Config: Config{RgrokInstanceID: "legacy-invalid"}}))
+
+	instanceID, err := EnsureRgrokInstanceID()
+	r.NoError(err)
+	r.True(validUUID(instanceID))
+	r.NotEqual("legacy-invalid", instanceID)
+}
+
+func TestEnsureRgrokInstanceIDIgnoresLegacyTokenAndName(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r.NoError(SaveState(AppState{}))
+	db, err := openStateDB()
+	r.NoError(err)
+	_, err = db.Exec(`INSERT INTO config(key, value) VALUES ('rgrok_name', 'legacy-name'), ('rgrok_token', 'legacy-token')`)
+	r.NoError(err)
+	r.NoError(db.Close())
+
+	instanceID, err := EnsureRgrokInstanceID()
+	r.NoError(err)
+	r.True(validUUID(instanceID))
+	state, err := LoadState()
+	r.NoError(err)
+	r.Equal(instanceID, state.Config.RgrokInstanceID)
+}
+
+func TestEnsureRgrokInstanceIDSurfacesStateError(t *testing.T) {
+	r := require.New(t)
+	root := t.TempDir()
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(root, "parent-file", "state.db"))
+	r.NoError(os.WriteFile(filepath.Join(root, "parent-file"), nil, 0o600))
+
+	_, err := EnsureRgrokInstanceID()
+	r.ErrorContains(err, "create state directory")
 }
 
 func TestStateDatabaseUsesPrivatePermissions(t *testing.T) {
@@ -420,6 +475,48 @@ func TestStateForAppKeepsRemoteStateIndependent(t *testing.T) {
 	r.Equal("https://b.test/scim", projectedB.Config.BaseURL)
 	r.Equal("remote-b", projectedB.Users[0].RemoteID)
 	r.True(projectedB.Users[0].Dirty)
+}
+
+func TestStateForAppKeepsLocalHistoryAndScopesSyncHistory(t *testing.T) {
+	r := require.New(t)
+	state := AppState{
+		Apps: []App{
+			{ID: "app-a", Name: "Portal A", SCIMEnabled: true},
+			{ID: "app-b", Name: "Portal B", SCIMEnabled: true},
+		},
+		UserOperations: map[string][]OperationLog{
+			"troy": {
+				{Kind: "local", Summary: "Updated locally"},
+				{AppID: "app-a", Kind: "sync", Summary: "Synced to A"},
+				{AppID: "app-b", Kind: "sync", Summary: "Synced to B"},
+				{Kind: "sync", Summary: "Legacy unscoped sync"},
+			},
+		},
+	}
+
+	projected, err := StateForApp(state, "app-a")
+	r.NoError(err)
+	r.Equal([]OperationLog{
+		{Kind: "local", Summary: "Updated locally"},
+		{AppID: "app-a", Kind: "sync", Summary: "Synced to A"},
+	}, projected.UserOperations["troy"])
+}
+
+func TestOperationLogAppIDRoundTrips(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	state := AppState{
+		Users: []User{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}},
+		Apps:  []App{{ID: "app-local", Name: "dev-local", Slug: "dev-local", Protocol: "scim", SCIMEnabled: true}},
+		UserOperations: map[string][]OperationLog{
+			"troy": {{AppID: "app-local", Kind: "sync", Summary: "Created"}},
+		},
+	}
+
+	r.NoError(SaveState(state))
+	loaded, err := LoadState()
+	r.NoError(err)
+	r.Equal("app-local", loaded.UserOperations["troy"][0].AppID)
 }
 
 func TestMarkDirtyUpdatesEverySyncApp(t *testing.T) {

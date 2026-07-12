@@ -18,6 +18,7 @@ var (
 	loadState                  = core.LoadState
 	loadStateForAppSlug        = core.LoadStateForAppSlug
 	loadAllApps                = core.LoadAllApps
+	ensureRgrokInstanceID      = core.EnsureRgrokInstanceID
 	saveState                  = core.SaveState
 	appendOperationLogs        = core.AppendOperationLogs
 	appendLocalOperationLog    = core.AppendLocalOperationLog

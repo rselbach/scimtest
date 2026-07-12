@@ -2,6 +2,9 @@ package web
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -808,6 +811,16 @@ func TestSyncStartsAsyncAndReportsStatus(t *testing.T) {
 	r.True(runningJob.Running)
 	r.Equal(1, runningJob.Total)
 	r.Equal(0, runningJob.Processed)
+	r.Equal(1, runningJob.LatestSequence)
+	r.Equal([]syncJobEvent{{
+		Sequence:     1,
+		ID:           "user:u1",
+		ResourceType: "user",
+		ResourceID:   "u1",
+		Label:        "Shirley Bennett (sbennett)",
+		Operation:    "create",
+		Phase:        "running",
+	}}, runningJob.Events)
 
 	updated, err := loadState()
 	r.NoError(err)
@@ -818,6 +831,53 @@ func TestSyncStartsAsyncAndReportsStatus(t *testing.T) {
 	r.True(finishedJob.Success)
 	r.Equal(100, finishedJob.Percent)
 	r.Equal("create user Shirley Bennett (sbennett)", finishedJob.Current)
+	r.Equal(2, finishedJob.LatestSequence)
+	r.Len(finishedJob.Events, 2)
+	r.Equal("done", finishedJob.Events[1].Phase)
+
+	incrementalReq := httptest.NewRequest(http.MethodGet, "/sync/status?after=1", nil)
+	incrementalRec := httptest.NewRecorder()
+	app.routes().ServeHTTP(incrementalRec, incrementalReq)
+	r.Equal(http.StatusOK, incrementalRec.Code)
+	var incrementalJob syncJobSnapshot
+	r.NoError(json.NewDecoder(incrementalRec.Body).Decode(&incrementalJob))
+	r.Len(incrementalJob.Events, 1)
+	r.Equal(2, incrementalJob.Events[0].Sequence)
+	r.Equal("done", incrementalJob.Events[0].Phase)
+}
+
+func TestSyncStatusRejectsInvalidEventSequence(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+	rec := httptest.NewRecorder()
+
+	newTestIDPApp(t).routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sync/status?after=-1", nil))
+
+	r.Equal(http.StatusBadRequest, rec.Code)
+	r.JSONEq(`{"error":"sync event sequence must be a non-negative integer"}`, rec.Body.String())
+}
+
+func TestCurrentSyncJobAfterDoesNotResendLargeActivityHistory(t *testing.T) {
+	r := require.New(t)
+	events := make([]syncJobEvent, 10000)
+	for i := range events {
+		events[i] = syncJobEvent{
+			Sequence: i + 1,
+			ID:       fmt.Sprintf("user-%d", i+1),
+			Label:    "Human Being mascot",
+			Phase:    "done",
+		}
+	}
+	app := &webApp{syncJobs: map[string]*syncJobSnapshot{
+		"app-greendale": {LatestSequence: len(events), Events: events},
+	}}
+
+	job := app.currentSyncJobAfter("app-greendale", 9999)
+
+	r.Len(job.Events, 1)
+	r.Equal(10000, job.Events[0].Sequence)
+	r.Len(app.syncJobs["app-greendale"].Events, 10000)
 }
 
 func TestMutationIsRejectedWhileSyncRuns(t *testing.T) {
@@ -915,6 +975,10 @@ func TestDashboardRendersCriticalFlowAffordances(t *testing.T) {
 	r.Contains(progressRec.Body.String(), `role="progressbar"`)
 	r.Contains(progressRec.Body.String(), `aria-valuenow="42"`)
 	r.Contains(progressRec.Body.String(), `aria-live="polite"`)
+	r.Contains(progressRec.Body.String(), `data-sync-details`)
+	r.Contains(progressRec.Body.String(), `data-sync-activity-list`)
+	r.Contains(progressRec.Body.String(), `data-sync-details-open>View details</button>`)
+	r.Contains(progressRec.Body.String(), `statusURL.searchParams.set('after', String(syncEventSequence))`)
 }
 
 func TestDashboardJavaScriptDoesNotContainStyles(t *testing.T) {
@@ -953,33 +1017,87 @@ func TestDashboardUsesOneGlobalDirectory(t *testing.T) {
 	r.NotContains(body, "Edit environment")
 }
 
-func TestSyncAppSelectorRendersInResourceToolbar(t *testing.T) {
+func TestEnvironmentSelectorRendersInTopbar(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
-	r.NoError(saveState(appState{Apps: []app{{
-		ID: "app-1", Name: "Greendale SCIM", Slug: "greendale-scim", Protocol: "scim",
-		SCIMEnabled: true, SCIMBaseURL: "https://greendale.test/scim", SCIMBearerToken: "token",
-	}}}))
+	r.NoError(saveState(appState{Apps: []app{
+		{
+			ID: "app-1", Name: "Greendale SCIM", Slug: "greendale-scim", Protocol: "scim",
+			SCIMEnabled: true, SCIMBaseURL: "https://greendale.test/scim", SCIMBearerToken: "token",
+		},
+		{ID: "app-2", Name: "Greendale OIDC", Slug: "greendale-oidc", Protocol: "oidc"},
+	}}))
 	appService := newTestIDPApp(t)
 
 	for _, tab := range []string{"users", "groups"} {
 		rec := httptest.NewRecorder()
-		appService.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab="+tab, nil))
+		appService.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab="+tab+"&environment=app-1", nil))
 
 		r.Equal(http.StatusOK, rec.Code)
 		body := rec.Body.String()
-		selectorIndex := strings.Index(body, `id="sync-app-selector"`)
-		actionbarIndex := strings.Index(body, `class="actionbar"`)
+		selectorIndex := strings.Index(body, `id="environment-selector"`)
 		topbarEnd := strings.Index(body, `</header>`)
-		r.Greater(selectorIndex, actionbarIndex)
-		r.Greater(selectorIndex, topbarEnd)
-		r.Equal(1, strings.Count(body, `id="sync-app-selector"`))
-		r.Contains(body, "Sync target")
+		r.Greater(selectorIndex, 0)
+		r.Less(selectorIndex, topbarEnd)
+		r.Equal(1, strings.Count(body, `id="environment-selector"`))
+		r.Contains(body, "Active environment")
 		r.Contains(body, "Greendale SCIM")
-		r.NotContains(body, "Configured SCIM endpoint")
-		r.NotContains(body, "Configured IDP issuer base URL")
-		r.NotContains(body, "Trace <b>")
+		r.Contains(body, "Greendale OIDC")
+		r.Contains(body, "Sync Greendale SCIM")
+		r.NotContains(body, "Sync target")
 	}
+}
+
+func TestEnvironmentContextIsExplicitAndIndependentPerRequest(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Users: []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}},
+		Apps: []app{
+			{ID: "app-local", Name: "dev-local", Slug: "dev-local", Protocol: "scim", SCIMEnabled: true, SCIMBaseURL: "https://local.test/scim", SCIMBearerToken: "local-token"},
+			{ID: "app-staging", Name: "staging", Slug: "staging", Protocol: "scim", SCIMEnabled: true, SCIMBaseURL: "https://staging.test/scim", SCIMBearerToken: "staging-token"},
+		},
+		UserSync: map[string]map[string]resourceSyncState{
+			"app-local":   {"troy": {RemoteID: "remote-local"}},
+			"app-staging": {"troy": {RemoteID: "remote-staging"}},
+		},
+	}))
+	appService := newTestIDPApp(t)
+
+	localRec := httptest.NewRecorder()
+	appService.routes().ServeHTTP(localRec, httptest.NewRequest(http.MethodGet, "/?tab=users&environment=app-local", nil))
+	r.Equal(http.StatusOK, localRec.Code)
+	r.Contains(localRec.Body.String(), "remote-local")
+	r.NotContains(localRec.Body.String(), "remote-staging")
+	r.Contains(localRec.Body.String(), "environment=app-local")
+
+	stagingRec := httptest.NewRecorder()
+	appService.routes().ServeHTTP(stagingRec, httptest.NewRequest(http.MethodGet, "/?tab=users&environment=app-staging", nil))
+	r.Equal(http.StatusOK, stagingRec.Code)
+	r.Contains(stagingRec.Body.String(), "remote-staging")
+	r.NotContains(stagingRec.Body.String(), "remote-local")
+	r.Contains(stagingRec.Body.String(), "environment=app-staging")
+}
+
+func TestAuthenticationOnlyEnvironmentHidesSCIMActions(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Users: []user{{ID: "abed", GivenName: "Abed", FamilyName: "Nadir", Email: "abed@greendale.edu", Username: "abed", Active: true}},
+		Apps: []app{
+			{ID: "app-scim", Name: "SCIM", Slug: "scim", Protocol: "scim", SCIMEnabled: true, SCIMBaseURL: "https://scim.test", SCIMBearerToken: "token"},
+			{ID: "app-oidc", Name: "OIDC only", Slug: "oidc-only", Protocol: "oidc"},
+		},
+	}))
+	appService := newTestIDPApp(t)
+	rec := httptest.NewRecorder()
+	appService.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=users&environment=app-oidc", nil))
+
+	r.Equal(http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	r.Contains(body, `<option value="app-oidc" selected>OIDC only</option>`)
+	r.NotContains(body, "Sync OIDC only")
+	r.NotContains(body, "Remote ID")
 }
 
 func TestAppSaveStoresSCIMSettingsAndInitializesSyncState(t *testing.T) {
@@ -1009,6 +1127,7 @@ func TestAppSaveStoresSCIMSettingsAndInitializesSyncState(t *testing.T) {
 	r.NoError(err)
 	r.Len(state.Apps, 1)
 	savedApp := state.Apps[0]
+	r.Contains(rec.Header().Get("Location"), "environment="+savedApp.ID)
 	r.True(savedApp.SCIMEnabled)
 	r.Equal("https://portal.test/scim/v2", savedApp.SCIMBaseURL)
 	r.Equal("chang-secret", savedApp.SCIMBearerToken)
@@ -1026,6 +1145,29 @@ func TestAppSaveStoresSCIMSettingsAndInitializesSyncState(t *testing.T) {
 	state, err = loadState()
 	r.NoError(err)
 	r.Equal("chang-secret", state.Apps[0].SCIMBearerToken)
+}
+
+func TestDeletingActiveEnvironmentSelectsNextEnvironment(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{Apps: []app{
+		{ID: "app-local", Name: "dev-local", Slug: "dev-local", Protocol: "oidc"},
+		{ID: "app-staging", Name: "staging", Slug: "staging", Protocol: "oidc"},
+	}}))
+	appService := newTestIDPApp(t)
+	form := url.Values{"environment": {"app-local"}}
+	req := httptest.NewRequest(http.MethodPost, "/apps/app-local/delete", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	appService.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	r.Contains(rec.Header().Get("Location"), "environment=app-staging")
+	state, err := loadState()
+	r.NoError(err)
+	r.Len(state.Apps, 1)
+	r.Equal("app-staging", state.Apps[0].ID)
 }
 
 func TestEnvironmentRoutesAreRemoved(t *testing.T) {
@@ -1070,7 +1212,7 @@ func TestSyncOnlyMutatesSelectedApp(t *testing.T) {
 		},
 	}))
 	app := newTestIDPApp(t)
-	form := url.Values{"tab": {"users"}, "app": {"app-b"}}
+	form := url.Values{"tab": {"users"}, "environment": {"app-b"}}
 	req := httptest.NewRequest(http.MethodPost, "/sync", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
@@ -1286,351 +1428,136 @@ func TestSCIMDisabledRejectsSync(t *testing.T) {
 	app.routes().ServeHTTP(rec, req)
 
 	r.Equal(http.StatusSeeOther, rec.Code)
-	r.Contains(rec.Header().Get("Set-Cookie"), "select+a+sync-enabled+app")
+	r.Contains(rec.Header().Get("Set-Cookie"), "SCIM+is+not+enabled+for+the+active+environment")
 }
 
-func TestConfigRendersRgrokSetupLink(t *testing.T) {
+func TestConfigRendersAutomaticRgrokStatus(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{}))
-
-	app := &webApp{}
-	req := httptest.NewRequest(http.MethodGet, "/?tab=users&modal=config", nil)
 	rec := httptest.NewRecorder()
 
-	app.routes().ServeHTTP(rec, req)
+	newTestIDPApp(t).routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=users&modal=config", nil))
 
 	r.Equal(http.StatusOK, rec.Code)
-	body := rec.Body.String()
-	r.Contains(body, "Set up rgrok tunnel")
-	r.Contains(body, "/?modal=config&amp;rgrok=1&amp;tab=users")
-	r.Contains(body, `name="idp_base_url"`)
-	r.NotContains(body, `name="idp_base_url" value="" placeholder="http://example.com" autocomplete="off" disabled`)
+	r.Contains(rec.Body.String(), "Automatic tunnel:")
+	r.NotContains(rec.Body.String(), "rgrok_token")
+	r.NotContains(rec.Body.String(), "rgrok_name")
 }
 
-func TestConfigRendersEstablishedRgrokTunnel(t *testing.T) {
+func TestLoadRgrokApplicationIdentity(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	_ = publicKey
+	seed := privateKey.Seed()
+
+	tests := map[string]struct {
+		profileID string
+		seed      string
+		required  string
+		wantNil   bool
+		wantErr   string
+	}{
+		"development build without identity": {wantNil: true},
+		"release missing identity":           {required: "true", wantErr: "profile id"},
+		"invalid profile":                    {profileID: "not-a-profile", seed: base64.StdEncoding.EncodeToString(seed), wantErr: "profile id"},
+		"missing seed":                       {profileID: strings.Repeat("a", 32), wantErr: "private seed is required"},
+		"invalid base64":                     {profileID: strings.Repeat("a", 32), seed: "%%%", wantErr: "invalid base64"},
+		"wrong seed size":                    {profileID: strings.Repeat("a", 32), seed: base64.StdEncoding.EncodeToString([]byte("short")), wantErr: "32 bytes"},
+		"valid identity":                     {profileID: strings.Repeat("a", 32), seed: base64.StdEncoding.EncodeToString(seed)},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			oldProfileID, oldSeed, oldRequired := rgrokApplicationProfileID, rgrokApplicationPrivateSeed, rgrokReleaseIdentityRequired
+			t.Cleanup(func() {
+				rgrokApplicationProfileID, rgrokApplicationPrivateSeed, rgrokReleaseIdentityRequired = oldProfileID, oldSeed, oldRequired
+			})
+			rgrokApplicationProfileID, rgrokApplicationPrivateSeed, rgrokReleaseIdentityRequired = tc.profileID, tc.seed, tc.required
+
+			identity, err := loadRgrokApplicationIdentity()
+			if tc.wantErr != "" {
+				r.ErrorContains(err, tc.wantErr)
+				return
+			}
+			r.NoError(err)
+			if tc.wantNil {
+				r.Nil(identity)
+				return
+			}
+			r.Equal(tc.profileID, identity.profileID)
+			r.Equal(privateKey, identity.privateKey)
+		})
+	}
+}
+
+func TestAutomaticRgrokTunnelUsesApplicationIdentity(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{}))
-
-	app := &webApp{
-		rgrokTunnel: &activeRgrokTunnel{
-			Name:      "demo",
-			PublicURL: "https://demo.rgrok.rselbach.com",
-			Tunnel:    &fakeTunnel{},
-		},
-	}
-	req := httptest.NewRequest(http.MethodGet, "/?tab=users&modal=config", nil)
-	rec := httptest.NewRecorder()
-
-	app.routes().ServeHTTP(rec, req)
-
-	r.Equal(http.StatusOK, rec.Code)
-	body := rec.Body.String()
-	r.Contains(body, "Tunnel connected:")
-	r.Contains(body, `form="rgrok-cancel-form">Cancel</button>`)
-	r.Contains(body, `value="https://demo.rgrok.rselbach.com"`)
-	r.Contains(body, `autocomplete="off" disabled`)
-	r.NotContains(body, "Set up rgrok tunnel")
-}
-
-func TestConfigRendersTunnelRestoreFailure(t *testing.T) {
-	r := require.New(t)
-	setTestStateFile(t)
-	r.NoError(saveState(appState{}))
-	app := &webApp{rgrokLastError: "token rejected by the air conditioning repair school"}
-	rec := httptest.NewRecorder()
-
-	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=users&modal=config", nil))
-
-	r.Equal(http.StatusOK, rec.Code)
-	r.Contains(rec.Body.String(), "Tunnel connection failed: token rejected by the air conditioning repair school")
-	r.Contains(rec.Body.String(), "Set up rgrok tunnel")
-}
-
-func TestRgrokSetupStartsTunnel(t *testing.T) {
-	r := require.New(t)
-	setTestStateFile(t)
-	r.NoError(saveState(appState{}))
-
-	var got rgrokclient.Config
-	var gotCtx context.Context
-	tunnel := &fakeTunnel{}
-	app := &webApp{
-		localPort: 8080,
-		rgrokStart: func(ctx context.Context, cfg rgrokclient.Config) (*startedRgrokTunnel, error) {
-			gotCtx = ctx
-			got = cfg
-			return &startedRgrokTunnel{
-				PublicURL: "https://demo.rgrok.rselbach.com",
-				Tunnel:    tunnel,
-			}, nil
-		},
-	}
-	form := url.Values{
-		"tab":         {"apps"},
-		"rgrok_name":  {"Demo"},
-		"rgrok_token": {"token-123"},
-	}
-	req := httptest.NewRequest(http.MethodPost, "/rgrok/setup", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rec := httptest.NewRecorder()
-
-	app.routes().ServeHTTP(rec, req)
-
-	r.Equal(http.StatusSeeOther, rec.Code)
-	r.Contains(rec.Header().Get("Location"), "modal=config")
-	r.Equal("https://rgrok.rselbach.com", got.ServerBaseURL)
-	r.Equal("token-123", got.Token)
-	r.Equal("demo", got.Name)
-	r.Equal(8080, got.LocalPort)
-	r.Equal("https://demo.rgrok.rselbach.com", app.rgrokPublicURL())
-	r.False(tunnel.closed)
-	r.NoError(gotCtx.Err())
-
-	state, err := loadState()
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	r.NoError(err)
-	r.Equal("demo", state.Config.RgrokName)
-	r.Equal("token-123", state.Config.RgrokToken)
-	r.Equal("https://demo.rgrok.rselbach.com", state.Config.IDPBaseURL)
-}
-
-func TestRgrokSetupDoesNotBlockConfigSave(t *testing.T) {
-	r := require.New(t)
-	setTestStateFile(t)
-	r.NoError(saveState(appState{}))
-
-	started := make(chan struct{})
-	release := make(chan struct{})
-	app := &webApp{
-		localPort: 8080,
-		rgrokStart: func(context.Context, rgrokclient.Config) (*startedRgrokTunnel, error) {
-			close(started)
-			<-release
-			return &startedRgrokTunnel{
-				PublicURL: "https://demo.rgrok.rselbach.com",
-				Tunnel:    &fakeTunnel{},
-			}, nil
-		},
-	}
-
-	setupForm := url.Values{
-		"tab":         {"apps"},
-		"rgrok_name":  {"demo"},
-		"rgrok_token": {"token-123"},
-	}
-	setupReq := httptest.NewRequest(http.MethodPost, "/rgrok/setup", strings.NewReader(setupForm.Encode()))
-	setupReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	setupRec := httptest.NewRecorder()
-	setupDone := make(chan struct{})
-	go func() {
-		app.routes().ServeHTTP(setupRec, setupReq)
-		close(setupDone)
-	}()
-
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("rgrok setup did not start")
-	}
-
-	configForm := url.Values{"tab": {"apps"}, "trust_forwarded_headers": {"on"}}
-	configReq := httptest.NewRequest(http.MethodPost, "/config/save", strings.NewReader(configForm.Encode()))
-	configReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	configRec := httptest.NewRecorder()
-	configDone := make(chan struct{})
-	go func() {
-		app.routes().ServeHTTP(configRec, configReq)
-		close(configDone)
-	}()
-
-	select {
-	case <-configDone:
-		r.Equal(http.StatusSeeOther, configRec.Code)
-	case <-time.After(time.Second):
-		t.Fatal("config save blocked on rgrok setup")
-	}
-
-	close(release)
-	select {
-	case <-setupDone:
-		r.Equal(http.StatusSeeOther, setupRec.Code)
-	case <-time.After(time.Second):
-		t.Fatal("rgrok setup did not finish")
-	}
-
-	state, err := loadState()
-	r.NoError(err)
-	r.True(state.Config.TrustForwardedHeaders)
-	r.Equal("demo", state.Config.RgrokName)
-}
-
-func TestRgrokSetupRedirectsBackToDialogOnError(t *testing.T) {
-	r := require.New(t)
-	setTestStateFile(t)
-
-	app := &webApp{localPort: 8080}
-	form := url.Values{
-		"tab":         {"users"},
-		"rgrok_name":  {"bad_name"},
-		"rgrok_token": {"token-123"},
-	}
-	req := httptest.NewRequest(http.MethodPost, "/rgrok/setup", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rec := httptest.NewRecorder()
-
-	app.routes().ServeHTTP(rec, req)
-
-	r.Equal(http.StatusSeeOther, rec.Code)
-	location := rec.Header().Get("Location")
-	r.Contains(location, "modal=config")
-	r.Contains(location, "rgrok=1")
-	r.Contains(location, "rgrok_error=")
-	r.Empty(app.rgrokPublicURL())
-}
-
-func TestRgrokCancelClosesTunnel(t *testing.T) {
-	r := require.New(t)
-	setTestStateFile(t)
-	r.NoError(saveState(appState{
-		Config: config{
-			IDPBaseURL: "https://demo.rgrok.rselbach.com",
-			RgrokName:  "demo",
-			RgrokToken: "token-123",
-		},
-	}))
-
-	tunnel := &fakeTunnel{}
-	app := &webApp{
-		rgrokTunnel: &activeRgrokTunnel{
-			Name:      "demo",
-			PublicURL: "https://demo.rgrok.rselbach.com",
-			Tunnel:    tunnel,
-		},
-	}
-	form := url.Values{"tab": {"users"}}
-	req := httptest.NewRequest(http.MethodPost, "/rgrok/cancel", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rec := httptest.NewRecorder()
-
-	app.routes().ServeHTTP(rec, req)
-
-	r.Equal(http.StatusSeeOther, rec.Code)
-	r.True(tunnel.closed)
-	r.Empty(app.rgrokPublicURL())
-
-	state, err := loadState()
-	r.NoError(err)
-	r.Empty(state.Config.RgrokName)
-	r.Empty(state.Config.RgrokToken)
-	r.Empty(state.Config.IDPBaseURL)
-}
-
-func TestRestoreSavedRgrokTunnel(t *testing.T) {
-	r := require.New(t)
-	setTestStateFile(t)
-	r.NoError(saveState(appState{
-		Config: config{
-			RgrokName:  "demo",
-			RgrokToken: "token-123",
-		},
-	}))
-
 	var got rgrokclient.Config
 	tunnel := &fakeTunnel{}
 	app := &webApp{
 		localPort: 8080,
-		rgrokStart: func(ctx context.Context, cfg rgrokclient.Config) (*startedRgrokTunnel, error) {
+		rgrokStart: func(_ context.Context, cfg rgrokclient.Config) (*startedRgrokTunnel, error) {
 			got = cfg
-			return &startedRgrokTunnel{
-				PublicURL: "https://demo.rgrok.rselbach.com",
-				Tunnel:    tunnel,
-			}, nil
+			return &startedRgrokTunnel{PublicURL: "https://random.rgrok.rselbach.com", Tunnel: tunnel}, nil
 		},
 	}
 
-	app.restoreSavedRgrokTunnel()
+	app.startAutomaticRgrokTunnel(rgrokApplicationIdentity{profileID: strings.Repeat("a", 32), privateKey: privateKey})
 
 	r.Equal("https://rgrok.rselbach.com", got.ServerBaseURL)
-	r.Equal("token-123", got.Token)
-	r.Equal("demo", got.Name)
+	r.Equal(strings.Repeat("a", 32), got.ApplicationProfileID)
+	r.NotEmpty(got.InstanceID)
+	r.Equal(privateKey, got.ApplicationPrivateKey)
+	r.Empty(got.Token)
+	r.Empty(got.Name)
 	r.Equal(8080, got.LocalPort)
-	r.Equal("https://demo.rgrok.rselbach.com", app.rgrokPublicURL())
-	r.False(tunnel.closed)
-
-	state, err := loadState()
-	r.NoError(err)
-	r.Equal("demo", state.Config.RgrokName)
-	r.Equal("token-123", state.Config.RgrokToken)
-	r.Equal("https://demo.rgrok.rselbach.com", state.Config.IDPBaseURL)
+	r.Equal("https://random.rgrok.rselbach.com", app.rgrokPublicURL())
+	r.NoError(app.closeAutomaticRgrokTunnel())
+	r.True(tunnel.closed)
+	r.Empty(app.rgrokPublicURL())
 }
 
-func TestRgrokCancelWaitsForRestore(t *testing.T) {
+func TestAutomaticRgrokTunnelSurfacesRegistrationError(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
-	r.NoError(saveState(appState{
-		Config: config{
-			RgrokName:  "demo",
-			RgrokToken: "token-123",
+	r.NoError(saveState(appState{}))
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	r.NoError(err)
+	app := &webApp{
+		localPort: 8080,
+		rgrokStart: func(context.Context, rgrokclient.Config) (*startedRgrokTunnel, error) {
+			return nil, fmt.Errorf("application profile rejected")
 		},
-	}))
+	}
 
-	started := make(chan struct{})
-	release := make(chan struct{})
+	app.startAutomaticRgrokTunnel(rgrokApplicationIdentity{profileID: strings.Repeat("a", 32), privateKey: privateKey})
+
+	r.Equal("start automatic tunnel: application profile rejected", app.rgrokError())
+}
+
+func TestAutomaticRgrokTunnelClosesInvalidTunnel(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	r.NoError(err)
 	tunnel := &fakeTunnel{}
 	app := &webApp{
 		localPort: 8080,
 		rgrokStart: func(context.Context, rgrokclient.Config) (*startedRgrokTunnel, error) {
-			close(started)
-			<-release
-			return &startedRgrokTunnel{
-				PublicURL: "https://demo.rgrok.rselbach.com",
-				Tunnel:    tunnel,
-			}, nil
+			return &startedRgrokTunnel{Tunnel: tunnel}, nil
 		},
 	}
-	restoreDone := make(chan struct{})
-	go func() {
-		app.restoreSavedRgrokTunnel()
-		close(restoreDone)
-	}()
 
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("rgrok restore did not start")
-	}
+	app.startAutomaticRgrokTunnel(rgrokApplicationIdentity{profileID: strings.Repeat("a", 32), privateKey: privateKey})
 
-	cancelForm := url.Values{"tab": {"users"}}
-	cancelReq := httptest.NewRequest(http.MethodPost, "/rgrok/cancel", strings.NewReader(cancelForm.Encode()))
-	cancelReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	cancelRec := httptest.NewRecorder()
-	cancelDone := make(chan struct{})
-	go func() {
-		app.routes().ServeHTTP(cancelRec, cancelReq)
-		close(cancelDone)
-	}()
-
-	close(release)
-	select {
-	case <-restoreDone:
-	case <-time.After(time.Second):
-		t.Fatal("rgrok restore did not finish")
-	}
-	select {
-	case <-cancelDone:
-	case <-time.After(time.Second):
-		t.Fatal("rgrok cancel did not finish")
-	}
-
-	r.Equal(http.StatusSeeOther, cancelRec.Code)
 	r.True(tunnel.closed)
-	r.Empty(app.rgrokPublicURL())
-	state, err := loadState()
-	r.NoError(err)
-	r.Empty(state.Config.RgrokName)
-	r.Empty(state.Config.RgrokToken)
-	r.Empty(state.Config.IDPBaseURL)
+	r.Equal("rgrok did not return a public URL", app.rgrokError())
 }
 
 type fakeTunnel struct {

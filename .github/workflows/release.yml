@@ -36,6 +36,24 @@ jobs:
             exit 1
           fi
 
+      - name: Check rgrok application identity
+        env:
+          RGROK_APPLICATION_PROFILE_ID: ${{ vars.RGROK_APPLICATION_PROFILE_ID }}
+          RGROK_APPLICATION_PRIVATE_SEED_BASE64: ${{ secrets.RGROK_APPLICATION_PRIVATE_SEED_BASE64 }}
+        run: |
+          if [[ ! "${RGROK_APPLICATION_PROFILE_ID}" =~ ^[a-f0-9]{32}$ ]]; then
+            echo "::error::Set RGROK_APPLICATION_PROFILE_ID to the application profile ID"
+            exit 1
+          fi
+          if [[ -z "${RGROK_APPLICATION_PRIVATE_SEED_BASE64}" ]]; then
+            echo "::error::Set RGROK_APPLICATION_PRIVATE_SEED_BASE64 to a base64-encoded 32-byte Ed25519 seed"
+            exit 1
+          fi
+          if ! python3 -c 'import base64, os; assert len(base64.b64decode(os.environ["RGROK_APPLICATION_PRIVATE_SEED_BASE64"], validate=True)) == 32'; then
+            echo "::error::RGROK_APPLICATION_PRIVATE_SEED_BASE64 must encode exactly 32 bytes"
+            exit 1
+          fi
+
       - name: Release
         uses: goreleaser/goreleaser-action@v6
         with:
@@ -45,3 +63,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          RGROK_APPLICATION_PROFILE_ID: ${{ vars.RGROK_APPLICATION_PROFILE_ID }}
+          RGROK_APPLICATION_PRIVATE_SEED_BASE64: ${{ secrets.RGROK_APPLICATION_PRIVATE_SEED_BASE64 }}

@@ -111,7 +111,9 @@ type SyncProgress struct {
 	ResourceID   string
 	Label        string
 	Operation    string
+	Phase        string
 	Status       string
+	Detail       string
 	RateLimited  bool
 	RetryAfter   string
 }
@@ -289,12 +291,35 @@ func (r *syncProgressReporter) reportUser(u User, operation string, status strin
 	}
 
 	r.processed++
+	phase := "done"
+	detail := ""
+	if status == "Failed" {
+		phase = "failed"
+		detail = u.LastError
+	}
 	r.report(SyncProgress{
 		ResourceType: "user",
 		ResourceID:   u.ID,
 		Label:        progressUserLabel(u),
 		Operation:    operation,
+		Phase:        phase,
 		Status:       status,
+		Detail:       detail,
+	})
+}
+
+func (r *syncProgressReporter) startUser(u User, operation string) {
+	if r == nil {
+		return
+	}
+
+	r.report(SyncProgress{
+		ResourceType: "user",
+		ResourceID:   u.ID,
+		Label:        progressUserLabel(u),
+		Operation:    operation,
+		Phase:        "running",
+		Status:       "In progress",
 	})
 }
 
@@ -317,7 +342,9 @@ func (r *syncProgressReporter) reportRateLimit(target TraceTarget, delay time.Du
 		ResourceID:   target.ResourceID,
 		Label:        target.Label,
 		Operation:    target.Operation,
+		Phase:        "waiting",
 		Status:       status,
+		Detail:       status,
 		RateLimited:  true,
 		RetryAfter:   retryAfterHeader,
 	})
@@ -339,12 +366,35 @@ func (r *syncProgressReporter) reportGroup(g Group, operation string, status str
 	}
 
 	r.processed++
+	phase := "done"
+	detail := ""
+	if status == "Failed" {
+		phase = "failed"
+		detail = g.LastError
+	}
 	r.report(SyncProgress{
 		ResourceType: "group",
 		ResourceID:   g.ID,
 		Label:        g.DisplayName,
 		Operation:    operation,
+		Phase:        phase,
 		Status:       status,
+		Detail:       detail,
+	})
+}
+
+func (r *syncProgressReporter) startGroup(g Group, operation string) {
+	if r == nil {
+		return
+	}
+
+	r.report(SyncProgress{
+		ResourceType: "group",
+		ResourceID:   g.ID,
+		Label:        g.DisplayName,
+		Operation:    operation,
+		Phase:        "running",
+		Status:       "In progress",
 	})
 }
 
@@ -375,19 +425,27 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 		}
 
 		u.LastError = ""
+		operation := "update"
+		switch {
+		case u.Deleted:
+			operation = "delete"
+		case u.RemoteID == "":
+			operation = "create"
+		}
+		progress.startUser(u, operation)
 
 		switch {
 		case u.Deleted && u.RemoteID == "":
 			progress.addTotal(pruneUserFromGroups(&state, u.ID))
 			counts.deleted++
-			progress.reportUser(u, "delete", "Deleted locally")
+			progress.reportUser(u, operation, "Deleted locally")
 			continue
 		case u.Deleted:
 			if err := client.deleteUser(u, "delete"); err != nil {
 				u.LastError = err.Error()
 				counts.failed++
 				nextUsers = append(nextUsers, u)
-				progress.reportUser(u, "delete", "Failed")
+				progress.reportUser(u, operation, "Failed")
 				if isRateLimitError(err) {
 					nextUsers = append(nextUsers, state.Users[i+1:]...)
 					state.Users = nextUsers
@@ -398,14 +456,14 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 
 			progress.addTotal(pruneUserFromGroups(&state, u.ID))
 			counts.deleted++
-			progress.reportUser(u, "delete", "Deleted")
+			progress.reportUser(u, operation, "Deleted")
 		case u.RemoteID == "":
 			remoteID, err := client.createUser(u)
 			if err != nil {
 				u.LastError = err.Error()
 				counts.failed++
 				nextUsers = append(nextUsers, u)
-				progress.reportUser(u, "create", "Failed")
+				progress.reportUser(u, operation, "Failed")
 				if isRateLimitError(err) {
 					nextUsers = append(nextUsers, state.Users[i+1:]...)
 					state.Users = nextUsers
@@ -418,13 +476,13 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 			u.Dirty = false
 			counts.created++
 			nextUsers = append(nextUsers, u)
-			progress.reportUser(u, "create", "Created")
+			progress.reportUser(u, operation, "Created")
 		default:
 			if err := client.replaceUser(u); err != nil {
 				u.LastError = err.Error()
 				counts.failed++
 				nextUsers = append(nextUsers, u)
-				progress.reportUser(u, "update", "Failed")
+				progress.reportUser(u, operation, "Failed")
 				if isRateLimitError(err) {
 					nextUsers = append(nextUsers, state.Users[i+1:]...)
 					state.Users = nextUsers
@@ -436,7 +494,7 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 			u.Dirty = false
 			counts.updated++
 			nextUsers = append(nextUsers, u)
-			progress.reportUser(u, "update", "Updated")
+			progress.reportUser(u, operation, "Updated")
 		}
 	}
 
@@ -480,18 +538,26 @@ func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressR
 		}
 
 		g.LastError = ""
+		operation := "update"
+		switch {
+		case g.Deleted:
+			operation = "delete"
+		case g.RemoteID == "":
+			operation = "create"
+		}
+		progress.startGroup(g, operation)
 
 		switch {
 		case g.Deleted && g.RemoteID == "":
 			counts.deleted++
-			progress.reportGroup(g, "delete", "Deleted locally")
+			progress.reportGroup(g, operation, "Deleted locally")
 			continue
 		case g.Deleted:
 			if err := client.deleteGroup(g, "delete"); err != nil {
 				g.LastError = err.Error()
 				counts.failed++
 				nextGroups = append(nextGroups, g)
-				progress.reportGroup(g, "delete", "Failed")
+				progress.reportGroup(g, operation, "Failed")
 				if isRateLimitError(err) {
 					nextGroups = append(nextGroups, state.Groups[i+1:]...)
 					state.Groups = nextGroups
@@ -501,14 +567,14 @@ func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressR
 			}
 
 			counts.deleted++
-			progress.reportGroup(g, "delete", "Deleted")
+			progress.reportGroup(g, operation, "Deleted")
 		case g.RemoteID == "":
 			remoteID, err := client.createGroup(g, state.Users)
 			if err != nil {
 				g.LastError = err.Error()
 				counts.failed++
 				nextGroups = append(nextGroups, g)
-				progress.reportGroup(g, "create", "Failed")
+				progress.reportGroup(g, operation, "Failed")
 				if isRateLimitError(err) {
 					nextGroups = append(nextGroups, state.Groups[i+1:]...)
 					state.Groups = nextGroups
@@ -521,13 +587,13 @@ func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressR
 			g.Dirty = false
 			counts.created++
 			nextGroups = append(nextGroups, g)
-			progress.reportGroup(g, "create", "Created")
+			progress.reportGroup(g, operation, "Created")
 		default:
 			if err := client.replaceGroup(g, state.Users); err != nil {
 				g.LastError = err.Error()
 				counts.failed++
 				nextGroups = append(nextGroups, g)
-				progress.reportGroup(g, "update", "Failed")
+				progress.reportGroup(g, operation, "Failed")
 				if isRateLimitError(err) {
 					nextGroups = append(nextGroups, state.Groups[i+1:]...)
 					state.Groups = nextGroups
@@ -539,7 +605,7 @@ func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressR
 			g.Dirty = false
 			counts.updated++
 			nextGroups = append(nextGroups, g)
-			progress.reportGroup(g, "update", "Updated")
+			progress.reportGroup(g, operation, "Updated")
 		}
 	}
 

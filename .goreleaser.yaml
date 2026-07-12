@@ -10,6 +10,11 @@ builds:
       - CGO_ENABLED=0
     flags:
       - -trimpath
+    ldflags:
+      - -s -w
+      - -X=scimtest/internal/web.rgrokApplicationProfileID={{ .Env.RGROK_APPLICATION_PROFILE_ID }}
+      - -X=scimtest/internal/web.rgrokApplicationPrivateSeed={{ .Env.RGROK_APPLICATION_PRIVATE_SEED_BASE64 }}
+      - -X=scimtest/internal/web.rgrokReleaseIdentityRequired=true
     goos:
       - darwin
       - linux

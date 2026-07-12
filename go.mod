@@ -1,10 +1,10 @@
 module scimtest
 
-go 1.25.0
+go 1.25.10
 
 require (
 	github.com/beevik/etree v1.6.0
-	github.com/rselbach/rgrok v0.0.2
+	github.com/rselbach/rgrok v0.0.4
 	github.com/russellhaering/goxmldsig v1.6.0
 	github.com/stretchr/testify v1.11.1
 	modernc.org/sqlite v1.50.0

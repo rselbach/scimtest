@@ -88,6 +88,31 @@
       justify-content: center;
       color: var(--topbar-fg);
     }
+    .environment-context {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: auto;
+    }
+    .environment-context label {
+      color: #aeb4bf;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .environment-context select {
+      height: 32px;
+      min-width: 190px;
+      max-width: 320px;
+      padding: 0 30px 0 10px;
+      border: 1px solid #3a3d44;
+      border-radius: var(--radius);
+      background: #1d1f23;
+      color: #fff;
+      font-weight: 500;
+    }
+    .environment-manage { color: #c8d7ff; font-size: 12.5px; }
 
     /* App grid */
     .app {
@@ -146,6 +171,7 @@
     .content {
       padding: 28px 32px;
       max-width: 1280px;
+      min-width: 0;
       width: 100%;
     }
 
@@ -329,8 +355,6 @@
       flex-wrap: wrap;
     }
     .actionbar form { margin: 0; }
-	.actionbar-selector { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12.5px; }
-	.actionbar-selector select { height: 32px; max-width: 240px; padding: 0 30px 0 10px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--card); color: var(--text); }
     .actionbar-meta {
       margin-left: auto;
       color: var(--muted);
@@ -387,6 +411,62 @@
     }
     .sync-progress-current { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .sync-progress-trace.is-hidden { display: none; }
+    .sync-progress-actions { display: inline-flex; gap: 10px; white-space: nowrap; }
+    .sync-details-open.is-hidden { display: none; }
+
+    .sync-details-modal { width: min(760px, 100%); overflow: hidden; }
+    .sync-details-body { display: grid; gap: 14px; padding: 18px; }
+    .sync-details-progress { margin: 0; box-shadow: none; }
+    .sync-activity-summary {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 12.5px;
+    }
+    .sync-activity-list {
+      max-height: min(42vh, 420px);
+      overflow-y: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--card);
+    }
+    .sync-activity-empty { padding: 24px; color: var(--muted); text-align: center; }
+    .sync-activity-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px 16px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+    .sync-activity-row:last-child { border-bottom: 0; }
+    .sync-activity-title { color: var(--text-strong); font-weight: 500; }
+    .sync-activity-detail { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+    .sync-activity-state {
+      align-self: start;
+      min-width: 76px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--bg-soft);
+      color: var(--muted);
+      font-size: 11.5px;
+      font-weight: 600;
+      text-align: center;
+    }
+    .sync-activity-row.is-running .sync-activity-state { background: var(--accent-soft); color: var(--accent); }
+    .sync-activity-row.is-done .sync-activity-state { background: var(--success-soft); color: var(--success); }
+    .sync-activity-row.is-failed .sync-activity-state { background: var(--danger-soft); color: var(--danger); }
+    .sync-activity-row.is-waiting .sync-activity-state { background: var(--warn-soft); color: var(--warn-text); }
+    .sync-new-events { justify-self: center; }
+    .sync-new-events.is-hidden { display: none; }
+    .sync-details-footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 18px;
+      border-top: 1px solid var(--line);
+      background: var(--bg-soft);
+    }
 
     .pagination {
       display: flex;
@@ -447,6 +527,8 @@
        Stability across state changes is preserved by min-widths on the
        Status pill and Active toggle elsewhere in this stylesheet. */
     table.groups-table { table-layout: auto; }
+    table.environments-table { min-width: 720px; table-layout: auto; }
+    table.users-table { min-width: 900px; }
     thead th {
       background: var(--bg-soft);
       text-align: left;
@@ -656,6 +738,7 @@
       background: rgba(15, 23, 42, 0.4);
       z-index: 30;
     }
+    .overlay.is-hidden { display: none; }
     .modal {
       width: min(640px, 100%);
       max-height: calc(100vh - 32px);
@@ -1045,6 +1128,8 @@
       .side-section + .side-section { margin-top: 8px; }
       .content { padding: 18px; }
       .form-grid, .members-grid { grid-template-columns: 1fr; }
+      .environment-context label, .environment-manage { display: none; }
+      .environment-context select { min-width: 140px; max-width: 48vw; }
     }
   </style>
 </head>
@@ -1062,12 +1147,20 @@
       scimtest
       <span class="sr-only">SCIM Control Surface</span>
     </a>
+    <form class="environment-context" method="get" action="/">
+      <input type="hidden" name="tab" value="{{.Tab}}">
+      <label for="environment-selector">Active environment</label>
+      <select id="environment-selector" name="environment" onchange="this.form.submit()" {{if not .Environments}}disabled{{end}}>
+        {{range .Environments}}<option value="{{.ID}}" {{if eq .ID $.ActiveEnvironment.ID}}selected{{end}}>{{.Name}}</option>{{else}}<option>No environments</option>{{end}}
+      </select>
+      <a class="environment-manage" href="{{.AppsURL}}">Manage</a>
+    </form>
   </header>
 
   <div class="app">
     <aside class="sidebar">
-      <nav class="side-section" aria-label="Resources">
-        <div class="side-label">Resources</div>
+      <nav class="side-section" aria-label="Shared directory">
+        <div class="side-label">Shared directory</div>
         <a class="side-item {{if eq .Tab "users"}}active{{end}}" href="{{.UsersURL}}">
           <span class="icon" aria-hidden="true">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="6" r="2.6"/><path d="M3 14c0-2.4 2.2-4 5-4s5 1.6 5 4"/></svg>
@@ -1082,22 +1175,38 @@
           Groups
           <span class="badge {{if and .SCIMEnabled .Stats.DirtyGroups}}dirty{{end}}">{{.Stats.Groups}}{{if and .SCIMEnabled .Stats.DirtyGroups}}·{{.Stats.DirtyGroups}}{{end}}</span>
         </a>
+      </nav>
+
+      {{if .ActiveEnvironment.ID}}<nav class="side-section" aria-label="Active environment">
+        <div class="side-label">{{.ActiveEnvironment.Name}}</div>
+        <a class="side-item" href="{{.EnvironmentSettingsURL}}">
+          <span class="icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="M5.5 6h5M5.5 8.5h5"/></svg>
+          </span>
+          Environment settings
+        </a>
+        {{if .SCIMEnabled}}<a class="side-item {{if not .HasTrace}}is-disabled{{end}}" href="{{.TraceURL}}" {{if not .HasTrace}}aria-disabled="true" tabindex="-1"{{end}}>
+          <span class="icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h7l3 3v7H3z"/><path d="M9.5 3v3.5h3.5"/><path d="M5.5 9h5M5.5 11h3.5"/></svg>
+          </span>
+          Sync trace
+        </a>{{end}}
+      </nav>{{end}}
+
+      <nav class="side-section" aria-label="Global settings">
+        <div class="side-label">Global</div>
         <a class="side-item {{if eq .Tab "apps"}}active{{end}}" href="{{.AppsURL}}">
           <span class="icon" aria-hidden="true">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="M5.5 6h5M5.5 8.5h5"/></svg>
           </span>
-          Apps
+          Environments
           <span class="badge">{{.Stats.Apps}}</span>
         </a>
-      </nav>
-
-      <nav class="side-section" aria-label="Settings">
-        <div class="side-label">Settings</div>
         <a class="side-item" href="{{.ConfigURL}}">
           <span class="icon" aria-hidden="true">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8L3.4 3.4"/></svg>
           </span>
-          Config
+          Global config
         </a>
         <a class="side-item" href="{{.ToolsURL}}">
           <span class="icon" aria-hidden="true">
@@ -1105,12 +1214,6 @@
           </span>
           Tools
         </a>
-        {{if .SCIMEnabled}}<a class="side-item {{if not .HasTrace}}is-disabled{{end}}" href="{{.TraceURL}}" {{if not .HasTrace}}aria-disabled="true" tabindex="-1"{{end}}>
-          <span class="icon" aria-hidden="true">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h7l3 3v7H3z"/><path d="M9.5 3v3.5h3.5"/><path d="M5.5 9h5M5.5 11h3.5"/></svg>
-          </span>
-          Trace
-        </a>{{end}}
       </nav>
     </aside>
 
@@ -1134,9 +1237,8 @@
 	  <section class="setup-guide" aria-label="Getting started">
 		<strong>Get ready to test</strong>
 		<ol>
-		  <li {{if .SCIMReady}}class="done"{{end}}><a href="{{.NewAppURL}}">Configure SCIM on an app</a></li>
-		  <li {{if .HasLocalUsers}}class="done"{{end}}><a href="{{.NewUserURL}}">Create a user</a> or import from SCIM</li>
-		  <li {{if .HasApps}}class="done"{{end}}><a href="{{.NewAppURL}}">Create an OIDC or SAML app</a></li>
+		  <li {{if .HasApps}}class="done"{{end}}><a href="{{.NewAppURL}}">Create an environment</a></li>
+		  <li {{if .HasLocalUsers}}class="done"{{end}}><a href="{{.NewUserURL}}">Create a user</a>{{if .SCIMEnabled}} or import from {{.ActiveEnvironment.Name}}{{end}}</li>
 		  <li {{if .HasPublicIDP}}class="done"{{end}}><a href="{{.ConfigURL}}">Connect the public tunnel</a> when your client requires TLS</li>
 		</ol>
 	  </section>
@@ -1153,14 +1255,14 @@
           {{end}}
         </div>
         <div class="page-header-text">
-          <h1>{{if eq .Tab "groups"}}Groups{{else if eq .Tab "apps"}}Apps{{else}}Users{{end}}</h1>
-          <p class="lede">{{if eq .Tab "groups"}}Local groups shared by SCIM, OIDC, and SAML.{{else if eq .Tab "apps"}}Local OIDC and SAML apps using the same users and groups.{{else}}Local users shared by SCIM, OIDC, and SAML.{{end}}</p>
+          <h1>{{if eq .Tab "groups"}}Groups{{else if eq .Tab "apps"}}Environments{{else}}Users{{end}}</h1>
+          <p class="lede">{{if eq .Tab "groups"}}Shared groups{{if .ActiveEnvironment.ID}}; sync status shown for {{.ActiveEnvironment.Name}}{{end}}.{{else if eq .Tab "apps"}}Configure and switch between test environments.{{else}}Shared users{{if .ActiveEnvironment.ID}}; sync status shown for {{.ActiveEnvironment.Name}}{{end}}.{{end}}</p>
         </div>
         <div class="actions">
           {{if eq .Tab "groups"}}
           <a class="btn btn-primary" href="{{.NewGroupURL}}"><span class="plus">+</span> Add group</a>
           {{else if eq .Tab "apps"}}
-          <a class="btn btn-primary" href="{{.NewAppURL}}"><span class="plus">+</span> Add app</a>
+          <a class="btn btn-primary" href="{{.NewAppURL}}"><span class="plus">+</span> Add environment</a>
           {{else}}
           <a class="btn btn-primary" href="{{.NewUserURL}}"><span class="plus">+</span> Add user</a>
           {{end}}
@@ -1169,31 +1271,23 @@
 
       {{if and .SCIMEnabled (ne .Tab "apps")}}
       <div class="actionbar">
-		<form class="actionbar-selector" method="get" action="/">
-		  <input type="hidden" name="tab" value="{{.Tab}}">
-		  {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
-		  <label for="sync-app-selector">Sync target</label>
-		  <select id="sync-app-selector" name="app" onchange="this.form.submit()">
-			{{range .SyncApps}}<option value="{{.ID}}" {{if eq .ID $.SyncApp.ID}}selected{{end}}>{{.Name}}</option>{{end}}
-		  </select>
-		</form>
         <form method="post" action="/sync" data-sync-form>
           <input type="hidden" name="tab" value="{{.Tab}}">
-		  <input type="hidden" name="app" value="{{.SyncApp.ID}}">
+		  <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
-          <button class="btn" type="submit" data-sync-submit {{if and .SyncJob .SyncJob.Running}}disabled{{end}}>Sync</button>
+          <button class="btn" type="submit" data-sync-submit {{if and .SyncJob .SyncJob.Running}}disabled{{end}}>Sync {{.ActiveEnvironment.Name}}</button>
         </form>
-        <form method="post" action="/import" onsubmit="return confirm('This replaces local users and groups with the selected app’s SCIM state. Other sync apps will be marked dirty. Continue?')">
+        <form method="post" action="/import" onsubmit="return confirm('Import from {{.ActiveEnvironment.Name}}? This replaces the shared directory and marks every other SCIM environment dirty.')">
           <input type="hidden" name="tab" value="{{.Tab}}">
-		  <input type="hidden" name="app" value="{{.SyncApp.ID}}">
+		  <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
-          <button class="btn" type="submit">Import</button>
+          <button class="btn" type="submit">Import from {{.ActiveEnvironment.Name}}</button>
         </form>
-        <form method="post" action="/reset" onsubmit="return confirm('This clears remote IDs for the selected app and marks its users and groups dirty. Continue?')">
+        <form method="post" action="/reset" onsubmit="return confirm('Reset sync state for {{.ActiveEnvironment.Name}}? This clears its remote IDs and marks its users and groups dirty.')">
           <input type="hidden" name="tab" value="{{.Tab}}">
-		  <input type="hidden" name="app" value="{{.SyncApp.ID}}">
+		  <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
-          <button class="btn btn-danger" type="submit">Reset</button>
+          <button class="btn btn-danger" type="submit">Reset {{.ActiveEnvironment.Name}}</button>
         </form>
         <span class="actionbar-meta">
           <b>{{.Stats.Users}}</b> users{{if .Stats.DirtyUsers}} <span class="sep">·</span> <span class="dirty">{{.Stats.DirtyUsers}} dirty</span>{{end}}
@@ -1211,7 +1305,10 @@
         </div>
         <div class="sync-progress-detail">
           <span class="sync-progress-current" data-sync-current>{{if .SyncJob}}{{.SyncJob.Current}}{{end}}</span>
-          <a class="sync-progress-trace {{if not (and .SyncJob .SyncJob.TraceAvailable)}}is-hidden{{end}}" href="{{.TraceURL}}" data-sync-trace>View trace</a>
+          <span class="sync-progress-actions">
+            <button class="link-button sync-details-open {{if not .SyncJob}}is-hidden{{end}}" type="button" data-sync-details-open>View details</button>
+            <a class="sync-progress-trace {{if not (and .SyncJob .SyncJob.TraceAvailable)}}is-hidden{{end}}" href="{{.TraceURL}}" data-sync-trace>View trace</a>
+          </span>
         </div>
       </div>
       {{end}}
@@ -1222,10 +1319,47 @@
 
   <footer class="footer">
     <span class="ok">scimtest</span>
-    <span class="copy">SCIM: {{if .SCIMEnabled}}{{if .BaseURL}}{{.BaseURL}}{{else}}enabled, not configured{{end}}{{else}}disabled{{end}}</span>
+    <span class="copy">{{if .ActiveEnvironment.ID}}{{.ActiveEnvironment.Name}} SCIM: {{if .SCIMEnabled}}{{if .BaseURL}}{{.BaseURL}}{{else}}enabled, not configured{{end}}{{else}}disabled{{end}}{{else}}No active environment{{end}}</span>
     <span>IDP base: {{.IDPBaseURL}}</span>
 	</footer>
 	<div class="sr-only" aria-live="polite" data-copy-status></div>
+
+  {{if and .SCIMEnabled (ne .Tab "apps")}}
+  <div class="overlay is-hidden" data-sync-details aria-hidden="true">
+    <div class="modal sync-details-modal" role="dialog" aria-modal="true" aria-labelledby="sync-details-title" tabindex="-1">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title" id="sync-details-title">Sync details</div>
+          <div class="modal-sub">{{.ActiveEnvironment.Name}}</div>
+        </div>
+        <button class="btn btn-sm btn-ghost" type="button" data-sync-details-close>Close</button>
+      </div>
+      <div class="sync-details-body">
+        <div class="sync-progress sync-details-progress" data-sync-modal-progress>
+          <div class="sync-progress-head">
+            <span class="sync-progress-title" data-sync-modal-message>{{if .SyncJob}}{{.SyncJob.Message}}{{else}}Ready to sync{{end}}</span>
+            <span class="sync-progress-count" data-sync-modal-count>{{if .SyncJob}}{{.SyncJob.Processed}} / {{.SyncJob.Total}}{{else}}0 / 0{{end}}</span>
+          </div>
+          <div class="sync-progress-bar" role="progressbar" aria-label="Detailed SCIM sync progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{if .SyncJob}}{{.SyncJob.Percent}}{{else}}0{{end}}" data-sync-modal-progressbar>
+            <div class="sync-progress-fill" data-sync-modal-fill style="width: {{if .SyncJob}}{{.SyncJob.Percent}}{{else}}0{{end}}%"></div>
+          </div>
+        </div>
+        <div class="sync-activity-summary">
+          <span data-sync-activity-complete>{{if .SyncJob}}{{.SyncJob.Processed}} completed{{else}}No operations started{{end}}</span>
+          <span data-sync-activity-remaining>{{if .SyncJob}}{{.SyncJob.Total}} remaining{{end}}</span>
+        </div>
+        <div class="sync-activity-list" data-sync-activity-list>
+          <div class="sync-activity-empty" data-sync-activity-empty>Operations will appear here as they start.</div>
+        </div>
+        <button class="btn btn-sm sync-new-events is-hidden" type="button" data-sync-new-events></button>
+      </div>
+      <div class="sync-details-footer">
+        <a class="sync-progress-trace {{if not (and .SyncJob .SyncJob.TraceAvailable)}}is-hidden{{end}}" href="{{.TraceURL}}" data-sync-modal-trace>View trace</a>
+        <button class="btn" type="button" data-sync-details-close>Close</button>
+      </div>
+    </div>
+  </div>
+  {{end}}
 
   {{if .History}}
   <div class="overlay" data-overlay>
@@ -1290,6 +1424,7 @@
             <h3>Create users</h3>
             <p>Add active, dirty local users with generated names, usernames, and emails.</p>
             <form method="post" action="/tools/create-users">
+              <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
               <input type="hidden" name="tab" value="{{.Tab}}">
               {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
               <div class="form-grid">
@@ -1312,21 +1447,25 @@
             <p>Apply the same state change to every non-deleted user.</p>
             <div class="tool-actions">
               <form method="post" action="/tools/activate-all">
+                <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
                 <input type="hidden" name="tab" value="{{.Tab}}">
                 {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
                 <button class="btn" type="submit" onclick="return confirm('Activate all non-deleted users?')">Activate All</button>
               </form>
               <form method="post" action="/tools/deactivate-all">
+                <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
                 <input type="hidden" name="tab" value="{{.Tab}}">
                 {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
                 <button class="btn" type="submit" onclick="return confirm('Deactivate all non-deleted users?')">Deactivate All</button>
               </form>
 			  <form method="post" action="/tools/delete-all">
+				<input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
                 <input type="hidden" name="tab" value="{{.Tab}}">
                 {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
                 <button class="btn btn-danger" type="submit" onclick="return confirm('Delete all users? This is a big red button, my dude.')">Delete All</button>
 			  </form>
 			  <form method="post" action="/tools/clear-users-local">
+				<input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
 				<input type="hidden" name="tab" value="{{.Tab}}">
 				{{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
 				<button class="btn btn-danger" type="submit" onclick="return confirm('Immediately clear every local user? No SCIM server will be contacted. Group memberships and user history will also be cleared.')">Clear Users Locally</button>
@@ -1343,10 +1482,14 @@
   <div class="overlay" data-overlay>
     <div class="modal" role="dialog" aria-modal="true" tabindex="-1">
       <div class="modal-header">
-        <div class="modal-title">{{.UserForm.Title}}</div>
+        <div>
+          <div class="modal-title">{{.UserForm.Title}}</div>
+          <div class="modal-sub">Shared across all environments</div>
+        </div>
         <a class="btn btn-sm btn-ghost" href="{{.UserForm.Close}}" data-autofocus>Close</a>
       </div>
       <form method="post" action="/users/save">
+        <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
         <input type="hidden" name="tab" value="users">
         {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
         <input type="hidden" name="id" value="{{.UserForm.ID}}">
@@ -1383,10 +1526,14 @@
   <div class="overlay" data-overlay>
     <div class="modal wide" role="dialog" aria-modal="true" tabindex="-1">
       <div class="modal-header">
-        <div class="modal-title">{{.GroupForm.Title}}</div>
+        <div>
+          <div class="modal-title">{{.GroupForm.Title}}</div>
+          <div class="modal-sub">Shared across all environments</div>
+        </div>
         <a class="btn btn-sm btn-ghost" href="{{.GroupForm.Close}}" data-autofocus>Close</a>
       </div>
       <form method="post" action="/groups/save">
+        <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
         <input type="hidden" name="tab" value="groups">
         {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
         <input type="hidden" name="id" value="{{.GroupForm.ID}}">
@@ -1429,17 +1576,18 @@
       <div class="modal-header">
         <div>
           <div class="modal-title">{{.AppForm.Title}}</div>
-          <div class="modal-sub">Authentication and provisioning target</div>
+          <div class="modal-sub">The authentication and provisioning context used while testing</div>
         </div>
         <a class="btn btn-sm btn-ghost" href="{{.AppForm.Close}}" data-autofocus>Close</a>
       </div>
       <form method="post" action="/apps/save">
+        <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
         <input type="hidden" name="tab" value="apps">
         <input type="hidden" name="id" value="{{.AppForm.App.ID}}">
         <div class="modal-body">
           <div class="form-grid">
             <label class="field">
-              <span class="label">App name</span>
+              <span class="label">Environment name</span>
               <input name="name" value="{{.AppForm.App.Name}}" autocomplete="off">
             </label>
             <label class="field">
@@ -1466,7 +1614,7 @@
 			  <span class="label">Sync</span>
 			  <span class="checkbox-row">
 				<input type="checkbox" name="scim_enabled" data-scim-toggle {{if .AppForm.App.SCIMEnabled}}checked{{end}}>
-				Enable SCIM sync for this app
+				Enable SCIM sync for this environment
 			  </span>
 			</label>
 			<div class="protocol-section {{if not .AppForm.App.SCIMEnabled}}is-hidden{{end}}" data-scim-section>
@@ -1575,7 +1723,7 @@
           </div>
           <div class="form-actions">
             <a class="btn btn-ghost" href="{{.AppForm.Close}}">Cancel</a>
-            <button class="btn btn-primary" type="submit">Save app</button>
+            <button class="btn btn-primary" type="submit">Save environment</button>
           </div>
         </div>
       </form>
@@ -1591,6 +1739,7 @@
         <a class="btn btn-sm btn-ghost" href="{{.ConfigForm.Close}}" data-autofocus>Close</a>
       </div>
       <form method="post" action="/config/save">
+        <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
         <input type="hidden" name="tab" value="{{.Tab}}">
         {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
         <div class="modal-body">
@@ -1600,12 +1749,11 @@
 			{{if .ConfigForm.Tunnel}}
 			<div class="tunnel-row">
 			  <strong>Tunnel connected:</strong> <span class="mono">{{.ConfigForm.Tunnel.PublicURL}}</span>
-			  <button class="link-button" type="submit" form="rgrok-cancel-form">Cancel</button>
 			</div>
 			<span class="hint">Only OIDC and SAML endpoints are exposed through the tunnel.</span>
 			{{else}}
 			<div class="tunnel-row">
-			  <a href="{{.ConfigForm.RgrokSetupURL}}">Set up rgrok tunnel</a>
+			  <strong>Automatic tunnel:</strong> waiting for connection
 			</div>
 			{{if .ConfigForm.TunnelError}}<div class="inline-error" role="alert">Tunnel connection failed: {{.ConfigForm.TunnelError}}</div>{{end}}
               {{end}}
@@ -1627,52 +1775,9 @@
           </div>
         </div>
       </form>
-      <form id="rgrok-cancel-form" method="post" action="/rgrok/cancel" style="margin:0">
-        <input type="hidden" name="tab" value="{{.Tab}}">
-        {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
-      </form>
     </div>
   </div>
 
-  {{if .ConfigForm.RgrokForm}}
-  <div class="overlay" data-overlay>
-    <div class="modal" role="dialog" aria-modal="true" tabindex="-1">
-      <div class="modal-header">
-        <div>
-          <div class="modal-title">Set up rgrok tunnel</div>
-          <div class="modal-sub">Creates a public IDP issuer URL for this local scimtest server.</div>
-        </div>
-        <a class="btn btn-sm btn-ghost" href="{{.ConfigForm.RgrokForm.Close}}" data-autofocus>Close</a>
-      </div>
-      <form method="post" action="/rgrok/setup" data-rgrok-form>
-        <input type="hidden" name="tab" value="{{$.Tab}}">
-        {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
-        <div class="modal-body">
-          <div class="form-grid">
-            {{if .ConfigForm.RgrokForm.Error}}
-            <div class="inline-error" role="alert">{{.ConfigForm.RgrokForm.Error}}</div>
-            {{end}}
-            <label class="field full">
-              <span class="label">Name</span>
-              <span class="subdomain-field">
-                <input name="rgrok_name" value="{{.ConfigForm.RgrokForm.Name}}" autocomplete="off" data-rgrok-required>
-                <span class="subdomain-suffix">.rgrok.rselbach.com</span>
-              </span>
-            </label>
-            <label class="field full">
-              <span class="label">API Token</span>
-              <input type="password" name="rgrok_token" autocomplete="off" data-rgrok-required>
-            </label>
-          </div>
-          <div class="form-actions">
-            <a class="btn btn-ghost" href="{{.ConfigForm.RgrokForm.Close}}">Cancel</a>
-            <button class="btn btn-primary" type="submit" data-rgrok-submit disabled>Setup</button>
-          </div>
-        </div>
-      </form>
-    </div>
-  </div>
-  {{end}}
   {{end}}
 
 	{{if .FormError}}<div class="inline-error" role="alert" data-form-error>{{.FormError}}</div>{{end}}
@@ -1968,47 +2073,198 @@
     const syncMessage = document.querySelector('[data-sync-message]');
     const syncCount = document.querySelector('[data-sync-count]');
 	const syncFill = document.querySelector('[data-sync-fill]');
-	const syncProgressBar = document.querySelector('[data-sync-progressbar]');
+    const syncProgressBar = document.querySelector('[data-sync-progressbar]');
     const syncCurrent = document.querySelector('[data-sync-current]');
     const syncTrace = document.querySelector('[data-sync-trace]');
+    const syncDetails = document.querySelector('[data-sync-details]');
+    const syncDetailsOpenButtons = Array.from(document.querySelectorAll('[data-sync-details-open]'));
+    const syncDetailsCloseButtons = Array.from(document.querySelectorAll('[data-sync-details-close]'));
+    const syncModalProgress = document.querySelector('[data-sync-modal-progress]');
+    const syncModalMessage = document.querySelector('[data-sync-modal-message]');
+    const syncModalCount = document.querySelector('[data-sync-modal-count]');
+    const syncModalFill = document.querySelector('[data-sync-modal-fill]');
+    const syncModalProgressBar = document.querySelector('[data-sync-modal-progressbar]');
+    const syncModalTrace = document.querySelector('[data-sync-modal-trace]');
+    const syncActivityComplete = document.querySelector('[data-sync-activity-complete]');
+    const syncActivityRemaining = document.querySelector('[data-sync-activity-remaining]');
+    const syncActivityList = document.querySelector('[data-sync-activity-list]');
+    const syncActivityEmpty = document.querySelector('[data-sync-activity-empty]');
+    const syncNewEvents = document.querySelector('[data-sync-new-events]');
     let syncPollTimer = null;
     let reloadWhenSyncFinishes = false;
+    let syncDetailsVisible = false;
+    let syncJobDone = false;
+    let syncEventSequence = 0;
+    let syncNewEventCount = 0;
+    const syncEventRows = new Map();
+
+    function setSyncProgressState(container, job) {
+      if (!container) return;
+      container.classList.remove('is-error', 'is-rate-limited', 'is-success');
+      if (job.error) container.classList.add('is-error');
+      if (job.rateLimited && !job.error) container.classList.add('is-rate-limited');
+      if (job.done && !job.error) container.classList.add('is-success');
+    }
 
     function setSyncProgress(job) {
       if (!syncProgress || !job) return;
-      syncProgress.classList.remove('is-hidden', 'is-error', 'is-rate-limited', 'is-success');
-      if (job.error) syncProgress.classList.add('is-error');
-      if (job.rateLimited && !job.error) syncProgress.classList.add('is-rate-limited');
-      if (job.done && !job.error) syncProgress.classList.add('is-success');
+      syncProgress.classList.remove('is-hidden');
+      setSyncProgressState(syncProgress, job);
+      setSyncProgressState(syncModalProgress, job);
       if (syncMessage) syncMessage.textContent = job.message || job.error || 'Sync running';
       if (syncCount) syncCount.textContent = String(job.processed || 0) + ' / ' + String(job.total || 0);
 	  if (syncFill) syncFill.style.width = String(job.percent || 0) + '%';
 	  if (syncProgressBar) syncProgressBar.setAttribute('aria-valuenow', String(job.percent || 0));
       if (syncCurrent) syncCurrent.textContent = job.current || '';
-		if (syncTrace) syncTrace.classList.toggle('is-hidden', !job.traceAvailable);
+	  if (syncModalMessage) syncModalMessage.textContent = job.message || job.error || 'Sync running';
+	  if (syncModalCount) syncModalCount.textContent = String(job.processed || 0) + ' / ' + String(job.total || 0);
+	  if (syncModalFill) syncModalFill.style.width = String(job.percent || 0) + '%';
+	  if (syncModalProgressBar) syncModalProgressBar.setAttribute('aria-valuenow', String(job.percent || 0));
+	  if (syncActivityComplete) syncActivityComplete.textContent = String(job.processed || 0) + ' completed';
+	  if (syncActivityRemaining) {
+		const remaining = Math.max((job.total || 0) - (job.processed || 0), 0);
+		syncActivityRemaining.textContent = String(remaining) + ' remaining';
+	  }
+	  if (syncTrace) syncTrace.classList.toggle('is-hidden', !job.traceAvailable);
+	  if (syncModalTrace) syncModalTrace.classList.toggle('is-hidden', !job.traceAvailable);
+	  for (const button of syncDetailsOpenButtons) button.classList.remove('is-hidden');
 		if (syncSubmit) syncSubmit.disabled = Boolean(job.running);
 		for (const button of document.querySelectorAll('form[method="post"] button[type="submit"]')) {
 		  if (button !== syncSubmit) button.disabled = Boolean(job.running);
 		}
+      syncJobDone = Boolean(job.done);
+    }
+
+    function syncOperationTitle(event) {
+      const verbs = { create: 'Create', update: 'Update', delete: 'Delete' };
+      const verb = verbs[event.operation] || event.operation || 'Process';
+      const resource = event.resourceType || 'resource';
+      return verb + ' ' + resource + ': ' + event.label;
+    }
+
+    function syncPhaseLabel(phase) {
+      const labels = { running: 'In progress', done: 'Done', failed: 'Failed', waiting: 'Waiting' };
+      return labels[phase] || phase;
+    }
+
+    function activityListAtBottom() {
+      if (!syncActivityList) return true;
+      return syncActivityList.scrollHeight - syncActivityList.scrollTop - syncActivityList.clientHeight < 24;
+    }
+
+    function updateNewEventsButton() {
+      if (!syncNewEvents) return;
+      syncNewEvents.classList.toggle('is-hidden', syncNewEventCount === 0);
+      syncNewEvents.textContent = syncNewEventCount === 1 ? '1 new update' : String(syncNewEventCount) + ' new updates';
+    }
+
+    function renderSyncEvents(events) {
+      if (!syncActivityList || !Array.isArray(events) || events.length === 0) return;
+      const followActivity = activityListAtBottom();
+      for (const event of events) {
+        syncEventSequence = Math.max(syncEventSequence, event.sequence || 0);
+        let row = syncEventRows.get(event.id);
+        if (!row) {
+          row = document.createElement('div');
+          row.className = 'sync-activity-row';
+          row.dataset.syncEvent = event.id;
+
+          const title = document.createElement('div');
+          title.className = 'sync-activity-title';
+          row.appendChild(title);
+
+          const state = document.createElement('div');
+          state.className = 'sync-activity-state';
+          row.appendChild(state);
+
+          const detail = document.createElement('div');
+          detail.className = 'sync-activity-detail';
+          row.appendChild(detail);
+
+          syncEventRows.set(event.id, row);
+          syncActivityList.appendChild(row);
+        }
+
+        row.classList.remove('is-running', 'is-done', 'is-failed', 'is-waiting');
+        row.classList.add('is-' + event.phase);
+        row.querySelector('.sync-activity-title').textContent = syncOperationTitle(event);
+        row.querySelector('.sync-activity-state').textContent = syncPhaseLabel(event.phase);
+        const detail = row.querySelector('.sync-activity-detail');
+        detail.textContent = event.detail || '';
+        detail.hidden = !event.detail;
+      }
+
+      if (syncActivityEmpty) syncActivityEmpty.hidden = syncEventRows.size > 0;
+      if (followActivity) {
+        syncActivityList.scrollTop = syncActivityList.scrollHeight;
+        syncNewEventCount = 0;
+      } else if (syncDetailsVisible) {
+        syncNewEventCount += events.length;
+      }
+      updateNewEventsButton();
+    }
+
+    function resetSyncActivity() {
+      syncEventSequence = 0;
+      syncNewEventCount = 0;
+      for (const row of syncEventRows.values()) row.remove();
+      syncEventRows.clear();
+      if (syncActivityEmpty) syncActivityEmpty.hidden = false;
+      updateNewEventsButton();
+    }
+
+    function openSyncDetails(refresh) {
+      if (!syncDetails) return;
+      syncDetails.classList.remove('is-hidden');
+      syncDetails.setAttribute('aria-hidden', 'false');
+      syncDetailsVisible = true;
+      for (const element of document.querySelectorAll('.topbar, .app, .footer')) element.setAttribute('inert', '');
+      const close = syncDetails.querySelector('[data-sync-details-close]');
+      if (close) close.focus();
+      if (refresh !== false && !syncPollTimer) pollSyncStatus();
+    }
+
+    function closeSyncDetails() {
+      if (!syncDetails || !syncDetailsVisible) return;
+      syncDetails.classList.add('is-hidden');
+      syncDetails.setAttribute('aria-hidden', 'true');
+      syncDetailsVisible = false;
+      for (const element of document.querySelectorAll('.topbar, .app, .footer')) element.removeAttribute('inert');
+      if (reloadWhenSyncFinishes && syncJobDone) {
+        window.location.reload();
+        return;
+      }
+      const returnFocus = syncDetailsOpenButtons.find(button => !button.classList.contains('is-hidden')) || syncSubmit;
+      if (returnFocus) returnFocus.focus();
+    }
+
+    function syncStatusURL() {
+      const statusURL = new URL('/sync/status', window.location.href);
+      statusURL.searchParams.set('environment', '{{.ActiveEnvironment.ID}}');
+      statusURL.searchParams.set('after', String(syncEventSequence));
+      return statusURL;
     }
 
     async function pollSyncStatus() {
+      syncPollTimer = null;
       try {
-        const response = await fetch('/sync/status', {
+        const response = await fetch(syncStatusURL(), {
           headers: { 'Accept': 'application/json' }
         });
         if (!response.ok) {
           throw new Error('sync status failed: ' + response.status);
         }
         const job = await response.json();
+        if (!job) return;
         setSyncProgress(job);
+        renderSyncEvents(job.events);
         if (job && job.running) {
           syncPollTimer = setTimeout(pollSyncStatus, 750);
           return;
         }
+        syncPollTimer = null;
         if (job && job.done && reloadWhenSyncFinishes) {
-          reloadWhenSyncFinishes = false;
-          window.location.reload();
+          if (!syncDetailsVisible) window.location.reload();
         }
       } catch (err) {
         console.error(err);
@@ -2022,9 +2278,13 @@
       syncForm.addEventListener('submit', async function (event) {
         event.preventDefault();
         if (syncPollTimer) clearTimeout(syncPollTimer);
+        syncPollTimer = null;
         reloadWhenSyncFinishes = true;
+        syncJobDone = false;
+        resetSyncActivity();
+        openSyncDetails(false);
         if (syncSubmit) syncSubmit.disabled = true;
-        setSyncProgress({ running: true, message: 'Starting sync', processed: 0, total: 0, percent: 0 });
+        setSyncProgress({ running: true, message: 'Starting sync for {{.ActiveEnvironment.Name}}', processed: 0, total: 0, percent: 0 });
         try {
           const response = await fetch(syncForm.action, {
             method: 'POST',
@@ -2039,6 +2299,7 @@
             throw new Error(job.error || job.message || 'sync could not start');
           }
           setSyncProgress(job);
+          renderSyncEvents(job.events);
           syncPollTimer = setTimeout(pollSyncStatus, 300);
         } catch (err) {
           console.error(err);
@@ -2052,19 +2313,33 @@
       pollSyncStatus();
     }
 
-    const rgrokForm = document.querySelector('[data-rgrok-form]');
-    if (rgrokForm) {
-      const submit = rgrokForm.querySelector('[data-rgrok-submit]');
-      const required = Array.from(rgrokForm.querySelectorAll('[data-rgrok-required]'));
-      function syncRgrokSubmit() {
-        if (!submit) return;
-        submit.disabled = required.some((control) => !control.value.trim());
-      }
-      for (const control of required) {
-        control.addEventListener('input', syncRgrokSubmit);
-      }
-      syncRgrokSubmit();
+    for (const button of syncDetailsOpenButtons) {
+      button.addEventListener('click', openSyncDetails);
     }
+    for (const button of syncDetailsCloseButtons) {
+      button.addEventListener('click', closeSyncDetails);
+    }
+    if (syncDetails) {
+      let syncMouseDownOnBackdrop = false;
+      syncDetails.addEventListener('mousedown', function (event) {
+        syncMouseDownOnBackdrop = event.target === syncDetails;
+      });
+      syncDetails.addEventListener('mouseup', function (event) {
+        if (syncMouseDownOnBackdrop && event.target === syncDetails) closeSyncDetails();
+        syncMouseDownOnBackdrop = false;
+      });
+    }
+    if (syncNewEvents) {
+      syncNewEvents.addEventListener('click', function () {
+        if (syncActivityList) syncActivityList.scrollTop = syncActivityList.scrollHeight;
+        syncNewEventCount = 0;
+        updateNewEventsButton();
+      });
+    }
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape' && syncDetailsVisible) closeSyncDetails();
+    });
+
   </script>
 </body>
 </html>

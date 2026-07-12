@@ -2,8 +2,10 @@ package web
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rsa"
 	"embed"
+	"encoding/base64"
 	"fmt"
 	"html/template"
 	"log"
@@ -85,11 +87,16 @@ type rgrokTunnelView struct {
 	PublicURL string
 }
 
-type rgrokFormView struct {
-	Name  string
-	Error string
-	Close string
+type rgrokApplicationIdentity struct {
+	profileID  string
+	privateKey ed25519.PrivateKey
 }
+
+var (
+	rgrokApplicationProfileID    string
+	rgrokApplicationPrivateSeed  string
+	rgrokReleaseIdentityRequired string
+)
 
 type flashMessage struct {
 	Kind    string
@@ -104,20 +111,34 @@ type formDraft struct {
 }
 
 type syncJobSnapshot struct {
-	ID             string `json:"id"`
-	Running        bool   `json:"running"`
-	Done           bool   `json:"done"`
-	Success        bool   `json:"success"`
-	TraceAvailable bool   `json:"traceAvailable"`
-	Total          int    `json:"total"`
-	Processed      int    `json:"processed"`
-	Percent        int    `json:"percent"`
-	Message        string `json:"message"`
-	Error          string `json:"error"`
-	Current        string `json:"current"`
-	RateLimited    bool   `json:"rateLimited"`
-	StartedAt      string `json:"startedAt"`
-	FinishedAt     string `json:"finishedAt,omitempty"`
+	ID              string         `json:"id"`
+	EnvironmentName string         `json:"environmentName"`
+	Running         bool           `json:"running"`
+	Done            bool           `json:"done"`
+	Success         bool           `json:"success"`
+	TraceAvailable  bool           `json:"traceAvailable"`
+	Total           int            `json:"total"`
+	Processed       int            `json:"processed"`
+	Percent         int            `json:"percent"`
+	Message         string         `json:"message"`
+	Error           string         `json:"error"`
+	Current         string         `json:"current"`
+	RateLimited     bool           `json:"rateLimited"`
+	StartedAt       string         `json:"startedAt"`
+	FinishedAt      string         `json:"finishedAt,omitempty"`
+	LatestSequence  int            `json:"latestSequence"`
+	Events          []syncJobEvent `json:"events,omitempty"`
+}
+
+type syncJobEvent struct {
+	Sequence     int    `json:"sequence"`
+	ID           string `json:"id"`
+	ResourceType string `json:"resourceType"`
+	ResourceID   string `json:"resourceID"`
+	Label        string `json:"label"`
+	Operation    string `json:"operation"`
+	Phase        string `json:"phase"`
+	Detail       string `json:"detail,omitempty"`
 }
 
 type statsView struct {
@@ -177,6 +198,8 @@ type appRowView struct {
 	SAMLTestURL            string
 	SCIMEnabled            bool
 	SCIMBaseURL            string
+	Active                 bool
+	OpenURL                string
 }
 
 type historyEntryView struct {
@@ -247,11 +270,9 @@ type appFormView struct {
 type configFormView struct {
 	Config             config
 	Close              string
-	RgrokSetupURL      string
 	IDPBaseURLValue    string
 	IDPBaseURLDisabled bool
 	Tunnel             *rgrokTunnelView
-	RgrokForm          *rgrokFormView
 	TunnelError        string
 }
 
@@ -262,50 +283,52 @@ type toolsFormView struct {
 }
 
 type pageData struct {
-	Tab               string
-	Flash             flashMessage
-	Stats             statsView
-	Users             []userRowView
-	Groups            []groupRowView
-	Apps              []appRowView
-	Pagination        *paginationView
-	Errors            []string
-	BaseURL           string
-	IDPBaseURL        string
-	SCIMEnabled       bool
-	UsersURL          string
-	GroupsURL         string
-	AppsURL           string
-	NewUserURL        string
-	NewGroupURL       string
-	NewAppURL         string
-	ConfigURL         string
-	ToolsURL          string
-	TraceURL          string
-	TraceCloseURL     string
-	ShowTrace         bool
-	HasTrace          bool
-	TraceContent      string
-	History           *historyView
-	UserForm          *userFormView
-	GroupForm         *groupFormView
-	AppForm           *appFormView
-	ConfigForm        *configFormView
-	ToolsForm         *toolsFormView
-	SyncJob           *syncJobSnapshot
-	ShowSetupGuide    bool
-	HasLocalUsers     bool
-	HasApps           bool
-	HasPublicIDP      bool
-	SCIMReady         bool
-	FormError         string
-	SyncApps          []app
-	SyncApp           app
+	Tab                    string
+	Flash                  flashMessage
+	Stats                  statsView
+	Users                  []userRowView
+	Groups                 []groupRowView
+	Apps                   []appRowView
+	Pagination             *paginationView
+	Errors                 []string
+	BaseURL                string
+	IDPBaseURL             string
+	SCIMEnabled            bool
+	UsersURL               string
+	GroupsURL              string
+	AppsURL                string
+	EnvironmentSettingsURL string
+	NewUserURL             string
+	NewGroupURL            string
+	NewAppURL              string
+	ConfigURL              string
+	ToolsURL               string
+	TraceURL               string
+	TraceCloseURL          string
+	ShowTrace              bool
+	HasTrace               bool
+	TraceContent           string
+	History                *historyView
+	UserForm               *userFormView
+	GroupForm              *groupFormView
+	AppForm                *appFormView
+	ConfigForm             *configFormView
+	ToolsForm              *toolsFormView
+	SyncJob                *syncJobSnapshot
+	ShowSetupGuide         bool
+	HasLocalUsers          bool
+	HasApps                bool
+	HasSCIMEnvironments    bool
+	HasPublicIDP           bool
+	FormError              string
+	Environments           []app
+	ActiveEnvironment      app
 }
 
 type RunOptions struct {
 	Debug        bool
 	DebugSecrets bool
+	browserOpen  browserOpener
 }
 
 type serverError struct {
@@ -339,10 +362,15 @@ func Run(options ...RunOptions) error {
 	if len(options) > 0 {
 		opts = options[0]
 	}
+	identity, err := loadRgrokApplicationIdentity()
+	if err != nil {
+		return err
+	}
 
 	port := strings.TrimSpace(os.Getenv("PORT"))
-	if port == "" {
-		port = "8080"
+	portSpecified := port != ""
+	if !portSpecified {
+		port = strconv.Itoa(defaultPort)
 	}
 
 	key, certDER, err := loadOrCreateSigningMaterial()
@@ -372,16 +400,20 @@ func Run(options ...RunOptions) error {
 		authCodes:    make(map[string]authCode),
 		accessTokens: make(map[string]accessToken),
 	}
-	addr := net.JoinHostPort("127.0.0.1", port)
-	listener, err := net.Listen("tcp", addr)
+	listener, err := listenForAdmin(defaultHost, port, !portSpecified)
 	if err != nil {
 		if closeErr := idpListener.Close(); closeErr != nil {
-			return fmt.Errorf("listen on %s: %w; close tunneled IDP listener: %v", addr, err, closeErr)
+			return fmt.Errorf("%w; close tunneled IDP listener: %v", err, closeErr)
 		}
-		return fmt.Errorf("listen on %s: %w", addr, err)
+		return err
 	}
-	go app.restoreSavedRgrokTunnel()
-	log.Printf("merged auth test service listening on http://%s", addr)
+	localURL, err := listenerURL(listener)
+	if err != nil {
+		adminCloseErr := listener.Close()
+		idpCloseErr := idpListener.Close()
+		return fmt.Errorf("%w; close admin listener: %v; close tunneled IDP listener: %v", err, adminCloseErr, idpCloseErr)
+	}
+	log.Printf("merged auth test service listening on %s", localURL)
 	if opts.Debug {
 		if _, err := fmt.Fprintln(os.Stdout, "RP debug logging enabled"); err != nil {
 			adminCloseErr := listener.Close()
@@ -405,14 +437,31 @@ func Run(options ...RunOptions) error {
 	go func() {
 		serveErrors <- serverError{name: "tunneled IDP", err: http.Serve(idpListener, app.idpRoutes())}
 	}()
+	if identity != nil {
+		go app.startAutomaticRgrokTunnel(*identity)
+	}
+	opener := opts.browserOpen
+	if opener == nil {
+		opener = openBrowser
+	}
+	if err := opener(localURL); err != nil {
+		log.Printf("warning: open browser at %s: %v", localURL, err)
+	}
 
 	result := <-serveErrors
 	other := idpListener
 	if result.name == "tunneled IDP" {
 		other = listener
 	}
-	if err := other.Close(); err != nil {
-		return fmt.Errorf("serve %s: %w; close other listener: %v", result.name, result.err, err)
+	listenerCloseErr := other.Close()
+	tunnelCloseErr := app.closeAutomaticRgrokTunnel()
+	switch {
+	case listenerCloseErr != nil && tunnelCloseErr != nil:
+		return fmt.Errorf("serve %s: %w; close other listener: %v; close rgrok tunnel: %v", result.name, result.err, listenerCloseErr, tunnelCloseErr)
+	case listenerCloseErr != nil:
+		return fmt.Errorf("serve %s: %w; close other listener: %v", result.name, result.err, listenerCloseErr)
+	case tunnelCloseErr != nil:
+		return fmt.Errorf("serve %s: %w; close rgrok tunnel: %v", result.name, result.err, tunnelCloseErr)
 	}
 	return fmt.Errorf("serve %s: %w", result.name, result.err)
 }
@@ -424,23 +473,42 @@ func (a *webApp) routes() http.Handler {
 	return mux
 }
 
-const syncAppCookieName = "scimtest_sync_app"
+const environmentCookieName = "scimtest_environment"
+const legacySyncAppCookieName = "scimtest_sync_app"
 
-func requestSyncAppID(r *http.Request, state appState) string {
-	if appID := strings.TrimSpace(r.FormValue("app")); appID != "" {
-		if selected, ok := appByID(state.Apps, appID); ok && selected.SCIMEnabled {
-			return appID
-		}
+func requestEnvironmentID(r *http.Request, state appState) string {
+	requested := strings.TrimSpace(r.FormValue("environment"))
+	if requested == "" {
+		requested = strings.TrimSpace(r.FormValue("app"))
 	}
-	if cookie, err := r.Cookie(syncAppCookieName); err == nil {
-		if selected, ok := appByID(state.Apps, strings.TrimSpace(cookie.Value)); ok && selected.SCIMEnabled {
+	if requested != "" {
+		if selected, ok := appByID(state.Apps, requested); ok {
+			return selected.ID
+		}
+		return ""
+	}
+
+	for _, cookieName := range []string{environmentCookieName, legacySyncAppCookieName} {
+		cookie, err := r.Cookie(cookieName)
+		if err != nil {
+			continue
+		}
+		if selected, ok := appByID(state.Apps, strings.TrimSpace(cookie.Value)); ok {
 			return selected.ID
 		}
 	}
-	for _, candidate := range state.Apps {
-		if candidate.SCIMEnabled {
-			return candidate.ID
-		}
+
+	if len(state.Apps) > 0 {
+		return state.Apps[0].ID
+	}
+	return ""
+}
+
+func requestSyncAppID(r *http.Request, state appState) string {
+	environmentID := requestEnvironmentID(r, state)
+	selected, ok := appByID(state.Apps, environmentID)
+	if ok && selected.SCIMEnabled {
+		return selected.ID
 	}
 	return ""
 }
@@ -449,11 +517,11 @@ func loadRequestState(r *http.Request) (appState, error) {
 	return loadState()
 }
 
-func rememberSyncApp(w http.ResponseWriter, appID string) {
-	if appID == "" {
+func rememberEnvironment(w http.ResponseWriter, environmentID string) {
+	if environmentID == "" {
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: syncAppCookieName, Value: appID, Path: "/", MaxAge: 365 * 24 * 60 * 60, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	http.SetCookie(w, &http.Cookie{Name: environmentCookieName, Value: environmentID, Path: "/", MaxAge: 365 * 24 * 60 * 60, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 }
 
 func (a *webApp) adminRoutes() http.Handler {
@@ -480,8 +548,6 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /apps/save", a.rejectWhileSyncing(a.handleAppSave))
 	mux.HandleFunc("POST /apps/{id}/delete", a.rejectWhileSyncing(a.handleAppDelete))
 	mux.HandleFunc("POST /config/save", a.rejectWhileSyncing(a.handleConfigSave))
-	mux.HandleFunc("POST /rgrok/setup", a.rejectWhileSyncing(a.handleRgrokSetup))
-	mux.HandleFunc("POST /rgrok/cancel", a.rejectWhileSyncing(a.handleRgrokCancel))
 	mux.HandleFunc("POST /tools/delete-all", a.rejectWhileSyncing(a.handleToolsDeleteAll))
 	mux.HandleFunc("POST /tools/clear-users-local", a.rejectWhileSyncing(a.handleToolsClearUsersLocal))
 	mux.HandleFunc("POST /tools/deactivate-all", a.rejectWhileSyncing(a.handleToolsDeactivateAll))
@@ -539,24 +605,18 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	globalState := state
-	syncAppID := requestSyncAppID(r, globalState)
-	var syncApp app
-	if syncAppID != "" {
-		syncApp, _ = appByID(globalState.Apps, syncAppID)
-		state, err = stateForApp(globalState, syncAppID)
+	environmentID := requestEnvironmentID(r, globalState)
+	var activeEnvironment app
+	if environmentID != "" {
+		activeEnvironment, _ = appByID(globalState.Apps, environmentID)
+		state, err = stateForApp(globalState, environmentID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		rememberSyncApp(w, syncAppID)
+		rememberEnvironment(w, environmentID)
 	} else {
 		state.Config.SCIMDisabled = true
-	}
-	var syncApps []app
-	for _, candidate := range globalState.Apps {
-		if candidate.SCIMEnabled {
-			syncApps = append(syncApps, candidate)
-		}
 	}
 
 	tab := normalizedTab(r.URL.Query().Get("tab"))
@@ -590,39 +650,41 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := pageData{
-		Tab:               tab,
-		Flash:             flash,
-		Stats:             buildStats(state),
-		Users:             users,
-		Groups:            groups,
-		Apps:              buildAppRows(state, a.effectiveIDPBaseURL(r, state), certificatePEM(a.certDER)),
-		Pagination:        pagination,
-		Errors:            buildErrorList(state),
-		BaseURL:           configuredBaseURL(state.Config.BaseURL),
-		IDPBaseURL:        a.effectiveIDPBaseURL(r, state),
-		SCIMEnabled:       scimEnabled(state),
-		UsersURL:          dashboardURL("users", nil),
-		GroupsURL:         dashboardURL("groups", nil),
-		AppsURL:           dashboardURL("apps", nil),
-		NewUserURL:        dashboardURLWithPage("users", page, pageSize, search, map[string]string{"modal": "user"}),
-		NewGroupURL:       dashboardURLWithPage("groups", page, pageSize, search, map[string]string{"modal": "group"}),
-		NewAppURL:         dashboardURL("apps", map[string]string{"modal": "app"}),
-		ConfigURL:         dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"modal": "config"}),
-		ToolsURL:          dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"modal": "tools"}),
-		TraceURL:          dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"showTrace": "1"}),
-		TraceCloseURL:     dashboardURLWithPage(tab, page, pageSize, search, nil),
-		ShowTrace:         showTrace && a.hasTrace(syncAppID),
-		HasTrace:          a.hasTrace(syncAppID),
-		TraceContent:      a.traceContent(syncAppID),
-		SyncJob:           a.currentSyncJob(syncAppID),
-		ShowSetupGuide:    len(state.Users) == 0 || len(state.Apps) == 0,
-		HasLocalUsers:     len(state.Users) > 0,
-		HasApps:           len(state.Apps) > 0,
-		HasPublicIDP:      a.rgrokPublicURL() != "" || strings.TrimSpace(state.Config.IDPBaseURL) != "",
-		SCIMReady:         syncAppID != "" && strings.TrimSpace(syncApp.SCIMBaseURL) != "" && strings.TrimSpace(syncApp.SCIMBearerToken) != "",
-		SyncApps:          syncApps,
-		SyncApp:           syncApp,
+		Tab:                    tab,
+		Flash:                  flash,
+		Stats:                  buildStats(state),
+		Users:                  users,
+		Groups:                 groups,
+		Apps:                   buildAppRows(state, environmentID, a.effectiveIDPBaseURL(r, state), certificatePEM(a.certDER)),
+		Pagination:             pagination,
+		Errors:                 buildErrorList(state),
+		BaseURL:                configuredBaseURL(state.Config.BaseURL),
+		IDPBaseURL:             a.effectiveIDPBaseURL(r, state),
+		SCIMEnabled:            activeEnvironment.SCIMEnabled,
+		UsersURL:               dashboardURL("users", nil),
+		GroupsURL:              dashboardURL("groups", nil),
+		AppsURL:                dashboardURL("apps", nil),
+		EnvironmentSettingsURL: dashboardURL("apps", map[string]string{"modal": "app", "id": environmentID}),
+		NewUserURL:             dashboardURLWithPage("users", page, pageSize, search, map[string]string{"modal": "user"}),
+		NewGroupURL:            dashboardURLWithPage("groups", page, pageSize, search, map[string]string{"modal": "group"}),
+		NewAppURL:              dashboardURL("apps", map[string]string{"modal": "app"}),
+		ConfigURL:              dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"modal": "config"}),
+		ToolsURL:               dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"modal": "tools"}),
+		TraceURL:               dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"showTrace": "1"}),
+		TraceCloseURL:          dashboardURLWithPage(tab, page, pageSize, search, nil),
+		ShowTrace:              showTrace && a.hasTrace(environmentID),
+		HasTrace:               a.hasTrace(environmentID),
+		TraceContent:           a.traceContent(environmentID),
+		SyncJob:                a.currentSyncJob(environmentID),
+		ShowSetupGuide:         len(state.Users) == 0 || len(state.Apps) == 0,
+		HasLocalUsers:          len(state.Users) > 0,
+		HasApps:                len(state.Apps) > 0,
+		HasSCIMEnvironments:    scimEnabled(globalState),
+		HasPublicIDP:           a.rgrokPublicURL() != "" || strings.TrimSpace(state.Config.IDPBaseURL) != "",
+		Environments:           globalState.Apps,
+		ActiveEnvironment:      activeEnvironment,
 	}
+	scopePageDataURLs(&data, environmentID)
 	if !data.SCIMEnabled {
 		data.Errors = nil
 		data.ShowTrace = false
@@ -655,7 +717,7 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 			data.AppForm = form
 		}
 	case "config":
-		data.ConfigForm = a.buildConfigFormView(globalState.Config, tab, page, pageSize, search, r.URL.Query())
+		data.ConfigForm = a.buildConfigFormView(globalState.Config, tab, page, pageSize, search)
 	case "tools":
 		data.ToolsForm = &toolsFormView{Close: dashboardURLWithPage(tab, page, pageSize, search, nil), Count: "10"}
 	}
@@ -663,6 +725,7 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		applyFormDraft(&data, *draft)
 		data.FormError = draft.Error
 	}
+	scopePageDataURLs(&data, environmentID)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplate.ExecuteTemplate(w, "index.html", data); err != nil {
@@ -981,8 +1044,7 @@ func (a *webApp) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 	state.Config = config{
 		IDPBaseURL:            idpBaseURL,
 		TrustForwardedHeaders: r.FormValue("trust_forwarded_headers") == "on",
-		RgrokName:             state.Config.RgrokName,
-		RgrokToken:            state.Config.RgrokToken,
+		RgrokInstanceID:       state.Config.RgrokInstanceID,
 		SigningPrivateKeyPEM:  state.Config.SigningPrivateKeyPEM,
 		SigningCertificatePEM: state.Config.SigningCertificatePEM,
 	}
@@ -998,189 +1060,67 @@ func (a *webApp) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: "config saved"})
 }
 
-func (a *webApp) handleRgrokSetup(w http.ResponseWriter, r *http.Request) {
-	tab := normalizedTab(r.FormValue("tab"))
-	name := normalizeRgrokName(r.FormValue("rgrok_name"))
-	token := strings.TrimSpace(r.FormValue("rgrok_token"))
-
+func (a *webApp) startAutomaticRgrokTunnel(identity rgrokApplicationIdentity) {
 	a.rgrokLifecycleMu.Lock()
 	defer a.rgrokLifecycleMu.Unlock()
 
-	a.rgrokMu.Lock()
-	tunnelExists := a.rgrokTunnel != nil
-	a.rgrokMu.Unlock()
-	if tunnelExists {
-		redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), map[string]string{"modal": "config"}), flashMessage{Kind: "success", Message: "tunnel already established"})
+	instanceID, err := ensureRgrokInstanceID()
+	if err != nil {
+		a.setRgrokError(fmt.Sprintf("load rgrok instance identity: %v", err))
+		log.Printf("start rgrok tunnel: load instance identity: %v", err)
 		return
 	}
-	if err := validateRgrokSetup(name, token, a.localPort); err != nil {
-		a.redirectRgrokFormError(w, r, tab, name, err)
-		return
-	}
-
 	starter := a.rgrokStart
 	if starter == nil {
 		starter = startRgrokTunnel
 	}
 	started, err := startRgrokWithTimeout(starter, rgrokclient.Config{
-		ServerBaseURL: "https://rgrok.rselbach.com",
-		Token:         token,
-		Name:          name,
-		LocalPort:     a.localPort,
+		ServerBaseURL:         "https://rgrok.rselbach.com",
+		ApplicationProfileID:  identity.profileID,
+		InstanceID:            instanceID,
+		ApplicationPrivateKey: identity.privateKey,
+		LocalPort:             a.localPort,
 	}, 20*time.Second)
 	if err != nil {
-		a.redirectRgrokFormError(w, r, tab, name, fmt.Errorf("set up rgrok tunnel: %w", err))
+		a.setRgrokError(fmt.Sprintf("start automatic tunnel: %v", err))
+		log.Printf("start rgrok tunnel: %v", err)
 		return
 	}
 	if started == nil || started.Tunnel == nil || strings.TrimSpace(started.PublicURL) == "" {
-		a.redirectRgrokFormError(w, r, tab, name, fmt.Errorf("set up rgrok tunnel: rgrok did not return a public URL"))
+		err := fmt.Errorf("rgrok did not return a public URL")
+		if started != nil && started.Tunnel != nil {
+			if closeErr := started.Tunnel.Close(); closeErr != nil {
+				err = fmt.Errorf("%w; close tunnel: %v", err, closeErr)
+			}
+		}
+		a.setRgrokError(err.Error())
+		log.Printf("start rgrok tunnel: %v", err)
 		return
 	}
 
 	publicURL := strings.TrimRight(strings.TrimSpace(started.PublicURL), "/")
-	if err := a.saveRgrokConfig(name, token, publicURL); err != nil {
-		if closeErr := started.Tunnel.Close(); closeErr != nil {
-			err = fmt.Errorf("%w; close tunnel: %v", err, closeErr)
-		}
-		a.redirectRgrokFormError(w, r, tab, name, fmt.Errorf("save rgrok tunnel config: %w", err))
-		return
-	}
 	a.rgrokMu.Lock()
 	a.rgrokTunnel = &activeRgrokTunnel{
-		Name:      name,
 		PublicURL: publicURL,
 		Tunnel:    started.Tunnel,
 	}
 	a.rgrokLastError = ""
 	a.rgrokMu.Unlock()
-	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), map[string]string{"modal": "config"}), flashMessage{Kind: "success", Message: "tunnel established"})
+	log.Printf("rgrok tunnel established at %s", publicURL)
 }
 
-func (a *webApp) handleRgrokCancel(w http.ResponseWriter, r *http.Request) {
-	tab := normalizedTab(r.FormValue("tab"))
+func (a *webApp) closeAutomaticRgrokTunnel() error {
 	a.rgrokLifecycleMu.Lock()
 	defer a.rgrokLifecycleMu.Unlock()
 
-	if err := a.closeActiveRgrokTunnel(); err != nil {
-		redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), map[string]string{"modal": "config"}), flashMessage{Kind: "error", Message: fmt.Sprintf("disconnect tunnel: %v", err)})
-		return
-	}
-	if err := a.clearRgrokConfig(); err != nil {
-		redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), map[string]string{"modal": "config"}), flashMessage{Kind: "error", Message: fmt.Sprintf("clear tunnel config: %v", err)})
-		return
-	}
-	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), map[string]string{"modal": "config"}), flashMessage{Kind: "success", Message: "tunnel disconnected"})
-}
-
-func (a *webApp) closeActiveRgrokTunnel() error {
 	a.rgrokMu.Lock()
 	tunnel := a.rgrokTunnel
 	a.rgrokTunnel = nil
-	a.rgrokLastError = ""
 	a.rgrokMu.Unlock()
-
 	if tunnel == nil || tunnel.Tunnel == nil {
 		return nil
 	}
 	return tunnel.Tunnel.Close()
-}
-
-func (a *webApp) restoreSavedRgrokTunnel() {
-	a.rgrokLifecycleMu.Lock()
-	defer a.rgrokLifecycleMu.Unlock()
-
-	state, err := loadState()
-	if err != nil {
-		a.setRgrokError(fmt.Sprintf("load saved tunnel configuration: %v", err))
-		log.Printf("restore rgrok tunnel: load state: %v", err)
-		return
-	}
-	name := normalizeRgrokName(state.Config.RgrokName)
-	token := strings.TrimSpace(state.Config.RgrokToken)
-	if name == "" || token == "" {
-		return
-	}
-	if err := validateRgrokSetup(name, token, a.localPort); err != nil {
-		a.setRgrokError(err.Error())
-		log.Printf("restore rgrok tunnel: %v", err)
-		return
-	}
-	starter := a.rgrokStart
-	if starter == nil {
-		starter = startRgrokTunnel
-	}
-	started, err := startRgrokWithTimeout(starter, rgrokclient.Config{
-		ServerBaseURL: "https://rgrok.rselbach.com",
-		Token:         token,
-		Name:          name,
-		LocalPort:     a.localPort,
-	}, 20*time.Second)
-	if err != nil {
-		a.setRgrokError(err.Error())
-		log.Printf("restore rgrok tunnel: %v", err)
-		return
-	}
-	if started == nil || started.Tunnel == nil || strings.TrimSpace(started.PublicURL) == "" {
-		a.setRgrokError("rgrok did not return a public URL")
-		log.Printf("restore rgrok tunnel: rgrok did not return a public URL")
-		return
-	}
-
-	publicURL := strings.TrimRight(strings.TrimSpace(started.PublicURL), "/")
-	a.rgrokMu.Lock()
-	tunnelExists := a.rgrokTunnel != nil
-	a.rgrokMu.Unlock()
-	if tunnelExists {
-		if err := started.Tunnel.Close(); err != nil {
-			log.Printf("restore rgrok tunnel: close duplicate tunnel: %v", err)
-		}
-		return
-	}
-	if err := a.saveRgrokConfig(name, token, publicURL); err != nil {
-		a.setRgrokError(fmt.Sprintf("save public URL: %v", err))
-		log.Printf("restore rgrok tunnel: save public URL: %v", err)
-		if closeErr := started.Tunnel.Close(); closeErr != nil {
-			log.Printf("restore rgrok tunnel: close after save failure: %v", closeErr)
-		}
-		return
-	}
-	a.rgrokMu.Lock()
-	a.rgrokTunnel = &activeRgrokTunnel{
-		Name:      name,
-		PublicURL: publicURL,
-		Tunnel:    started.Tunnel,
-	}
-	a.rgrokLastError = ""
-	a.rgrokMu.Unlock()
-	log.Printf("restored rgrok tunnel at %s", publicURL)
-}
-
-func (a *webApp) saveRgrokConfig(name, token, publicURL string) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	state, err := loadState()
-	if err != nil {
-		return err
-	}
-	state.Config.RgrokName = name
-	state.Config.RgrokToken = token
-	state.Config.IDPBaseURL = strings.TrimRight(strings.TrimSpace(publicURL), "/")
-	return saveState(state)
-}
-
-func (a *webApp) clearRgrokConfig() error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	state, err := loadState()
-	if err != nil {
-		return err
-	}
-	state.Config.RgrokName = ""
-	state.Config.RgrokToken = ""
-	state.Config.IDPBaseURL = ""
-	return saveState(state)
 }
 
 func startRgrokTunnel(ctx context.Context, cfg rgrokclient.Config) (*startedRgrokTunnel, error) {
@@ -1232,38 +1172,39 @@ func startedRgrokTunnelWithCancel(started *startedRgrokTunnel, cancel context.Ca
 	return started
 }
 
-var rgrokNamePattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+var rgrokApplicationProfilePattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
-func normalizeRgrokName(value string) string {
-	value = strings.TrimSpace(strings.ToLower(value))
-	value = strings.TrimPrefix(value, "https://")
-	value = strings.TrimPrefix(value, "http://")
-	value = strings.TrimSuffix(value, ".rgrok.rselbach.com")
-	return strings.Trim(value, ".")
+func loadRgrokApplicationIdentity() (*rgrokApplicationIdentity, error) {
+	profileID := strings.TrimSpace(rgrokApplicationProfileID)
+	encodedSeed := strings.TrimSpace(rgrokApplicationPrivateSeed)
+	required := strings.EqualFold(strings.TrimSpace(rgrokReleaseIdentityRequired), "true")
+	if profileID == "" && encodedSeed == "" && !required {
+		return nil, nil
+	}
+	if !rgrokApplicationProfilePattern.MatchString(profileID) {
+		return nil, fmt.Errorf("rgrok application profile id must be 32 lowercase hexadecimal characters")
+	}
+	if encodedSeed == "" {
+		return nil, fmt.Errorf("rgrok application private seed is required")
+	}
+	seed, err := base64.StdEncoding.DecodeString(encodedSeed)
+	if err != nil {
+		return nil, fmt.Errorf("decode rgrok application private seed: invalid base64")
+	}
+	if len(seed) != ed25519.SeedSize {
+		return nil, fmt.Errorf("rgrok application private seed must decode to %d bytes", ed25519.SeedSize)
+	}
+	return &rgrokApplicationIdentity{
+		profileID:  profileID,
+		privateKey: ed25519.NewKeyFromSeed(seed),
+	}, nil
 }
 
-func validateRgrokSetup(name, token string, localPort int) error {
-	if name == "" {
-		return fmt.Errorf("name is required")
-	}
-	if !rgrokNamePattern.MatchString(name) {
-		return fmt.Errorf("name must be a valid subdomain using lowercase letters, numbers, and hyphens")
-	}
-	if token == "" {
-		return fmt.Errorf("API token is required")
-	}
-	if localPort == 0 {
-		return fmt.Errorf("local web port is not available for rgrok")
-	}
-	return nil
-}
-
-func (a *webApp) buildConfigFormView(cfg config, tab string, page int, pageSize int, search string, query url.Values) *configFormView {
+func (a *webApp) buildConfigFormView(cfg config, tab string, page int, pageSize int, search string) *configFormView {
 	closeURL := dashboardURLWithPage(tab, page, pageSize, search, nil)
 	form := &configFormView{
 		Config:          cfg,
 		Close:           closeURL,
-		RgrokSetupURL:   dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"modal": "config", "rgrok": "1"}),
 		IDPBaseURLValue: cfg.IDPBaseURL,
 		TunnelError:     a.rgrokError(),
 	}
@@ -1272,27 +1213,7 @@ func (a *webApp) buildConfigFormView(cfg config, tab string, page int, pageSize 
 		form.IDPBaseURLValue = tunnel.PublicURL
 		form.IDPBaseURLDisabled = true
 	}
-	if query.Get("rgrok") == "1" {
-		formName := normalizeRgrokName(query.Get("rgrok_name"))
-		if formName == "" {
-			formName = normalizeRgrokName(cfg.RgrokName)
-		}
-		form.RgrokForm = &rgrokFormView{
-			Name:  formName,
-			Error: query.Get("rgrok_error"),
-			Close: dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"modal": "config"}),
-		}
-	}
 	return form
-}
-
-func (a *webApp) redirectRgrokFormError(w http.ResponseWriter, r *http.Request, tab, name string, err error) {
-	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), map[string]string{
-		"modal":       "config",
-		"rgrok":       "1",
-		"rgrok_name":  name,
-		"rgrok_error": err.Error(),
-	}), flashMessage{})
 }
 
 func (a *webApp) effectiveIDPBaseURL(r *http.Request, state appState) string {
@@ -1346,14 +1267,15 @@ func (a *webApp) handleSync(w http.ResponseWriter, r *http.Request) {
 	}
 	appID := requestSyncAppID(r, state)
 	if appID == "" {
-		a.respondSyncStartError(w, r, tab, fmt.Errorf("select a sync-enabled app"))
+		a.respondSyncStartError(w, r, tab, fmt.Errorf("SCIM is not enabled for the active environment"))
 		return
 	}
+	activeEnvironment, _ := appByID(state.Apps, appID)
 	if job := a.currentSyncJob(appID); job != nil && job.Running {
 		a.respondSyncStartError(w, r, tab, fmt.Errorf("sync already running"))
 		return
 	}
-	job, err := a.startSyncJob(appID)
+	job, err := a.startSyncJob(appID, activeEnvironment.Name)
 	if err != nil {
 		a.respondSyncStartError(w, r, tab, err)
 		return
@@ -1374,7 +1296,25 @@ func (a *webApp) handleSyncStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, a.currentSyncJob(requestSyncAppID(r, state)))
+	after, err := syncEventSequence(r.URL.Query().Get("after"))
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, a.currentSyncJobAfter(requestSyncAppID(r, state), after))
+}
+
+func syncEventSequence(value string) (int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	sequence, err := strconv.Atoi(value)
+	if err != nil || sequence < 0 {
+		return 0, fmt.Errorf("sync event sequence must be a non-negative integer")
+	}
+	return sequence, nil
 }
 
 func (a *webApp) respondSyncStartError(w http.ResponseWriter, r *http.Request, tab string, err error) {
@@ -1387,7 +1327,7 @@ func (a *webApp) respondSyncStartError(w http.ResponseWriter, r *http.Request, t
 	a.redirectError(w, r, tab, err)
 }
 
-func (a *webApp) startSyncJob(appID string) (*syncJobSnapshot, error) {
+func (a *webApp) startSyncJob(appID string, environmentName string) (*syncJobSnapshot, error) {
 	a.syncJobMu.Lock()
 	defer a.syncJobMu.Unlock()
 
@@ -1399,10 +1339,11 @@ func (a *webApp) startSyncJob(appID string) (*syncJobSnapshot, error) {
 	}
 
 	job := &syncJobSnapshot{
-		ID:        strconvFormatInt(time.Now().UnixNano()),
-		Running:   true,
-		Message:   "Starting sync",
-		StartedAt: time.Now().UTC().Format(time.RFC3339),
+		ID:              strconvFormatInt(time.Now().UnixNano()),
+		EnvironmentName: environmentName,
+		Running:         true,
+		Message:         "Starting sync for " + environmentName,
+		StartedAt:       time.Now().UTC().Format(time.RFC3339),
 	}
 	a.syncJobs[appID] = job
 	go a.runSyncJob(job.ID, appID)
@@ -1435,7 +1376,7 @@ func (a *webApp) runSyncJob(id string, appID string) {
 	}
 
 	mergeAppSyncState(&state, appID, result.State)
-	appendOperationLogs(&state, result.Traces)
+	appendOperationLogs(&state, appID, result.Traces)
 	purgeFullySyncedDeletions(&state)
 	if err := saveState(state); err != nil {
 		a.finishSyncJob(appID, id, false, err.Error(), len(result.Traces) > 0)
@@ -1459,6 +1400,19 @@ func (a *webApp) updateSyncJobProgress(appID string, id string, progress syncPro
 	job.Percent = syncProgressPercent(progress.Processed, progress.Total, false)
 	if progress.Label != "" {
 		job.Current = strings.TrimSpace(strings.Join([]string{progress.Operation, progress.ResourceType, progress.Label}, " "))
+		if progress.Phase != "" {
+			job.LatestSequence++
+			job.Events = append(job.Events, syncJobEvent{
+				Sequence:     job.LatestSequence,
+				ID:           progress.ResourceType + ":" + progress.ResourceID,
+				ResourceType: progress.ResourceType,
+				ResourceID:   progress.ResourceID,
+				Label:        progress.Label,
+				Operation:    progress.Operation,
+				Phase:        progress.Phase,
+				Detail:       progress.Detail,
+			})
+		}
 	}
 	job.RateLimited = progress.RateLimited
 	if progress.Status != "" {
@@ -1494,12 +1448,31 @@ func (a *webApp) currentSyncJob(appID string) *syncJobSnapshot {
 	return cloneSyncJob(a.syncJobs[appID])
 }
 
+func (a *webApp) currentSyncJobAfter(appID string, sequence int) *syncJobSnapshot {
+	a.syncJobMu.Lock()
+	defer a.syncJobMu.Unlock()
+
+	job := cloneSyncJob(a.syncJobs[appID])
+	if job == nil || sequence == 0 {
+		return job
+	}
+	events := make([]syncJobEvent, 0, len(job.Events))
+	for _, event := range job.Events {
+		if event.Sequence > sequence {
+			events = append(events, event)
+		}
+	}
+	job.Events = events
+	return job
+}
+
 func cloneSyncJob(job *syncJobSnapshot) *syncJobSnapshot {
 	if job == nil {
 		return nil
 	}
 
 	cloned := *job
+	cloned.Events = append([]syncJobEvent(nil), job.Events...)
 	return &cloned
 }
 
@@ -1537,6 +1510,10 @@ func (a *webApp) handleImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	appID := requestSyncAppID(r, state)
+	if appID == "" {
+		a.redirectError(w, r, tab, fmt.Errorf("SCIM is not enabled for the active environment"))
+		return
+	}
 	projected, err := stateForApp(state, appID)
 	if err != nil {
 		a.redirectError(w, r, tab, err)
@@ -1554,7 +1531,7 @@ func (a *webApp) handleImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mergeAppImportState(&state, appID, result.State)
-	appendOperationLogs(&state, result.Traces)
+	appendOperationLogs(&state, appID, result.Traces)
 	purgeFullySyncedDeletions(&state)
 	if err := saveState(state); err != nil {
 		a.redirectError(w, r, tab, err)
@@ -1578,6 +1555,10 @@ func (a *webApp) handleReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	appID := requestSyncAppID(r, state)
+	if appID == "" {
+		a.redirectError(w, r, tab, fmt.Errorf("SCIM is not enabled for the active environment"))
+		return
+	}
 	if _, err := stateForApp(state, appID); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
@@ -1783,7 +1764,7 @@ const formDraftCookieName = "scimtest_form_draft"
 func (a *webApp) redirectFormError(w http.ResponseWriter, r *http.Request, tab string, modal string, err error) {
 	values := make(url.Values, len(r.Form))
 	for key, entries := range r.Form {
-		if key == "bearer_token" || key == "oidc_client_secret" || key == "rgrok_token" {
+		if key == "bearer_token" || key == "oidc_client_secret" {
 			continue
 		}
 		values[key] = append([]string(nil), entries...)
@@ -1916,20 +1897,20 @@ func (a *webApp) traceContent(appID string) string {
 func buildStats(state appState) statsView {
 	stats := statsView{Apps: len(state.Apps)}
 	for _, u := range state.Users {
-		if !scimEnabled(state) && u.Deleted {
+		if state.Config.SCIMDisabled && u.Deleted {
 			continue
 		}
 		stats.Users++
-		if scimEnabled(state) && u.Dirty {
+		if !state.Config.SCIMDisabled && u.Dirty {
 			stats.DirtyUsers++
 		}
 	}
 	for _, g := range state.Groups {
-		if !scimEnabled(state) && g.Deleted {
+		if state.Config.SCIMDisabled && g.Deleted {
 			continue
 		}
 		stats.Groups++
-		if scimEnabled(state) && g.Dirty {
+		if !state.Config.SCIMDisabled && g.Dirty {
 			stats.DirtyGroups++
 		}
 	}
@@ -1948,7 +1929,7 @@ func scimEnabled(state appState) bool {
 func buildUserRows(state appState, tab string, page int, pageSize int, search string) []userRowView {
 	rows := make([]userRowView, 0, len(state.Users))
 	for _, u := range state.Users {
-		if !scimEnabled(state) && u.Deleted {
+		if state.Config.SCIMDisabled && u.Deleted {
 			continue
 		}
 		remoteID := u.RemoteID
@@ -1974,7 +1955,7 @@ func buildUserRows(state appState, tab string, page int, pageSize int, search st
 func buildGroupRows(state appState, tab string, page int, pageSize int, search string) []groupRowView {
 	rows := make([]groupRowView, 0, len(state.Groups))
 	for _, g := range state.Groups {
-		if !scimEnabled(state) && g.Deleted {
+		if state.Config.SCIMDisabled && g.Deleted {
 			continue
 		}
 		remoteID := g.RemoteID
@@ -2030,7 +2011,7 @@ func filterGroupRows(rows []groupRowView, query string) []groupRowView {
 	return filtered
 }
 
-func buildAppRows(state appState, base string, certPEM string) []appRowView {
+func buildAppRows(state appState, environmentID string, base string, certPEM string) []appRowView {
 	rows := make([]appRowView, 0, len(state.Apps))
 	for _, app := range state.Apps {
 		samlIDPEntityID := base + "/saml/" + app.Slug + "/metadata"
@@ -2055,6 +2036,8 @@ func buildAppRows(state appState, base string, certPEM string) []appRowView {
 			SAMLSPAudience:         samlAudience,
 			SCIMEnabled:            app.SCIMEnabled,
 			SCIMBaseURL:            app.SCIMBaseURL,
+			Active:                 app.ID == environmentID,
+			OpenURL:                addEnvironmentToURL(dashboardURL("users", nil), app.ID),
 		}
 		if row.SupportsOIDC {
 			row.OIDCDiscovery = base + "/oidc/" + app.Slug + "/.well-known/openid-configuration"
@@ -2270,7 +2253,7 @@ func buildGroupFormView(state appState, tab string, page int, pageSize int, sear
 	for _, u := range state.Users {
 		_, checked := selected[u.ID]
 		metaParts := []string{u.Email, activeStatus(u)}
-		if scimEnabled(state) {
+		if !state.Config.SCIMDisabled {
 			metaParts = append(metaParts, syncStatus(u))
 		}
 		meta := strings.TrimSpace(strings.Join(metaParts, " • "))
@@ -2287,7 +2270,7 @@ func buildGroupFormView(state appState, tab string, page int, pageSize int, sear
 
 func buildAppFormView(state appState, tab string, id string, baseURL string, certPEM string) (*appFormView, error) {
 	form := &appFormView{
-		Title: "Add App",
+		Title: "Add Environment",
 		App: app{
 			Protocol:               "oidc",
 			SAMLNameIDField:        defaultSAMLNameIDField,
@@ -2305,7 +2288,7 @@ func buildAppFormView(state appState, tab string, id string, baseURL string, cer
 	if !ok {
 		return nil, fmt.Errorf("app %s not found", id)
 	}
-	form.Title = "Edit App"
+	form.Title = "Edit Environment"
 	form.App = existing
 	form.App.SAMLNameIDField = normalizeSAMLNameIDField(form.App.SAMLNameIDField)
 	form.App.SAMLNameIDFormat = samlNameIDFormatForField(form.App.SAMLNameIDField)
@@ -2669,8 +2652,81 @@ func dashboardURL(tab string, extra map[string]string) string {
 	return "/?" + values.Encode()
 }
 
+func scopePageDataURLs(data *pageData, environmentID string) {
+	if environmentID == "" {
+		return
+	}
+	urls := []*string{
+		&data.UsersURL,
+		&data.GroupsURL,
+		&data.AppsURL,
+		&data.EnvironmentSettingsURL,
+		&data.NewUserURL,
+		&data.NewGroupURL,
+		&data.NewAppURL,
+		&data.ConfigURL,
+		&data.ToolsURL,
+		&data.TraceURL,
+		&data.TraceCloseURL,
+	}
+	for _, target := range urls {
+		*target = addEnvironmentToURL(*target, environmentID)
+	}
+	for i := range data.Users {
+		data.Users[i].EditURL = addEnvironmentToURL(data.Users[i].EditURL, environmentID)
+		data.Users[i].HistoryURL = addEnvironmentToURL(data.Users[i].HistoryURL, environmentID)
+	}
+	for i := range data.Groups {
+		data.Groups[i].EditURL = addEnvironmentToURL(data.Groups[i].EditURL, environmentID)
+		data.Groups[i].HistoryURL = addEnvironmentToURL(data.Groups[i].HistoryURL, environmentID)
+	}
+	for i := range data.Apps {
+		data.Apps[i].EditURL = addEnvironmentToURL(data.Apps[i].EditURL, environmentID)
+	}
+	if data.Pagination != nil {
+		data.Pagination.PreviousURL = addEnvironmentToURL(data.Pagination.PreviousURL, environmentID)
+		data.Pagination.NextURL = addEnvironmentToURL(data.Pagination.NextURL, environmentID)
+	}
+	if data.History != nil {
+		data.History.Close = addEnvironmentToURL(data.History.Close, environmentID)
+	}
+	if data.UserForm != nil {
+		data.UserForm.Close = addEnvironmentToURL(data.UserForm.Close, environmentID)
+	}
+	if data.GroupForm != nil {
+		data.GroupForm.Close = addEnvironmentToURL(data.GroupForm.Close, environmentID)
+	}
+	if data.AppForm != nil {
+		data.AppForm.Close = addEnvironmentToURL(data.AppForm.Close, environmentID)
+	}
+	if data.ConfigForm != nil {
+		data.ConfigForm.Close = addEnvironmentToURL(data.ConfigForm.Close, environmentID)
+	}
+	if data.ToolsForm != nil {
+		data.ToolsForm.Close = addEnvironmentToURL(data.ToolsForm.Close, environmentID)
+	}
+}
+
+func addEnvironmentToURL(rawURL string, environmentID string) string {
+	if rawURL == "" || environmentID == "" {
+		return rawURL
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.IsAbs() || parsed.Path != "/" {
+		return rawURL
+	}
+	values := parsed.Query()
+	values.Set("environment", environmentID)
+	parsed.RawQuery = values.Encode()
+	return parsed.String()
+}
+
 func redirectWithFlash(w http.ResponseWriter, r *http.Request, location string, flash flashMessage) {
 	setFlashCookie(w, flash)
+	parsed, err := url.Parse(location)
+	if err == nil && parsed.Query().Get("environment") == "" {
+		location = addEnvironmentToURL(location, strings.TrimSpace(r.FormValue("environment")))
+	}
 	http.Redirect(w, r, location, http.StatusSeeOther)
 }
 

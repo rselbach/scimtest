@@ -32,14 +32,15 @@
                     <a class="icon-btn" href="{{.EditURL}}" title="Edit group" aria-label="Edit group">
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M10 4l2 2"/></svg>
                     </a>
-                    {{if $.SCIMEnabled}}
+                    {{if $.HasSCIMEnvironments}}
                     <a class="icon-btn" href="{{.HistoryURL}}" title="Group history" aria-label="Group history">
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2 1.5"/></svg>
                     </a>
                     {{end}}
                     {{if .Deleted}}
-                    {{if $.SCIMEnabled}}
+                    {{if $.HasSCIMEnvironments}}
                     <form method="post" action="/groups/{{.ID}}/restore">
+                      <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
                       <input type="hidden" name="tab" value="groups">
                       {{if $.Pagination}}<input type="hidden" name="page" value="{{$.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{$.Pagination.PageSize}}">{{if $.Pagination.SearchQuery}}<input type="hidden" name="q" value="{{$.Pagination.SearchQuery}}">{{end}}{{end}}
                       <button class="icon-btn success" type="submit" title="Restore group" aria-label="Restore group">
@@ -49,9 +50,10 @@
                     {{end}}
                     {{else}}
                     <form method="post" action="/groups/{{.ID}}/delete">
+                      <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
                       <input type="hidden" name="tab" value="groups">
                       {{if $.Pagination}}<input type="hidden" name="page" value="{{$.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{$.Pagination.PageSize}}">{{if $.Pagination.SearchQuery}}<input type="hidden" name="q" value="{{$.Pagination.SearchQuery}}">{{end}}{{end}}
-					  <button class="icon-btn danger" type="submit" title="{{if $.SCIMEnabled}}Mark group for deletion{{else}}Delete group{{end}}" aria-label="{{if $.SCIMEnabled}}Mark group for deletion{{else}}Delete group{{end}}" {{if not $.SCIMEnabled}}onclick="return confirm('Permanently delete this local group?')"{{end}}>
+					  <button class="icon-btn danger" type="submit" title="Delete group from shared directory" aria-label="Delete group from shared directory" onclick="return confirm('{{if $.HasSCIMEnvironments}}Delete this group from the shared directory? The deletion will be scheduled in every SCIM environment.{{else}}Permanently delete this group from the shared directory?{{end}}')">
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10"/><path d="M5.5 4.5V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.5"/><path d="M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>
                       </button>
                     </form>
@@ -63,18 +65,17 @@
               <tr><td colspan="{{if $.SCIMEnabled}}5{{else}}3{{end}}">
                 <div class="card-empty">
                   <div class="h">{{if and $.Pagination $.Pagination.SearchQuery}}No groups match search{{else}}No groups yet{{end}}</div>
-                  <div>{{if and $.Pagination $.Pagination.SearchQuery}}Try a different search.{{else if $.SCIMEnabled}}Add one with the button above, or import from the selected app.{{else}}Add one with the button above.{{end}}</div>
+                  <div>{{if and $.Pagination $.Pagination.SearchQuery}}Try a different search.{{else if $.SCIMEnabled}}Add one with the button above, or import from {{$.ActiveEnvironment.Name}}.{{else}}Add one with the button above.{{end}}</div>
                 </div>
               </td></tr>
               {{end}}
             </tbody>
           </table>
           {{else if eq .Tab "apps"}}
-          <table>
-			<colgroup><col><col style="width: 120px"><col style="width: 260px"><col style="width: 360px"></colgroup>
+          <table class="environments-table">
             <thead>
               <tr>
-                <th>Application</th>
+                <th>Environment</th>
                 <th>Protocol</th>
                 <th>Client ID</th>
                 <th class="col-actions">Actions</th>
@@ -83,20 +84,22 @@
             <tbody>
               {{range .Apps}}
               <tr>
-                <td><div class="row-title">{{.Name}}</div><div class="mono">{{.Slug}}</div>{{if .SCIMEnabled}}<div class="mono" title="{{.SCIMBaseURL}}">SCIM · {{.SCIMBaseURL}}</div>{{end}}</td>
-                <td><span class="status">{{.Protocol}}</span>{{if .SCIMEnabled}} <span class="status synced">SYNC</span>{{end}}</td>
+                <td><div class="row-title">{{.Name}} {{if .Active}}<span class="status synced">ACTIVE</span>{{end}}</div><div class="mono">{{.Slug}}</div>{{if .SCIMEnabled}}<div class="mono" title="{{.SCIMBaseURL}}">SCIM · {{.SCIMBaseURL}}</div>{{end}}</td>
+                <td><span class="status">{{.Protocol}}</span>{{if and .SCIMEnabled (ne .Protocol "SCIM")}} <span class="status synced">SCIM</span>{{end}}</td>
                 <td class="mono" title="{{.OIDCClientID}}">{{if .SupportsOIDC}}{{.OIDCClientID}}{{else}}-{{end}}</td>
                 <td class="col-actions cell-widget">
 				  <div class="row-actions">
+					{{if not .Active}}<a class="btn btn-sm" href="{{.OpenURL}}">Use environment</a>{{end}}
 					{{if .SupportsOIDC}}<a class="btn btn-sm" href="{{.OIDCDiscovery}}" target="_blank" rel="noreferrer">Discovery</a>{{end}}
 					{{if .OIDCTestURL}}<a class="btn btn-sm" href="{{.OIDCTestURL}}" target="_blank" rel="noreferrer">Test OIDC</a>{{end}}
 					{{if .SupportsSAML}}<a class="btn btn-sm" href="{{.SAMLMetadata}}" target="_blank" rel="noreferrer">Metadata</a>{{end}}
 					{{if .SAMLTestURL}}<a class="btn btn-sm" href="{{.SAMLTestURL}}" target="_blank" rel="noreferrer">Test SAML</a>{{end}}
-                    <a class="icon-btn" href="{{.EditURL}}" title="Edit app" aria-label="Edit app">
+                    <a class="icon-btn" href="{{.EditURL}}" title="Edit environment" aria-label="Edit environment">
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M10 4l2 2"/></svg>
                     </a>
-                    <form method="post" action="/apps/{{.ID}}/delete">
-					  <button class="icon-btn danger" type="submit" title="Delete app" aria-label="Delete app" onclick="return confirm('Delete this app and its protocol configuration?')">
+					<form method="post" action="/apps/{{.ID}}/delete">
+					  <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
+					  <button class="icon-btn danger" type="submit" title="Delete environment" aria-label="Delete environment" onclick="return confirm('Delete this environment and all of its protocol and sync configuration?')">
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10"/><path d="M5.5 4.5V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.5"/><path d="M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>
                       </button>
                     </form>
@@ -106,15 +109,15 @@
               {{else}}
               <tr><td colspan="4">
                 <div class="card-empty">
-                  <div class="h">No apps yet</div>
-                  <div>Add an app to configure OIDC, SAML, or SCIM.</div>
+                  <div class="h">No environments yet</div>
+                  <div>Add an environment to configure OIDC, SAML, or SCIM.</div>
                 </div>
               </td></tr>
               {{end}}
             </tbody>
           </table>
           {{else}}
-          <table>
+          <table class="users-table">
             <colgroup>
               <col>
               <col>
@@ -152,6 +155,7 @@
                   <span class="active-toggle is-readonly {{if eq .Active "active"}}is-active{{end}}">{{.Active}}</span>
                   {{else}}
                   <form method="post" action="/users/{{.ID}}/toggle-active" style="display:inline;margin:0">
+                    <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
                     <input type="hidden" name="tab" value="users">
                     {{if $.Pagination}}<input type="hidden" name="page" value="{{$.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{$.Pagination.PageSize}}">{{if $.Pagination.SearchQuery}}<input type="hidden" name="q" value="{{$.Pagination.SearchQuery}}">{{end}}{{end}}
                     <button class="active-toggle {{if eq .Active "active"}}is-active{{end}}" type="submit">{{.Active}}</button>
@@ -169,14 +173,15 @@
                     <a class="icon-btn" href="{{.EditURL}}" title="Edit user" aria-label="Edit user">
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M10 4l2 2"/></svg>
                     </a>
-                    {{if $.SCIMEnabled}}
+                    {{if $.HasSCIMEnvironments}}
                     <a class="icon-btn" href="{{.HistoryURL}}" title="User history" aria-label="User history">
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2 1.5"/></svg>
                     </a>
                     {{end}}
                     {{if .Deleted}}
-                    {{if $.SCIMEnabled}}
+                    {{if $.HasSCIMEnvironments}}
                     <form method="post" action="/users/{{.ID}}/restore">
+                      <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
                       <input type="hidden" name="tab" value="users">
                       {{if $.Pagination}}<input type="hidden" name="page" value="{{$.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{$.Pagination.PageSize}}">{{if $.Pagination.SearchQuery}}<input type="hidden" name="q" value="{{$.Pagination.SearchQuery}}">{{end}}{{end}}
                       <button class="icon-btn success" type="submit" title="Restore user" aria-label="Restore user">
@@ -186,9 +191,10 @@
                     {{end}}
                     {{else}}
                     <form method="post" action="/users/{{.ID}}/delete">
+                      <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
                       <input type="hidden" name="tab" value="users">
                       {{if $.Pagination}}<input type="hidden" name="page" value="{{$.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{$.Pagination.PageSize}}">{{if $.Pagination.SearchQuery}}<input type="hidden" name="q" value="{{$.Pagination.SearchQuery}}">{{end}}{{end}}
-					  <button class="icon-btn danger" type="submit" title="{{if $.SCIMEnabled}}Mark user for deletion{{else}}Delete user{{end}}" aria-label="{{if $.SCIMEnabled}}Mark user for deletion{{else}}Delete user{{end}}" {{if not $.SCIMEnabled}}onclick="return confirm('Permanently delete this local user?')"{{end}}>
+					  <button class="icon-btn danger" type="submit" title="Delete user from shared directory" aria-label="Delete user from shared directory" onclick="return confirm('{{if $.HasSCIMEnvironments}}Delete this user from the shared directory? The deletion will be scheduled in every SCIM environment.{{else}}Permanently delete this user from the shared directory?{{end}}')">
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10"/><path d="M5.5 4.5V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.5"/><path d="M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>
                       </button>
                     </form>
@@ -200,7 +206,7 @@
               <tr><td colspan="{{if $.SCIMEnabled}}7{{else}}5{{end}}">
                 <div class="card-empty">
                   <div class="h">{{if and $.Pagination $.Pagination.SearchQuery}}No users match search{{else}}No users yet{{end}}</div>
-                  <div>{{if and $.Pagination $.Pagination.SearchQuery}}Try a different search.{{else if $.SCIMEnabled}}Add one with the button above, or import from the selected app.{{else}}Add one with the button above.{{end}}</div>
+                  <div>{{if and $.Pagination $.Pagination.SearchQuery}}Try a different search.{{else if $.SCIMEnabled}}Add one with the button above, or import from {{$.ActiveEnvironment.Name}}.{{else}}Add one with the button above.{{end}}</div>
                 </div>
               </td></tr>
               {{end}}
@@ -214,6 +220,7 @@
           <div class="pagination-actions">
             <form class="page-size-form" method="get" action="/" data-list-search-form>
               <input type="hidden" name="tab" value="{{.Tab}}">
+              <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
               <label for="list-search">Search
                 <input id="list-search" name="q" value="{{.Pagination.SearchQuery}}" placeholder="name, username, email" autocomplete="off" data-list-search>
               </label>

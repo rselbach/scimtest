@@ -38,10 +38,72 @@ type Config struct {
 	SCIMDisabled          bool   `json:"scim_disabled,omitempty"`
 	IDPBaseURL            string `json:"idp_base_url,omitempty"`
 	TrustForwardedHeaders bool   `json:"trust_forwarded_headers,omitempty"`
-	RgrokName             string `json:"rgrok_name,omitempty"`
-	RgrokToken            string `json:"rgrok_token,omitempty"`
+	RgrokInstanceID       string `json:"rgrok_instance_id,omitempty"`
 	SigningPrivateKeyPEM  string `json:"signing_private_key_pem,omitempty"`
 	SigningCertificatePEM string `json:"signing_certificate_pem,omitempty"`
+}
+
+// EnsureRgrokInstanceID returns the stable identity used for rgrok tunnel
+// reservations, generating and persisting it when necessary.
+func EnsureRgrokInstanceID() (string, error) {
+	db, err := openStateDB()
+	if err != nil {
+		return "", err
+	}
+	defer closeDB(db)
+
+	instanceID, err := newUUID()
+	if err != nil {
+		return "", err
+	}
+	if _, err := db.Exec(`INSERT OR IGNORE INTO config(key, value) VALUES('rgrok_instance_id', ?)`, instanceID); err != nil {
+		return "", fmt.Errorf("persist rgrok instance id: %w", err)
+	}
+
+	var saved string
+	if err := db.QueryRow(`SELECT value FROM config WHERE key = 'rgrok_instance_id'`).Scan(&saved); err != nil {
+		return "", fmt.Errorf("load rgrok instance id: %w", err)
+	}
+	if validUUID(saved) {
+		return saved, nil
+	}
+
+	result, err := db.Exec(`UPDATE config SET value = ? WHERE key = 'rgrok_instance_id' AND value = ?`, instanceID, saved)
+	if err != nil {
+		return "", fmt.Errorf("repair rgrok instance id: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return "", fmt.Errorf("check repaired rgrok instance id: %w", err)
+	}
+	if changed == 0 {
+		if err := db.QueryRow(`SELECT value FROM config WHERE key = 'rgrok_instance_id'`).Scan(&saved); err != nil {
+			return "", fmt.Errorf("reload rgrok instance id: %w", err)
+		}
+		if !validUUID(saved) {
+			return "", fmt.Errorf("reload rgrok instance id: invalid concurrent value %q", saved)
+		}
+		return saved, nil
+	}
+	return instanceID, nil
+}
+
+func newUUID() (string, error) {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", fmt.Errorf("generate rgrok instance id: %w", err)
+	}
+	value[6] = value[6]&0x0f | 0x40
+	value[8] = value[8]&0x3f | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", value[0:4], value[4:6], value[6:8], value[8:10], value[10:16]), nil
+}
+
+func validUUID(value string) bool {
+	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
+		return false
+	}
+	decoded, err := hex.DecodeString(strings.ReplaceAll(value, "-", ""))
+	return err == nil && len(decoded) == 16
 }
 
 type User struct {
@@ -118,6 +180,7 @@ type ResourceSyncState struct {
 }
 
 type OperationLog struct {
+	AppID              string
 	Kind               string
 	Summary            string
 	Operation          string
@@ -515,6 +578,7 @@ func initStateDB(db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS operation_logs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			environment_id TEXT NOT NULL DEFAULT 'env_default',
+			app_id TEXT NOT NULL DEFAULT '',
 			resource_type TEXT NOT NULL,
 			resource_id TEXT NOT NULL,
 			label TEXT NOT NULL,
@@ -542,6 +606,7 @@ func initStateDB(db *sql.DB) error {
 		`ALTER TABLE operation_logs ADD COLUMN kind TEXT NOT NULL DEFAULT 'sync'`,
 		`ALTER TABLE operation_logs ADD COLUMN summary TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE operation_logs ADD COLUMN response_retry_after TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE operation_logs ADD COLUMN app_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE apps ADD COLUMN saml_name_id_field TEXT NOT NULL DEFAULT 'email'`,
 		`ALTER TABLE apps ADD COLUMN allow_any_oidc_redirect INTEGER NOT NULL DEFAULT 1`,
 		`ALTER TABLE apps ADD COLUMN oidc_public_client INTEGER NOT NULL DEFAULT 0`,
@@ -731,10 +796,8 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 			state.Config.IDPBaseURL = value
 		case "trust_forwarded_headers":
 			state.Config.TrustForwardedHeaders = value == "1"
-		case "rgrok_name":
-			state.Config.RgrokName = value
-		case "rgrok_token":
-			state.Config.RgrokToken = value
+		case "rgrok_instance_id":
+			state.Config.RgrokInstanceID = value
 		case "signing_private_key_pem":
 			state.Config.SigningPrivateKeyPEM = value
 		case "signing_certificate_pem":
@@ -922,7 +985,7 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 		return AppState{}, fmt.Errorf("iterate app group sync state: %w", err)
 	}
 
-	logRows, err := db.Query(`SELECT resource_type, resource_id, kind, summary, operation, method, path, request_body, status, response_retry_after, response_body, error_text, created_at FROM operation_logs WHERE environment_id = ? ORDER BY resource_type, resource_id, created_at DESC, id ASC`, environmentID)
+	logRows, err := db.Query(`SELECT resource_type, resource_id, app_id, kind, summary, operation, method, path, request_body, status, response_retry_after, response_body, error_text, created_at FROM operation_logs WHERE environment_id = ? ORDER BY resource_type, resource_id, created_at DESC, id ASC`, environmentID)
 	if err != nil {
 		return AppState{}, fmt.Errorf("load operation logs from sqlite: %w", err)
 	}
@@ -932,7 +995,7 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 		var resourceType string
 		var resourceID string
 		var entry OperationLog
-		if err := logRows.Scan(&resourceType, &resourceID, &entry.Kind, &entry.Summary, &entry.Operation, &entry.Method, &entry.Path, &entry.RequestBody, &entry.Status, &entry.ResponseRetryAfter, &entry.ResponseBody, &entry.Err, &entry.CreatedAt); err != nil {
+		if err := logRows.Scan(&resourceType, &resourceID, &entry.AppID, &entry.Kind, &entry.Summary, &entry.Operation, &entry.Method, &entry.Path, &entry.RequestBody, &entry.Status, &entry.ResponseRetryAfter, &entry.ResponseBody, &entry.Err, &entry.CreatedAt); err != nil {
 			return AppState{}, fmt.Errorf("scan sqlite operation log row: %w", err)
 		}
 
@@ -1088,8 +1151,7 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 		"app_scim_migrated":       "1",
 		"idp_base_url":            state.Config.IDPBaseURL,
 		"trust_forwarded_headers": BoolString(state.Config.TrustForwardedHeaders),
-		"rgrok_name":              state.Config.RgrokName,
-		"rgrok_token":             state.Config.RgrokToken,
+		"rgrok_instance_id":       state.Config.RgrokInstanceID,
 		"signing_private_key_pem": state.Config.SigningPrivateKeyPEM,
 		"signing_certificate_pem": state.Config.SigningCertificatePEM,
 	}
@@ -1141,7 +1203,7 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 	}
 	defer closeStmt(memberStmt)
 
-	logStmt, err := tx.Prepare(`INSERT INTO operation_logs(environment_id, resource_type, resource_id, label, kind, summary, operation, method, path, request_body, status, response_retry_after, response_body, error_text, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	logStmt, err := tx.Prepare(`INSERT INTO operation_logs(environment_id, resource_type, resource_id, label, app_id, kind, summary, operation, method, path, request_body, status, response_retry_after, response_body, error_text, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("prepare sqlite operation log insert: %w", err)
 	}
@@ -1206,7 +1268,7 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 			label = UserLabel(User)
 		}
 		for _, entry := range entries {
-			if _, err := logStmt.Exec(environmentID, "user", resourceID, label, entry.Kind, entry.Summary, entry.Operation, entry.Method, entry.Path, entry.RequestBody, entry.Status, entry.ResponseRetryAfter, entry.ResponseBody, entry.Err, entry.CreatedAt); err != nil {
+			if _, err := logStmt.Exec(environmentID, "user", resourceID, label, entry.AppID, entry.Kind, entry.Summary, entry.Operation, entry.Method, entry.Path, entry.RequestBody, entry.Status, entry.ResponseRetryAfter, entry.ResponseBody, entry.Err, entry.CreatedAt); err != nil {
 				return fmt.Errorf("insert sqlite user operation log %s: %w", resourceID, err)
 			}
 		}
@@ -1218,7 +1280,7 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 			label = Group.DisplayName
 		}
 		for _, entry := range entries {
-			if _, err := logStmt.Exec(environmentID, "group", resourceID, label, entry.Kind, entry.Summary, entry.Operation, entry.Method, entry.Path, entry.RequestBody, entry.Status, entry.ResponseRetryAfter, entry.ResponseBody, entry.Err, entry.CreatedAt); err != nil {
+			if _, err := logStmt.Exec(environmentID, "group", resourceID, label, entry.AppID, entry.Kind, entry.Summary, entry.Operation, entry.Method, entry.Path, entry.RequestBody, entry.Status, entry.ResponseRetryAfter, entry.ResponseBody, entry.Err, entry.CreatedAt); err != nil {
 				return fmt.Errorf("insert sqlite group operation log %s: %w", resourceID, err)
 			}
 		}
@@ -1315,8 +1377,7 @@ func NormalizeState(state *AppState) {
 	migrateLegacySCIMConfig(state)
 	state.Config.BaseURL = strings.TrimRight(strings.TrimSpace(state.Config.BaseURL), "/")
 	state.Config.IDPBaseURL = strings.TrimRight(strings.TrimSpace(state.Config.IDPBaseURL), "/")
-	state.Config.RgrokName = strings.TrimSpace(state.Config.RgrokName)
-	state.Config.RgrokToken = strings.TrimSpace(state.Config.RgrokToken)
+	state.Config.RgrokInstanceID = strings.TrimSpace(state.Config.RgrokInstanceID)
 
 	for i := range state.Users {
 		if strings.TrimSpace(state.Users[i].Username) == "" {
@@ -1402,10 +1463,6 @@ func StateForApp(state AppState, appID string) (AppState, error) {
 	if !ok {
 		return AppState{}, fmt.Errorf("app %q not found", appID)
 	}
-	if !app.SCIMEnabled {
-		return AppState{}, fmt.Errorf("SCIM is disabled for %s", app.Name)
-	}
-
 	projected := state
 	projected.Users = append([]User(nil), state.Users...)
 	projected.Groups = append([]Group(nil), state.Groups...)
@@ -1415,7 +1472,12 @@ func StateForApp(state AppState, appID string) (AppState, error) {
 	projected.Config.BaseURL = app.SCIMBaseURL
 	projected.Config.BearerToken = app.SCIMBearerToken
 	projected.Config.AutoOpenSyncTrace = app.SCIMAutoOpenTrace
-	projected.Config.SCIMDisabled = false
+	projected.Config.SCIMDisabled = !app.SCIMEnabled
+	projected.UserOperations = operationLogsForApp(state.UserOperations, appID)
+	projected.GroupOperations = operationLogsForApp(state.GroupOperations, appID)
+	if !app.SCIMEnabled {
+		return projected, nil
+	}
 	deletedUserIDs := make(map[string]bool)
 	for i := range projected.Users {
 		syncState, exists := state.UserSync[appID][projected.Users[i].ID]
@@ -1448,6 +1510,19 @@ func StateForApp(state AppState, appID string) (AppState, error) {
 		projected.Groups[i].MemberIDs = members
 	}
 	return projected, nil
+}
+
+func operationLogsForApp(logs map[string][]OperationLog, appID string) map[string][]OperationLog {
+	filtered := make(map[string][]OperationLog, len(logs))
+	for resourceID, entries := range logs {
+		for _, entry := range entries {
+			if entry.Kind != "local" && entry.AppID != appID {
+				continue
+			}
+			filtered[resourceID] = append(filtered[resourceID], entry)
+		}
+	}
+	return filtered
 }
 
 // MarkUserDirtyForApps schedules a user change for every sync-enabled app.
@@ -1682,7 +1757,7 @@ func removeValue(values []string, value string) []string {
 	return kept
 }
 
-func AppendOperationLogs(state *AppState, traces []SyncTraceEntry) {
+func AppendOperationLogs(state *AppState, appID string, traces []SyncTraceEntry) {
 	if state.UserOperations == nil {
 		state.UserOperations = make(map[string][]OperationLog)
 	}
@@ -1692,6 +1767,7 @@ func AppendOperationLogs(state *AppState, traces []SyncTraceEntry) {
 
 	for _, trace := range traces {
 		entry := OperationLog{
+			AppID:              appID,
 			Kind:               "sync",
 			Summary:            summarizeSyncTrace(trace),
 			Operation:          trace.Operation,

@@ -189,6 +189,10 @@ func TestSyncDirtyStatePrunesDeletedUsersFromGroups(t *testing.T) {
 	lastProgress := progressEvents[len(progressEvents)-1]
 	r.Equal(4, lastProgress.Total)
 	r.Equal(4, lastProgress.Processed)
+	r.Equal([]string{"running", "done"}, progressPhasesFor(progressEvents, "user-chang"))
+	r.Equal([]string{"running", "done"}, progressPhasesFor(progressEvents, "user-koogler"))
+	r.Equal([]string{"running", "done"}, progressPhasesFor(progressEvents, "group-spanish"))
+	r.Equal([]string{"running", "done"}, progressPhasesFor(progressEvents, "group-new"))
 }
 
 func TestFailedSyncHistoryReportsFailure(t *testing.T) {
@@ -225,7 +229,8 @@ func TestFailedSyncHistoryReportsFailure(t *testing.T) {
 			}))
 			defer server.Close()
 
-			result := SyncDirtyState(AppState{
+			var progressEvents []SyncProgress
+			result := SyncDirtyStateWithProgress(AppState{
 				Config: Config{BaseURL: server.URL, BearerToken: "chang-secret"},
 				Users: []User{{
 					ID:         "user-troy",
@@ -236,15 +241,19 @@ func TestFailedSyncHistoryReportsFailure(t *testing.T) {
 					Active:     true,
 					Dirty:      true,
 				}},
+			}, func(progress SyncProgress) {
+				progressEvents = append(progressEvents, progress)
 			})
 			r.NoError(result.Fatal)
 			r.Len(result.Traces, 1)
 			r.ErrorContains(errors.New(result.Traces[0].Err), tc.wantError)
 
-			AppendOperationLogs(&result.State, result.Traces)
+			AppendOperationLogs(&result.State, "app-greendale", result.Traces)
 			r.Len(result.State.UserOperations["user-troy"], 1)
 			r.Equal("Failed to create", result.State.UserOperations["user-troy"][0].Summary)
 			r.Contains(result.State.UserOperations["user-troy"][0].Err, tc.wantError)
+			r.Equal([]string{"running", "failed"}, progressPhasesFor(progressEvents, "user-troy"))
+			r.Contains(progressEvents[len(progressEvents)-1].Detail, tc.wantError)
 		})
 	}
 }
@@ -395,6 +404,7 @@ func TestSyncDirtyStateRetriesRateLimit(t *testing.T) {
 	r.Contains(progressLabels(progressEvents), "Abed Nadir (abedn)")
 	r.Contains(progressStatuses(progressEvents), "Rate limited; waiting 2 seconds")
 	r.True(hasRateLimitedProgress(progressEvents))
+	r.Equal([]string{"running", "waiting", "done"}, progressPhasesFor(progressEvents, "user-2"))
 }
 
 func TestSyncDirtyStateDoesNotWaitForLongRetryAfter(t *testing.T) {
@@ -766,6 +776,17 @@ func progressStatuses(events []SyncProgress) []string {
 	}
 
 	return statuses
+}
+
+func progressPhasesFor(events []SyncProgress, resourceID string) []string {
+	phases := make([]string, 0, len(events))
+	for _, event := range events {
+		if event.ResourceID == resourceID && event.Phase != "" {
+			phases = append(phases, event.Phase)
+		}
+	}
+
+	return phases
 }
 
 func hasRateLimitedProgress(events []SyncProgress) bool {

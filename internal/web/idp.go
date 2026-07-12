@@ -172,7 +172,8 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status := "app updated"
+	status := "environment updated"
+	created := id == ""
 	if id == "" {
 		app.ID, err = newAppID()
 		if err != nil {
@@ -180,11 +181,11 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		state.Apps = append(state.Apps, app)
-		status = "app added"
+		status = "environment added"
 	} else if index, ok := appIndexByID(state.Apps, id); ok {
 		state.Apps[index] = app
 	} else {
-		a.redirectError(w, r, tab, fmt.Errorf("app %s not found", id))
+		a.redirectError(w, r, tab, fmt.Errorf("environment %s not found", id))
 		return
 	}
 	if app.SCIMEnabled && !wasSCIMEnabled {
@@ -194,7 +195,11 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		a.redirectError(w, r, tab, err)
 		return
 	}
-	redirectWithFlash(w, r, dashboardURL("apps", nil), flashMessage{Kind: "success", Message: status})
+	location := dashboardURL("apps", nil)
+	if created {
+		location = addEnvironmentToURL(location, app.ID)
+	}
+	redirectWithFlash(w, r, location, flashMessage{Kind: "success", Message: status})
 }
 
 func (a *webApp) handleAppDelete(w http.ResponseWriter, r *http.Request) {
@@ -208,7 +213,7 @@ func (a *webApp) handleAppDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	index, ok := appIndexByID(state.Apps, r.PathValue("id"))
 	if !ok {
-		a.redirectError(w, r, "apps", fmt.Errorf("app not found"))
+		a.redirectError(w, r, "apps", fmt.Errorf("environment not found"))
 		return
 	}
 	appID := state.Apps[index].ID
@@ -219,7 +224,17 @@ func (a *webApp) handleAppDelete(w http.ResponseWriter, r *http.Request) {
 		a.redirectError(w, r, "apps", err)
 		return
 	}
-	redirectWithFlash(w, r, dashboardURL("apps", nil), flashMessage{Kind: "success", Message: "app deleted"})
+	location := dashboardURL("apps", nil)
+	if strings.TrimSpace(r.FormValue("environment")) == appID {
+		if len(state.Apps) == 0 {
+			http.SetCookie(w, &http.Cookie{Name: environmentCookieName, Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+			setFlashCookie(w, flashMessage{Kind: "success", Message: "environment deleted"})
+			http.Redirect(w, r, location, http.StatusSeeOther)
+			return
+		}
+		location = addEnvironmentToURL(location, state.Apps[0].ID)
+	}
+	redirectWithFlash(w, r, location, flashMessage{Kind: "success", Message: "environment deleted"})
 }
 
 func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
