@@ -1,5 +1,14 @@
 {{define "list-card.html"}}
       <section class="card" data-list-card>
+        {{if and (eq .Tab "users") .Users}}
+        <form id="bulk-delete-users" class="bulk-actions" method="post" action="/users/delete" data-bulk-delete-form>
+          <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
+          <input type="hidden" name="tab" value="users">
+          {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
+          <span data-bulk-selection-count>0 users selected</span>
+          <button class="btn btn-sm btn-danger" type="submit" data-bulk-delete-button>Delete selected</button>
+        </form>
+        {{end}}
         <div class="table-wrap">
           {{if eq .Tab "groups"}}
           <table class="groups-table">
@@ -119,6 +128,7 @@
           {{else}}
           <table class="users-table">
             <colgroup>
+              <col style="width: 44px">
               <col>
               <col>
               <col>
@@ -131,6 +141,7 @@
             </colgroup>
             <thead>
               <tr>
+                <th class="col-select"><input type="checkbox" aria-label="Select all users on this page" data-select-all-users></th>
                 <th>Name</th>
                 <th>Username</th>
                 <th>Email</th>
@@ -145,6 +156,7 @@
             <tbody>
               {{range .Users}}
               <tr {{if .Deleted}}class="is-deleted"{{end}}>
+                <td class="col-select">{{if not .Deleted}}<input type="checkbox" name="user_ids" value="{{.ID}}" form="bulk-delete-users" aria-label="Select {{.Name}}" data-user-selection>{{end}}</td>
                 <td>
                   <div class="row-title" {{if .Deleted}}title="marked for deletion"{{end}}>{{.Name}}</div>
                 </td>
@@ -203,7 +215,7 @@
                 </td>
               </tr>
               {{else}}
-              <tr><td colspan="{{if $.SCIMEnabled}}7{{else}}5{{end}}">
+              <tr><td colspan="{{if $.SCIMEnabled}}8{{else}}6{{end}}">
                 <div class="card-empty">
                   <div class="h">{{if and $.Pagination $.Pagination.SearchQuery}}No users match search{{else}}No users yet{{end}}</div>
                   <div>{{if and $.Pagination $.Pagination.SearchQuery}}Try a different search.{{else if $.SCIMEnabled}}Add one with the button above, or import from {{$.ActiveEnvironment.Name}}.{{else}}Add one with the button above.{{end}}</div>

@@ -63,6 +63,35 @@ func TestIndexRendersDashboard(t *testing.T) {
 	r.Contains(groupRec.Body.String(), "Greendale Study Group")
 }
 
+func TestIndexRendersConciseSCIMActionsAndUsernameHint(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Apps: []app{{
+			ID:              "app-1",
+			Name:            "Greendale",
+			Slug:            "greendale",
+			Protocol:        "scim",
+			SCIMEnabled:     true,
+			SCIMBaseURL:     "https://example.test/scim",
+			SCIMBearerToken: "token",
+		}},
+		UserOperations:  map[string][]operationLog{},
+		GroupOperations: map[string][]operationLog{},
+	}))
+
+	app := &webApp{}
+	rec := httptest.NewRecorder()
+	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=users&environment=app-1&modal=user", nil))
+
+	r.Equal(http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	r.Contains(body, `data-sync-submit >Sync</button>`)
+	r.Contains(body, `type="submit">Import</button>`)
+	r.Contains(body, `type="submit">Reset</button>`)
+	r.Contains(body, `Uses email when left blank`)
+}
+
 func TestIDPRoutesExcludeAdminEndpoints(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
@@ -393,6 +422,143 @@ func TestUserActionPreservesPage(t *testing.T) {
 
 	r.Equal(http.StatusSeeOther, rec.Code)
 	r.Equal("/?page=2&pageSize=25&q=student026&tab=users", rec.Header().Get("Location"))
+}
+
+func TestIndexRendersBulkUserSelection(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Users: []user{
+			{ID: "u1", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.edu"},
+			{ID: "u2", GivenName: "Pierce", FamilyName: "Hawthorne", Username: "pierce", Email: "pierce@greendale.edu", Deleted: true},
+		},
+		UserOperations:  map[string][]operationLog{},
+		GroupOperations: map[string][]operationLog{},
+	}))
+
+	app := &webApp{}
+	rec := httptest.NewRecorder()
+	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=users", nil))
+
+	r.Equal(http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	r.Contains(body, `action="/users/delete"`)
+	r.Contains(body, `data-select-all-users`)
+	r.Contains(body, `name="user_ids" value="u1"`)
+	r.NotContains(body, `name="user_ids" value="u2"`)
+}
+
+func TestBulkDeleteUsers(t *testing.T) {
+	tests := map[string]struct {
+		state        appState
+		userIDs      []string
+		wantUsers    []string
+		wantDeleted  []string
+		wantMembers  []string
+		wantSCIMApps []string
+	}{
+		"SCIM enabled marks selected users for deletion": {
+			state: appState{
+				Apps: []app{
+					{ID: "app-1", Name: "Study App", Slug: "study-app", Protocol: "scim", SCIMEnabled: true, SCIMBaseURL: "https://study.example.test/scim", SCIMBearerToken: "token"},
+					{ID: "app-2", Name: "Library App", Slug: "library-app", Protocol: "scim", SCIMEnabled: true, SCIMBaseURL: "https://library.example.test/scim", SCIMBearerToken: "token"},
+					{ID: "app-3", Name: "Cafeteria App", Slug: "cafeteria-app", Protocol: "oidc"},
+				},
+				Users: []user{
+					{ID: "u1", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.edu"},
+					{ID: "u2", GivenName: "Abed", FamilyName: "Nadir", Username: "abed", Email: "abed@greendale.edu"},
+					{ID: "u3", GivenName: "Annie", FamilyName: "Edison", Username: "annie", Email: "annie@greendale.edu"},
+				},
+				UserOperations:  map[string][]operationLog{},
+				GroupOperations: map[string][]operationLog{},
+			},
+			userIDs:      []string{"u1", "u3"},
+			wantUsers:    []string{"u1", "u2", "u3"},
+			wantDeleted:  []string{"u1", "u3"},
+			wantSCIMApps: []string{"app-1", "app-2"},
+		},
+		"SCIM disabled removes selected users and memberships": {
+			state: appState{
+				Config: config{SCIMDisabled: true},
+				Users: []user{
+					{ID: "u1", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.edu"},
+					{ID: "u2", GivenName: "Abed", FamilyName: "Nadir", Username: "abed", Email: "abed@greendale.edu"},
+					{ID: "u3", GivenName: "Annie", FamilyName: "Edison", Username: "annie", Email: "annie@greendale.edu"},
+				},
+				Groups:          []group{{ID: "g1", DisplayName: "Study Group", MemberIDs: []string{"u1", "u2", "u3"}}},
+				UserOperations:  map[string][]operationLog{},
+				GroupOperations: map[string][]operationLog{},
+			},
+			userIDs:     []string{"u1", "u3"},
+			wantUsers:   []string{"u2"},
+			wantDeleted: []string{},
+			wantMembers: []string{"u2"},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			setTestStateFile(t)
+			r.NoError(saveState(tc.state))
+
+			form := url.Values{"tab": {"users"}, "user_ids": tc.userIDs}
+			req := httptest.NewRequest(http.MethodPost, "/users/delete", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			rec := httptest.NewRecorder()
+			(&webApp{}).routes().ServeHTTP(rec, req)
+
+			r.Equal(http.StatusSeeOther, rec.Code)
+			updated, err := loadState()
+			r.NoError(err)
+			userIDs := make([]string, 0, len(updated.Users))
+			deletedIDs := make([]string, 0, len(updated.Users))
+			for _, u := range updated.Users {
+				userIDs = append(userIDs, u.ID)
+				if u.Deleted {
+					deletedIDs = append(deletedIDs, u.ID)
+				}
+			}
+			r.Equal(tc.wantUsers, userIDs)
+			r.Equal(tc.wantDeleted, deletedIDs)
+			if tc.wantMembers != nil {
+				r.Equal(tc.wantMembers, updated.Groups[0].MemberIDs)
+			}
+			for _, appID := range tc.wantSCIMApps {
+				for _, userID := range tc.wantDeleted {
+					r.True(updated.UserSync[appID][userID].Dirty)
+					r.True(updated.UserSync[appID][userID].Deleted)
+				}
+				r.False(updated.UserSync[appID]["u2"].Dirty)
+			}
+			r.NotContains(updated.UserSync, "app-3")
+		})
+	}
+}
+
+func TestBulkDeleteUsersRejectsInvalidSelectionAtomically(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Users: []user{
+			{ID: "u1", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.edu"},
+			{ID: "u2", GivenName: "Abed", FamilyName: "Nadir", Username: "abed", Email: "abed@greendale.edu"},
+		},
+		UserOperations:  map[string][]operationLog{},
+		GroupOperations: map[string][]operationLog{},
+	}))
+
+	form := url.Values{"tab": {"users"}, "user_ids": {"u1", "missing"}}
+	req := httptest.NewRequest(http.MethodPost, "/users/delete", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	(&webApp{}).routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	updated, err := loadState()
+	r.NoError(err)
+	r.Len(updated.Users, 2)
+	r.False(updated.Users[0].Deleted)
 }
 
 func TestToggleActiveUpdatesStateAndHistory(t *testing.T) {
@@ -1043,7 +1209,8 @@ func TestEnvironmentSelectorRendersInTopbar(t *testing.T) {
 		r.Contains(body, "Active environment")
 		r.Contains(body, "Greendale SCIM")
 		r.Contains(body, "Greendale OIDC")
-		r.Contains(body, "Sync Greendale SCIM")
+		r.Contains(body, "data-sync-submit >Sync</button>")
+		r.NotContains(body, "Sync Greendale SCIM")
 		r.NotContains(body, "Sync target")
 	}
 }

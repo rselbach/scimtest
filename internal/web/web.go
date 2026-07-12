@@ -540,6 +540,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /", a.handleIndex)
 	mux.HandleFunc("POST /users/save", a.rejectWhileSyncing(a.handleUserSave))
 	mux.HandleFunc("POST /users/{id}/toggle-active", a.rejectWhileSyncing(a.handleUserToggleActive))
+	mux.HandleFunc("POST /users/delete", a.rejectWhileSyncing(a.handleUsersDelete))
 	mux.HandleFunc("POST /users/{id}/delete", a.rejectWhileSyncing(a.handleUserDelete))
 	mux.HandleFunc("POST /users/{id}/restore", a.rejectWhileSyncing(a.handleUserRestore))
 	mux.HandleFunc("POST /groups/save", a.rejectWhileSyncing(a.handleGroupSave))
@@ -848,6 +849,72 @@ func (a *webApp) handleUserToggleActive(w http.ResponseWriter, r *http.Request) 
 
 func (a *webApp) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 	a.handleUserDeletedState(w, r, true)
+}
+
+func (a *webApp) handleUsersDelete(w http.ResponseWriter, r *http.Request) {
+	tab := normalizedTab(r.FormValue("tab"))
+	userIDs := r.Form["user_ids"]
+	if len(userIDs) == 0 {
+		a.redirectError(w, r, tab, fmt.Errorf("select at least one user to delete"))
+		return
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	state, err := loadRequestState(r)
+	if err != nil {
+		a.redirectError(w, r, tab, err)
+		return
+	}
+
+	selected := make(map[string]bool, len(userIDs))
+	for _, id := range userIDs {
+		id = strings.TrimSpace(id)
+		index, ok := userIndexByID(state.Users, id)
+		if !ok || state.Users[index].Deleted {
+			a.redirectError(w, r, tab, fmt.Errorf("user %s is not available for deletion", id))
+			return
+		}
+		selected[id] = true
+	}
+
+	if scimEnabled(state) {
+		for i := range state.Users {
+			if !selected[state.Users[i].ID] {
+				continue
+			}
+			state.Users[i].Deleted = true
+			state.Users[i].Dirty = true
+			state.Users[i].LastError = ""
+			markUserDirtyForApps(&state, state.Users[i].ID, true)
+			appendLocalOperationLog(&state, "user", state.Users[i].ID, "Marked for deletion in bulk")
+		}
+	} else {
+		keptUsers := make([]user, 0, len(state.Users)-len(selected))
+		for _, u := range state.Users {
+			if !selected[u.ID] {
+				keptUsers = append(keptUsers, u)
+			}
+		}
+		state.Users = keptUsers
+		for i := range state.Groups {
+			for id := range selected {
+				state.Groups[i].MemberIDs = removeString(state.Groups[i].MemberIDs, id)
+			}
+		}
+	}
+
+	if err := saveState(state); err != nil {
+		a.redirectError(w, r, tab, err)
+		return
+	}
+
+	message := fmt.Sprintf("deleted %d users", len(selected))
+	if scimEnabled(state) {
+		message = fmt.Sprintf("marked %d users for deletion", len(selected))
+	}
+	redirectWithFlash(w, r, dashboardURLWithPage("users", formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: message})
 }
 
 func (a *webApp) handleUserRestore(w http.ResponseWriter, r *http.Request) {

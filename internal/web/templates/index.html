@@ -518,6 +518,18 @@
       overflow: hidden;
     }
     .table-wrap { overflow-x: auto; }
+    .bulk-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      min-height: 48px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--bg-soft);
+      color: var(--muted);
+      font-size: 12.5px;
+    }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -571,6 +583,8 @@
       color: var(--muted);
     }
     .col-actions { text-align: right; }
+    .col-select { text-align: center; }
+    .col-select input { width: 15px; height: 15px; margin: 0; accent-color: var(--danger); }
     /* Cells that contain inline-flex widgets shouldn't ellipsis-clip the widget */
     td.cell-widget { overflow: visible; }
 
@@ -778,6 +792,8 @@
       font-size: 12px;
       font-weight: 500;
     }
+    .field-label { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+    .field-label .hint { font-weight: 400; }
     .field input:not([type="checkbox"]), .field textarea, .field select {
       width: 100%;
       padding: 0 10px;
@@ -1275,19 +1291,19 @@
           <input type="hidden" name="tab" value="{{.Tab}}">
 		  <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
-          <button class="btn" type="submit" data-sync-submit {{if and .SyncJob .SyncJob.Running}}disabled{{end}}>Sync {{.ActiveEnvironment.Name}}</button>
+          <button class="btn" type="submit" data-sync-submit {{if and .SyncJob .SyncJob.Running}}disabled{{end}}>Sync</button>
         </form>
         <form method="post" action="/import" onsubmit="return confirm('Import from {{.ActiveEnvironment.Name}}? This replaces the shared directory and marks every other SCIM environment dirty.')">
           <input type="hidden" name="tab" value="{{.Tab}}">
 		  <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
-          <button class="btn" type="submit">Import from {{.ActiveEnvironment.Name}}</button>
+          <button class="btn" type="submit">Import</button>
         </form>
         <form method="post" action="/reset" onsubmit="return confirm('Reset sync state for {{.ActiveEnvironment.Name}}? This clears its remote IDs and marks its users and groups dirty.')">
           <input type="hidden" name="tab" value="{{.Tab}}">
 		  <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
-          <button class="btn btn-danger" type="submit">Reset {{.ActiveEnvironment.Name}}</button>
+          <button class="btn btn-danger" type="submit">Reset</button>
         </form>
         <span class="actionbar-meta">
           <b>{{.Stats.Users}}</b> users{{if .Stats.DirtyUsers}} <span class="sep">·</span> <span class="dirty">{{.Stats.DirtyUsers}} dirty</span>{{end}}
@@ -1496,7 +1512,7 @@
         <div class="modal-body">
           <div class="form-grid">
             <label class="field">
-              <span class="label">Username</span>
+              <span class="label field-label">Username{{if not .UserForm.ID}}<span class="hint">Uses email when left blank</span>{{end}}</span>
               <input name="username" value="{{.UserForm.User.Username}}" autocomplete="off">
             </label>
             <label class="field">
@@ -2029,6 +2045,7 @@
         const html = await response.text();
         if (updateID !== listUpdateID) return;
         card.outerHTML = html;
+        updateBulkUserSelection(document.querySelector('[data-list-card]'));
         if (restoreSearchFocus) {
           const nextSearch = document.querySelector('[data-list-search]');
           if (nextSearch) {
@@ -2066,6 +2083,46 @@
       if (link.getAttribute('aria-disabled') === 'true') return;
       replaceListCard(new URL(link.href, window.location.href));
     });
+
+    function updateBulkUserSelection(card) {
+      const selections = Array.from(card.querySelectorAll('[data-user-selection]'));
+      const selected = selections.filter(function (checkbox) { return checkbox.checked; });
+      const selectAll = card.querySelector('[data-select-all-users]');
+      const button = card.querySelector('[data-bulk-delete-button]');
+      const count = card.querySelector('[data-bulk-selection-count]');
+      if (selectAll) {
+        selectAll.checked = selections.length > 0 && selected.length === selections.length;
+        selectAll.indeterminate = selected.length > 0 && selected.length < selections.length;
+      }
+      if (button) button.disabled = selected.length === 0;
+      if (count) count.textContent = String(selected.length) + (selected.length === 1 ? ' user selected' : ' users selected');
+    }
+
+    document.addEventListener('change', function (event) {
+      const card = event.target.closest('[data-list-card]');
+      if (!card) return;
+      if (event.target.matches('[data-select-all-users]')) {
+        for (const checkbox of card.querySelectorAll('[data-user-selection]')) {
+          checkbox.checked = event.target.checked;
+        }
+      } else if (!event.target.matches('[data-user-selection]')) {
+        return;
+      }
+      updateBulkUserSelection(card);
+    });
+
+    document.addEventListener('submit', function (event) {
+      const form = event.target.closest('[data-bulk-delete-form]');
+      if (!form) return;
+      const selected = document.querySelectorAll('[data-user-selection]:checked').length;
+      const message = selected === 1
+        ? 'Delete this user from the shared directory?'
+        : 'Delete ' + String(selected) + ' users from the shared directory?';
+      const scope = '{{if .HasSCIMEnvironments}} The deletion will be scheduled in every SCIM environment.{{else}} This permanently deletes the selected users.{{end}}';
+      if (!window.confirm(message + scope)) event.preventDefault();
+    });
+    const initialListCard = document.querySelector('[data-list-card]');
+    if (initialListCard) updateBulkUserSelection(initialListCard);
 
     const syncForm = document.querySelector('[data-sync-form]');
     const syncSubmit = document.querySelector('[data-sync-submit]');
