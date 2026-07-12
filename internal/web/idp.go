@@ -219,6 +219,7 @@ func (a *webApp) handleAppDelete(w http.ResponseWriter, r *http.Request) {
 	state.Apps = append(state.Apps[:index], state.Apps[index+1:]...)
 	delete(state.UserSync, appID)
 	delete(state.GroupSync, appID)
+	dropAppOperationLogs(&state, appID)
 	if err := saveState(state); err != nil {
 		a.redirectError(w, r, "apps", err)
 		return

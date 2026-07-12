@@ -1783,6 +1783,37 @@ func waitForSyncDone(t *testing.T, app *webApp) syncJobSnapshot {
 	return syncJobSnapshot{}
 }
 
+func TestDeletingEnvironmentDropsItsOperationLogs(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Users: []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}},
+		Apps: []app{
+			{ID: "app-a", Name: "Alpha", Slug: "alpha", Protocol: "scim", SCIMEnabled: true, SCIMBaseURL: "https://alpha.test", SCIMBearerToken: "token"},
+			{ID: "app-b", Name: "Beta", Slug: "beta", Protocol: "scim", SCIMEnabled: true, SCIMBaseURL: "https://beta.test", SCIMBearerToken: "token"},
+		},
+		UserOperations: map[string][]operationLog{"troy": {
+			{AppID: "app-a", Kind: "sync", Summary: "Created", Operation: "create", CreatedAt: "2026-07-12T00:00:00Z"},
+			{AppID: "app-b", Kind: "sync", Summary: "Created", Operation: "create", CreatedAt: "2026-07-12T00:00:00Z"},
+			{Kind: "local", Summary: "Created", CreatedAt: "2026-07-12T00:00:00Z"},
+		}},
+	}))
+	appService := newTestIDPApp(t)
+	req := httptest.NewRequest(http.MethodPost, "/apps/app-a/delete", nil)
+	rec := httptest.NewRecorder()
+
+	appService.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	state, err := loadState()
+	r.NoError(err)
+	entries := state.UserOperations["troy"]
+	r.Len(entries, 2)
+	for _, entry := range entries {
+		r.NotEqual("app-a", entry.AppID)
+	}
+}
+
 func TestSyncRejectedWhileAnotherEnvironmentSyncs(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)

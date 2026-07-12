@@ -50,6 +50,7 @@ var (
 	mergeAppSyncState          = core.MergeAppSyncState
 	mergeAppImportState        = core.MergeAppImportState
 	purgeFullySyncedDeletions  = core.PurgeFullySyncedDeletions
+	dropAppOperationLogs       = core.DropAppOperationLogs
 	userGroups                 = core.UserGroups
 	syncStatus                 = core.SyncStatus
 	groupSyncStatus            = core.GroupSyncStatus
