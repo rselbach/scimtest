@@ -153,7 +153,8 @@
       font-weight: 500;
     }
     .side-item.active .icon { color: var(--accent); }
-    .side-item.is-disabled { color: var(--muted-2); pointer-events: none; }
+    .side-item.is-unavailable { color: var(--muted-2); cursor: help; }
+    .side-item.is-unavailable:hover { background: none; }
     .side-item .icon { width: 16px; height: 16px; color: var(--muted); flex: 0 0 auto; }
     .side-item .badge {
       margin-left: auto;
@@ -1201,12 +1202,17 @@
           </span>
           Environment settings
         </a>
-        {{if .SCIMEnabled}}<a class="side-item {{if not .HasTrace}}is-disabled{{end}}" href="{{.TraceURL}}" {{if not .HasTrace}}aria-disabled="true" tabindex="-1"{{end}}>
+        {{if .SCIMEnabled}}{{if .HasTrace}}<a class="side-item" href="{{.TraceURL}}">
           <span class="icon" aria-hidden="true">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h7l3 3v7H3z"/><path d="M9.5 3v3.5h3.5"/><path d="M5.5 9h5M5.5 11h3.5"/></svg>
           </span>
           Sync trace
-        </a>{{end}}
+        </a>{{else}}<span class="side-item is-unavailable" title="Traces cover the most recent sync or import and reset when scimtest restarts">
+          <span class="icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h7l3 3v7H3z"/><path d="M9.5 3v3.5h3.5"/><path d="M5.5 9h5M5.5 11h3.5"/></svg>
+          </span>
+          Sync trace
+        </span>{{end}}{{end}}
       </nav>{{end}}
 
       <nav class="side-section" aria-label="Global settings">
