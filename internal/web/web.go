@@ -693,7 +693,6 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		Environments:           globalState.Apps,
 		ActiveEnvironment:      activeEnvironment,
 	}
-	scopePageDataURLs(&data, environmentID)
 	if !data.SCIMEnabled {
 		data.Errors = nil
 		data.ShowTrace = false
@@ -701,6 +700,7 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.URL.Query().Get("partial") == "list" {
+		scopePageDataURLs(&data, environmentID)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		if err := pageTemplate.ExecuteTemplate(w, "list-card.html", data); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
