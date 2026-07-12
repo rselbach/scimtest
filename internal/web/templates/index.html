@@ -1951,8 +1951,18 @@
 	  if (modalBody) modalBody.prepend(formError);
 	}
 
+    // Esc and backdrop clicks discard the modal; ask first once the user
+    // has typed into it. Explicit Cancel/Close links stay unguarded.
+    let overlayFormDirty = false;
+    if (activeOverlay) {
+      activeOverlay.addEventListener('input', function (event) {
+        if (event.target.closest('form')) overlayFormDirty = true;
+      });
+    }
+
     function closeActiveOverlay() {
       if (!activeOverlay) return;
+      if (overlayFormDirty && !window.confirm('Discard unsaved changes?')) return;
       const closeLink = activeOverlay.querySelector('a[href]');
       if (closeLink) {
         window.location.href = closeLink.href;
