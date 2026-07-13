@@ -11,12 +11,14 @@ import (
 
 const scimUserSchema = "urn:ietf:params:scim:schemas:core:2.0:User"
 const scimGroupSchema = "urn:ietf:params:scim:schemas:core:2.0:Group"
+const scimPatchSchema = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
 
 type SCIMClient struct {
 	ctx         context.Context
 	baseURL     string
 	token       string
 	filter      bool
+	patch       bool
 	client      *http.Client
 	onRateLimit func(TraceTarget, time.Duration, string, int)
 	traces      []SyncTraceEntry
@@ -42,7 +44,7 @@ type SCIMName struct {
 }
 
 type SCIMUserResource struct {
-	Schemas     []string    `json:"schemas"`
+	Schemas     []string    `json:"schemas,omitempty"`
 	ID          string      `json:"id,omitempty"`
 	ExternalID  string      `json:"externalId,omitempty"`
 	UserName    string      `json:"userName"`
@@ -58,7 +60,7 @@ type SCIMMember struct {
 }
 
 type SCIMGroupResource struct {
-	Schemas     []string     `json:"schemas"`
+	Schemas     []string     `json:"schemas,omitempty"`
 	ID          string       `json:"id,omitempty"`
 	ExternalID  string       `json:"externalId,omitempty"`
 	DisplayName string       `json:"displayName"`
@@ -205,6 +207,7 @@ func newSCIMClient(ctx context.Context, cfg Config) (*SCIMClient, error) {
 		baseURL: baseURL,
 		token:   token,
 		filter:  cfg.FilterSupported,
+		patch:   cfg.PatchSupported,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},

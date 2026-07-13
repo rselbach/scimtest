@@ -137,6 +137,55 @@ func TestExternalIDAdoptionRejectsAmbiguousMatches(t *testing.T) {
 	r.Contains(client.traces[0].Err, "multiple resources")
 }
 
+func TestSCIMClientUsesPatchWhenSupported(t *testing.T) {
+	r := require.New(t)
+	requests := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		requests = append(requests, req.Method+" "+req.URL.Path)
+		var patch struct {
+			Schemas    []string `json:"schemas"`
+			Operations []struct {
+				Op    string          `json:"op"`
+				Value json.RawMessage `json:"value"`
+			} `json:"Operations"`
+		}
+		r.NoError(json.NewDecoder(req.Body).Decode(&patch))
+		r.Equal([]string{scimPatchSchema}, patch.Schemas)
+		r.Len(patch.Operations, 1)
+		r.Equal("replace", patch.Operations[0].Op)
+		switch req.URL.Path {
+		case "/Users/remote-troy":
+			var resource SCIMUserResource
+			r.NoError(json.Unmarshal(patch.Operations[0].Value, &resource))
+			r.Empty(resource.Schemas)
+			r.Empty(resource.ID)
+			r.Equal("troy", resource.ExternalID)
+		case "/Groups/remote-study-group":
+			var resource SCIMGroupResource
+			r.NoError(json.Unmarshal(patch.Operations[0].Value, &resource))
+			r.Empty(resource.Schemas)
+			r.Empty(resource.ID)
+			r.Equal("study-group", resource.ExternalID)
+		default:
+			t.Fatalf("unexpected SCIM path %s", req.URL.Path)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	client, err := NewSCIMClient(Config{BaseURL: server.URL, BearerToken: "chang-secret", PatchSupported: true})
+	r.NoError(err)
+	user := User{
+		ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy",
+		Email: "troy@greendale.edu", Active: true, RemoteID: "remote-troy",
+	}
+
+	r.NoError(client.replaceUser(user))
+	r.NoError(client.replaceGroup(Group{
+		ID: "study-group", DisplayName: "Study Group", RemoteID: "remote-study-group", MemberIDs: []string{"troy"},
+	}, []User{user}))
+	r.Equal([]string{"PATCH /Users/remote-troy", "PATCH /Groups/remote-study-group"}, requests)
+}
+
 func TestReadSCIMResponseBodyRejectsOversizedBody(t *testing.T) {
 	r := require.New(t)
 	_, err := readSCIMResponseBody(bytes.NewReader(make([]byte, maxSCIMResponseBodyBytes+1)))

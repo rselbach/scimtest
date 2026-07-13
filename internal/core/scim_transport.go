@@ -180,8 +180,16 @@ func (c *SCIMClient) getGroup(g Group) (SCIMGroupResource, error) {
 func (c *SCIMClient) replaceUser(u User) error {
 	resource := newSCIMUserResource(u)
 	resource.ID = u.RemoteID
+	method := http.MethodPut
+	body := any(resource)
+	if c.patch {
+		method = http.MethodPatch
+		resource.Schemas = nil
+		resource.ID = ""
+		body = newSCIMPatchRequest(resource)
+	}
 
-	return c.doJSON(http.MethodPut, "/Users/"+url.PathEscape(u.RemoteID), resource, nil, traceTargetForUser(u, "update"))
+	return c.doJSON(method, "/Users/"+url.PathEscape(u.RemoteID), body, nil, traceTargetForUser(u, "update"))
 }
 
 func newSCIMUserResource(u User) SCIMUserResource {
@@ -305,8 +313,36 @@ func (c *SCIMClient) replaceGroup(g Group, users []User) error {
 		return err
 	}
 	resource.ID = g.RemoteID
+	method := http.MethodPut
+	body := any(resource)
+	if c.patch {
+		method = http.MethodPatch
+		resource.Schemas = nil
+		resource.ID = ""
+		body = newSCIMPatchRequest(resource)
+	}
 
-	return c.doJSON(http.MethodPut, "/Groups/"+url.PathEscape(g.RemoteID), resource, nil, traceTargetForGroup(g, "update"))
+	return c.doJSON(method, "/Groups/"+url.PathEscape(g.RemoteID), body, nil, traceTargetForGroup(g, "update"))
+}
+
+type scimPatchRequest struct {
+	Schemas    []string             `json:"schemas"`
+	Operations []scimPatchOperation `json:"Operations"`
+}
+
+type scimPatchOperation struct {
+	Op    string `json:"op"`
+	Value any    `json:"value"`
+}
+
+func newSCIMPatchRequest(value any) scimPatchRequest {
+	return scimPatchRequest{
+		Schemas: []string{scimPatchSchema},
+		Operations: []scimPatchOperation{{
+			Op:    "replace",
+			Value: value,
+		}},
+	}
 }
 
 func (c *SCIMClient) deleteGroup(g Group, operation string) error {

@@ -22,6 +22,7 @@ type Config struct {
 	SigningPrivateKeyPEM  string `json:"signing_private_key_pem,omitempty"`
 	SigningCertificatePEM string `json:"signing_certificate_pem,omitempty"`
 	FilterSupported       bool   `json:"filter_supported,omitempty"`
+	PatchSupported        bool   `json:"patch_supported,omitempty"`
 }
 
 type User struct {

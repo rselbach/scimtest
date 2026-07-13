@@ -583,7 +583,7 @@ func TestStateForAppKeepsRemoteStateIndependent(t *testing.T) {
 		Users:  []User{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}},
 		Groups: []Group{{ID: "study-group", DisplayName: "Study Group", MemberIDs: []string{"troy"}}},
 		Apps: []App{
-			{ID: "app-a", Name: "Portal A", SCIMEnabled: true, SCIMBaseURL: "https://a.test/scim", SCIMBearerToken: "token-a"},
+			{ID: "app-a", Name: "Portal A", SCIMEnabled: true, SCIMBaseURL: "https://a.test/scim", SCIMBearerToken: "token-a", SCIMFilterSupported: true, SCIMPatchSupported: true},
 			{ID: "app-b", Name: "Portal B", SCIMEnabled: true, SCIMBaseURL: "https://b.test/scim", SCIMBearerToken: "token-b"},
 		},
 		UserSync: map[string]map[string]ResourceSyncState{
@@ -595,6 +595,8 @@ func TestStateForAppKeepsRemoteStateIndependent(t *testing.T) {
 	projectedA, err := StateForApp(state, "app-a")
 	r.NoError(err)
 	r.Equal("https://a.test/scim", projectedA.Config.BaseURL)
+	r.True(projectedA.Config.FilterSupported)
+	r.True(projectedA.Config.PatchSupported)
 	r.Equal("remote-a", projectedA.Users[0].RemoteID)
 	r.False(projectedA.Users[0].Dirty)
 
