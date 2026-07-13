@@ -355,8 +355,22 @@
 				{{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
 				<button class="btn btn-danger" type="submit" onclick="return confirm('Immediately clear every local user? No SCIM server will be contacted. Group memberships and user history will also be cleared.')">Clear Users Locally</button>
 			  </form>
-            </div>
+			</div>
           </section>
+		  <section class="tool-card">
+			<h3>Backup and restore</h3>
+			<p>Backups contain client secrets, SCIM bearer tokens, signing keys, users, and operation history. Store them securely.</p>
+			<div class="tool-actions">
+			  <a class="btn" href="/backup">Download backup</a>
+			  <form method="post" action="/restore" enctype="multipart/form-data" onsubmit="return confirm('Replace all scimtest state from this backup? A private pre-restore copy will be saved automatically.')">
+				<label class="field">
+				  <span class="label">Backup JSON</span>
+				  <input type="file" name="backup" accept="application/json,.json" required>
+				</label>
+				<button class="btn btn-danger" type="submit">Restore backup</button>
+			  </form>
+			</div>
+		  </section>
         </div>
       </div>
     </div>

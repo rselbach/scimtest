@@ -12,6 +12,7 @@ type (
 	syncTraceEntry    = core.SyncTraceEntry
 	syncProgress      = core.SyncProgress
 	resourceSyncState = core.ResourceSyncState
+	stateBackup       = core.StateBackup
 )
 
 var (
@@ -60,6 +61,8 @@ var (
 	reconcileStateWithProgress = core.ReconcileStateWithProgress
 	importStateFromSCIM        = core.ImportStateFromSCIM
 	configuredBaseURL          = core.ConfiguredBaseURL
+	newStateBackup             = core.NewStateBackup
+	writeSafetyBackup          = core.WriteSafetyBackup
 )
 
 const (
