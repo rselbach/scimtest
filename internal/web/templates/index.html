@@ -527,6 +527,14 @@
               </span>
             </label>
 			<label class="field full">
+			  <span class="label">Sign-in chooser privacy</span>
+			  <select name="chooser_mode">
+				<option value="list" {{if eq .AppForm.App.ChooserMode "list"}}selected{{end}}>Show active users</option>
+				<option value="identifier" {{if eq .AppForm.App.ChooserMode "identifier"}}selected{{end}}>Ask for username or email</option>
+			  </select>
+			  <span class="hint">Identifier mode prevents the sign-in page from listing directory users.</span>
+			</label>
+			<label class="field full">
 			  <span class="label">Sync</span>
 			  <span class="checkbox-row">
 				<input type="checkbox" name="scim_enabled" data-scim-toggle {{if .AppForm.App.SCIMEnabled}}checked{{end}}>

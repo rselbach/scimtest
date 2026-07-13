@@ -448,6 +448,61 @@ func TestChooserRendersScrollableSearchableUserList(t *testing.T) {
 	r.Contains(body, `data-no-matches`)
 }
 
+func TestIdentifierChooserDoesNotEnumerateUsers(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	svc := newTestIDPApp(t)
+	r.NoError(saveState(appState{
+		Users: []user{
+			{ID: "usr-troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.edu", Active: true},
+			{ID: "usr-abed", GivenName: "Abed", FamilyName: "Nadir", Username: "abed", Email: "abed@greendale.edu", Active: true},
+		},
+		Apps: []app{{
+			ID: "app-1", Name: "Example", Slug: "example", Protocol: "oidc",
+			OIDCClientID: "example-client", OIDCRedirectURIs: []string{"http://client.test/callback"},
+			ChooserMode: chooserModeIdentifier,
+		}},
+	}))
+	authorizeURL := "/oidc/example/authorize?response_type=code&client_id=example-client&redirect_uri=http%3A%2F%2Fclient.test%2Fcallback&scope=openid"
+	getRec := httptest.NewRecorder()
+
+	svc.routes().ServeHTTP(getRec, httptest.NewRequest(http.MethodGet, authorizeURL, nil))
+
+	r.Equal(http.StatusOK, getRec.Code)
+	body := getRec.Body.String()
+	r.Contains(body, `name="login_identifier"`)
+	r.NotContains(body, "Troy Barnes")
+	r.NotContains(body, "troy@greendale.edu")
+	r.NotContains(body, "Abed Nadir")
+	r.NotContains(body, `data-user-option`)
+
+	form := url.Values{
+		"response_type":    {"code"},
+		"client_id":        {"example-client"},
+		"redirect_uri":     {"http://client.test/callback"},
+		"scope":            {"openid"},
+		"login_identifier": {"TROY@greendale.edu"},
+	}
+	postReq := httptest.NewRequest(http.MethodPost, "/oidc/example/authorize", strings.NewReader(form.Encode()))
+	postReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	postRec := httptest.NewRecorder()
+	svc.routes().ServeHTTP(postRec, postReq)
+	r.Equal(http.StatusFound, postRec.Code)
+	r.Contains(postRec.Header().Get("Location"), "code=")
+
+	state, err := loadState()
+	r.NoError(err)
+	state.Apps[0].Protocol = "saml"
+	state.Apps[0].SAMLACSURL = "http://client.test/saml/acs"
+	state.Apps[0].SAMLEntityID = "urn:client:test"
+	r.NoError(saveState(state))
+	samlRec := httptest.NewRecorder()
+	svc.routes().ServeHTTP(samlRec, httptest.NewRequest(http.MethodGet, "/saml/example/sso", nil))
+	r.Equal(http.StatusOK, samlRec.Code)
+	r.Contains(samlRec.Body.String(), `name="login_identifier"`)
+	r.NotContains(samlRec.Body.String(), "Troy Barnes")
+}
+
 func TestOIDCAuthorizeLoginHintUsesDefaultBehaviorForMultipleMatches(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)

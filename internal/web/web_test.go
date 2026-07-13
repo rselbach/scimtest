@@ -1592,6 +1592,7 @@ func TestAppSaveStoresSCIMSettingsAndInitializesSyncState(t *testing.T) {
 		"saml_attribute_given_name":  {"first_name"},
 		"saml_attribute_family_name": {"last_name"},
 		"saml_attribute_groups":      {"roles"},
+		"chooser_mode":               {"identifier"},
 	}
 	req := httptest.NewRequest(http.MethodPost, "/apps/save", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -1613,6 +1614,7 @@ func TestAppSaveStoresSCIMSettingsAndInitializesSyncState(t *testing.T) {
 	r.Equal("roles", savedApp.OIDCClaimMappings.Groups)
 	r.Equal("mail", savedApp.SAMLAttributeMappings.Email)
 	r.Equal("roles", savedApp.SAMLAttributeMappings.Groups)
+	r.Equal("identifier", savedApp.ChooserMode)
 	r.True(state.UserSync[savedApp.ID]["troy"].Dirty)
 	r.True(state.GroupSync[savedApp.ID]["study-group"].Dirty)
 	state.UserSync[savedApp.ID]["troy"] = resourceSyncState{RemoteID: "remote-troy", LastError: "old user error"}

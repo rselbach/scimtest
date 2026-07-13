@@ -143,6 +143,7 @@ type App struct {
 	IncludeGroupsClaim     bool                  `json:"include_groups_claim"`
 	OIDCClaimMappings      OIDCClaimMappings     `json:"oidc_claim_mappings,omitempty"`
 	SAMLAttributeMappings  SAMLAttributeMappings `json:"saml_attribute_mappings,omitempty"`
+	ChooserMode            string                `json:"chooser_mode,omitempty"`
 	SCIMEnabled            bool                  `json:"scim_enabled,omitempty"`
 	SCIMBaseURL            string                `json:"scim_base_url,omitempty"`
 	SCIMBearerToken        string                `json:"scim_bearer_token,omitempty"`

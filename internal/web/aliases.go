@@ -70,9 +70,12 @@ var (
 	defaultSAMLAttributeMappings = core.DefaultSAMLAttributeMappings
 	oidcClaimMappingsForApp      = core.OIDCClaimMappingsForApp
 	samlAttributeMappingsForApp  = core.SAMLAttributeMappingsForApp
+	normalizeChooserMode         = core.NormalizeChooserMode
 )
 
 const (
 	defaultSAMLEmailAttributeName = core.DefaultSAMLEmailAttributeName
 	defaultSAMLNameIDField        = core.DefaultSAMLNameIDField
+	chooserModeList               = core.ChooserModeList
+	chooserModeIdentifier         = core.ChooserModeIdentifier
 )

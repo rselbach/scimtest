@@ -116,6 +116,7 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		SAMLNameIDField:        normalizeSAMLNameIDField(r.FormValue("saml_name_id_field")),
 		SAMLEmailAttributeName: strings.TrimSpace(r.FormValue("saml_email_attribute_name")),
 		IncludeGroupsClaim:     r.FormValue("include_groups_claim") == "on",
+		ChooserMode:            normalizeChooserMode(r.FormValue("chooser_mode")),
 		OIDCClaimMappings: oidcClaimMappings{
 			Name: strings.TrimSpace(r.FormValue("oidc_claim_name")), GivenName: strings.TrimSpace(r.FormValue("oidc_claim_given_name")),
 			FamilyName: strings.TrimSpace(r.FormValue("oidc_claim_family_name")), Username: strings.TrimSpace(r.FormValue("oidc_claim_username")),
@@ -403,16 +404,7 @@ func (a *webApp) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	loginHint := loginHintFromRequest(r)
-	selectedUserID := selectedLoginHintUserID(state.Users, loginHint)
-	renderChooser(w, chooserData{
-		Title:          "OIDC sign-in",
-		AppName:        app.Name,
-		Action:         r.URL.RequestURI(),
-		Users:          activeUsersWithLoginHint(state.Users, loginHint),
-		SelectedUserID: selectedUserID,
-		Hidden:         hiddenValues(r.URL.Query()),
-		NoUsersHint:    "Create an active user before starting an OIDC flow.",
-	})
+	renderChooser(w, newChooserData("OIDC sign-in", app, r.URL.RequestURI(), state.Users, loginHint, hiddenValues(r.URL.Query()), "Create an active user before starting an OIDC flow."))
 }
 
 func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request) {
@@ -436,7 +428,7 @@ func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	user, ok := userByID(state.Users, r.FormValue("user_id"))
+	user, ok := chooserUser(state.Users, app, r.Form)
 	if !ok || !user.Active || user.Deleted {
 		http.Error(w, "active user is required", http.StatusBadRequest)
 		return
@@ -623,16 +615,7 @@ func (a *webApp) handleSAMLSSO(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	loginHint := loginHintFromRequest(r)
-	selectedUserID := selectedLoginHintUserID(state.Users, loginHint)
-	renderChooser(w, chooserData{
-		Title:          "SAML sign-in",
-		AppName:        app.Name,
-		Action:         r.URL.RequestURI(),
-		Users:          activeUsersWithLoginHint(state.Users, loginHint),
-		SelectedUserID: selectedUserID,
-		Hidden:         hiddenValues(r.URL.Query()),
-		NoUsersHint:    "Create an active user before starting a SAML flow.",
-	})
+	renderChooser(w, newChooserData("SAML sign-in", app, r.URL.RequestURI(), state.Users, loginHint, hiddenValues(r.URL.Query()), "Create an active user before starting a SAML flow."))
 }
 
 func (a *webApp) handleSAMLSSOPost(w http.ResponseWriter, r *http.Request) {
@@ -645,26 +628,17 @@ func (a *webApp) handleSAMLSSOPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	baseURL := a.effectiveIDPBaseURL(r, state)
-	responseContext, err := resolveSAMLResponseContext(r.Form, app, baseURL, r.FormValue("user_id") != "")
+	responseContext, err := resolveSAMLResponseContext(r.Form, app, baseURL, chooserSelectionProvided(app, r.Form))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if r.FormValue("user_id") == "" && (r.FormValue("SAMLRequest") != "" || r.FormValue("login_hint") != "" || r.FormValue("RelayState") != "") {
+	if !chooserSelectionProvided(app, r.Form) && (r.FormValue("SAMLRequest") != "" || r.FormValue("login_hint") != "" || r.FormValue("RelayState") != "") {
 		loginHint := loginHintFromValues(r.Form)
-		selectedUserID := selectedLoginHintUserID(state.Users, loginHint)
-		renderChooser(w, chooserData{
-			Title:          "SAML sign-in",
-			AppName:        app.Name,
-			Action:         r.URL.RequestURI(),
-			Users:          activeUsersWithLoginHint(state.Users, loginHint),
-			SelectedUserID: selectedUserID,
-			Hidden:         hiddenValues(r.Form),
-			NoUsersHint:    "Create an active user before starting a SAML flow.",
-		})
+		renderChooser(w, newChooserData("SAML sign-in", app, r.URL.RequestURI(), state.Users, loginHint, hiddenValues(r.Form), "Create an active user before starting a SAML flow."))
 		return
 	}
-	user, ok := userByID(state.Users, r.FormValue("user_id"))
+	user, ok := chooserUser(state.Users, app, r.Form)
 	if !ok || !user.Active || user.Deleted {
 		http.Error(w, "active user is required", http.StatusBadRequest)
 		return
@@ -953,13 +927,45 @@ func stringIn(values []string, target string) bool {
 }
 
 type chooserData struct {
-	Title          string
-	AppName        string
-	Action         string
-	Users          []user
-	SelectedUserID string
-	Hidden         map[string][]string
-	NoUsersHint    string
+	Title           string
+	AppName         string
+	Action          string
+	Users           []user
+	SelectedUserID  string
+	Hidden          map[string][]string
+	NoUsersHint     string
+	IdentifierOnly  bool
+	LoginIdentifier string
+}
+
+func newChooserData(title string, app app, action string, users []user, loginHint string, hidden map[string][]string, noUsersHint string) chooserData {
+	data := chooserData{
+		Title: title, AppName: app.Name, Action: action, Hidden: hidden,
+		NoUsersHint: noUsersHint,
+	}
+	if normalizeChooserMode(app.ChooserMode) == chooserModeIdentifier {
+		data.IdentifierOnly = true
+		data.LoginIdentifier = loginHint
+		return data
+	}
+	data.Users = activeUsersWithLoginHint(users, loginHint)
+	data.SelectedUserID = selectedLoginHintUserID(users, loginHint)
+	return data
+}
+
+func chooserSelectionProvided(app app, values url.Values) bool {
+	if normalizeChooserMode(app.ChooserMode) == chooserModeIdentifier {
+		return strings.TrimSpace(values.Get("login_identifier")) != ""
+	}
+	return strings.TrimSpace(values.Get("user_id")) != ""
+}
+
+func chooserUser(users []user, app app, values url.Values) (user, bool) {
+	userID := values.Get("user_id")
+	if normalizeChooserMode(app.ChooserMode) == chooserModeIdentifier {
+		userID = selectedLoginHintUserID(users, values.Get("login_identifier"))
+	}
+	return userByID(users, userID)
 }
 
 func activeUsers(users []user) []user {
@@ -1160,7 +1166,7 @@ func firstElementTextByLocalName(el *etree.Element, localName string) string {
 func hiddenValues(values url.Values) map[string][]string {
 	out := make(map[string][]string)
 	for key, value := range values {
-		if key == "user_id" {
+		if key == "user_id" || key == "login_identifier" {
 			continue
 		}
 		out[key] = value
@@ -1208,6 +1214,9 @@ var chooserTemplate = template.Must(template.New("chooser").Funcs(template.FuncM
     button:hover { background:var(--accent-strong); border-color:var(--accent-strong); }
     button:disabled { opacity:.5; cursor:not-allowed; }
     .empty { color:var(--muted); padding:18px 20px 20px; }
+	.identifier-form { grid-template-rows:auto auto; }
+	.identifier-field { display:grid; gap:6px; color:var(--muted); }
+	.identifier-field input { width:100%; height:38px; padding:0 11px; border:1px solid var(--line); border-radius:6px; color:var(--text); font:inherit; }
   </style>
 </head>
 <body>
@@ -1216,7 +1225,15 @@ var chooserTemplate = template.Must(template.New("chooser").Funcs(template.FuncM
       <h1>{{.Title}}</h1>
       <p>{{.AppName}}</p>
     </header>
-    {{if .Users}}
+    {{if .IdentifierOnly}}
+	<form class="identifier-form" method="post" action="{{.Action}}">
+	  {{range $key, $values := .Hidden}}{{range $values}}<input type="hidden" name="{{$key}}" value="{{.}}">{{end}}{{end}}
+	  <label class="identifier-field">Username or email
+		<input name="login_identifier" value="{{.LoginIdentifier}}" autocomplete="username" required autofocus>
+	  </label>
+	  <button type="submit">Continue</button>
+	</form>
+	{{else if .Users}}
     <form method="post" action="{{.Action}}">
       {{range $key, $values := .Hidden}}{{range $values}}<input type="hidden" name="{{$key}}" value="{{.}}">{{end}}{{end}}
       <div class="search-row">

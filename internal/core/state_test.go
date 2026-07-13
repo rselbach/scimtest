@@ -59,6 +59,7 @@ func TestSaveAndLoadState(t *testing.T) {
 				GivenName: "first_name", FamilyName: "last_name", Username: "login",
 				Email: "mail", Groups: "roles",
 			},
+			ChooserMode: ChooserModeIdentifier,
 		}},
 		UserSync: map[string]map[string]ResourceSyncState{
 			"app-1": {"local-1": {RemoteID: "remote-1", Dirty: true}},

@@ -1307,6 +1307,7 @@ func applyFormDraft(data *pageData, draft formDraft) {
 			Username: values.Get("saml_attribute_username"), Email: values.Get("saml_email_attribute_name"), Groups: values.Get("saml_attribute_groups"),
 		}
 		data.AppForm.App.IncludeGroupsClaim = values.Get("include_groups_claim") == "on"
+		data.AppForm.App.ChooserMode = normalizeChooserMode(values.Get("chooser_mode"))
 		data.AppForm.App.SCIMEnabled = values.Get("scim_enabled") == "on"
 		data.AppForm.App.SCIMBaseURL = values.Get("scim_base_url")
 		data.AppForm.App.SCIMAutoOpenTrace = values.Get("scim_auto_open_trace") == "on"
@@ -1828,6 +1829,7 @@ func buildAppFormView(state appState, tab string, id string, baseURL string, cer
 			SAMLNameIDFormat:       samlNameIDFormatForField(defaultSAMLNameIDField),
 			SAMLEmailAttributeName: defaultSAMLEmailAttributeName,
 			IncludeGroupsClaim:     true,
+			ChooserMode:            chooserModeList,
 			OIDCClaimMappings:      defaultOIDCClaimMappings(),
 			SAMLAttributeMappings:  defaultSAMLAttributeMappings(),
 		},
