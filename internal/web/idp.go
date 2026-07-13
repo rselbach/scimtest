@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -47,7 +48,12 @@ type accessToken struct {
 	ExpiresAt time.Time
 }
 
-const samlHTTPPostBinding = "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+const (
+	samlHTTPPostBinding = "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+	maxSAMLRequestBytes = 1 << 20
+)
+
+var errSAMLRequestTooLarge = fmt.Errorf("inflated SAMLRequest exceeds %d bytes", maxSAMLRequestBytes)
 
 type samlAuthnRequest struct {
 	ID              string
@@ -949,6 +955,9 @@ func parseSAMLRequestDocument(encodedRequest string) (*etree.Document, error) {
 		}
 	}
 	requestXML, inflateErr := inflateRawDeflate(decoded)
+	if errors.Is(inflateErr, errSAMLRequestTooLarge) {
+		return nil, inflateErr
+	}
 	if inflateErr != nil || len(requestXML) == 0 {
 		requestXML = decoded
 	}
@@ -995,15 +1004,19 @@ func loginHintFromURLOrQuery(value string) string {
 
 func inflateRawDeflate(data []byte) ([]byte, error) {
 	reader := flate.NewReader(bytes.NewReader(data))
-	out, err := io.ReadAll(reader)
-	if err != nil {
-		if closeErr := reader.Close(); closeErr != nil {
-			return nil, fmt.Errorf("read raw deflate: %w (close: %v)", err, closeErr)
+	out, readErr := io.ReadAll(io.LimitReader(reader, maxSAMLRequestBytes+1))
+	closeErr := reader.Close()
+	if readErr != nil {
+		if closeErr != nil {
+			return nil, fmt.Errorf("read raw deflate: %w (close: %v)", readErr, closeErr)
 		}
-		return nil, fmt.Errorf("read raw deflate: %w", err)
+		return nil, fmt.Errorf("read raw deflate: %w", readErr)
 	}
-	if err := reader.Close(); err != nil {
-		return nil, fmt.Errorf("close raw deflate reader: %w", err)
+	if closeErr != nil {
+		return nil, fmt.Errorf("close raw deflate reader: %w", closeErr)
+	}
+	if len(out) > maxSAMLRequestBytes {
+		return nil, errSAMLRequestTooLarge
 	}
 	return out, nil
 }

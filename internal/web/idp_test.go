@@ -727,6 +727,16 @@ func TestSAMLAuthnRequestValidation(t *testing.T) {
 	}
 }
 
+func TestParseSAMLRequestRejectsOversizedInflatedPayload(t *testing.T) {
+	r := require.New(t)
+	encodedRequest := encodeRedirectSAMLRequest(t, strings.Repeat("A", maxSAMLRequestBytes+1))
+
+	_, err := parseSAMLRequestDocument(encodedRequest)
+
+	r.ErrorIs(err, errSAMLRequestTooLarge)
+	r.ErrorContains(err, "inflated SAMLRequest exceeds 1048576 bytes")
+}
+
 func TestSignedSAMLResponseUsesSharedGroups(t *testing.T) {
 	r := require.New(t)
 	svc := newTestIDPApp(t)
