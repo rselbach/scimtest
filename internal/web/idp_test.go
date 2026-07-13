@@ -91,6 +91,8 @@ func TestOIDCAuthorizationCodeFlowUsesSharedDirectory(t *testing.T) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	svc.routes().ServeHTTP(token, req)
 	r.Equal(http.StatusOK, token.Code)
+	r.Equal("no-store", token.Header().Get("Cache-Control"))
+	r.Equal("no-cache", token.Header().Get("Pragma"))
 	var tokenBody map[string]any
 	r.NoError(json.Unmarshal(token.Body.Bytes(), &tokenBody))
 	r.NotEmpty(tokenBody["access_token"])
@@ -366,6 +368,8 @@ func TestOIDCTokenPrunesExpiredCredentials(t *testing.T) {
 	svc.routes().ServeHTTP(rec, req)
 
 	r.Equal(http.StatusBadRequest, rec.Code)
+	r.Equal("no-store", rec.Header().Get("Cache-Control"))
+	r.Equal("no-cache", rec.Header().Get("Pragma"))
 	r.NotContains(svc.authCodes, "expired-code")
 	r.Contains(svc.authCodes, "valid-code")
 	r.NotContains(svc.accessTokens, "expired-token")

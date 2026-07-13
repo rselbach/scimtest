@@ -367,6 +367,8 @@ func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request)
 }
 
 func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
 	a.oidcMu.Lock()
 	defer a.oidcMu.Unlock()
 
