@@ -932,6 +932,19 @@
       padding: 6px;
       background: var(--bg-soft);
     }
+    .member-picker-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+    .member-picker-toolbar input { flex: 1; }
+    .member-picker-status {
+      color: var(--muted);
+      font-size: 11.5px;
+      white-space: nowrap;
+    }
+    .member-picker-more { margin-top: 6px; }
     .member-option {
       display: flex;
       gap: 8px;

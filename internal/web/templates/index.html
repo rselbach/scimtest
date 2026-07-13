@@ -451,19 +451,29 @@
             </label>
             <div class="field full">
               <span class="label">Members</span>
-              <div class="members-grid">
+              {{if .GroupForm.Members}}
+              <div class="member-picker" data-member-picker>
+                <div class="member-picker-toolbar">
+                  <input type="search" placeholder="Search users" aria-label="Search group members" autocomplete="off" data-member-search>
+                  <span class="member-picker-status" aria-live="polite" data-member-status></span>
+                </div>
+              <div class="members-grid" data-member-list>
                 {{range .GroupForm.Members}}
-                <label class="member-option">
+                <label class="member-option" data-member-option data-member-terms="{{.Label}} {{.Meta}}">
                   <input type="checkbox" name="member_ids" value="{{.ID}}" {{if .Checked}}checked{{end}}>
                   <span class="member-copy">
                     <strong>{{.Label}}</strong>
                     <span>{{.Meta}}</span>
                   </span>
                 </label>
-                {{else}}
-                <div class="members-empty">No users available — create one first.</div>
                 {{end}}
+                <div class="members-empty is-hidden" data-member-empty>No users match this search.</div>
               </div>
+                <button class="btn btn-sm btn-ghost member-picker-more" type="button" data-member-more>Show more</button>
+              </div>
+              {{else}}
+              <div class="members-empty">No users available — create one first.</div>
+              {{end}}
             </div>
           </div>
           <div class="form-actions">

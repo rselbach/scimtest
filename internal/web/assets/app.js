@@ -107,6 +107,46 @@
 	  });
 	}
 
+	const memberPicker = document.querySelector('[data-member-picker]');
+	if (memberPicker) {
+	  const search = memberPicker.querySelector('[data-member-search]');
+	  const options = Array.from(memberPicker.querySelectorAll('[data-member-option]'));
+	  const status = memberPicker.querySelector('[data-member-status]');
+	  const empty = memberPicker.querySelector('[data-member-empty]');
+	  const more = memberPicker.querySelector('[data-member-more]');
+	  const pageSize = 50;
+	  let visibleLimit = pageSize;
+
+	  function updateMemberPicker() {
+		const query = (search.value || '').trim().toLocaleLowerCase();
+		const matches = options.filter(option => (option.dataset.memberTerms || '').toLocaleLowerCase().includes(query));
+		const matchSet = new Set(matches);
+		let shown = 0;
+		for (const option of options) {
+		  const matchesSearch = matchSet.has(option);
+		  const checked = option.querySelector('input').checked;
+		  const visible = matchesSearch && (shown < visibleLimit || (query === '' && checked));
+		  option.classList.toggle('is-hidden', !visible);
+		  if (visible) shown++;
+		}
+		const selected = options.filter(option => option.querySelector('input').checked).length;
+		status.textContent = 'Showing ' + String(shown) + ' of ' + String(matches.length) + ' · ' + String(selected) + ' selected';
+		empty.classList.toggle('is-hidden', matches.length !== 0);
+		more.classList.toggle('is-hidden', shown >= matches.length);
+	  }
+
+	  search.addEventListener('input', function () {
+		visibleLimit = pageSize;
+		updateMemberPicker();
+	  });
+	  memberPicker.addEventListener('change', updateMemberPicker);
+	  more.addEventListener('click', function () {
+		visibleLimit += pageSize;
+		updateMemberPicker();
+	  });
+	  updateMemberPicker();
+	}
+
     const overlays = Array.from(document.querySelectorAll('[data-overlay]'));
 	const activeOverlay = overlays[overlays.length - 1];
 	const formError = document.querySelector('[data-form-error]');

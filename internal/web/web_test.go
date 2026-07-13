@@ -173,6 +173,33 @@ func TestDashboardDialogsAreLabelledAndFocusEditableFields(t *testing.T) {
 	}
 }
 
+func TestGroupFormProvidesSearchableIncrementalMemberPicker(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	users := make([]user, 0, 60)
+	for i := 0; i < 60; i++ {
+		users = append(users, user{
+			ID: fmt.Sprintf("student-%d", i), GivenName: "Human", FamilyName: fmt.Sprintf("Being %d", i),
+			Username: fmt.Sprintf("human-%d", i), Email: fmt.Sprintf("human-%d@greendale.edu", i), Active: true,
+		})
+	}
+	r.NoError(saveState(appState{Users: users, Groups: []group{{ID: "study-group", DisplayName: "Study Group", MemberIDs: []string{"student-59"}}}}))
+	app := newTestIDPApp(t)
+	rec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=groups&modal=group&id=study-group", nil))
+
+	r.Equal(http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	r.Contains(body, `data-member-picker`)
+	r.Contains(body, `data-member-search`)
+	r.Contains(body, `value="student-59" checked`)
+	r.Contains(body, `data-member-more`)
+	javascript := dashboardAsset(t, app, "/assets/app.js")
+	r.Contains(javascript, "const pageSize = 50")
+	r.Contains(javascript, "query === '' && checked")
+}
+
 func TestIDPRoutesExcludeAdminEndpoints(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
