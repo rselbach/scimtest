@@ -1083,6 +1083,7 @@ func TestSyncStatusRejectsInvalidEventSequence(t *testing.T) {
 	newTestIDPApp(t).routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sync/status?after=-1", nil))
 
 	r.Equal(http.StatusBadRequest, rec.Code)
+	r.Equal("application/json", rec.Header().Get("Content-Type"))
 	r.JSONEq(`{"error":"sync event sequence must be a non-negative integer"}`, rec.Body.String())
 }
 
@@ -1125,6 +1126,7 @@ func TestMutationIsRejectedWhileSyncRuns(t *testing.T) {
 
 	r.False(called)
 	r.Equal(http.StatusConflict, rec.Code)
+	r.Equal("application/json", rec.Header().Get("Content-Type"))
 	r.JSONEq(`{"error":"sync is running; wait for it to finish"}`, rec.Body.String())
 }
 
@@ -2086,6 +2088,7 @@ func TestSyncRejectedWhileAnotherEnvironmentSyncs(t *testing.T) {
 	appService.routes().ServeHTTP(rec, req)
 
 	r.Equal(http.StatusConflict, rec.Code)
+	r.Equal("application/json", rec.Header().Get("Content-Type"))
 	r.Contains(rec.Body.String(), "a sync is already running for Alpha")
 }
 

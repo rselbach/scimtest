@@ -580,8 +580,7 @@ func (a *webApp) rejectWhileSyncing(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if a.anySyncRunning() {
 			if wantsJSON(r) {
-				w.WriteHeader(http.StatusConflict)
-				writeJSON(w, map[string]string{"error": "sync is running; wait for it to finish"})
+				writeJSONStatus(w, http.StatusConflict, map[string]string{"error": "sync is running; wait for it to finish"})
 				return
 			}
 			a.redirectError(w, r, normalizedTab(r.FormValue("tab")), fmt.Errorf("sync is running; wait for it to finish"))
@@ -1448,14 +1447,12 @@ func (a *webApp) startSyncRequest(w http.ResponseWriter, r *http.Request, kind s
 func (a *webApp) handleSyncStatus(w http.ResponseWriter, r *http.Request) {
 	state, err := loadRequestState(r)
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		writeJSON(w, map[string]string{"error": err.Error()})
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	after, err := syncEventSequence(r.URL.Query().Get("after"))
 	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		writeJSON(w, map[string]string{"error": err.Error()})
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, a.currentSyncJobAfter(requestSyncAppID(r, state), after))
@@ -1475,8 +1472,7 @@ func syncEventSequence(value string) (int, error) {
 
 func (a *webApp) respondSyncStartError(w http.ResponseWriter, r *http.Request, tab string, err error) {
 	if wantsJSON(r) {
-		w.WriteHeader(http.StatusConflict)
-		writeJSON(w, syncJobSnapshot{Done: true, Error: err.Error(), Message: err.Error()})
+		writeJSONStatus(w, http.StatusConflict, syncJobSnapshot{Done: true, Error: err.Error(), Message: err.Error()})
 		return
 	}
 
