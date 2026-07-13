@@ -319,6 +319,11 @@ func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	redirectURI, err := parseOIDCRedirectURI(r.FormValue("redirect_uri"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	user, ok := userByID(state.Users, r.FormValue("user_id"))
 	if !ok || !user.Active || user.Deleted {
 		http.Error(w, "active user is required", http.StatusBadRequest)
@@ -343,7 +348,6 @@ func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request)
 		ExpiresAt:     now.Add(5 * time.Minute),
 	}
 
-	redirectURI, _ := url.Parse(r.FormValue("redirect_uri"))
 	query := redirectURI.Query()
 	query.Set("code", code)
 	if stateValue := r.FormValue("state"); stateValue != "" {
@@ -688,6 +692,9 @@ func validateAuthorizeRequest(app app, values url.Values) error {
 	if redirectURI == "" {
 		return fmt.Errorf("redirect_uri is required")
 	}
+	if _, err := parseOIDCRedirectURI(redirectURI); err != nil {
+		return err
+	}
 	if !app.AllowAnyOIDCRedirect && !stringIn(app.OIDCRedirectURIs, redirectURI) {
 		return fmt.Errorf("redirect_uri is not registered for this app")
 	}
@@ -709,6 +716,22 @@ func validateAuthorizeRequest(app app, values url.Values) error {
 		return fmt.Errorf("code_challenge is required when code_challenge_method is set")
 	}
 	return nil
+}
+
+func parseOIDCRedirectURI(value string) (*url.URL, error) {
+	redirectURI, err := url.Parse(value)
+	if err != nil {
+		return nil, fmt.Errorf("redirect_uri must be a valid absolute HTTP(S) URL: %w", err)
+	}
+	switch strings.ToLower(redirectURI.Scheme) {
+	case "http", "https":
+	default:
+		return nil, fmt.Errorf("redirect_uri must be a valid absolute HTTP(S) URL")
+	}
+	if redirectURI.Host == "" || redirectURI.Fragment != "" {
+		return nil, fmt.Errorf("redirect_uri must be a valid absolute HTTP(S) URL without a fragment")
+	}
+	return redirectURI, nil
 }
 
 func validPKCEVerifier(challenge string, verifier string) bool {

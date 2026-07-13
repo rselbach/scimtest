@@ -220,6 +220,56 @@ func TestOIDCPKCEValidation(t *testing.T) {
 	r.EqualError(err, "public clients must use PKCE")
 }
 
+func TestOIDCRedirectURIValidation(t *testing.T) {
+	tests := map[string]struct {
+		redirectURI string
+		wantError   string
+	}{
+		"HTTP": {
+			redirectURI: "http://localhost/callback",
+		},
+		"HTTPS": {
+			redirectURI: "https://greendale.example/callback?audience=students",
+		},
+		"malformed": {
+			redirectURI: "https://greendale.example/%",
+			wantError:   "redirect_uri must be a valid absolute HTTP(S) URL",
+		},
+		"unsafe scheme": {
+			redirectURI: "javascript:alert(1)",
+			wantError:   "redirect_uri must be a valid absolute HTTP(S) URL",
+		},
+		"relative": {
+			redirectURI: "/callback",
+			wantError:   "redirect_uri must be a valid absolute HTTP(S) URL",
+		},
+		"fragment": {
+			redirectURI: "https://greendale.example/callback#token",
+			wantError:   "redirect_uri must be a valid absolute HTTP(S) URL without a fragment",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			err := validateAuthorizeRequest(app{
+				OIDCClientID:         "greendale-client",
+				AllowAnyOIDCRedirect: true,
+			}, url.Values{
+				"response_type": {"code"},
+				"client_id":     {"greendale-client"},
+				"redirect_uri":  {tc.redirectURI},
+				"scope":         {"openid"},
+			})
+			if tc.wantError == "" {
+				r.NoError(err)
+				return
+			}
+			r.ErrorContains(err, tc.wantError)
+		})
+	}
+}
+
 func TestUserClaimsHonorScopes(t *testing.T) {
 	r := require.New(t)
 	state := appState{Groups: []group{{DisplayName: "Study Group", MemberIDs: []string{"troy"}}}}
