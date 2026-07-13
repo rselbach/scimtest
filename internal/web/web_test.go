@@ -54,7 +54,7 @@ func TestIndexRendersDashboard(t *testing.T) {
 	r.Contains(userBody, "tbarnes")
 	r.Contains(userBody, "https://example.com/scim")
 	r.Contains(userBody, "SCIM Control Surface")
-	r.Contains(userBody, "window.location.reload()")
+	r.Contains(dashboardAsset(t, app, "/assets/app.js"), "window.location.reload()")
 
 	groupReq := httptest.NewRequest(http.MethodGet, "/?tab=groups", nil)
 	groupRec := httptest.NewRecorder()
@@ -113,6 +113,9 @@ func TestDashboardDialogsAreLabelledAndFocusEditableFields(t *testing.T) {
 	}))
 	appService := newTestIDPApp(t)
 	appService.rememberTrace("app-1", []syncTraceEntry{{Operation: "create", Method: http.MethodPost, Path: "/Users"}})
+	assetJS := dashboardAsset(t, appService, "/assets/app.js")
+	r.Contains(assetJS, "document.querySelectorAll('.topbar, .app, .footer')")
+	r.Contains(assetJS, "region.setAttribute('aria-hidden', 'true')")
 	tests := map[string]struct {
 		path         string
 		titleID      string
@@ -166,8 +169,6 @@ func TestDashboardDialogsAreLabelledAndFocusEditableFields(t *testing.T) {
 			if tc.focusPattern != "" {
 				r.Regexp(tc.focusPattern, body)
 			}
-			r.Contains(body, "document.querySelectorAll('.topbar, .app, .footer')")
-			r.Contains(body, "region.setAttribute('aria-hidden', 'true')")
 		})
 	}
 }
@@ -1297,40 +1298,39 @@ func TestDashboardRendersCriticalFlowAffordances(t *testing.T) {
 	r.Contains(progressRec.Body.String(), `data-sync-details`)
 	r.Contains(progressRec.Body.String(), `data-sync-activity-list`)
 	r.Contains(progressRec.Body.String(), `data-sync-details-open>View details</button>`)
-	r.Contains(progressRec.Body.String(), `statusURL.searchParams.set('after', String(syncEventSequence))`)
+	r.Contains(dashboardAsset(t, app, "/assets/app.js"), `statusURL.searchParams.set('after', String(syncEventSequence))`)
 }
 
 func TestDashboardJavaScriptDoesNotContainStyles(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{}))
+	app := newTestIDPApp(t)
 	rec := httptest.NewRecorder()
-	newTestIDPApp(t).routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/assets/app.js", nil))
 	r.Equal(http.StatusOK, rec.Code)
-	body := rec.Body.String()
-	start := strings.Index(body, "<script>")
-	end := strings.LastIndex(body, "</script>")
-	r.NotEqual(-1, start)
-	r.Greater(end, start)
-	script := body[start:end]
-	r.NotContains(script, ".section-label")
-	r.NotContains(script, "grid-column:")
+	r.Equal("public, max-age=3600", rec.Header().Get("Cache-Control"))
+	r.NotContains(rec.Body.String(), ".section-label")
+	r.NotContains(rec.Body.String(), "grid-column:")
+	r.Contains(dashboardAsset(t, app, "/assets/app.css"), ".section-label")
 }
 
 func TestNewEnvironmentFormGeneratesSlugLocally(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{}))
+	app := newTestIDPApp(t)
 	rec := httptest.NewRecorder()
-	newTestIDPApp(t).routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=apps&modal=app", nil))
+	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=apps&modal=app", nil))
 
 	r.Equal(http.StatusOK, rec.Code)
 	body := rec.Body.String()
 	r.Contains(body, `data-environment-form`)
 	r.Contains(body, `data-environment-name`)
 	r.Contains(body, `data-environment-slug`)
-	r.Contains(body, `if (environmentForm && !environmentForm.elements.id.value)`)
-	r.Contains(body, `.replace(/[^a-z0-9]+/g, '-')`)
+	assetJS := dashboardAsset(t, app, "/assets/app.js")
+	r.Contains(assetJS, `if (environmentForm && !environmentForm.elements.id.value)`)
+	r.Contains(assetJS, `.replace(/[^a-z0-9]+/g, '-')`)
 }
 
 func TestDashboardUsesOneGlobalDirectory(t *testing.T) {
@@ -2200,6 +2200,15 @@ func TestFormDraftRedactsSecrets(t *testing.T) {
 		r.Empty(draft.Values.Get("oidc_client_secret"))
 		r.Equal("Greendale Portal", draft.Values.Get("name"))
 	}
+}
+
+func dashboardAsset(t *testing.T, app *webApp, path string) string {
+	t.Helper()
+	r := require.New(t)
+	rec := httptest.NewRecorder()
+	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	r.Equal(http.StatusOK, rec.Code)
+	return rec.Body.String()
 }
 
 func setTestStateFile(t *testing.T) {

@@ -22,7 +22,7 @@ import (
 	rgrokclient "github.com/rselbach/rgrok/client"
 )
 
-//go:embed templates/*.html
+//go:embed templates/*.html assets/*
 var templateFS embed.FS
 
 var pageTemplate = template.Must(template.New("index.html").Funcs(template.FuncMap{
@@ -546,6 +546,11 @@ func (a *webApp) idpRoutes() http.Handler {
 }
 
 func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
+	assets := http.FileServer(http.FS(templateFS))
+	mux.Handle("GET /assets/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		assets.ServeHTTP(w, r)
+	}))
 	mux.HandleFunc("GET /", a.handleIndex)
 	mux.HandleFunc("POST /users/save", a.rejectWhileSyncing(a.handleUserSave))
 	mux.HandleFunc("POST /users/{id}/toggle-active", a.rejectWhileSyncing(a.handleUserToggleActive))
