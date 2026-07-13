@@ -115,6 +115,7 @@
 					{{if .SupportsOIDC}}<a class="btn btn-sm" href="{{.OIDCDiscovery}}" target="_blank" rel="noreferrer">Discovery</a>{{end}}
 					{{if .OIDCTestURL}}<a class="btn btn-sm" href="{{.OIDCTestURL}}" target="_blank" rel="noreferrer">Test OIDC</a>{{end}}
 					{{if .OIDCPKCETestURL}}<a class="btn btn-sm" href="{{.OIDCPKCETestURL}}" data-pkce-test target="_blank" rel="noreferrer" title="Opens the authorize endpoint with a generated PKCE challenge">Test OIDC</a>{{end}}
+					{{if .OIDCInspectorURL}}<a class="btn btn-sm" href="{{.OIDCInspectorURL}}">Inspect OIDC</a>{{end}}
 					{{if .SupportsSAML}}<a class="btn btn-sm" href="{{.SAMLMetadata}}" target="_blank" rel="noreferrer">Metadata</a>{{end}}
 					{{if .SAMLTestURL}}<a class="btn btn-sm" href="{{.SAMLTestURL}}" target="_blank" rel="noreferrer">Test SAML</a>{{end}}
                     <a class="icon-btn" href="{{.EditURL}}" title="Edit environment" aria-label="Edit environment">

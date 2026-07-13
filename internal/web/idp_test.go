@@ -78,6 +78,11 @@ func TestOIDCAuthorizationCodeFlowUsesSharedDirectory(t *testing.T) {
 	code := location.Query().Get("code")
 	r.NotEmpty(code)
 	r.Equal("abc", location.Query().Get("state"))
+	authorizationInspector := httptest.NewRecorder()
+	svc.routes().ServeHTTP(authorizationInspector, httptest.NewRequest(http.MethodGet, "/inspect/oidc/example", nil))
+	r.Equal(http.StatusOK, authorizationInspector.Code)
+	r.Contains(authorizationInspector.Body.String(), "Authorization code issued")
+	r.NotContains(authorizationInspector.Body.String(), code)
 
 	tokenForm := url.Values{
 		"grant_type":    {"authorization_code"},
@@ -97,6 +102,19 @@ func TestOIDCAuthorizationCodeFlowUsesSharedDirectory(t *testing.T) {
 	r.NoError(json.Unmarshal(token.Body.Bytes(), &tokenBody))
 	r.NotEmpty(tokenBody["access_token"])
 	r.NotEmpty(tokenBody["id_token"])
+
+	inspector := httptest.NewRecorder()
+	svc.routes().ServeHTTP(inspector, httptest.NewRequest(http.MethodGet, "/inspect/oidc/example", nil))
+	r.Equal(http.StatusOK, inspector.Code)
+	body := inspector.Body.String()
+	r.Contains(body, "Tokens issued")
+	r.Contains(body, "Riley Stone")
+	r.Contains(body, "openid profile email groups")
+	r.Contains(body, "Decoded ID token claims")
+	r.Contains(body, "riley@example.test")
+	r.NotContains(body, tokenBody["access_token"])
+	r.NotContains(body, tokenBody["id_token"])
+	r.NotContains(body, "secret")
 }
 
 func TestOIDCFlowProceedsWhileStateLockHeld(t *testing.T) {

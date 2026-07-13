@@ -441,7 +441,7 @@ func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	a.authCodes[code] = authCode{
+	authCode := authCode{
 		AppSlug:       app.Slug,
 		ClientID:      r.FormValue("client_id"),
 		UserID:        user.ID,
@@ -450,6 +450,11 @@ func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request)
 		Scope:         r.FormValue("scope"),
 		CodeChallenge: r.FormValue("code_challenge"),
 		ExpiresAt:     now.Add(5 * time.Minute),
+	}
+	a.authCodes[code] = authCode
+	if err := a.rememberOIDCInspection(app, user, authCode, "Authorization code issued", nil, now); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	query := redirectURI.Query()
@@ -523,6 +528,10 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 	}
 	access, err := randomSecret(32)
 	if err != nil {
+		writeOAuthError(w, http.StatusInternalServerError, "server_error", err.Error())
+		return
+	}
+	if err := a.rememberOIDCInspection(app, user, code, "Tokens issued", claims, now); err != nil {
 		writeOAuthError(w, http.StatusInternalServerError, "server_error", err.Error())
 		return
 	}

@@ -51,6 +51,8 @@ type webApp struct {
 	oidcMu           sync.Mutex
 	authCodes        map[string]authCode
 	accessTokens     map[string]accessToken
+	oidcInspectorMu  sync.Mutex
+	oidcInspections  map[string]oidcInspection
 	lastTraces       map[string][]syncTraceEntry
 	lastTraceContent map[string]string
 	formDraftMu      sync.Mutex
@@ -210,17 +212,18 @@ type groupRowView struct {
 }
 
 type appRowView struct {
-	ID            string
-	Name          string
-	Slug          string
-	Protocol      string
-	OIDCClientID  string
-	OIDCDiscovery string
-	SAMLMetadata  string
-	SupportsOIDC  bool
-	SupportsSAML  bool
-	EditURL       string
-	OIDCTestURL   string
+	ID               string
+	Name             string
+	Slug             string
+	Protocol         string
+	OIDCClientID     string
+	OIDCDiscovery    string
+	SAMLMetadata     string
+	SupportsOIDC     bool
+	SupportsSAML     bool
+	EditURL          string
+	OIDCTestURL      string
+	OIDCInspectorURL string
 	// OIDCPKCETestURL is an authorize URL missing its code_challenge; the
 	// page script generates a PKCE pair on click and appends the challenge.
 	OIDCPKCETestURL string
@@ -612,6 +615,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /tools/activate-all", a.rejectWhileSyncing(a.handleToolsActivateAll))
 	mux.HandleFunc("POST /tools/create-users", a.rejectWhileSyncing(a.handleToolsCreateUsers))
 	mux.HandleFunc("GET /backup", a.handleBackupDownload)
+	mux.HandleFunc("GET /inspect/oidc/{slug}", a.handleOIDCInspector)
 	mux.HandleFunc("POST /restore", a.rejectWhileSyncing(a.handleBackupRestore))
 	mux.HandleFunc("GET /sync/status", a.handleSyncStatus)
 	mux.HandleFunc("POST /sync", a.handleSync)
@@ -1585,6 +1589,7 @@ func buildAppRows(state appState, environmentID string, base string) []appRowVie
 		}
 		if row.SupportsOIDC {
 			row.OIDCDiscovery = base + "/oidc/" + app.Slug + "/.well-known/openid-configuration"
+			row.OIDCInspectorURL = "/inspect/oidc/" + url.PathEscape(app.Slug)
 			if len(app.OIDCRedirectURIs) > 0 {
 				query := url.Values{
 					"response_type": {"code"},

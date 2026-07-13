@@ -167,6 +167,15 @@
       min-width: 0;
       width: 100%;
     }
+    .inspector-page { margin: 0 auto; }
+    .inspector-card { padding: 20px; }
+    .inspector-card h2, .inspector-card h3 { margin: 0 0 14px; }
+    .inspector-card h3 { margin-top: 22px; }
+    .inspector-details { display: grid; gap: 10px; margin: 0; }
+    .inspector-details div { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 12px; }
+    .inspector-details dt { color: var(--muted); font-weight: 600; }
+    .inspector-details dd { margin: 0; overflow-wrap: anywhere; }
+    .inspector-payload { margin: 0; padding: 14px; overflow: auto; border-radius: var(--radius); background: var(--bg-soft); font: 12px/1.55 var(--mono); }
 
     /* Flash toast: pulled out of document flow so it never reflows the page */
     .flash {
