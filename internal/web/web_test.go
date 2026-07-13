@@ -1357,7 +1357,10 @@ func TestAuthenticationOnlyEnvironmentHidesSCIMActions(t *testing.T) {
 func TestAppSaveStoresSCIMSettingsAndInitializesSyncState(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
-	r.NoError(saveState(appState{Users: []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}}}))
+	r.NoError(saveState(appState{
+		Users:  []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}},
+		Groups: []group{{ID: "study-group", DisplayName: "Study Group", MemberIDs: []string{"troy"}}},
+	}))
 	appService := newTestIDPApp(t)
 	form := url.Values{
 		"tab":                     {"apps"},
@@ -1387,6 +1390,10 @@ func TestAppSaveStoresSCIMSettingsAndInitializesSyncState(t *testing.T) {
 	r.Equal("chang-secret", savedApp.SCIMBearerToken)
 	r.True(savedApp.SCIMAutoOpenTrace)
 	r.True(state.UserSync[savedApp.ID]["troy"].Dirty)
+	r.True(state.GroupSync[savedApp.ID]["study-group"].Dirty)
+	state.UserSync[savedApp.ID]["troy"] = resourceSyncState{RemoteID: "remote-troy", LastError: "old user error"}
+	state.GroupSync[savedApp.ID]["study-group"] = resourceSyncState{RemoteID: "remote-study-group", LastError: "old group error"}
+	r.NoError(saveState(state))
 
 	form.Set("id", savedApp.ID)
 	form.Set("name", "Greendale Portal Updated")
@@ -1399,6 +1406,20 @@ func TestAppSaveStoresSCIMSettingsAndInitializesSyncState(t *testing.T) {
 	state, err = loadState()
 	r.NoError(err)
 	r.Equal("chang-secret", state.Apps[0].SCIMBearerToken)
+	r.Equal("remote-troy", state.UserSync[savedApp.ID]["troy"].RemoteID)
+	r.Equal("remote-study-group", state.GroupSync[savedApp.ID]["study-group"].RemoteID)
+
+	form.Set("scim_base_url", "https://new-portal.test/scim/v2/")
+	req = httptest.NewRequest(http.MethodPost, "/apps/save", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec = httptest.NewRecorder()
+	appService.routes().ServeHTTP(rec, req)
+	r.Equal(http.StatusSeeOther, rec.Code)
+	state, err = loadState()
+	r.NoError(err)
+	r.Equal("https://new-portal.test/scim/v2", state.Apps[0].SCIMBaseURL)
+	r.Equal(resourceSyncState{Dirty: true}, state.UserSync[savedApp.ID]["troy"])
+	r.Equal(resourceSyncState{Dirty: true}, state.GroupSync[savedApp.ID]["study-group"])
 }
 
 func TestDeletingActiveEnvironmentSelectsNextEnvironment(t *testing.T) {

@@ -77,8 +77,10 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 	scimBearerToken := strings.TrimSpace(r.FormValue("scim_bearer_token"))
 	existingIndex, appExists := appIndexByID(state.Apps, id)
 	wasSCIMEnabled := false
+	previousSCIMBaseURL := ""
 	if appExists {
 		wasSCIMEnabled = state.Apps[existingIndex].SCIMEnabled
+		previousSCIMBaseURL = strings.TrimRight(strings.TrimSpace(state.Apps[existingIndex].SCIMBaseURL), "/")
 		if oidcClientSecret == "" && r.FormValue("regenerate_oidc_secret") != "on" {
 			oidcClientSecret = state.Apps[existingIndex].OIDCClientSecret
 		}
@@ -187,7 +189,8 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		a.redirectError(w, r, tab, fmt.Errorf("environment %s not found", id))
 		return
 	}
-	if app.SCIMEnabled && !wasSCIMEnabled {
+	scimEndpointChanged := previousSCIMBaseURL != strings.TrimRight(app.SCIMBaseURL, "/")
+	if app.SCIMEnabled && (!wasSCIMEnabled || scimEndpointChanged) {
 		initializeAppSync(&state, app.ID)
 	}
 	if err := saveState(state); err != nil {
