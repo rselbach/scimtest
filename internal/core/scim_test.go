@@ -55,6 +55,88 @@ func TestSyncDirtyStateWithContextCancelsInFlightRequest(t *testing.T) {
 	}
 }
 
+func TestSyncDirtyStateAdoptsResourcesByExternalID(t *testing.T) {
+	r := require.New(t)
+	requests := make([]string, 0, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		requests = append(requests, req.Method+" "+req.URL.Path)
+		w.Header().Set("Content-Type", "application/scim+json")
+		switch req.Method + " " + req.URL.Path {
+		case "GET /Users":
+			r.Equal(`externalId eq "troy"`, req.URL.Query().Get("filter"))
+			r.Equal("2", req.URL.Query().Get("count"))
+			r.NoError(json.NewEncoder(w).Encode(SCIMListResponse[SCIMUserResource]{
+				TotalResults: 1,
+				Resources:    []SCIMUserResource{{ID: "remote-troy", ExternalID: "troy"}},
+			}))
+		case "PUT /Users/remote-troy":
+			var resource SCIMUserResource
+			r.NoError(json.NewDecoder(req.Body).Decode(&resource))
+			r.Equal("troy", resource.ExternalID)
+		case "GET /Groups":
+			r.Equal(`externalId eq "study-group"`, req.URL.Query().Get("filter"))
+			r.NoError(json.NewEncoder(w).Encode(SCIMListResponse[SCIMGroupResource]{
+				TotalResults: 1,
+				Resources:    []SCIMGroupResource{{ID: "remote-study-group", ExternalID: "study-group"}},
+			}))
+		case "PUT /Groups/remote-study-group":
+			var resource SCIMGroupResource
+			r.NoError(json.NewDecoder(req.Body).Decode(&resource))
+			r.Equal([]SCIMMember{{Value: "remote-troy", Type: "User"}}, resource.Members)
+		default:
+			t.Fatalf("unexpected SCIM request %s %s", req.Method, req.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	result := SyncDirtyState(AppState{
+		Config: Config{BaseURL: server.URL, BearerToken: "chang-secret", FilterSupported: true},
+		Users: []User{{
+			ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy",
+			Email: "troy@greendale.edu", Active: true, Dirty: true,
+		}},
+		Groups: []Group{{ID: "study-group", DisplayName: "Study Group", MemberIDs: []string{"troy"}, Dirty: true}},
+	})
+
+	r.NoError(result.Fatal)
+	r.NoError(result.Stopped)
+	r.Equal("remote-troy", result.State.Users[0].RemoteID)
+	r.False(result.State.Users[0].Dirty)
+	r.Equal("remote-study-group", result.State.Groups[0].RemoteID)
+	r.False(result.State.Groups[0].Dirty)
+	r.Contains(result.Status, "users 0 created, 1 adopted")
+	r.Contains(result.Status, "groups 0 created, 1 adopted")
+	r.Equal([]string{"GET /Users", "PUT /Users/remote-troy", "GET /Groups", "PUT /Groups/remote-study-group"}, requests)
+	r.Equal([]string{"adopt", "update", "adopt", "update"}, []string{
+		result.Traces[0].Operation,
+		result.Traces[1].Operation,
+		result.Traces[2].Operation,
+		result.Traces[3].Operation,
+	})
+}
+
+func TestExternalIDAdoptionRejectsAmbiguousMatches(t *testing.T) {
+	r := require.New(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		r.NoError(json.NewEncoder(w).Encode(SCIMListResponse[SCIMUserResource]{
+			TotalResults: 2,
+			Resources: []SCIMUserResource{
+				{ID: "remote-troy-1", ExternalID: "troy"},
+				{ID: "remote-troy-2", ExternalID: "troy"},
+			},
+		}))
+	}))
+	defer server.Close()
+	client, err := NewSCIMClient(Config{BaseURL: server.URL, BearerToken: "chang-secret", FilterSupported: true})
+	r.NoError(err)
+
+	_, found, err := client.findUserByExternalID(User{ID: "troy", GivenName: "Troy", FamilyName: "Barnes"})
+
+	r.False(found)
+	r.EqualError(err, `SCIM filter for externalId "troy" returned multiple resources`)
+	r.Contains(client.traces[0].Err, "multiple resources")
+}
+
 func TestReadSCIMResponseBodyRejectsOversizedBody(t *testing.T) {
 	r := require.New(t)
 	_, err := readSCIMResponseBody(bytes.NewReader(make([]byte, maxSCIMResponseBodyBytes+1)))

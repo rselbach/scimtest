@@ -556,7 +556,7 @@
 			  {{if .AppForm.App.ID}}
 			  <div class="field full">
 				<span class="label">Provider capabilities</span>
-				<span class="hint">{{if .AppForm.App.SCIMCapabilitiesKnown}}PATCH: {{if .AppForm.App.SCIMPatchSupported}}supported{{else}}not supported{{end}}{{else}}Not discovered yet{{end}}</span>
+				<span class="hint">{{if .AppForm.App.SCIMCapabilitiesKnown}}PATCH: {{if .AppForm.App.SCIMPatchSupported}}supported{{else}}not supported{{end}} · Filters: {{if .AppForm.App.SCIMFilterSupported}}supported{{else}}not supported{{end}}{{else}}Not discovered yet{{end}}</span>
 				<button class="btn" type="submit" formaction="/apps/{{.AppForm.App.ID}}/discover-scim" formnovalidate>Discover capabilities</button>
 			  </div>
 			  {{end}}

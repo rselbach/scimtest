@@ -86,11 +86,13 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 	previousSCIMBaseURL := ""
 	scimCapabilitiesKnown := false
 	scimPatchSupported := false
+	scimFilterSupported := false
 	if appExists {
 		wasSCIMEnabled = state.Apps[existingIndex].SCIMEnabled
 		previousSCIMBaseURL = strings.TrimRight(strings.TrimSpace(state.Apps[existingIndex].SCIMBaseURL), "/")
 		scimCapabilitiesKnown = state.Apps[existingIndex].SCIMCapabilitiesKnown
 		scimPatchSupported = state.Apps[existingIndex].SCIMPatchSupported
+		scimFilterSupported = state.Apps[existingIndex].SCIMFilterSupported
 		if oidcClientSecret == "" && r.FormValue("regenerate_oidc_secret") != "on" {
 			oidcClientSecret = state.Apps[existingIndex].OIDCClientSecret
 		}
@@ -120,6 +122,7 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		SCIMAutoOpenTrace:      r.FormValue("scim_auto_open_trace") == "on",
 		SCIMCapabilitiesKnown:  scimCapabilitiesKnown,
 		SCIMPatchSupported:     scimPatchSupported,
+		SCIMFilterSupported:    scimFilterSupported,
 	}
 	if app.Slug == "" {
 		app.Slug = slugify(app.Name)
@@ -202,9 +205,11 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	scimEndpointChanged := previousSCIMBaseURL != strings.TrimRight(app.SCIMBaseURL, "/")
-	if scimEndpointChanged {
+	if appExists && scimEndpointChanged {
 		app.SCIMCapabilitiesKnown = false
 		app.SCIMPatchSupported = false
+		app.SCIMFilterSupported = false
+		state.Apps[existingIndex] = app
 	}
 	if app.SCIMEnabled && (!wasSCIMEnabled || scimEndpointChanged) {
 		initializeAppSync(&state, app.ID)
@@ -246,15 +251,20 @@ func (a *webApp) handleAppDiscoverSCIM(w http.ResponseWriter, r *http.Request) {
 	}
 	state.Apps[index].SCIMCapabilitiesKnown = true
 	state.Apps[index].SCIMPatchSupported = capabilities.PatchSupported
+	state.Apps[index].SCIMFilterSupported = capabilities.FilterSupported
 	if err := saveState(state); err != nil {
 		a.redirectError(w, r, "apps", err)
 		return
 	}
-	message := "SCIM capabilities discovered: PATCH is not supported"
-	if capabilities.PatchSupported {
-		message = "SCIM capabilities discovered: PATCH is supported"
-	}
+	message := fmt.Sprintf("SCIM capabilities discovered: PATCH %s; filtering %s", supportedLabel(capabilities.PatchSupported), supportedLabel(capabilities.FilterSupported))
 	redirectWithFlash(w, r, dashboardURL("apps", map[string]string{"modal": "app", "id": state.Apps[index].ID}), flashMessage{Kind: "success", Message: message})
+}
+
+func supportedLabel(supported bool) string {
+	if supported {
+		return "supported"
+	}
+	return "not supported"
 }
 
 func (a *webApp) handleAppTestSCIM(w http.ResponseWriter, r *http.Request) {

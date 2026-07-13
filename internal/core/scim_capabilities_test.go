@@ -13,7 +13,7 @@ func TestDiscoverSCIMCapabilities(t *testing.T) {
 	r := require.New(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		r.Equal("/ServiceProviderConfig", req.URL.Path)
-		_, err := fmt.Fprint(w, `{"patch":{"supported":true}}`)
+		_, err := fmt.Fprint(w, `{"patch":{"supported":true},"filter":{"supported":true}}`)
 		r.NoError(err)
 	}))
 	defer server.Close()
@@ -22,6 +22,7 @@ func TestDiscoverSCIMCapabilities(t *testing.T) {
 
 	r.NoError(err)
 	r.True(capabilities.PatchSupported)
+	r.True(capabilities.FilterSupported)
 	r.Len(capabilities.Traces, 1)
 	r.Equal("discover", capabilities.Traces[0].Operation)
 }

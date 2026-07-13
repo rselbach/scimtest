@@ -21,6 +21,7 @@ type Config struct {
 	RgrokInstanceID       string `json:"rgrok_instance_id,omitempty"`
 	SigningPrivateKeyPEM  string `json:"signing_private_key_pem,omitempty"`
 	SigningCertificatePEM string `json:"signing_certificate_pem,omitempty"`
+	FilterSupported       bool   `json:"filter_supported,omitempty"`
 }
 
 type User struct {
@@ -145,4 +146,5 @@ type App struct {
 	SCIMAutoOpenTrace      bool     `json:"scim_auto_open_trace,omitempty"`
 	SCIMCapabilitiesKnown  bool     `json:"scim_capabilities_known,omitempty"`
 	SCIMPatchSupported     bool     `json:"scim_patch_supported,omitempty"`
+	SCIMFilterSupported    bool     `json:"scim_filter_supported,omitempty"`
 }

@@ -1600,6 +1600,9 @@ func TestAppSaveStoresSCIMSettingsAndInitializesSyncState(t *testing.T) {
 	r.True(state.GroupSync[savedApp.ID]["study-group"].Dirty)
 	state.UserSync[savedApp.ID]["troy"] = resourceSyncState{RemoteID: "remote-troy", LastError: "old user error"}
 	state.GroupSync[savedApp.ID]["study-group"] = resourceSyncState{RemoteID: "remote-study-group", LastError: "old group error"}
+	state.Apps[0].SCIMCapabilitiesKnown = true
+	state.Apps[0].SCIMPatchSupported = true
+	state.Apps[0].SCIMFilterSupported = true
 	r.NoError(saveState(state))
 
 	form.Set("id", savedApp.ID)
@@ -1615,6 +1618,7 @@ func TestAppSaveStoresSCIMSettingsAndInitializesSyncState(t *testing.T) {
 	r.Equal("chang-secret", state.Apps[0].SCIMBearerToken)
 	r.Equal("remote-troy", state.UserSync[savedApp.ID]["troy"].RemoteID)
 	r.Equal("remote-study-group", state.GroupSync[savedApp.ID]["study-group"].RemoteID)
+	r.True(state.Apps[0].SCIMFilterSupported)
 
 	form.Set("scim_base_url", "https://new-portal.test/scim/v2/")
 	req = httptest.NewRequest(http.MethodPost, "/apps/save", strings.NewReader(form.Encode()))
@@ -1627,6 +1631,9 @@ func TestAppSaveStoresSCIMSettingsAndInitializesSyncState(t *testing.T) {
 	r.Equal("https://new-portal.test/scim/v2", state.Apps[0].SCIMBaseURL)
 	r.Equal(resourceSyncState{Dirty: true}, state.UserSync[savedApp.ID]["troy"])
 	r.Equal(resourceSyncState{Dirty: true}, state.GroupSync[savedApp.ID]["study-group"])
+	r.False(state.Apps[0].SCIMCapabilitiesKnown)
+	r.False(state.Apps[0].SCIMPatchSupported)
+	r.False(state.Apps[0].SCIMFilterSupported)
 }
 
 func TestDeletingActiveEnvironmentSelectsNextEnvironment(t *testing.T) {

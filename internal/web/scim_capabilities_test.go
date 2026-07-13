@@ -13,7 +13,7 @@ func TestAppDiscoversAndPersistsSCIMCapabilities(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, err := fmt.Fprint(w, `{"patch":{"supported":true}}`)
+		_, err := fmt.Fprint(w, `{"patch":{"supported":true},"filter":{"supported":true}}`)
 		r.NoError(err)
 	}))
 	defer server.Close()
@@ -28,4 +28,5 @@ func TestAppDiscoversAndPersistsSCIMCapabilities(t *testing.T) {
 	r.NoError(err)
 	r.True(state.Apps[0].SCIMCapabilitiesKnown)
 	r.True(state.Apps[0].SCIMPatchSupported)
+	r.True(state.Apps[0].SCIMFilterSupported)
 }

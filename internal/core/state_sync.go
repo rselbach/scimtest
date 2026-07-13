@@ -33,6 +33,7 @@ func StateForApp(state AppState, appID string) (AppState, error) {
 	projected.Config.BearerToken = app.SCIMBearerToken
 	projected.Config.AutoOpenSyncTrace = app.SCIMAutoOpenTrace
 	projected.Config.SCIMDisabled = !app.SCIMEnabled
+	projected.Config.FilterSupported = app.SCIMFilterSupported
 	projected.UserOperations = operationLogsForApp(state.UserOperations, appID)
 	projected.GroupOperations = operationLogsForApp(state.GroupOperations, appID)
 	if !app.SCIMEnabled {

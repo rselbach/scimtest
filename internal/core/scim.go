@@ -16,6 +16,7 @@ type SCIMClient struct {
 	ctx         context.Context
 	baseURL     string
 	token       string
+	filter      bool
 	client      *http.Client
 	onRateLimit func(TraceTarget, time.Duration, string, int)
 	traces      []SyncTraceEntry
@@ -102,14 +103,18 @@ type ImportResult struct {
 
 // SCIMCapabilities contains optional features advertised by a provider.
 type SCIMCapabilities struct {
-	PatchSupported bool
-	Traces         []SyncTraceEntry
+	PatchSupported  bool
+	FilterSupported bool
+	Traces          []SyncTraceEntry
 }
 
 type scimServiceProviderConfig struct {
 	Patch struct {
 		Supported bool `json:"supported"`
 	} `json:"patch"`
+	Filter struct {
+		Supported bool `json:"supported"`
+	} `json:"filter"`
 }
 
 // DiscoverSCIMCapabilities reads the provider's ServiceProviderConfig.
@@ -123,7 +128,7 @@ func DiscoverSCIMCapabilities(cfg Config) (SCIMCapabilities, error) {
 		Label:     "SCIM ServiceProviderConfig",
 		Operation: "discover",
 	})
-	return SCIMCapabilities{PatchSupported: response.Patch.Supported, Traces: client.traces}, err
+	return SCIMCapabilities{PatchSupported: response.Patch.Supported, FilterSupported: response.Filter.Supported, Traces: client.traces}, err
 }
 
 // SyncProgress reports foreground progress during a dirty-state sync.
@@ -199,6 +204,7 @@ func newSCIMClient(ctx context.Context, cfg Config) (*SCIMClient, error) {
 		ctx:     ctx,
 		baseURL: baseURL,
 		token:   token,
+		filter:  cfg.FilterSupported,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -236,12 +242,12 @@ func SyncDirtyStateWithContext(ctx context.Context, state AppState, onProgress f
 	}
 
 	status := fmt.Sprintf(
-		"sync finished: users %d created, %d updated, %d deleted, %d failed; groups %d created, %d updated, %d deleted, %d failed",
-		userCounts.created,
+		"sync finished: users %s, %d updated, %d deleted, %d failed; groups %s, %d updated, %d deleted, %d failed",
+		createdAndAdoptedStatus(userCounts),
 		userCounts.updated,
 		userCounts.deleted,
 		userCounts.failed,
-		groupCounts.created,
+		createdAndAdoptedStatus(groupCounts),
 		groupCounts.updated,
 		groupCounts.deleted,
 		groupCounts.failed,
@@ -316,13 +322,13 @@ func ReconcileStateWithContext(ctx context.Context, state AppState, onProgress f
 	}
 
 	status := fmt.Sprintf(
-		"reconcile finished: users %d created, %d updated, %d deleted, %d in sync, %d failed; groups %d created, %d updated, %d deleted, %d in sync, %d failed",
-		userCounts.created,
+		"reconcile finished: users %s, %d updated, %d deleted, %d in sync, %d failed; groups %s, %d updated, %d deleted, %d in sync, %d failed",
+		createdAndAdoptedStatus(userCounts),
 		userCounts.updated,
 		userCounts.deleted,
 		userCounts.inSync,
 		userCounts.failed,
-		groupCounts.created,
+		createdAndAdoptedStatus(groupCounts),
 		groupCounts.updated,
 		groupCounts.deleted,
 		groupCounts.inSync,
@@ -343,6 +349,7 @@ func ReconcileStateWithContext(ctx context.Context, state AppState, onProgress f
 
 type syncCounts struct {
 	created int
+	adopted int
 	updated int
 	deleted int
 	inSync  int
@@ -350,7 +357,15 @@ type syncCounts struct {
 }
 
 func (c syncCounts) total() int {
-	return c.created + c.updated + c.deleted + c.failed
+	return c.created + c.adopted + c.updated + c.deleted + c.failed
+}
+
+func createdAndAdoptedStatus(counts syncCounts) string {
+	status := fmt.Sprintf("%d created", counts.created)
+	if counts.adopted > 0 {
+		status += fmt.Sprintf(", %d adopted", counts.adopted)
+	}
+	return status
 }
 
 type syncProgressReporter struct {
@@ -553,7 +568,7 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 			counts.deleted++
 			progress.reportUser(u, operation, "Deleted")
 		case u.RemoteID == "":
-			remoteID, err := client.createUser(u)
+			remoteID, adopted, err := client.createUser(u)
 			if err != nil {
 				u.LastError = err.Error()
 				counts.failed++
@@ -569,8 +584,13 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 
 			u.RemoteID = remoteID
 			u.Dirty = false
-			counts.created++
 			nextUsers = append(nextUsers, u)
+			if adopted {
+				counts.adopted++
+				progress.reportUser(u, operation, "Adopted")
+				break
+			}
+			counts.created++
 			progress.reportUser(u, operation, "Created")
 		default:
 			if err := client.replaceUser(u); err != nil {
@@ -664,7 +684,7 @@ func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressR
 			counts.deleted++
 			progress.reportGroup(g, operation, "Deleted")
 		case g.RemoteID == "":
-			remoteID, err := client.createGroup(g, state.Users)
+			remoteID, adopted, err := client.createGroup(g, state.Users)
 			if err != nil {
 				g.LastError = err.Error()
 				counts.failed++
@@ -680,8 +700,13 @@ func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressR
 
 			g.RemoteID = remoteID
 			g.Dirty = false
-			counts.created++
 			nextGroups = append(nextGroups, g)
+			if adopted {
+				counts.adopted++
+				progress.reportGroup(g, operation, "Adopted")
+				break
+			}
+			counts.created++
 			progress.reportGroup(g, operation, "Created")
 		default:
 			if err := client.replaceGroup(g, state.Users); err != nil {
@@ -754,7 +779,7 @@ func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 			counts.deleted++
 			progress.reportUser(u, operation, "Deleted")
 		case u.RemoteID == "":
-			remoteID, err := client.createUser(u)
+			remoteID, adopted, err := client.createUser(u)
 			if err != nil {
 				if stopped := fail(err); stopped != nil {
 					return state, counts, stopped
@@ -764,14 +789,19 @@ func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 
 			u.RemoteID = remoteID
 			u.Dirty = false
-			counts.created++
 			nextUsers = append(nextUsers, u)
+			if adopted {
+				counts.adopted++
+				progress.reportUser(u, operation, "Adopted")
+				break
+			}
+			counts.created++
 			progress.reportUser(u, operation, "Created")
 		default:
 			remote, err := client.getUser(u)
 			switch {
 			case errors.Is(err, errSCIMNotFound):
-				remoteID, createErr := client.createUser(u)
+				remoteID, adopted, createErr := client.createUser(u)
 				if createErr != nil {
 					if stopped := fail(createErr); stopped != nil {
 						return state, counts, stopped
@@ -781,8 +811,13 @@ func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 
 				u.RemoteID = remoteID
 				u.Dirty = false
-				counts.created++
 				nextUsers = append(nextUsers, u)
+				if adopted {
+					counts.adopted++
+					progress.reportUser(u, "create", "Adopted")
+					break
+				}
+				counts.created++
 				progress.reportUser(u, "create", "Created")
 			case err != nil:
 				if stopped := fail(err); stopped != nil {
@@ -857,7 +892,7 @@ func reconcileGroups(client *SCIMClient, state AppState, progress *syncProgressR
 			counts.deleted++
 			progress.reportGroup(g, operation, "Deleted")
 		case g.RemoteID == "":
-			remoteID, err := client.createGroup(g, state.Users)
+			remoteID, adopted, err := client.createGroup(g, state.Users)
 			if err != nil {
 				if stopped := fail(err); stopped != nil {
 					return state, counts, stopped
@@ -867,8 +902,13 @@ func reconcileGroups(client *SCIMClient, state AppState, progress *syncProgressR
 
 			g.RemoteID = remoteID
 			g.Dirty = false
-			counts.created++
 			nextGroups = append(nextGroups, g)
+			if adopted {
+				counts.adopted++
+				progress.reportGroup(g, operation, "Adopted")
+				break
+			}
+			counts.created++
 			progress.reportGroup(g, operation, "Created")
 		default:
 			remote, err := client.getGroup(g)
@@ -878,7 +918,7 @@ func reconcileGroups(client *SCIMClient, state AppState, progress *syncProgressR
 			}
 			switch {
 			case errors.Is(err, errSCIMNotFound):
-				remoteID, createErr := client.createGroup(g, state.Users)
+				remoteID, adopted, createErr := client.createGroup(g, state.Users)
 				if createErr != nil {
 					if stopped := fail(createErr); stopped != nil {
 						return state, counts, stopped
@@ -888,8 +928,13 @@ func reconcileGroups(client *SCIMClient, state AppState, progress *syncProgressR
 
 				g.RemoteID = remoteID
 				g.Dirty = false
-				counts.created++
 				nextGroups = append(nextGroups, g)
+				if adopted {
+					counts.adopted++
+					progress.reportGroup(g, "create", "Adopted")
+					break
+				}
+				counts.created++
 				progress.reportGroup(g, "create", "Created")
 			case err != nil:
 				if stopped := fail(err); stopped != nil {
