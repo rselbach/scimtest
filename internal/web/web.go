@@ -52,6 +52,24 @@ type webApp struct {
 	lastTraceContent map[string]string
 	formDraftMu      sync.Mutex
 	formDrafts       map[string]formDraft
+	importPreviewMu  sync.Mutex
+	importPreviews   map[string]importPreview
+}
+
+type importPreview struct {
+	State     appState
+	Traces    []syncTraceEntry
+	Status    string
+	Added     int
+	Updated   int
+	Removed   int
+	CreatedAt time.Time
+}
+
+type importPreviewView struct {
+	Added   int
+	Updated int
+	Removed int
 }
 
 type rgrokStarter func(context.Context, rgrokclient.Config) (*startedRgrokTunnel, error)
@@ -325,6 +343,7 @@ type pageData struct {
 	ConfigForm             *configFormView
 	ToolsForm              *toolsFormView
 	SyncJob                *syncJobSnapshot
+	ImportPreview          *importPreviewView
 	ShowSetupGuide         bool
 	HasLocalUsers          bool
 	HasApps                bool
@@ -694,6 +713,7 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		HasTrace:               a.hasTrace(environmentID),
 		TraceContent:           a.traceContent(environmentID),
 		SyncJob:                a.currentSyncJob(environmentID),
+		ImportPreview:          a.importPreviewView(environmentID),
 		ShowSetupGuide:         len(state.Users) == 0 || len(state.Apps) == 0,
 		HasLocalUsers:          len(state.Users) > 0,
 		HasApps:                len(state.Apps) > 0,

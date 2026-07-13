@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -281,34 +282,119 @@ func (a *webApp) handleImport(w http.ResponseWriter, r *http.Request) {
 		a.redirectError(w, r, tab, fmt.Errorf("SCIM is not enabled for the active environment"))
 		return
 	}
-	projected, err := stateForApp(state, appID)
-	if err != nil {
+	preview, apply := a.cachedImportPreview(appID), r.FormValue("apply") == "on"
+	if !apply {
+		projected, err := stateForApp(state, appID)
+		if err != nil {
+			a.redirectError(w, r, tab, err)
+			return
+		}
+		result := importStateFromSCIM(projected)
+		a.rememberTrace(appID, result.Traces)
+		if result.Fatal != nil {
+			if len(result.Traces) > 0 && projected.Config.AutoOpenSyncTrace {
+				setShowTraceCookie(w)
+			}
+			redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "error", Message: result.Fatal.Error()})
+			return
+		}
+		added, updated, removed := importChangeCounts(projected, result.State)
+		preview = &importPreview{State: result.State, Traces: result.Traces, Status: result.Status, Added: added, Updated: updated, Removed: removed, CreatedAt: time.Now()}
+		a.storeImportPreview(appID, *preview)
+		message := fmt.Sprintf("import preview: %d added, %d updated, %d removed", added, updated, removed)
+		redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: message})
+		return
+	}
+	if preview == nil {
+		a.redirectError(w, r, tab, fmt.Errorf("import preview expired; preview the directory again"))
+		return
+	}
+	if _, err := writeSafetyBackup(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
-
-	result := importStateFromSCIM(projected)
-	a.rememberTrace(appID, result.Traces)
-	if result.Fatal != nil {
-		if len(result.Traces) > 0 && projected.Config.AutoOpenSyncTrace {
-			setShowTraceCookie(w)
-		}
-		redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "error", Message: result.Fatal.Error()})
-		return
-	}
-
-	mergeAppImportState(&state, appID, result.State)
-	appendOperationLogs(&state, appID, result.Traces)
+	mergeAppImportState(&state, appID, preview.State)
+	appendOperationLogs(&state, appID, preview.Traces)
 	purgeFullySyncedDeletions(&state)
 	if err := saveState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
 
-	if result.State.Config.AutoOpenSyncTrace {
+	a.deleteImportPreview(appID)
+	if preview.State.Config.AutoOpenSyncTrace {
 		setShowTraceCookie(w)
 	}
-	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: result.Status})
+	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: preview.Status + "; undo snapshot saved"})
+}
+
+func importChangeCounts(current appState, imported appState) (int, int, int) {
+	currentUsers := make(map[string]user, len(current.Users))
+	for _, item := range current.Users {
+		if !item.Deleted {
+			currentUsers[item.ID] = item
+		}
+	}
+	added, updated := 0, 0
+	for _, item := range imported.Users {
+		existing, ok := currentUsers[item.ID]
+		if !ok {
+			added++
+		} else if existing.GivenName != item.GivenName || existing.FamilyName != item.FamilyName || existing.Email != item.Email || existing.Username != item.Username || existing.Active != item.Active {
+			updated++
+		}
+		delete(currentUsers, item.ID)
+	}
+	currentGroups := make(map[string]group, len(current.Groups))
+	for _, item := range current.Groups {
+		if !item.Deleted {
+			currentGroups[item.ID] = item
+		}
+	}
+	for _, item := range imported.Groups {
+		existing, ok := currentGroups[item.ID]
+		if !ok {
+			added++
+		} else if existing.DisplayName != item.DisplayName || !slices.Equal(existing.MemberIDs, item.MemberIDs) {
+			updated++
+		}
+		delete(currentGroups, item.ID)
+	}
+	return added, updated, len(currentUsers) + len(currentGroups)
+}
+
+func (a *webApp) storeImportPreview(appID string, preview importPreview) {
+	a.importPreviewMu.Lock()
+	defer a.importPreviewMu.Unlock()
+	if a.importPreviews == nil {
+		a.importPreviews = make(map[string]importPreview)
+	}
+	a.importPreviews[appID] = preview
+}
+
+func (a *webApp) cachedImportPreview(appID string) *importPreview {
+	a.importPreviewMu.Lock()
+	defer a.importPreviewMu.Unlock()
+	preview, ok := a.importPreviews[appID]
+	if !ok || time.Since(preview.CreatedAt) > 10*time.Minute {
+		delete(a.importPreviews, appID)
+		return nil
+	}
+	return &preview
+}
+
+func (a *webApp) importPreviewView(appID string) *importPreviewView {
+	preview := a.cachedImportPreview(appID)
+	if preview == nil {
+		return nil
+	}
+	return &importPreviewView{Added: preview.Added, Updated: preview.Updated, Removed: preview.Removed}
+}
+
+func (a *webApp) deleteImportPreview(appID string) {
+	a.importPreviewMu.Lock()
+	defer a.importPreviewMu.Unlock()
+	delete(a.importPreviews, appID)
 }
 
 func (a *webApp) handleReset(w http.ResponseWriter, r *http.Request) {

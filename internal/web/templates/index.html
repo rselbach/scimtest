@@ -162,11 +162,16 @@
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
           <button class="btn" type="submit" data-sync-submit {{if and .SyncJob .SyncJob.Running}}disabled{{end}} title="Check every user and group on {{.ActiveEnvironment.Name}} and repair any drift">Reconcile</button>
         </form>
-        <form method="post" action="/import" onsubmit="return confirm('Import from {{.ActiveEnvironment.Name}}? This replaces the shared directory and marks every other SCIM environment dirty.')">
+        <form method="post" action="/import" {{if .ImportPreview}}onsubmit="return confirm('Apply this cached import preview? This replaces the shared directory and marks every other SCIM environment dirty.')"{{end}}>
           <input type="hidden" name="tab" value="{{.Tab}}">
 		  <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
-          <button class="btn" type="submit">Import</button>
+		  {{if .ImportPreview}}
+		  <input type="hidden" name="apply" value="on">
+		  <button class="btn btn-primary" type="submit">Apply import (+{{.ImportPreview.Added}} ~{{.ImportPreview.Updated}} -{{.ImportPreview.Removed}})</button>
+		  {{else}}
+		  <button class="btn" type="submit">Preview import</button>
+		  {{end}}
         </form>
         <form method="post" action="/reset" onsubmit="return confirm('Reset sync state for {{.ActiveEnvironment.Name}}? This clears its remote IDs and marks its users and groups dirty.')">
           <input type="hidden" name="tab" value="{{.Tab}}">

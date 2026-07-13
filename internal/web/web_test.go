@@ -87,7 +87,7 @@ func TestIndexRendersConciseSCIMActionsAndUsernameHint(t *testing.T) {
 	r.Equal(http.StatusOK, rec.Code)
 	body := rec.Body.String()
 	r.Contains(body, `data-sync-submit >Sync</button>`)
-	r.Contains(body, `type="submit">Import</button>`)
+	r.Contains(body, `type="submit">Preview import</button>`)
 	r.Contains(body, `type="submit">Reset</button>`)
 	r.Contains(body, `Uses email when left blank`)
 }
