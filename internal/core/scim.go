@@ -1432,7 +1432,7 @@ func replaceStateFromSCIM(state AppState, userResources []SCIMUserResource, grou
 
 	importedGroups := make([]Group, 0, len(groupResources))
 	for _, resource := range groupResources {
-		importedGroup, err := importedGroupFromSCIM(resource, remoteToLocalUserID)
+		importedGroup, err := importedGroupFromSCIM(state.Groups, resource, remoteToLocalUserID)
 		if err != nil {
 			return AppState{}, err
 		}
@@ -1509,13 +1509,22 @@ func importedUserFromSCIM(existingUsers []User, resource SCIMUserResource) (User
 	}, nil
 }
 
-func importedGroupFromSCIM(resource SCIMGroupResource, remoteToLocalUserID map[string]string) (Group, error) {
+func importedGroupFromSCIM(existingGroups []Group, resource SCIMGroupResource, remoteToLocalUserID map[string]string) (Group, error) {
 	localID := strings.TrimSpace(resource.ExternalID)
 	if localID == "" {
-		var err error
-		localID, err = NewGroupID()
-		if err != nil {
-			return Group{}, err
+		remoteID := strings.TrimSpace(resource.ID)
+		for _, existing := range existingGroups {
+			if remoteID != "" && existing.RemoteID == remoteID {
+				localID = existing.ID
+				break
+			}
+		}
+		if localID == "" {
+			var err error
+			localID, err = NewGroupID()
+			if err != nil {
+				return Group{}, err
+			}
 		}
 	}
 

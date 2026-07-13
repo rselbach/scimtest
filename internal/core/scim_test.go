@@ -743,6 +743,31 @@ func TestReplaceStateFromSCIMPreservesUserIDByRemoteID(t *testing.T) {
 	r.Equal("local-troy", second.Users[0].ID)
 }
 
+func TestReplaceStateFromSCIMPreservesGroupIDByRemoteID(t *testing.T) {
+	r := require.New(t)
+	state := AppState{
+		Groups: []Group{{
+			ID:          "local-study-group",
+			DisplayName: "Study Group",
+			RemoteID:    "remote-study-group",
+		}},
+	}
+	resources := []SCIMGroupResource{{
+		ID:          "remote-study-group",
+		DisplayName: "Greendale Study Group",
+	}}
+
+	first, err := replaceStateFromSCIM(state, nil, resources)
+	r.NoError(err)
+	r.Len(first.Groups, 1)
+	r.Equal("local-study-group", first.Groups[0].ID)
+
+	second, err := replaceStateFromSCIM(first, nil, resources)
+	r.NoError(err)
+	r.Len(second.Groups, 1)
+	r.Equal("local-study-group", second.Groups[0].ID)
+}
+
 func captureRateLimitSleeps(t *testing.T) *[]time.Duration {
 	t.Helper()
 
