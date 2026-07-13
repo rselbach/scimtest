@@ -200,6 +200,44 @@ func TestGroupFormProvidesSearchableIncrementalMemberPicker(t *testing.T) {
 	r.Contains(javascript, "query === '' && checked")
 }
 
+func TestDirectoryFiltersSortsAndLinksSyncErrors(t *testing.T) {
+	r := require.New(t)
+	state := appState{
+		Config: config{BaseURL: "https://scim.greendale.test", BearerToken: "chang-secret"},
+		Users: []user{
+			{ID: "abed", GivenName: "Abed", FamilyName: "Nadir", Username: "abed", Email: "abed@greendale.edu", Active: true, Dirty: true},
+			{ID: "britta", GivenName: "Britta", FamilyName: "Perry", Username: "britta", Email: "britta@greendale.edu", Active: true, Dirty: true},
+			{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.edu", Active: false, Dirty: true, LastError: "SCIM POST /Users returned 500"},
+		},
+	}
+
+	rows := directoryUserRows(state, "users", 1, 25, "", "pending", "name-desc")
+	r.Equal([]string{"Britta Perry", "Abed Nadir"}, []string{rows[0].Name, rows[1].Name})
+	r.Equal("", normalizedStatusFilter("groups", "active"))
+	r.Equal("", normalizedSortOrder("not-a-sort"))
+
+	setTestStateFile(t)
+	state.Apps = []app{{
+		ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "scim",
+		SCIMEnabled: true, SCIMBaseURL: state.Config.BaseURL, SCIMBearerToken: state.Config.BearerToken,
+	}}
+	initializeAppSync(&state, "app-1")
+	state.UserSync["app-1"]["troy"] = resourceSyncState{Dirty: true, LastError: "SCIM POST /Users returned 500"}
+	r.NoError(saveState(state))
+	app := newTestIDPApp(t)
+	rec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=users&environment=app-1&status=error&sort=status", nil))
+
+	r.Equal(http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	r.Contains(body, `<option value="error" selected>Sync error</option>`)
+	r.Contains(body, `<option value="status" selected>Status</option>`)
+	r.Contains(body, `historyID=troy`)
+	r.Contains(body, `status=error`)
+	r.Contains(body, `user Troy Barnes: SCIM POST /Users returned 500`)
+}
+
 func TestIDPRoutesExcludeAdminEndpoints(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)

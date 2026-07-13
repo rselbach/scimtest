@@ -1,6 +1,7 @@
 package web
 
 import (
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"crypto/rsa"
@@ -14,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -191,6 +193,7 @@ type userRowView struct {
 	Deleted    bool
 	EditURL    string
 	HistoryURL string
+	HasError   bool
 }
 
 type groupRowView struct {
@@ -203,6 +206,7 @@ type groupRowView struct {
 	Deleted        bool
 	EditURL        string
 	HistoryURL     string
+	HasError       bool
 }
 
 type appRowView struct {
@@ -240,10 +244,18 @@ type historyView struct {
 	Items []historyEntryView
 }
 
+type syncErrorView struct {
+	Message string
+	URL     string
+}
+
 type paginationView struct {
 	Page            int
 	PageSize        int
 	SearchQuery     string
+	StatusFilter    string
+	SortOrder       string
+	ActiveFilters   bool
 	TotalPages      int
 	Summary         string
 	PreviousURL     string
@@ -251,10 +263,18 @@ type paginationView struct {
 	HasPrevious     bool
 	HasNext         bool
 	PageSizeOptions []pageSizeOptionView
+	StatusOptions   []directoryOptionView
+	SortOptions     []directoryOptionView
 }
 
 type pageSizeOptionView struct {
 	Size     int
+	Label    string
+	Selected bool
+}
+
+type directoryOptionView struct {
+	Value    string
 	Label    string
 	Selected bool
 }
@@ -319,7 +339,7 @@ type pageData struct {
 	Groups                 []groupRowView
 	Apps                   []appRowView
 	Pagination             *paginationView
-	Errors                 []string
+	Errors                 []syncErrorView
 	BaseURL                string
 	IDPBaseURL             string
 	SCIMEnabled            bool
@@ -664,28 +684,33 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 	page := requestPage(r.URL.Query().Get("page"))
 	pageSize := requestPageSize(r.URL.Query().Get("pageSize"))
 	search := searchQuery(r.URL.Query().Get("q"))
+	statusFilter := normalizedStatusFilter(tab, r.URL.Query().Get("status"))
+	if state.Config.SCIMDisabled && statusFilter != "active" && statusFilter != "inactive" {
+		statusFilter = ""
+	}
+	sortOrder := normalizedSortOrder(r.URL.Query().Get("sort"))
 	flash := consumeFlash(w, r)
 	showTrace := r.URL.Query().Get("showTrace") == "1"
 	if consumeShowTrace(w, r) {
 		showTrace = true
 	}
 
-	users := filterUserRows(buildUserRows(state, tab, page, pageSize, search), search)
-	groups := filterGroupRows(buildGroupRows(state, tab, page, pageSize, search), search)
+	users := directoryUserRows(state, tab, page, pageSize, search, statusFilter, sortOrder)
+	groups := directoryGroupRows(state, tab, page, pageSize, search, statusFilter, sortOrder)
 	var pagination *paginationView
 	switch tab {
 	case "groups":
 		total := len(groups)
 		page = currentListPage(total, page, pageSize)
-		groups = filterGroupRows(buildGroupRows(state, tab, page, pageSize, search), search)
+		groups = directoryGroupRows(state, tab, page, pageSize, search, statusFilter, sortOrder)
 		groups = slicePage(groups, page, pageSize)
-		pagination = buildPagination(total, tab, page, pageSize, search)
+		pagination = buildPagination(total, tab, page, pageSize, search, statusFilter, sortOrder, state.Config.SCIMDisabled)
 	case "users":
 		total := len(users)
 		page = currentListPage(total, page, pageSize)
-		users = filterUserRows(buildUserRows(state, tab, page, pageSize, search), search)
+		users = directoryUserRows(state, tab, page, pageSize, search, statusFilter, sortOrder)
 		users = slicePage(users, page, pageSize)
-		pagination = buildPagination(total, tab, page, pageSize, search)
+		pagination = buildPagination(total, tab, page, pageSize, search, statusFilter, sortOrder, state.Config.SCIMDisabled)
 	default:
 		page = 1
 	}
@@ -698,7 +723,7 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		Groups:                 groups,
 		Apps:                   buildAppRows(state, environmentID, a.effectiveIDPBaseURL(r, state)),
 		Pagination:             pagination,
-		Errors:                 buildErrorList(state),
+		Errors:                 buildErrorList(state, tab, page, pageSize, search, statusFilter, sortOrder),
 		BaseURL:                configuredBaseURL(state.Config.BaseURL),
 		IDPBaseURL:             a.effectiveIDPBaseURL(r, state),
 		SCIMEnabled:            activeEnvironment.SCIMEnabled,
@@ -706,8 +731,8 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		GroupsURL:              dashboardURL("groups", nil),
 		AppsURL:                dashboardURL("apps", nil),
 		EnvironmentSettingsURL: dashboardURL("apps", map[string]string{"modal": "app", "id": environmentID}),
-		NewUserURL:             dashboardURLWithPage("users", page, pageSize, search, map[string]string{"modal": "user"}),
-		NewGroupURL:            dashboardURLWithPage("groups", page, pageSize, search, map[string]string{"modal": "group"}),
+		NewUserURL:             dashboardURLWithDirectory("users", page, pageSize, search, statusFilter, sortOrder, map[string]string{"modal": "user"}),
+		NewGroupURL:            dashboardURLWithDirectory("groups", page, pageSize, search, statusFilter, sortOrder, map[string]string{"modal": "group"}),
 		NewAppURL:              dashboardURL("apps", map[string]string{"modal": "app"}),
 		ConfigURL:              dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"modal": "config"}),
 		ToolsURL:               dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"modal": "tools"}),
@@ -741,17 +766,17 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if history := buildHistoryView(state, tab, page, pageSize, search, r.URL.Query()); history != nil {
+	if history := buildHistoryView(state, tab, page, pageSize, search, statusFilter, sortOrder, r.URL.Query()); history != nil {
 		data.History = history
 	}
 
 	switch r.URL.Query().Get("modal") {
 	case "user":
-		if form, formErr := buildUserFormView(state, tab, page, pageSize, search, r.URL.Query().Get("id")); formErr == nil {
+		if form, formErr := buildUserFormView(state, tab, page, pageSize, search, statusFilter, sortOrder, r.URL.Query().Get("id")); formErr == nil {
 			data.UserForm = form
 		}
 	case "group":
-		if form, formErr := buildGroupFormView(state, tab, page, pageSize, search, r.URL.Query().Get("id")); formErr == nil {
+		if form, formErr := buildGroupFormView(state, tab, page, pageSize, search, statusFilter, sortOrder, r.URL.Query().Get("id")); formErr == nil {
 			data.GroupForm = form
 		}
 	case "app":
@@ -1349,7 +1374,7 @@ func scimEnabled(state appState) bool {
 	return false
 }
 
-func buildUserRows(state appState, tab string, page int, pageSize int, search string) []userRowView {
+func buildUserRows(state appState, tab string, page int, pageSize int, search string, statusFilter string, sortOrder string) []userRowView {
 	rows := make([]userRowView, 0, len(state.Users))
 	for _, u := range state.Users {
 		if state.Config.SCIMDisabled && u.Deleted {
@@ -1368,14 +1393,15 @@ func buildUserRows(state appState, tab string, page int, pageSize int, search st
 			Status:     syncStatus(u),
 			RemoteID:   remoteID,
 			Deleted:    u.Deleted,
-			EditURL:    dashboardURLWithPage("users", page, pageSize, search, map[string]string{"modal": "user", "id": u.ID}),
-			HistoryURL: dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"historyType": "user", "historyID": u.ID}),
+			EditURL:    dashboardURLWithDirectory("users", page, pageSize, search, statusFilter, sortOrder, map[string]string{"modal": "user", "id": u.ID}),
+			HistoryURL: dashboardURLWithDirectory(tab, page, pageSize, search, statusFilter, sortOrder, map[string]string{"historyType": "user", "historyID": u.ID}),
+			HasError:   u.LastError != "",
 		})
 	}
 	return rows
 }
 
-func buildGroupRows(state appState, tab string, page int, pageSize int, search string) []groupRowView {
+func buildGroupRows(state appState, tab string, page int, pageSize int, search string, statusFilter string, sortOrder string) []groupRowView {
 	rows := make([]groupRowView, 0, len(state.Groups))
 	for _, g := range state.Groups {
 		if state.Config.SCIMDisabled && g.Deleted {
@@ -1393,8 +1419,9 @@ func buildGroupRows(state appState, tab string, page int, pageSize int, search s
 			Status:         groupSyncStatus(g),
 			RemoteID:       remoteID,
 			Deleted:        g.Deleted,
-			EditURL:        dashboardURLWithPage("groups", page, pageSize, search, map[string]string{"modal": "group", "id": g.ID}),
-			HistoryURL:     dashboardURLWithPage(tab, page, pageSize, search, map[string]string{"historyType": "group", "historyID": g.ID}),
+			EditURL:        dashboardURLWithDirectory("groups", page, pageSize, search, statusFilter, sortOrder, map[string]string{"modal": "group", "id": g.ID}),
+			HistoryURL:     dashboardURLWithDirectory(tab, page, pageSize, search, statusFilter, sortOrder, map[string]string{"historyType": "group", "historyID": g.ID}),
+			HasError:       g.LastError != "",
 		})
 	}
 	return rows
@@ -1432,6 +1459,102 @@ func filterGroupRows(rows []groupRowView, query string) []groupRowView {
 	}
 
 	return filtered
+}
+
+func directoryUserRows(state appState, tab string, page int, pageSize int, search string, statusFilter string, sortOrder string) []userRowView {
+	rows := filterUserRows(buildUserRows(state, tab, page, pageSize, search, statusFilter, sortOrder), search)
+	rows = filterUserRowsByStatus(rows, statusFilter)
+	sortUserRows(rows, sortOrder)
+	return rows
+}
+
+func directoryGroupRows(state appState, tab string, page int, pageSize int, search string, statusFilter string, sortOrder string) []groupRowView {
+	rows := filterGroupRows(buildGroupRows(state, tab, page, pageSize, search, statusFilter, sortOrder), search)
+	rows = filterGroupRowsByStatus(rows, statusFilter)
+	sortGroupRows(rows, sortOrder)
+	return rows
+}
+
+func filterUserRowsByStatus(rows []userRowView, statusFilter string) []userRowView {
+	if statusFilter == "" {
+		return rows
+	}
+
+	filtered := make([]userRowView, 0, len(rows))
+	for _, row := range rows {
+		matches := false
+		switch statusFilter {
+		case "active":
+			matches = row.Active == "active" && !row.Deleted
+		case "inactive":
+			matches = row.Active == "inactive" && !row.Deleted
+		case "synced":
+			matches = row.Status == "synced"
+		case "pending":
+			matches = strings.HasPrefix(row.Status, "pending")
+		case "error":
+			matches = row.Status == "sync error"
+		case "deleted":
+			matches = row.Deleted
+		}
+		if matches {
+			filtered = append(filtered, row)
+		}
+	}
+	return filtered
+}
+
+func filterGroupRowsByStatus(rows []groupRowView, statusFilter string) []groupRowView {
+	if statusFilter == "" {
+		return rows
+	}
+
+	filtered := make([]groupRowView, 0, len(rows))
+	for _, row := range rows {
+		matches := false
+		switch statusFilter {
+		case "synced":
+			matches = row.Status == "synced"
+		case "pending":
+			matches = strings.HasPrefix(row.Status, "pending")
+		case "error":
+			matches = row.Status == "sync error"
+		case "deleted":
+			matches = row.Deleted
+		}
+		if matches {
+			filtered = append(filtered, row)
+		}
+	}
+	return filtered
+}
+
+func sortUserRows(rows []userRowView, sortOrder string) {
+	slices.SortStableFunc(rows, func(a userRowView, b userRowView) int {
+		switch sortOrder {
+		case "name-desc":
+			return cmp.Compare(strings.ToLower(b.Name), strings.ToLower(a.Name))
+		case "status":
+			if result := cmp.Compare(a.Status, b.Status); result != 0 {
+				return result
+			}
+		}
+		return cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+	})
+}
+
+func sortGroupRows(rows []groupRowView, sortOrder string) {
+	slices.SortStableFunc(rows, func(a groupRowView, b groupRowView) int {
+		switch sortOrder {
+		case "name-desc":
+			return cmp.Compare(strings.ToLower(b.Name), strings.ToLower(a.Name))
+		case "status":
+			if result := cmp.Compare(a.Status, b.Status); result != 0 {
+				return result
+			}
+		}
+		return cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+	})
 }
 
 func buildAppRows(state appState, environmentID string, base string) []appRowView {
@@ -1476,16 +1599,22 @@ func buildAppRows(state appState, environmentID string, base string) []appRowVie
 	return rows
 }
 
-func buildErrorList(state appState) []string {
-	var errors []string
+func buildErrorList(state appState, tab string, page int, pageSize int, search string, statusFilter string, sortOrder string) []syncErrorView {
+	var errors []syncErrorView
 	for _, u := range state.Users {
 		if u.LastError != "" {
-			errors = append(errors, fmt.Sprintf("user %s: %s", userLabel(u), readableLastError(u.LastError)))
+			errors = append(errors, syncErrorView{
+				Message: fmt.Sprintf("user %s: %s", userLabel(u), readableLastError(u.LastError)),
+				URL:     dashboardURLWithDirectory(tab, page, pageSize, search, statusFilter, sortOrder, map[string]string{"historyType": "user", "historyID": u.ID}),
+			})
 		}
 	}
 	for _, g := range state.Groups {
 		if g.LastError != "" {
-			errors = append(errors, fmt.Sprintf("group %s: %s", g.DisplayName, readableLastError(g.LastError)))
+			errors = append(errors, syncErrorView{
+				Message: fmt.Sprintf("group %s: %s", g.DisplayName, readableLastError(g.LastError)),
+				URL:     dashboardURLWithDirectory(tab, page, pageSize, search, statusFilter, sortOrder, map[string]string{"historyType": "group", "historyID": g.ID}),
+			})
 		}
 	}
 	return errors
@@ -1583,14 +1712,14 @@ func readableRetryDelay(delay time.Duration) string {
 	}
 }
 
-func buildHistoryView(state appState, tab string, page int, pageSize int, search string, values url.Values) *historyView {
+func buildHistoryView(state appState, tab string, page int, pageSize int, search string, statusFilter string, sortOrder string, values url.Values) *historyView {
 	resourceType := strings.TrimSpace(values.Get("historyType"))
 	resourceID := strings.TrimSpace(values.Get("historyID"))
 	if resourceType == "" || resourceID == "" {
 		return nil
 	}
 
-	view := &historyView{Close: dashboardURLWithPage(tab, page, pageSize, search, nil)}
+	view := &historyView{Close: dashboardURLWithDirectory(tab, page, pageSize, search, statusFilter, sortOrder, nil)}
 	var entries []operationLog
 	if resourceType == "user" {
 		u, ok := userByID(state.Users, resourceID)
@@ -1634,9 +1763,9 @@ func buildHistoryView(state appState, tab string, page int, pageSize int, search
 	return view
 }
 
-func buildUserFormView(state appState, tab string, page int, pageSize int, search string, id string) (*userFormView, error) {
+func buildUserFormView(state appState, tab string, page int, pageSize int, search string, statusFilter string, sortOrder string, id string) (*userFormView, error) {
 	if strings.TrimSpace(id) == "" {
-		return &userFormView{Title: "Add User", Close: dashboardURLWithPage(tab, page, pageSize, search, nil)}, nil
+		return &userFormView{Title: "Add User", Close: dashboardURLWithDirectory(tab, page, pageSize, search, statusFilter, sortOrder, nil)}, nil
 	}
 
 	u, ok := userByID(state.Users, id)
@@ -1644,11 +1773,11 @@ func buildUserFormView(state appState, tab string, page int, pageSize int, searc
 		return nil, fmt.Errorf("user %s not found", id)
 	}
 
-	return &userFormView{Title: "Edit User", ID: id, User: u, Close: dashboardURLWithPage(tab, page, pageSize, search, nil)}, nil
+	return &userFormView{Title: "Edit User", ID: id, User: u, Close: dashboardURLWithDirectory(tab, page, pageSize, search, statusFilter, sortOrder, nil)}, nil
 }
 
-func buildGroupFormView(state appState, tab string, page int, pageSize int, search string, id string) (*groupFormView, error) {
-	form := &groupFormView{Title: "Add Group", Close: dashboardURLWithPage(tab, page, pageSize, search, nil)}
+func buildGroupFormView(state appState, tab string, page int, pageSize int, search string, statusFilter string, sortOrder string, id string) (*groupFormView, error) {
+	form := &groupFormView{Title: "Add Group", Close: dashboardURLWithDirectory(tab, page, pageSize, search, statusFilter, sortOrder, nil)}
 	selected := map[string]struct{}{}
 	if strings.TrimSpace(id) != "" {
 		g, ok := groupByID(state.Groups, id)
@@ -1936,6 +2065,31 @@ func searchQuery(value string) string {
 	return strings.TrimSpace(value)
 }
 
+func normalizedStatusFilter(tab string, value string) string {
+	value = strings.TrimSpace(value)
+	switch value {
+	case "active", "inactive":
+		if tab == "users" {
+			return value
+		}
+		return ""
+	case "synced", "pending", "error", "deleted":
+		return value
+	default:
+		return ""
+	}
+}
+
+func normalizedSortOrder(value string) string {
+	value = strings.TrimSpace(value)
+	switch value {
+	case "name-desc", "status":
+		return value
+	default:
+		return ""
+	}
+}
+
 func formSearch(r *http.Request) string {
 	return searchQuery(r.FormValue("q"))
 }
@@ -1988,8 +2142,8 @@ func slicePage[T any](rows []T, page int, pageSize int) []T {
 	return rows[start:end]
 }
 
-func buildPagination(total int, tab string, page int, pageSize int, search string) *paginationView {
-	if total == 0 && search == "" {
+func buildPagination(total int, tab string, page int, pageSize int, search string, statusFilter string, sortOrder string, scimDisabled bool) *paginationView {
+	if total == 0 && search == "" && statusFilter == "" && sortOrder == "" {
 		return nil
 	}
 
@@ -2011,20 +2165,59 @@ func buildPagination(total int, tab string, page int, pageSize int, search strin
 		Page:            page,
 		PageSize:        pageSize,
 		SearchQuery:     search,
+		StatusFilter:    statusFilter,
+		SortOrder:       sortOrder,
+		ActiveFilters:   search != "" || statusFilter != "",
 		TotalPages:      totalPages,
 		Summary:         summary,
 		PageSizeOptions: buildPageSizeOptions(pageSize),
+		StatusOptions:   buildStatusOptions(tab, statusFilter, scimDisabled),
+		SortOptions:     buildSortOptions(sortOrder),
 	}
 	if page > 1 {
 		view.HasPrevious = true
-		view.PreviousURL = dashboardURLWithPage(tab, page-1, pageSize, search, nil)
+		view.PreviousURL = dashboardURLWithDirectory(tab, page-1, pageSize, search, statusFilter, sortOrder, nil)
 	}
 	if page < totalPages {
 		view.HasNext = true
-		view.NextURL = dashboardURLWithPage(tab, page+1, pageSize, search, nil)
+		view.NextURL = dashboardURLWithDirectory(tab, page+1, pageSize, search, statusFilter, sortOrder, nil)
 	}
 
 	return view
+}
+
+func buildStatusOptions(tab string, selected string, scimDisabled bool) []directoryOptionView {
+	options := []directoryOptionView{{Label: "All statuses"}}
+	if tab == "users" {
+		options = append(options,
+			directoryOptionView{Value: "active", Label: "Active"},
+			directoryOptionView{Value: "inactive", Label: "Inactive"},
+		)
+	}
+	if !scimDisabled {
+		options = append(options,
+			directoryOptionView{Value: "synced", Label: "Synced"},
+			directoryOptionView{Value: "pending", Label: "Pending"},
+			directoryOptionView{Value: "error", Label: "Sync error"},
+			directoryOptionView{Value: "deleted", Label: "Deleted"},
+		)
+	}
+	for i := range options {
+		options[i].Selected = options[i].Value == selected
+	}
+	return options
+}
+
+func buildSortOptions(selected string) []directoryOptionView {
+	options := []directoryOptionView{
+		{Value: "", Label: "Name A–Z"},
+		{Value: "name-desc", Label: "Name Z–A"},
+		{Value: "status", Label: "Status"},
+	}
+	for i := range options {
+		options[i].Selected = options[i].Value == selected
+	}
+	return options
 }
 
 func buildPageSizeOptions(pageSize int) []pageSizeOptionView {
@@ -2041,6 +2234,10 @@ func buildPageSizeOptions(pageSize int) []pageSizeOptionView {
 }
 
 func dashboardURLWithPage(tab string, page int, pageSize int, search string, extra map[string]string) string {
+	return dashboardURLWithDirectory(tab, page, pageSize, search, "", "", extra)
+}
+
+func dashboardURLWithDirectory(tab string, page int, pageSize int, search string, statusFilter string, sortOrder string, extra map[string]string) string {
 	values := make(map[string]string, len(extra)+3)
 	for key, value := range extra {
 		values[key] = value
@@ -2053,6 +2250,12 @@ func dashboardURLWithPage(tab string, page int, pageSize int, search string, ext
 	}
 	if strings.TrimSpace(search) != "" {
 		values["q"] = search
+	}
+	if statusFilter != "" {
+		values["status"] = statusFilter
+	}
+	if sortOrder != "" {
+		values["sort"] = sortOrder
 	}
 
 	return dashboardURL(tab, values)
@@ -2097,6 +2300,9 @@ func scopePageDataURLs(data *pageData, environmentID string) {
 	for i := range data.Groups {
 		data.Groups[i].EditURL = addEnvironmentToURL(data.Groups[i].EditURL, environmentID)
 		data.Groups[i].HistoryURL = addEnvironmentToURL(data.Groups[i].HistoryURL, environmentID)
+	}
+	for i := range data.Errors {
+		data.Errors[i].URL = addEnvironmentToURL(data.Errors[i].URL, environmentID)
 	}
 	for i := range data.Apps {
 		data.Apps[i].EditURL = addEnvironmentToURL(data.Apps[i].EditURL, environmentID)

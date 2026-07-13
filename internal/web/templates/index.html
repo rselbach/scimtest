@@ -108,7 +108,7 @@
       <div class="errors">
         <div class="errors-head">Sync errors ({{len .Errors}})</div>
         <ul>
-          {{range .Errors}}<li>{{.}}</li>{{end}}
+          {{range .Errors}}<li><a href="{{.URL}}">{{.Message}}</a></li>{{end}}
         </ul>
       </div>
 	  {{end}}

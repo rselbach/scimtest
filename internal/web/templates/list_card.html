@@ -43,7 +43,9 @@
                 <td title="{{.MembersSummary}}">{{.MemberCount}}</td>
                 {{if $.SCIMEnabled}}
                 <td class="cell-widget">
+                  {{if .HasError}}<a class="status error" href="{{.HistoryURL}}">{{.Status}}</a>{{else}}
                   <span class="status {{if eq .Status "synced"}}synced{{else if eq .Status "sync error"}}error{{else if eq .Status "deleted"}}deleted{{else}}pending{{end}}">{{.Status}}</span>
+                  {{end}}
                 </td>
                 <td class="mono" title="{{.RemoteID}}">{{.RemoteID}}</td>
                 {{end}}
@@ -84,8 +86,8 @@
               {{else}}
               <tr><td colspan="{{if $.SCIMEnabled}}6{{else}}4{{end}}">
                 <div class="card-empty">
-                  <div class="h">{{if and $.Pagination $.Pagination.SearchQuery}}No groups match search{{else}}No groups yet{{end}}</div>
-                  <div>{{if and $.Pagination $.Pagination.SearchQuery}}Try a different search.{{else if $.SCIMEnabled}}Add one with the button above, or import from {{$.ActiveEnvironment.Name}}.{{else}}Add one with the button above.{{end}}</div>
+                  <div class="h">{{if and $.Pagination $.Pagination.ActiveFilters}}No groups match the filters{{else}}No groups yet{{end}}</div>
+                  <div>{{if and $.Pagination $.Pagination.ActiveFilters}}Try different search or status filters.{{else if $.SCIMEnabled}}Add one with the button above, or import from {{$.ActiveEnvironment.Name}}.{{else}}Add one with the button above.{{end}}</div>
                 </div>
               </td></tr>
               {{end}}
@@ -188,7 +190,9 @@
                 </td>
                 {{if $.SCIMEnabled}}
                 <td class="cell-widget">
+                  {{if .HasError}}<a class="status error" href="{{.HistoryURL}}">{{.Status}}</a>{{else}}
                   <span class="status {{if eq .Status "synced"}}synced{{else if eq .Status "sync error"}}error{{else if eq .Status "deleted"}}deleted{{else}}pending{{end}}">{{.Status}}</span>
+                  {{end}}
                 </td>
                 <td class="mono" title="{{.RemoteID}}">{{.RemoteID}}</td>
                 {{end}}
@@ -229,8 +233,8 @@
               {{else}}
               <tr><td colspan="{{if $.SCIMEnabled}}8{{else}}6{{end}}">
                 <div class="card-empty">
-                  <div class="h">{{if and $.Pagination $.Pagination.SearchQuery}}No users match search{{else}}No users yet{{end}}</div>
-                  <div>{{if and $.Pagination $.Pagination.SearchQuery}}Try a different search.{{else if $.SCIMEnabled}}Add one with the button above, or import from {{$.ActiveEnvironment.Name}}.{{else}}Add one with the button above.{{end}}</div>
+                  <div class="h">{{if and $.Pagination $.Pagination.ActiveFilters}}No users match the filters{{else}}No users yet{{end}}</div>
+                  <div>{{if and $.Pagination $.Pagination.ActiveFilters}}Try different search or status filters.{{else if $.SCIMEnabled}}Add one with the button above, or import from {{$.ActiveEnvironment.Name}}.{{else}}Add one with the button above.{{end}}</div>
                 </div>
               </td></tr>
               {{end}}
@@ -247,6 +251,22 @@
               <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
               <label for="list-search">Search
                 <input id="list-search" name="q" value="{{.Pagination.SearchQuery}}" placeholder="name, username, email" autocomplete="off" data-list-search>
+              </label>
+              {{if gt (len .Pagination.StatusOptions) 1}}
+              <label for="status-filter">Status
+                <select id="status-filter" name="status" onchange="this.form.requestSubmit()">
+                  {{range .Pagination.StatusOptions}}
+                  <option value="{{.Value}}" {{if .Selected}}selected{{end}}>{{.Label}}</option>
+                  {{end}}
+                </select>
+              </label>
+              {{end}}
+              <label for="sort-order">Sort
+                <select id="sort-order" name="sort" onchange="this.form.requestSubmit()">
+                  {{range .Pagination.SortOptions}}
+                  <option value="{{.Value}}" {{if .Selected}}selected{{end}}>{{.Label}}</option>
+                  {{end}}
+                </select>
               </label>
               <label for="page-size">Rows
                 <select id="page-size" name="pageSize" onchange="this.form.requestSubmit()">

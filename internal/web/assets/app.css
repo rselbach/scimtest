@@ -251,6 +251,7 @@
     }
     .errors ul { margin: 0; padding: 0 0 0 16px; }
 	.errors li { font-size: 12.5px; color: #4d1419; padding: 2px 0; }
+	.errors a { color: inherit; text-decoration: underline; }
 	.setup-guide { margin-bottom: 14px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg-soft); }
 	.setup-guide strong { display: block; margin-bottom: 6px; }
 	.setup-guide ol { margin: 0; padding-left: 20px; }
@@ -606,6 +607,7 @@
     }
     .status.synced { background: var(--success-soft); color: var(--success); }
     .status.error { background: var(--danger-soft); color: var(--danger); }
+    .status[href] { text-decoration: underline; }
     .status.deleted { background: rgba(15, 23, 42, 0.05); color: var(--muted-2); }
     .status.pending { background: var(--warn-soft); color: var(--warn-text); }
 
