@@ -126,7 +126,9 @@ func (a *webApp) writeDebugHTTPResponse(w io.Writer, response *debugResponseWrit
 		writeDebugln(w)
 		writeDebugln(w, debugResponseBody(response.Header().Get("Content-Type"), body, a.debugSecrets))
 	}
-	writeDebugSAMLResponse(w, body)
+	if a.debugSecrets {
+		writeDebugSAMLResponse(w, body)
+	}
 }
 
 func writeDebugHeaders(w io.Writer, headers http.Header, includeSecrets bool) {

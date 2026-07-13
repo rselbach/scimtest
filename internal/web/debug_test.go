@@ -1,6 +1,8 @@
 package web
 
 import (
+	"bytes"
+	"encoding/base64"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +11,43 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestDebugSAMLResponseRequiresExplicitSecrets(t *testing.T) {
+	assertion := `<saml:Assertion><saml:NameID>troy@greendale.edu</saml:NameID></saml:Assertion>`
+	body := `<form><input name="SAMLResponse" value="` +
+		base64.StdEncoding.EncodeToString([]byte(assertion)) + `"></form>`
+
+	tests := map[string]struct {
+		includeSecrets bool
+		wantAssertion  bool
+	}{
+		"redacted by default": {
+			wantAssertion: false,
+		},
+		"included when requested": {
+			includeSecrets: true,
+			wantAssertion:  true,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			response := &debugResponseWriter{ResponseWriter: httptest.NewRecorder()}
+			response.Header().Set("Content-Type", "text/html")
+			response.body.WriteString(body)
+			var output bytes.Buffer
+
+			(&webApp{debugSecrets: tc.includeSecrets}).writeDebugHTTPResponse(&output, response)
+
+			r.Equal(tc.wantAssertion, bytes.Contains(output.Bytes(), []byte(assertion)))
+			if !tc.includeSecrets {
+				r.NotContains(output.String(), "troy@greendale.edu")
+				r.Contains(output.String(), `value="[REDACTED]"`)
+			}
+		})
+	}
+}
 
 func TestDebugHandlerRejectsOversizedRequestBody(t *testing.T) {
 	r := require.New(t)
