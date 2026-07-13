@@ -911,6 +911,68 @@ func TestSyncPersistsRemoteStateAndTraceCookie(t *testing.T) {
 	r.Contains(app.traceContent("app_legacy_scim"), "POST /Users")
 }
 
+func TestReconcileRepairsDriftedSyncedUser(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+
+	requests := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		requests = append(requests, req.Method+" "+req.URL.Path)
+		switch req.Method + " " + req.URL.Path {
+		case "GET /Users/remote-user-1":
+			w.Header().Set("Content-Type", "application/scim+json")
+			_, err := fmt.Fprint(w, `{"id":"remote-user-1","externalId":"u1","userName":"sbennett-old"}`)
+			r.NoError(err)
+		case "PUT /Users/remote-user-1":
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Errorf("unexpected request: %s %s", req.Method, req.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	state := appState{
+		Config: config{
+			BaseURL:     server.URL,
+			BearerToken: "token",
+		},
+		Users: []user{{
+			ID:         "u1",
+			GivenName:  "Shirley",
+			FamilyName: "Bennett",
+			Username:   "sbennett",
+			Email:      "shirley@example.com",
+			Active:     true,
+			RemoteID:   "remote-user-1",
+		}},
+		UserOperations:  map[string][]operationLog{},
+		GroupOperations: map[string][]operationLog{},
+	}
+	r.NoError(saveState(state))
+
+	app := &webApp{}
+	form := url.Values{"tab": {"users"}}
+	req := httptest.NewRequest(http.MethodPost, "/reconcile", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	job := waitForSyncDone(t, app)
+	r.True(job.Success)
+	r.Contains(job.Message, "1 updated")
+	r.Equal([]string{
+		"GET /Users/remote-user-1",
+		"PUT /Users/remote-user-1",
+	}, requests)
+	updated, err := loadState()
+	r.NoError(err)
+	r.Equal("remote-user-1", updated.UserSync["app_legacy_scim"]["u1"].RemoteID)
+	r.False(updated.UserSync["app_legacy_scim"]["u1"].Dirty)
+	r.NotEmpty(updated.UserOperations["u1"])
+}
+
 func TestSyncStartsAsyncAndReportsStatus(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)

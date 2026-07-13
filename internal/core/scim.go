@@ -148,6 +148,9 @@ const (
 
 var rateLimitSleep = time.Sleep
 
+// errSCIMNotFound marks a 404/410 SCIM response so reconcile can recreate the resource.
+var errSCIMNotFound = errors.New("resource not found")
+
 func NewSCIMClient(cfg Config) (*SCIMClient, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
 	token := strings.TrimSpace(cfg.BearerToken)
@@ -247,10 +250,60 @@ func ImportStateFromSCIM(state AppState) ImportResult {
 	}
 }
 
+// ReconcileState checks every user and group against the SCIM server and
+// repairs drift regardless of local dirty flags: resources missing remotely
+// are created, mismatched ones replaced, and deletions carried out.
+func ReconcileState(state AppState) SyncResult {
+	return ReconcileStateWithProgress(state, nil)
+}
+
+// ReconcileStateWithProgress reconciles all resources and reports per-resource progress.
+func ReconcileStateWithProgress(state AppState, onProgress func(SyncProgress)) SyncResult {
+	client, err := NewSCIMClient(state.Config)
+	if err != nil {
+		return SyncResult{Fatal: err}
+	}
+
+	progress := newSyncProgressReporter(len(state.Users)+len(state.Groups), onProgress)
+	client.onRateLimit = progress.reportRateLimit
+	progress.report(SyncProgress{Status: "Starting reconcile"})
+	state, userCounts, stopped := reconcileUsers(client, state, progress)
+	groupCounts := syncCounts{}
+	if stopped == nil {
+		state, groupCounts, stopped = reconcileGroups(client, state, progress)
+	}
+
+	status := fmt.Sprintf(
+		"reconcile finished: users %d created, %d updated, %d deleted, %d in sync, %d failed; groups %d created, %d updated, %d deleted, %d in sync, %d failed",
+		userCounts.created,
+		userCounts.updated,
+		userCounts.deleted,
+		userCounts.inSync,
+		userCounts.failed,
+		groupCounts.created,
+		groupCounts.updated,
+		groupCounts.deleted,
+		groupCounts.inSync,
+		groupCounts.failed,
+	)
+	if stopped != nil {
+		status = fmt.Sprintf("reconcile stopped: %v; %s", stopped, status)
+	}
+
+	return SyncResult{
+		State:   state,
+		Status:  status,
+		Stopped: stopped,
+		Changed: userCounts.total()+groupCounts.total() > 0,
+		Traces:  client.traces,
+	}
+}
+
 type syncCounts struct {
 	created int
 	updated int
 	deleted int
+	inSync  int
 	failed  int
 }
 
@@ -613,6 +666,260 @@ func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressR
 	return state, counts, nil
 }
 
+func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressReporter) (AppState, syncCounts, error) {
+	nextUsers := make([]User, 0, len(state.Users))
+	counts := syncCounts{}
+
+	for i, u := range state.Users {
+		u.LastError = ""
+		operation := "check"
+		switch {
+		case u.Deleted:
+			operation = "delete"
+		case u.RemoteID == "":
+			operation = "create"
+		}
+		progress.startUser(u, operation)
+
+		fail := func(err error) error {
+			u.LastError = err.Error()
+			u.Dirty = true
+			counts.failed++
+			nextUsers = append(nextUsers, u)
+			progress.reportUser(u, operation, "Failed")
+			if isRateLimitError(err) {
+				nextUsers = append(nextUsers, state.Users[i+1:]...)
+				state.Users = nextUsers
+				return err
+			}
+			return nil
+		}
+
+		switch {
+		case u.Deleted && u.RemoteID == "":
+			pruneUserFromGroups(&state, u.ID)
+			counts.deleted++
+			progress.reportUser(u, operation, "Deleted locally")
+		case u.Deleted:
+			if err := client.deleteUser(u, "delete"); err != nil {
+				if stopped := fail(err); stopped != nil {
+					return state, counts, stopped
+				}
+				continue
+			}
+
+			pruneUserFromGroups(&state, u.ID)
+			counts.deleted++
+			progress.reportUser(u, operation, "Deleted")
+		case u.RemoteID == "":
+			remoteID, err := client.createUser(u)
+			if err != nil {
+				if stopped := fail(err); stopped != nil {
+					return state, counts, stopped
+				}
+				continue
+			}
+
+			u.RemoteID = remoteID
+			u.Dirty = false
+			counts.created++
+			nextUsers = append(nextUsers, u)
+			progress.reportUser(u, operation, "Created")
+		default:
+			remote, err := client.getUser(u)
+			switch {
+			case errors.Is(err, errSCIMNotFound):
+				remoteID, createErr := client.createUser(u)
+				if createErr != nil {
+					if stopped := fail(createErr); stopped != nil {
+						return state, counts, stopped
+					}
+					continue
+				}
+
+				u.RemoteID = remoteID
+				u.Dirty = false
+				counts.created++
+				nextUsers = append(nextUsers, u)
+				progress.reportUser(u, "create", "Created")
+			case err != nil:
+				if stopped := fail(err); stopped != nil {
+					return state, counts, stopped
+				}
+			case userMatchesRemote(newSCIMUserResource(u), remote):
+				u.Dirty = false
+				counts.inSync++
+				nextUsers = append(nextUsers, u)
+				progress.reportUser(u, operation, "In sync")
+			default:
+				if err := client.replaceUser(u); err != nil {
+					if stopped := fail(err); stopped != nil {
+						return state, counts, stopped
+					}
+					continue
+				}
+
+				u.Dirty = false
+				counts.updated++
+				nextUsers = append(nextUsers, u)
+				progress.reportUser(u, "update", "Updated")
+			}
+		}
+	}
+
+	state.Users = nextUsers
+	return state, counts, nil
+}
+
+func reconcileGroups(client *SCIMClient, state AppState, progress *syncProgressReporter) (AppState, syncCounts, error) {
+	nextGroups := make([]Group, 0, len(state.Groups))
+	counts := syncCounts{}
+
+	for i, g := range state.Groups {
+		g.LastError = ""
+		operation := "check"
+		switch {
+		case g.Deleted:
+			operation = "delete"
+		case g.RemoteID == "":
+			operation = "create"
+		}
+		progress.startGroup(g, operation)
+
+		fail := func(err error) error {
+			g.LastError = err.Error()
+			g.Dirty = true
+			counts.failed++
+			nextGroups = append(nextGroups, g)
+			progress.reportGroup(g, operation, "Failed")
+			if isRateLimitError(err) {
+				nextGroups = append(nextGroups, state.Groups[i+1:]...)
+				state.Groups = nextGroups
+				return err
+			}
+			return nil
+		}
+
+		switch {
+		case g.Deleted && g.RemoteID == "":
+			counts.deleted++
+			progress.reportGroup(g, operation, "Deleted locally")
+		case g.Deleted:
+			if err := client.deleteGroup(g, "delete"); err != nil {
+				if stopped := fail(err); stopped != nil {
+					return state, counts, stopped
+				}
+				continue
+			}
+
+			counts.deleted++
+			progress.reportGroup(g, operation, "Deleted")
+		case g.RemoteID == "":
+			remoteID, err := client.createGroup(g, state.Users)
+			if err != nil {
+				if stopped := fail(err); stopped != nil {
+					return state, counts, stopped
+				}
+				continue
+			}
+
+			g.RemoteID = remoteID
+			g.Dirty = false
+			counts.created++
+			nextGroups = append(nextGroups, g)
+			progress.reportGroup(g, operation, "Created")
+		default:
+			remote, err := client.getGroup(g)
+			var desired SCIMGroupResource
+			if err == nil {
+				desired, err = newSCIMGroupResource(g, state.Users)
+			}
+			switch {
+			case errors.Is(err, errSCIMNotFound):
+				remoteID, createErr := client.createGroup(g, state.Users)
+				if createErr != nil {
+					if stopped := fail(createErr); stopped != nil {
+						return state, counts, stopped
+					}
+					continue
+				}
+
+				g.RemoteID = remoteID
+				g.Dirty = false
+				counts.created++
+				nextGroups = append(nextGroups, g)
+				progress.reportGroup(g, "create", "Created")
+			case err != nil:
+				if stopped := fail(err); stopped != nil {
+					return state, counts, stopped
+				}
+			case groupMatchesRemote(desired, remote):
+				g.Dirty = false
+				counts.inSync++
+				nextGroups = append(nextGroups, g)
+				progress.reportGroup(g, operation, "In sync")
+			default:
+				if err := client.replaceGroup(g, state.Users); err != nil {
+					if stopped := fail(err); stopped != nil {
+						return state, counts, stopped
+					}
+					continue
+				}
+
+				g.Dirty = false
+				counts.updated++
+				nextGroups = append(nextGroups, g)
+				progress.reportGroup(g, "update", "Updated")
+			}
+		}
+	}
+
+	state.Groups = nextGroups
+	return state, counts, nil
+}
+
+func userMatchesRemote(desired SCIMUserResource, remote SCIMUserResource) bool {
+	remoteActive := remote.Active == nil || *remote.Active
+	desiredGiven, desiredFamily := scimNameParts(desired.Name)
+	remoteGiven, remoteFamily := scimNameParts(remote.Name)
+
+	return desired.UserName == strings.TrimSpace(remote.UserName) &&
+		desired.DisplayName == strings.TrimSpace(remote.DisplayName) &&
+		desired.ExternalID == strings.TrimSpace(remote.ExternalID) &&
+		*desired.Active == remoteActive &&
+		desiredGiven == remoteGiven &&
+		desiredFamily == remoteFamily &&
+		firstSCIMEmail(desired.Emails) == firstSCIMEmail(remote.Emails)
+}
+
+func scimNameParts(name *SCIMName) (string, string) {
+	if name == nil {
+		return "", ""
+	}
+
+	return strings.TrimSpace(name.GivenName), strings.TrimSpace(name.FamilyName)
+}
+
+func groupMatchesRemote(desired SCIMGroupResource, remote SCIMGroupResource) bool {
+	if desired.DisplayName != strings.TrimSpace(remote.DisplayName) ||
+		desired.ExternalID != strings.TrimSpace(remote.ExternalID) ||
+		len(desired.Members) != len(remote.Members) {
+		return false
+	}
+
+	remoteMembers := make(map[string]bool, len(remote.Members))
+	for _, member := range remote.Members {
+		remoteMembers[strings.TrimSpace(member.Value)] = true
+	}
+	for _, member := range desired.Members {
+		if !remoteMembers[member.Value] {
+			return false
+		}
+	}
+
+	return true
+}
+
 func isRateLimitError(err error) bool {
 	var rateLimitErr *RateLimitError
 	return errors.As(err, &rateLimitErr)
@@ -717,6 +1024,18 @@ func (c *SCIMClient) listGroups() ([]SCIMGroupResource, error) {
 
 		startIndex = nextIndex
 	}
+}
+
+func (c *SCIMClient) getUser(u User) (SCIMUserResource, error) {
+	var resource SCIMUserResource
+	err := c.doJSON(http.MethodGet, "/Users/"+url.PathEscape(u.RemoteID), nil, &resource, traceTargetForUser(u, "check"))
+	return resource, err
+}
+
+func (c *SCIMClient) getGroup(g Group) (SCIMGroupResource, error) {
+	var resource SCIMGroupResource
+	err := c.doJSON(http.MethodGet, "/Groups/"+url.PathEscape(g.RemoteID), nil, &resource, traceTargetForGroup(g, "check"))
+	return resource, err
 }
 
 func (c *SCIMClient) replaceUser(u User) error {
@@ -911,6 +1230,13 @@ func (c *SCIMClient) doJSONOnce(method string, path string, payload []byte, requ
 		if method == http.MethodDelete && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone) {
 			c.traces = append(c.traces, trace)
 			return nil
+		}
+
+		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
+			responseErr := fmt.Errorf("SCIM %s %s returned %s: %w", method, path, resp.Status, errSCIMNotFound)
+			trace.Err = responseErr.Error()
+			c.traces = append(c.traces, trace)
+			return responseErr
 		}
 
 		if resp.StatusCode == http.StatusTooManyRequests {

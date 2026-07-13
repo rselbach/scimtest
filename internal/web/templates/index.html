@@ -1302,6 +1302,12 @@
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
           <button class="btn" type="submit" data-sync-submit {{if and .SyncJob .SyncJob.Running}}disabled{{end}}>Sync</button>
         </form>
+        <form method="post" action="/reconcile" data-sync-form data-sync-kind="reconcile">
+          <input type="hidden" name="tab" value="{{.Tab}}">
+		  <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
+          {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
+          <button class="btn" type="submit" data-sync-submit {{if and .SyncJob .SyncJob.Running}}disabled{{end}} title="Check every user and group on {{.ActiveEnvironment.Name}} and repair any drift">Reconcile</button>
+        </form>
         <form method="post" action="/import" onsubmit="return confirm('Import from {{.ActiveEnvironment.Name}}? This replaces the shared directory and marks every other SCIM environment dirty.')">
           <input type="hidden" name="tab" value="{{.Tab}}">
 		  <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
@@ -2263,8 +2269,8 @@
     const initialListCard = document.querySelector('[data-list-card]');
     if (initialListCard) updateBulkSelection(initialListCard);
 
-    const syncForm = document.querySelector('[data-sync-form]');
-    const syncSubmit = document.querySelector('[data-sync-submit]');
+    const syncForms = Array.from(document.querySelectorAll('[data-sync-form]'));
+    const syncSubmits = Array.from(document.querySelectorAll('[data-sync-submit]'));
     const syncProgress = document.querySelector('[data-sync-progress]');
     const syncMessage = document.querySelector('[data-sync-message]');
     const syncCount = document.querySelector('[data-sync-count]');
@@ -2324,15 +2330,15 @@
 	  if (syncTrace) syncTrace.classList.toggle('is-hidden', !job.traceAvailable);
 	  if (syncModalTrace) syncModalTrace.classList.toggle('is-hidden', !job.traceAvailable);
 	  for (const button of syncDetailsOpenButtons) button.classList.remove('is-hidden');
-		if (syncSubmit) syncSubmit.disabled = Boolean(job.running);
+		for (const button of syncSubmits) button.disabled = Boolean(job.running);
 		for (const button of document.querySelectorAll('form[method="post"] button[type="submit"]')) {
-		  if (button !== syncSubmit) button.disabled = Boolean(job.running);
+		  if (!syncSubmits.includes(button)) button.disabled = Boolean(job.running);
 		}
       syncJobDone = Boolean(job.done);
     }
 
     function syncOperationTitle(event) {
-      const verbs = { create: 'Create', update: 'Update', delete: 'Delete' };
+      const verbs = { create: 'Create', update: 'Update', delete: 'Delete', check: 'Check' };
       const verb = verbs[event.operation] || event.operation || 'Process';
       const resource = event.resourceType || 'resource';
       return verb + ' ' + resource + ': ' + event.label;
@@ -2430,7 +2436,7 @@
         window.location.reload();
         return;
       }
-      const returnFocus = syncDetailsOpenButtons.find(button => !button.classList.contains('is-hidden')) || syncSubmit;
+      const returnFocus = syncDetailsOpenButtons.find(button => !button.classList.contains('is-hidden')) || syncSubmits[0];
       if (returnFocus) returnFocus.focus();
     }
 
@@ -2466,12 +2472,12 @@
         console.error(err);
         if (syncMessage) syncMessage.textContent = err.message;
         if (syncProgress) syncProgress.classList.add('is-error');
-        if (syncSubmit) syncSubmit.disabled = false;
+        for (const button of syncSubmits) button.disabled = false;
       }
     }
 
-    if (syncForm) {
-      syncForm.addEventListener('submit', async function (event) {
+    for (const form of syncForms) {
+      form.addEventListener('submit', async function (event) {
         event.preventDefault();
         if (syncPollTimer) clearTimeout(syncPollTimer);
         syncPollTimer = null;
@@ -2479,12 +2485,13 @@
         syncJobDone = false;
         resetSyncActivity();
         openSyncDetails(false);
-        if (syncSubmit) syncSubmit.disabled = true;
-        setSyncProgress({ running: true, message: 'Starting sync for {{.ActiveEnvironment.Name}}', processed: 0, total: 0, percent: 0 });
+        for (const button of syncSubmits) button.disabled = true;
+        const kind = form.dataset.syncKind || 'sync';
+        setSyncProgress({ running: true, message: 'Starting ' + kind + ' for {{.ActiveEnvironment.Name}}', processed: 0, total: 0, percent: 0 });
         try {
-          const response = await fetch(syncForm.action, {
+          const response = await fetch(form.action, {
             method: 'POST',
-            body: new FormData(syncForm),
+            body: new FormData(form),
             headers: {
               'Accept': 'application/json',
               'X-Requested-With': 'fetch'
@@ -2492,7 +2499,7 @@
           });
           const job = await response.json();
           if (!response.ok) {
-            throw new Error(job.error || job.message || 'sync could not start');
+            throw new Error(job.error || job.message || kind + ' could not start');
           }
           setSyncProgress(job);
           renderSyncEvents(job.events);

@@ -802,3 +802,162 @@ func hasRateLimitedProgress(events []SyncProgress) bool {
 func boolPtr(v bool) *bool {
 	return &v
 }
+
+func TestReconcileState(t *testing.T) {
+	r := require.New(t)
+
+	requests := make([]string, 0, 12)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		requests = append(requests, req.Method+" "+req.URL.Path)
+		w.Header().Set("Content-Type", "application/scim+json")
+
+		switch req.Method + " " + req.URL.Path {
+		case "POST /Users":
+			var body SCIMUserResource
+			r.NoError(json.NewDecoder(req.Body).Decode(&body))
+			w.WriteHeader(http.StatusCreated)
+			switch body.UserName {
+			case "shirleyb":
+				r.NoError(json.NewEncoder(w).Encode(SCIMUserResource{ID: "remote-user-created"}))
+			case "abedn":
+				r.NoError(json.NewEncoder(w).Encode(SCIMUserResource{ID: "remote-user-recreated"}))
+			default:
+				t.Fatalf("unexpected user created: %q", body.UserName)
+			}
+		case "GET /Users/remote-in-sync":
+			r.NoError(json.NewEncoder(w).Encode(SCIMUserResource{
+				ID:          "remote-in-sync",
+				ExternalID:  "user-2",
+				UserName:    "anniee",
+				DisplayName: "Annie Edison",
+				Name:        &SCIMName{GivenName: "Annie", FamilyName: "Edison"},
+				Emails:      []SCIMEmail{{Value: "annie@greendale.edu"}},
+			}))
+		case "GET /Users/remote-drifted":
+			r.NoError(json.NewEncoder(w).Encode(SCIMUserResource{
+				ID:          "remote-drifted",
+				ExternalID:  "user-3",
+				UserName:    "troy.old",
+				DisplayName: "Troy Barnes",
+				Name:        &SCIMName{GivenName: "Troy", FamilyName: "Barnes"},
+				Emails:      []SCIMEmail{{Value: "troy@greendale.edu"}},
+			}))
+		case "PUT /Users/remote-drifted":
+			var body SCIMUserResource
+			r.NoError(json.NewDecoder(req.Body).Decode(&body))
+			r.Equal("troyb", body.UserName)
+			w.WriteHeader(http.StatusOK)
+		case "GET /Users/remote-missing":
+			w.WriteHeader(http.StatusNotFound)
+		case "DELETE /Users/remote-user-deleted":
+			w.WriteHeader(http.StatusNoContent)
+		case "GET /Groups/remote-group-in-sync":
+			r.NoError(json.NewEncoder(w).Encode(SCIMGroupResource{
+				ID:          "remote-group-in-sync",
+				ExternalID:  "group-1",
+				DisplayName: "Study Group",
+				Members:     []SCIMMember{{Value: "remote-in-sync"}},
+			}))
+		case "GET /Groups/remote-group-drifted":
+			r.NoError(json.NewEncoder(w).Encode(SCIMGroupResource{
+				ID:          "remote-group-drifted",
+				ExternalID:  "group-2",
+				DisplayName: "Spanish Class",
+				Members:     []SCIMMember{{Value: "remote-stranger"}},
+			}))
+		case "PUT /Groups/remote-group-drifted":
+			var body SCIMGroupResource
+			r.NoError(json.NewDecoder(req.Body).Decode(&body))
+			r.Len(body.Members, 1)
+			r.Equal("remote-user-recreated", body.Members[0].Value)
+			w.WriteHeader(http.StatusOK)
+		case "POST /Groups":
+			var body SCIMGroupResource
+			r.NoError(json.NewDecoder(req.Body).Decode(&body))
+			r.Equal("Paintball Squad", body.DisplayName)
+			w.WriteHeader(http.StatusCreated)
+			r.NoError(json.NewEncoder(w).Encode(SCIMGroupResource{ID: "remote-group-created"}))
+		default:
+			t.Fatalf("unexpected request: %s %s", req.Method, req.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	state := AppState{
+		Config: Config{BaseURL: server.URL, BearerToken: "chang-secret"},
+		Users: []User{
+			{ID: "user-1", GivenName: "Shirley", FamilyName: "Bennett", Username: "shirleyb", Email: "shirley@greendale.edu", Active: true},
+			{ID: "user-2", GivenName: "Annie", FamilyName: "Edison", Username: "anniee", Email: "annie@greendale.edu", Active: true, RemoteID: "remote-in-sync", Dirty: true},
+			{ID: "user-3", GivenName: "Troy", FamilyName: "Barnes", Username: "troyb", Email: "troy@greendale.edu", Active: true, RemoteID: "remote-drifted"},
+			{ID: "user-4", GivenName: "Abed", FamilyName: "Nadir", Username: "abedn", Email: "abed@greendale.edu", Active: true, RemoteID: "remote-missing"},
+			{ID: "user-5", GivenName: "Señor", FamilyName: "Chang", Username: "chang", Email: "chang@greendale.edu", Active: true, RemoteID: "remote-user-deleted", Deleted: true},
+		},
+		Groups: []Group{
+			{ID: "group-1", DisplayName: "Study Group", MemberIDs: []string{"user-2"}, RemoteID: "remote-group-in-sync"},
+			{ID: "group-2", DisplayName: "Spanish Class", MemberIDs: []string{"user-4"}, RemoteID: "remote-group-drifted"},
+			{ID: "group-3", DisplayName: "Paintball Squad", MemberIDs: nil},
+		},
+	}
+
+	result := ReconcileState(state)
+	r.NoError(result.Fatal)
+	r.NoError(result.Stopped)
+	r.Equal(
+		"reconcile finished: users 2 created, 1 updated, 1 deleted, 1 in sync, 0 failed; groups 1 created, 1 updated, 0 deleted, 1 in sync, 0 failed",
+		result.Status,
+	)
+	r.Equal([]string{
+		"POST /Users",
+		"GET /Users/remote-in-sync",
+		"GET /Users/remote-drifted",
+		"PUT /Users/remote-drifted",
+		"GET /Users/remote-missing",
+		"POST /Users",
+		"DELETE /Users/remote-user-deleted",
+		"GET /Groups/remote-group-in-sync",
+		"GET /Groups/remote-group-drifted",
+		"PUT /Groups/remote-group-drifted",
+		"POST /Groups",
+	}, requests)
+
+	r.Len(result.State.Users, 4)
+	r.Equal("remote-user-created", result.State.Users[0].RemoteID)
+	r.Equal("remote-user-recreated", result.State.Users[3].RemoteID)
+	for _, u := range result.State.Users {
+		r.False(u.Dirty)
+		r.Empty(u.LastError)
+	}
+	r.Len(result.State.Groups, 3)
+	r.Equal("remote-group-created", result.State.Groups[2].RemoteID)
+	for _, g := range result.State.Groups {
+		r.False(g.Dirty)
+		r.Empty(g.LastError)
+	}
+}
+
+func TestReconcileStateMarksFailuresDirty(t *testing.T) {
+	r := require.New(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	state := AppState{
+		Config: Config{BaseURL: server.URL, BearerToken: "chang-secret"},
+		Users: []User{
+			{ID: "user-1", GivenName: "Jeff", FamilyName: "Winger", Username: "jeffw", Email: "jeff@greendale.edu", Active: true, RemoteID: "remote-jeff"},
+		},
+	}
+
+	result := ReconcileState(state)
+	r.NoError(result.Fatal)
+	r.NoError(result.Stopped)
+	r.Equal(
+		"reconcile finished: users 0 created, 0 updated, 0 deleted, 0 in sync, 1 failed; groups 0 created, 0 updated, 0 deleted, 0 in sync, 0 failed",
+		result.Status,
+	)
+	r.Len(result.State.Users, 1)
+	r.True(result.State.Users[0].Dirty)
+	r.Contains(result.State.Users[0].LastError, "500 Internal Server Error")
+}

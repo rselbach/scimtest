@@ -57,6 +57,7 @@ var (
 	groupSyncStatus            = core.GroupSyncStatus
 	activeStatus               = core.ActiveStatus
 	syncDirtyStateWithProgress = core.SyncDirtyStateWithProgress
+	reconcileStateWithProgress = core.ReconcileStateWithProgress
 	importStateFromSCIM        = core.ImportStateFromSCIM
 	configuredBaseURL          = core.ConfiguredBaseURL
 )

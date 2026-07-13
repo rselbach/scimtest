@@ -571,6 +571,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /tools/create-users", a.rejectWhileSyncing(a.handleToolsCreateUsers))
 	mux.HandleFunc("GET /sync/status", a.handleSyncStatus)
 	mux.HandleFunc("POST /sync", a.handleSync)
+	mux.HandleFunc("POST /reconcile", a.handleReconcile)
 	mux.HandleFunc("POST /import", a.rejectWhileSyncing(a.handleImport))
 	mux.HandleFunc("POST /reset", a.rejectWhileSyncing(a.handleReset))
 }
@@ -1404,6 +1405,14 @@ func (a *webApp) rgrokError() string {
 }
 
 func (a *webApp) handleSync(w http.ResponseWriter, r *http.Request) {
+	a.startSyncRequest(w, r, "sync")
+}
+
+func (a *webApp) handleReconcile(w http.ResponseWriter, r *http.Request) {
+	a.startSyncRequest(w, r, "reconcile")
+}
+
+func (a *webApp) startSyncRequest(w http.ResponseWriter, r *http.Request, kind string) {
 	tab := normalizedTab(r.FormValue("tab"))
 	a.mu.Lock()
 	state, err := loadRequestState(r)
@@ -1422,7 +1431,7 @@ func (a *webApp) handleSync(w http.ResponseWriter, r *http.Request) {
 		a.respondSyncStartError(w, r, tab, fmt.Errorf("sync already running"))
 		return
 	}
-	job, err := a.startSyncJob(appID, activeEnvironment.Name)
+	job, err := a.startSyncJob(appID, activeEnvironment.Name, kind)
 	if err != nil {
 		a.respondSyncStartError(w, r, tab, err)
 		return
@@ -1433,7 +1442,7 @@ func (a *webApp) handleSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: "sync started"})
+	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: kind + " started"})
 }
 
 func (a *webApp) handleSyncStatus(w http.ResponseWriter, r *http.Request) {
@@ -1474,7 +1483,7 @@ func (a *webApp) respondSyncStartError(w http.ResponseWriter, r *http.Request, t
 	a.redirectError(w, r, tab, err)
 }
 
-func (a *webApp) startSyncJob(appID string, environmentName string) (*syncJobSnapshot, error) {
+func (a *webApp) startSyncJob(appID string, environmentName string, kind string) (*syncJobSnapshot, error) {
 	a.syncJobMu.Lock()
 	defer a.syncJobMu.Unlock()
 
@@ -1495,16 +1504,16 @@ func (a *webApp) startSyncJob(appID string, environmentName string) (*syncJobSna
 		ID:              strconvFormatInt(time.Now().UnixNano()),
 		EnvironmentName: environmentName,
 		Running:         true,
-		Message:         "Starting sync for " + environmentName,
+		Message:         "Starting " + kind + " for " + environmentName,
 		StartedAt:       time.Now().UTC().Format(time.RFC3339),
 	}
 	a.syncJobs[appID] = job
-	go a.runSyncJob(job.ID, appID)
+	go a.runSyncJob(job.ID, appID, kind)
 
 	return cloneSyncJob(job), nil
 }
 
-func (a *webApp) runSyncJob(id string, appID string) {
+func (a *webApp) runSyncJob(id string, appID string, kind string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -1519,7 +1528,11 @@ func (a *webApp) runSyncJob(id string, appID string) {
 		return
 	}
 
-	result := syncDirtyStateWithProgress(projected, func(progress syncProgress) {
+	run := syncDirtyStateWithProgress
+	if kind == "reconcile" {
+		run = reconcileStateWithProgress
+	}
+	result := run(projected, func(progress syncProgress) {
 		a.updateSyncJobProgress(appID, id, progress)
 	})
 	a.rememberTrace(appID, result.Traces)
