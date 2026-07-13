@@ -299,6 +299,61 @@ func TestSaveStateCapsOperationLogs(t *testing.T) {
 	r.Equal("Update 0", loaded.UserOperations["troy"][0].Summary)
 }
 
+func TestSaveStatePreservesRowIDsForUpdatedEntities(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	state := AppState{
+		Users:  []User{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}},
+		Groups: []Group{{ID: "study-group", DisplayName: "Study Group", MemberIDs: []string{"troy"}}},
+		Apps:   []App{{ID: "greendale", Name: "Greendale", Slug: "greendale", Protocol: "oidc"}},
+	}
+	r.NoError(SaveState(state))
+	db, err := openStateDB()
+	r.NoError(err)
+	rowIDs := map[string]int64{}
+	for _, table := range []string{"users", "groups", "apps"} {
+		var rowID int64
+		r.NoError(db.QueryRow(`SELECT rowid FROM ` + table + ` LIMIT 1`).Scan(&rowID))
+		rowIDs[table] = rowID
+	}
+
+	state.Users[0].Email = "troy.barnes@greendale.edu"
+	state.Groups[0].DisplayName = "Save Greendale Committee"
+	state.Apps[0].Name = "Greendale Portal"
+	r.NoError(SaveState(state))
+
+	for _, table := range []string{"users", "groups", "apps"} {
+		var rowID int64
+		r.NoError(db.QueryRow(`SELECT rowid FROM ` + table + ` LIMIT 1`).Scan(&rowID))
+		r.Equal(rowIDs[table], rowID)
+	}
+}
+
+func BenchmarkSaveStateIncremental(b *testing.B) {
+	b.Setenv("SCIMTEST_STATE_FILE", filepath.Join(b.TempDir(), "state.db"))
+	users := make([]User, 500)
+	for i := range users {
+		users[i] = User{
+			ID:        fmt.Sprintf("user-%d", i),
+			GivenName: "Human",
+			Email:     fmt.Sprintf("human-%d@greendale.edu", i),
+			Username:  fmt.Sprintf("human-%d", i),
+			Active:    true,
+		}
+	}
+	state := AppState{Users: users}
+	if err := SaveState(state); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		state.Users[0].Email = fmt.Sprintf("human-%d@greendale.edu", i)
+		if err := SaveState(state); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestValidateUserAllowsEmptyFamilyName(t *testing.T) {
 	r := require.New(t)
 

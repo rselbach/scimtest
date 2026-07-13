@@ -852,11 +852,8 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 	committed := false
 	defer rollbackTx(tx, &committed)
 
-	if _, err := tx.Exec(`DELETE FROM config`); err != nil {
-		return fmt.Errorf("clear sqlite config: %w", err)
-	}
 	if global {
-		for _, table := range []string{"environment_config", "app_user_sync", "app_group_sync", "group_members", "operation_logs", "apps", "groups", "users"} {
+		for _, table := range []string{"environment_config", "app_user_sync", "app_group_sync", "group_members", "operation_logs"} {
 			if _, err := tx.Exec(`DELETE FROM ` + table); err != nil {
 				return fmt.Errorf("clear sqlite %s: %w", table, err)
 			}
@@ -864,24 +861,20 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 		if _, err := tx.Exec(`DELETE FROM environments WHERE id != ?`, DefaultEnvironmentID); err != nil {
 			return fmt.Errorf("remove migrated environments: %w", err)
 		}
+		for _, table := range []string{"apps", "groups", "users"} {
+			if _, err := tx.Exec(`DELETE FROM `+table+` WHERE environment_id != ?`, DefaultEnvironmentID); err != nil {
+				return fmt.Errorf("remove migrated sqlite %s: %w", table, err)
+			}
+		}
 	} else {
 		if _, err := tx.Exec(`DELETE FROM environment_config WHERE environment_id = ?`, environmentID); err != nil {
 			return fmt.Errorf("clear sqlite environment config: %w", err)
-		}
-		if _, err := tx.Exec(`DELETE FROM users WHERE environment_id = ?`, environmentID); err != nil {
-			return fmt.Errorf("clear sqlite users: %w", err)
-		}
-		if _, err := tx.Exec(`DELETE FROM groups WHERE environment_id = ?`, environmentID); err != nil {
-			return fmt.Errorf("clear sqlite groups: %w", err)
 		}
 		if _, err := tx.Exec(`DELETE FROM app_user_sync WHERE app_id IN (SELECT id FROM apps WHERE environment_id = ?)`, environmentID); err != nil {
 			return fmt.Errorf("clear sqlite app user sync: %w", err)
 		}
 		if _, err := tx.Exec(`DELETE FROM app_group_sync WHERE app_id IN (SELECT id FROM apps WHERE environment_id = ?)`, environmentID); err != nil {
 			return fmt.Errorf("clear sqlite app group sync: %w", err)
-		}
-		if _, err := tx.Exec(`DELETE FROM apps WHERE environment_id = ?`, environmentID); err != nil {
-			return fmt.Errorf("clear sqlite apps: %w", err)
 		}
 		if _, err := tx.Exec(`DELETE FROM group_members WHERE environment_id = ?`, environmentID); err != nil {
 			return fmt.Errorf("clear sqlite group members: %w", err)
@@ -890,8 +883,33 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 			return fmt.Errorf("clear sqlite operation logs: %w", err)
 		}
 	}
+	userIDs := make([]string, 0, len(state.Users))
+	for _, user := range state.Users {
+		userIDs = append(userIDs, user.ID)
+	}
+	groupIDs := make([]string, 0, len(state.Groups))
+	for _, group := range state.Groups {
+		groupIDs = append(groupIDs, group.ID)
+	}
+	appIDs := make([]string, 0, len(state.Apps))
+	for _, app := range state.Apps {
+		appIDs = append(appIDs, app.ID)
+	}
+	for _, target := range []struct {
+		table string
+		key   string
+		ids   []string
+	}{
+		{table: "apps", key: "id", ids: appIDs},
+		{table: "groups", key: "id", ids: groupIDs},
+		{table: "users", key: "id", ids: userIDs},
+	} {
+		if err := deleteMissingRows(tx, target.table, target.key, environmentID, target.ids); err != nil {
+			return err
+		}
+	}
 
-	configStmt, err := tx.Prepare(`INSERT INTO config(key, value) VALUES(?, ?)`)
+	configStmt, err := tx.Prepare(`INSERT INTO config(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
 	if err != nil {
 		return fmt.Errorf("prepare sqlite config insert: %w", err)
 	}
@@ -918,13 +936,13 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 			"scim_disabled":        BoolString(state.Config.SCIMDisabled),
 		}
 		for key, value := range environmentConfigEntries {
-			if _, err := tx.Exec(`INSERT INTO environment_config(environment_id, key, value) VALUES(?, ?, ?)`, environmentID, key, value); err != nil {
+			if _, err := tx.Exec(`INSERT INTO environment_config(environment_id, key, value) VALUES(?, ?, ?) ON CONFLICT(environment_id, key) DO UPDATE SET value = excluded.value`, environmentID, key, value); err != nil {
 				return fmt.Errorf("insert environment config %s: %w", key, err)
 			}
 		}
 	}
 
-	userStmt, err := tx.Prepare(`INSERT INTO users(id, environment_id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	userStmt, err := tx.Prepare(`INSERT INTO users(id, environment_id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET environment_id = excluded.environment_id, given_name = excluded.given_name, family_name = excluded.family_name, email = excluded.email, username = excluded.username, active = excluded.active, remote_id = excluded.remote_id, dirty = excluded.dirty, deleted = excluded.deleted, last_error = excluded.last_error`)
 	if err != nil {
 		return fmt.Errorf("prepare sqlite user insert: %w", err)
 	}
@@ -941,7 +959,7 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 		}
 	}
 
-	groupStmt, err := tx.Prepare(`INSERT INTO groups(id, environment_id, display_name, remote_id, dirty, deleted, last_error) VALUES(?, ?, ?, ?, ?, ?, ?)`)
+	groupStmt, err := tx.Prepare(`INSERT INTO groups(id, environment_id, display_name, remote_id, dirty, deleted, last_error) VALUES(?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET environment_id = excluded.environment_id, display_name = excluded.display_name, remote_id = excluded.remote_id, dirty = excluded.dirty, deleted = excluded.deleted, last_error = excluded.last_error`)
 	if err != nil {
 		return fmt.Errorf("prepare sqlite group insert: %w", err)
 	}
@@ -976,7 +994,7 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 		}
 	}
 
-	appStmt, err := tx.Prepare(`INSERT INTO apps(id, environment_id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, include_groups_claim, allow_any_oidc_redirect, scim_enabled, scim_base_url, scim_bearer_token, scim_auto_open_trace) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	appStmt, err := tx.Prepare(`INSERT INTO apps(id, environment_id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, include_groups_claim, allow_any_oidc_redirect, scim_enabled, scim_base_url, scim_bearer_token, scim_auto_open_trace) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET environment_id = excluded.environment_id, name = excluded.name, slug = excluded.slug, protocol = excluded.protocol, oidc_client_id = excluded.oidc_client_id, oidc_client_secret = excluded.oidc_client_secret, oidc_public_client = excluded.oidc_public_client, oidc_redirect_uris = excluded.oidc_redirect_uris, saml_entity_id = excluded.saml_entity_id, saml_acs_url = excluded.saml_acs_url, saml_audience = excluded.saml_audience, saml_name_id_field = excluded.saml_name_id_field, saml_name_id_format = excluded.saml_name_id_format, saml_email_attribute_name = excluded.saml_email_attribute_name, include_groups_claim = excluded.include_groups_claim, allow_any_oidc_redirect = excluded.allow_any_oidc_redirect, scim_enabled = excluded.scim_enabled, scim_base_url = excluded.scim_base_url, scim_bearer_token = excluded.scim_bearer_token, scim_auto_open_trace = excluded.scim_auto_open_trace`)
 	if err != nil {
 		return fmt.Errorf("prepare sqlite app insert: %w", err)
 	}
@@ -1041,6 +1059,23 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 	}
 	committed = true
 
+	return nil
+}
+
+func deleteMissingRows(tx *sql.Tx, table string, key string, environmentID string, ids []string) error {
+	query := `DELETE FROM ` + table + ` WHERE environment_id = ?`
+	args := []any{environmentID}
+	if len(ids) > 0 {
+		placeholders := make([]string, len(ids))
+		for i, id := range ids {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		query += ` AND ` + key + ` NOT IN (` + strings.Join(placeholders, ",") + `)`
+	}
+	if _, err := tx.Exec(query, args...); err != nil {
+		return fmt.Errorf("delete missing sqlite %s: %w", table, err)
+	}
 	return nil
 }
 
