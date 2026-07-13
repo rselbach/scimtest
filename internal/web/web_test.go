@@ -92,6 +92,86 @@ func TestIndexRendersConciseSCIMActionsAndUsernameHint(t *testing.T) {
 	r.Contains(body, `Uses email when left blank`)
 }
 
+func TestDashboardDialogsAreLabelledAndFocusEditableFields(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Users:  []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.edu", Active: true}},
+		Groups: []group{{ID: "study-group", DisplayName: "Study Group", MemberIDs: []string{"troy"}}},
+		Apps: []app{{
+			ID:              "app-1",
+			Name:            "Greendale",
+			Slug:            "greendale",
+			Protocol:        "scim",
+			SCIMEnabled:     true,
+			SCIMBaseURL:     "https://greendale.test/scim",
+			SCIMBearerToken: "chang-secret",
+		}},
+		UserOperations: map[string][]operationLog{
+			"troy": {{Kind: "local", Summary: "Created", CreatedAt: "2026-07-12T00:00:00Z"}},
+		},
+	}))
+	appService := newTestIDPApp(t)
+	appService.rememberTrace("app-1", []syncTraceEntry{{Operation: "create", Method: http.MethodPost, Path: "/Users"}})
+	tests := map[string]struct {
+		path         string
+		titleID      string
+		focusPattern string
+	}{
+		"user": {
+			path:         "/?tab=users&modal=user",
+			titleID:      "user-dialog-title",
+			focusPattern: `name="username"[^>]*data-autofocus`,
+		},
+		"group": {
+			path:         "/?tab=groups&modal=group",
+			titleID:      "group-dialog-title",
+			focusPattern: `name="display_name"[^>]*data-autofocus`,
+		},
+		"environment": {
+			path:         "/?tab=apps&modal=app",
+			titleID:      "app-dialog-title",
+			focusPattern: `name="name"[^>]*data-autofocus`,
+		},
+		"config": {
+			path:         "/?tab=users&modal=config",
+			titleID:      "config-dialog-title",
+			focusPattern: `name="idp_base_url"[^>]*data-autofocus`,
+		},
+		"tools": {
+			path:         "/?tab=users&modal=tools",
+			titleID:      "tools-dialog-title",
+			focusPattern: `name="count"[^>]*data-autofocus`,
+		},
+		"history": {
+			path:    "/?tab=users&historyType=user&historyID=troy",
+			titleID: "history-dialog-title",
+		},
+		"trace": {
+			path:    "/?tab=users&showTrace=1",
+			titleID: "trace-dialog-title",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			rec := httptest.NewRecorder()
+			appService.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
+
+			r.Equal(http.StatusOK, rec.Code)
+			body := rec.Body.String()
+			r.Contains(body, `aria-labelledby="`+tc.titleID+`"`)
+			r.Contains(body, `id="`+tc.titleID+`"`)
+			if tc.focusPattern != "" {
+				r.Regexp(tc.focusPattern, body)
+			}
+			r.Contains(body, "document.querySelectorAll('.topbar, .app, .footer')")
+			r.Contains(body, "region.setAttribute('aria-hidden', 'true')")
+		})
+	}
+}
+
 func TestIDPRoutesExcludeAdminEndpoints(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)

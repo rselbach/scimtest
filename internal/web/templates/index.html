@@ -1394,10 +1394,10 @@
 
   {{if .History}}
   <div class="overlay" data-overlay>
-    <div class="modal wide history-modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div class="modal wide history-modal" role="dialog" aria-modal="true" aria-labelledby="history-dialog-title" tabindex="-1">
       <div class="modal-header">
         <div>
-          <div class="modal-title">{{.History.Title}}</div>
+          <div class="modal-title" id="history-dialog-title">{{.History.Title}}</div>
           <div class="modal-sub">Newest first</div>
         </div>
         <a class="btn btn-sm btn-ghost" href="{{.History.Close}}" data-autofocus>Close</a>
@@ -1427,9 +1427,9 @@
 
   {{if .ShowTrace}}
   <div class="overlay" data-overlay>
-    <div class="modal wide" role="dialog" aria-modal="true" tabindex="-1">
+    <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="trace-dialog-title" tabindex="-1">
       <div class="modal-header">
-        <div class="modal-title">Last sync trace</div>
+        <div class="modal-title" id="trace-dialog-title">Last sync trace</div>
         <a class="btn btn-sm btn-ghost" href="{{.TraceCloseURL}}" data-autofocus>Close</a>
       </div>
       <div class="modal-body">
@@ -1441,13 +1441,13 @@
 
   {{if .ToolsForm}}
   <div class="overlay" data-overlay>
-    <div class="modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="tools-dialog-title" tabindex="-1">
       <div class="modal-header">
         <div>
-          <div class="modal-title">Tools</div>
+          <div class="modal-title" id="tools-dialog-title">Tools</div>
           <div class="modal-sub">Bulk user actions for test data wrangling.</div>
         </div>
-        <a class="btn btn-sm btn-ghost" href="{{.ToolsForm.Close}}" data-autofocus>Close</a>
+        <a class="btn btn-sm btn-ghost" href="{{.ToolsForm.Close}}">Close</a>
       </div>
       <div class="modal-body">
         <div class="tool-grid">
@@ -1461,7 +1461,7 @@
               <div class="form-grid">
                 <label class="field">
                   <span class="label">Number</span>
-			  <input name="count" type="number" min="1" max="10000" value="{{.ToolsForm.Count}}" inputmode="numeric">
+			  <input name="count" type="number" min="1" max="10000" value="{{.ToolsForm.Count}}" inputmode="numeric" data-autofocus>
                 </label>
                 <label class="field">
                   <span class="label">Email domain</span>
@@ -1511,13 +1511,13 @@
 
   {{if .UserForm}}
   <div class="overlay" data-overlay>
-    <div class="modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="user-dialog-title" tabindex="-1">
       <div class="modal-header">
         <div>
-          <div class="modal-title">{{.UserForm.Title}}</div>
+          <div class="modal-title" id="user-dialog-title">{{.UserForm.Title}}</div>
           <div class="modal-sub">Shared across all environments</div>
         </div>
-        <a class="btn btn-sm btn-ghost" href="{{.UserForm.Close}}" data-autofocus>Close</a>
+        <a class="btn btn-sm btn-ghost" href="{{.UserForm.Close}}">Close</a>
       </div>
       <form method="post" action="/users/save">
         <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
@@ -1528,7 +1528,7 @@
           <div class="form-grid">
             <label class="field">
               <span class="label field-label">Username{{if not .UserForm.ID}}<span class="hint">Uses email when left blank</span>{{end}}</span>
-              <input name="username" value="{{.UserForm.User.Username}}" autocomplete="off">
+              <input name="username" value="{{.UserForm.User.Username}}" autocomplete="off" data-autofocus>
             </label>
             <label class="field">
               <span class="label">Email</span>
@@ -1555,13 +1555,13 @@
 
   {{if .GroupForm}}
   <div class="overlay" data-overlay>
-    <div class="modal wide" role="dialog" aria-modal="true" tabindex="-1">
+    <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="group-dialog-title" tabindex="-1">
       <div class="modal-header">
         <div>
-          <div class="modal-title">{{.GroupForm.Title}}</div>
+          <div class="modal-title" id="group-dialog-title">{{.GroupForm.Title}}</div>
           <div class="modal-sub">Shared across all environments</div>
         </div>
-        <a class="btn btn-sm btn-ghost" href="{{.GroupForm.Close}}" data-autofocus>Close</a>
+        <a class="btn btn-sm btn-ghost" href="{{.GroupForm.Close}}">Close</a>
       </div>
       <form method="post" action="/groups/save">
         <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
@@ -1572,7 +1572,7 @@
           <div class="form-grid">
             <label class="field full">
               <span class="label">Group name</span>
-              <input name="display_name" value="{{.GroupForm.Group.DisplayName}}" autocomplete="off">
+              <input name="display_name" value="{{.GroupForm.Group.DisplayName}}" autocomplete="off" data-autofocus>
             </label>
             <div class="field full">
               <span class="label">Members</span>
@@ -1603,13 +1603,13 @@
 
   {{if .AppForm}}
   <div class="overlay" data-overlay>
-    <div class="modal wide" role="dialog" aria-modal="true" tabindex="-1">
+    <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="app-dialog-title" tabindex="-1">
       <div class="modal-header">
         <div>
-          <div class="modal-title">{{.AppForm.Title}}</div>
+          <div class="modal-title" id="app-dialog-title">{{.AppForm.Title}}</div>
           <div class="modal-sub">The authentication and provisioning context used while testing</div>
         </div>
-        <a class="btn btn-sm btn-ghost" href="{{.AppForm.Close}}" data-autofocus>Close</a>
+        <a class="btn btn-sm btn-ghost" href="{{.AppForm.Close}}">Close</a>
       </div>
       <form method="post" action="/apps/save" data-environment-form>
         <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
@@ -1619,7 +1619,7 @@
           <div class="form-grid">
             <label class="field">
               <span class="label">Environment name</span>
-              <input name="name" value="{{.AppForm.App.Name}}" autocomplete="off" data-environment-name>
+              <input name="name" value="{{.AppForm.App.Name}}" autocomplete="off" data-environment-name data-autofocus>
             </label>
             <label class="field">
               <span class="label">Slug</span>
@@ -1825,10 +1825,10 @@
 
 	{{if .ConfigForm}}
   <div class="overlay" data-overlay>
-    <div class="modal" role="dialog" aria-modal="true" tabindex="-1">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="config-dialog-title" tabindex="-1">
       <div class="modal-header">
-		  <div class="modal-title">IDP and tunnel settings</div>
-        <a class="btn btn-sm btn-ghost" href="{{.ConfigForm.Close}}" data-autofocus>Close</a>
+		  <div class="modal-title" id="config-dialog-title">IDP and tunnel settings</div>
+		<a class="btn btn-sm btn-ghost" href="{{.ConfigForm.Close}}">Close</a>
       </div>
       <form method="post" action="/config/save">
         <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
@@ -1853,12 +1853,12 @@
             <label class="field full">
               <span class="label">IDP base URL</span>
               {{if .ConfigForm.IDPBaseURLDisabled}}<input type="hidden" name="idp_base_url" value="{{.ConfigForm.IDPBaseURLValue}}">{{end}}
-              <input name="idp_base_url" value="{{.ConfigForm.IDPBaseURLValue}}" placeholder="{{.IDPBaseURL}}" autocomplete="off" {{if .ConfigForm.IDPBaseURLDisabled}}disabled{{end}}>
+              <input name="idp_base_url" value="{{.ConfigForm.IDPBaseURLValue}}" placeholder="{{.IDPBaseURL}}" autocomplete="off" {{if .ConfigForm.IDPBaseURLDisabled}}disabled{{else}}data-autofocus{{end}}>
 			  <span class="hint">Set this only when OIDC/SAML clients need a public issuer URL different from the current request host.</span>
 			</label>
 			<label class="field full">
 			  <span class="label">Reverse proxy</span>
-			  <span class="checkbox-row"><input type="checkbox" name="trust_forwarded_headers" {{if .ConfigForm.Config.TrustForwardedHeaders}}checked{{end}}> Trust X-Forwarded-Proto from a local reverse proxy</span>
+			  <span class="checkbox-row"><input type="checkbox" name="trust_forwarded_headers" {{if .ConfigForm.Config.TrustForwardedHeaders}}checked{{end}} {{if .ConfigForm.IDPBaseURLDisabled}}data-autofocus{{end}}> Trust X-Forwarded-Proto from a local reverse proxy</span>
 			</label>
           </div>
           <div class="form-actions">
@@ -1985,25 +1985,24 @@
     }
 
     if (activeOverlay) {
-      const shell = document.getElementById('app-shell');
       const modal = activeOverlay.querySelector('[role="dialog"]');
       const focusableSelectors = [
-        '[data-autofocus]',
         'button:not([disabled])',
         '[href]',
-        'input:not([disabled])',
+		'input:not([type="hidden"]):not([disabled])',
         'select:not([disabled])',
         'textarea:not([disabled])',
         '[tabindex]:not([tabindex="-1"])'
       ].join(',');
       const focusableElements = Array.from(activeOverlay.querySelectorAll(focusableSelectors));
 
-      if (shell) {
-        shell.setAttribute('inert', '');
-        shell.setAttribute('aria-hidden', 'true');
+	  for (const region of document.querySelectorAll('.topbar, .app, .footer')) {
+		region.setAttribute('inert', '');
+		region.setAttribute('aria-hidden', 'true');
       }
 
-      const initialFocus = focusableElements[0] || modal;
+	  const preferredFocus = activeOverlay.querySelector('[data-autofocus]:not([disabled])');
+      const initialFocus = preferredFocus || focusableElements[0] || modal;
       if (initialFocus) {
         initialFocus.focus();
       }
@@ -2420,7 +2419,10 @@
       syncDetails.classList.remove('is-hidden');
       syncDetails.setAttribute('aria-hidden', 'false');
       syncDetailsVisible = true;
-      for (const element of document.querySelectorAll('.topbar, .app, .footer')) element.setAttribute('inert', '');
+	  for (const region of document.querySelectorAll('.topbar, .app, .footer')) {
+		region.setAttribute('inert', '');
+		region.setAttribute('aria-hidden', 'true');
+	  }
       const close = syncDetails.querySelector('[data-sync-details-close]');
       if (close) close.focus();
       if (refresh !== false && !syncPollTimer) pollSyncStatus();
@@ -2431,7 +2433,10 @@
       syncDetails.classList.add('is-hidden');
       syncDetails.setAttribute('aria-hidden', 'true');
       syncDetailsVisible = false;
-      for (const element of document.querySelectorAll('.topbar, .app, .footer')) element.removeAttribute('inert');
+	  for (const region of document.querySelectorAll('.topbar, .app, .footer')) {
+		region.removeAttribute('inert');
+		region.removeAttribute('aria-hidden');
+	  }
       if (reloadWhenSyncFinishes && syncJobDone) {
         window.location.reload();
         return;
