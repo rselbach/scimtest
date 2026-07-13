@@ -583,6 +583,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /apps/save", a.rejectWhileSyncing(a.handleAppSave))
 	mux.HandleFunc("POST /apps/{id}/delete", a.rejectWhileSyncing(a.handleAppDelete))
 	mux.HandleFunc("POST /apps/{id}/discover-scim", a.rejectWhileSyncing(a.handleAppDiscoverSCIM))
+	mux.HandleFunc("POST /apps/test-scim", a.rejectWhileSyncing(a.handleAppTestSCIM))
 	mux.HandleFunc("POST /config/save", a.rejectWhileSyncing(a.handleConfigSave))
 	mux.HandleFunc("POST /tools/delete-all", a.rejectWhileSyncing(a.handleToolsDeleteAll))
 	mux.HandleFunc("POST /tools/clear-users-local", a.rejectWhileSyncing(a.handleToolsClearUsersLocal))

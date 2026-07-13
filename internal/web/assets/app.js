@@ -82,6 +82,31 @@
 	  });
 	}
 
+	const testSCIMButton = document.querySelector('[data-test-scim]');
+	if (testSCIMButton) {
+	  testSCIMButton.addEventListener('click', async function () {
+		const form = testSCIMButton.closest('form');
+		const status = form ? form.querySelector('[data-test-scim-status]') : null;
+		if (!form || !status) return;
+		testSCIMButton.disabled = true;
+		status.textContent = 'Testing connection…';
+		try {
+		  const response = await fetch('/apps/test-scim', {
+			method: 'POST',
+			body: new FormData(form),
+			headers: { 'Accept': 'application/json', 'X-Requested-With': 'fetch' }
+		  });
+		  const result = await response.json();
+		  if (!response.ok) throw new Error(result.error || 'Connection test failed');
+		  status.textContent = result.message;
+		} catch (err) {
+		  status.textContent = err.message;
+		} finally {
+		  testSCIMButton.disabled = false;
+		}
+	  });
+	}
+
     const overlays = Array.from(document.querySelectorAll('[data-overlay]'));
 	const activeOverlay = overlays[overlays.length - 1];
 	const formError = document.querySelector('[data-form-error]');

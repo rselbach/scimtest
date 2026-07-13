@@ -533,6 +533,10 @@
 				<button class="link-button" type="button" data-secret-toggle>Show</button>
 				{{if .AppForm.App.SCIMBearerToken}}<span class="hint">The saved token stays hidden; Show reveals only what you type here.</span>{{end}}
 			  </label>
+			  <div class="field full">
+				<button class="btn" type="button" data-test-scim>Test connection</button>
+				<span class="hint" role="status" aria-live="polite" data-test-scim-status></span>
+			  </div>
 			  <label class="field full">
 				<span class="label">Trace</span>
 				<span class="checkbox-row"><input type="checkbox" name="scim_auto_open_trace" {{if .AppForm.App.SCIMAutoOpenTrace}}checked{{end}}> Auto-open after sync and import</span>

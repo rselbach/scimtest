@@ -257,6 +257,39 @@ func (a *webApp) handleAppDiscoverSCIM(w http.ResponseWriter, r *http.Request) {
 	redirectWithFlash(w, r, dashboardURL("apps", map[string]string{"modal": "app", "id": state.Apps[index].ID}), flashMessage{Kind: "success", Message: message})
 }
 
+func (a *webApp) handleAppTestSCIM(w http.ResponseWriter, r *http.Request) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := r.ParseMultipartForm(1 << 20); err != nil {
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	token := strings.TrimSpace(r.FormValue("scim_bearer_token"))
+	if token == "" && strings.TrimSpace(r.FormValue("id")) != "" {
+		state, err := loadRequestState(r)
+		if err != nil {
+			writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if index, ok := appIndexByID(state.Apps, r.FormValue("id")); ok {
+			token = state.Apps[index].SCIMBearerToken
+		}
+	}
+	capabilities, err := discoverSCIMCapabilities(config{
+		BaseURL:     strings.TrimSpace(r.FormValue("scim_base_url")),
+		BearerToken: token,
+	})
+	if err != nil {
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	patch := "not supported"
+	if capabilities.PatchSupported {
+		patch = "supported"
+	}
+	writeJSON(w, map[string]string{"message": "Connection successful. PATCH is " + patch + "."})
+}
+
 func (a *webApp) handleAppDelete(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
