@@ -61,6 +61,7 @@ var (
 	reconcileStateWithProgress = core.ReconcileStateWithProgress
 	importStateFromSCIM        = core.ImportStateFromSCIM
 	configuredBaseURL          = core.ConfiguredBaseURL
+	discoverSCIMCapabilities   = core.DiscoverSCIMCapabilities
 	newStateBackup             = core.NewStateBackup
 	writeSafetyBackup          = core.WriteSafetyBackup
 )

@@ -98,6 +98,32 @@ type ImportResult struct {
 	Traces []SyncTraceEntry
 }
 
+// SCIMCapabilities contains optional features advertised by a provider.
+type SCIMCapabilities struct {
+	PatchSupported bool
+	Traces         []SyncTraceEntry
+}
+
+type scimServiceProviderConfig struct {
+	Patch struct {
+		Supported bool `json:"supported"`
+	} `json:"patch"`
+}
+
+// DiscoverSCIMCapabilities reads the provider's ServiceProviderConfig.
+func DiscoverSCIMCapabilities(cfg Config) (SCIMCapabilities, error) {
+	client, err := NewSCIMClient(cfg)
+	if err != nil {
+		return SCIMCapabilities{}, err
+	}
+	var response scimServiceProviderConfig
+	err = client.doJSON(http.MethodGet, "/ServiceProviderConfig", nil, &response, TraceTarget{
+		Label:     "SCIM ServiceProviderConfig",
+		Operation: "discover",
+	})
+	return SCIMCapabilities{PatchSupported: response.Patch.Supported, Traces: client.traces}, err
+}
+
 // SyncProgress reports foreground progress during a dirty-state sync.
 type SyncProgress struct {
 	Total        int

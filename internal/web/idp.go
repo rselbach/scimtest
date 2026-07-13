@@ -84,9 +84,13 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 	existingIndex, appExists := appIndexByID(state.Apps, id)
 	wasSCIMEnabled := false
 	previousSCIMBaseURL := ""
+	scimCapabilitiesKnown := false
+	scimPatchSupported := false
 	if appExists {
 		wasSCIMEnabled = state.Apps[existingIndex].SCIMEnabled
 		previousSCIMBaseURL = strings.TrimRight(strings.TrimSpace(state.Apps[existingIndex].SCIMBaseURL), "/")
+		scimCapabilitiesKnown = state.Apps[existingIndex].SCIMCapabilitiesKnown
+		scimPatchSupported = state.Apps[existingIndex].SCIMPatchSupported
 		if oidcClientSecret == "" && r.FormValue("regenerate_oidc_secret") != "on" {
 			oidcClientSecret = state.Apps[existingIndex].OIDCClientSecret
 		}
@@ -114,6 +118,8 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		SCIMBaseURL:            strings.TrimSpace(r.FormValue("scim_base_url")),
 		SCIMBearerToken:        scimBearerToken,
 		SCIMAutoOpenTrace:      r.FormValue("scim_auto_open_trace") == "on",
+		SCIMCapabilitiesKnown:  scimCapabilitiesKnown,
+		SCIMPatchSupported:     scimPatchSupported,
 	}
 	if app.Slug == "" {
 		app.Slug = slugify(app.Name)
@@ -196,6 +202,10 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	scimEndpointChanged := previousSCIMBaseURL != strings.TrimRight(app.SCIMBaseURL, "/")
+	if scimEndpointChanged {
+		app.SCIMCapabilitiesKnown = false
+		app.SCIMPatchSupported = false
+	}
 	if app.SCIMEnabled && (!wasSCIMEnabled || scimEndpointChanged) {
 		initializeAppSync(&state, app.ID)
 	}
@@ -208,6 +218,43 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		location = addEnvironmentToURL(location, app.ID)
 	}
 	redirectWithFlash(w, r, location, flashMessage{Kind: "success", Message: status})
+}
+
+func (a *webApp) handleAppDiscoverSCIM(w http.ResponseWriter, r *http.Request) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	state, err := loadRequestState(r)
+	if err != nil {
+		a.redirectError(w, r, "apps", err)
+		return
+	}
+	index, ok := appIndexByID(state.Apps, r.PathValue("id"))
+	if !ok || !state.Apps[index].SCIMEnabled {
+		a.redirectError(w, r, "apps", fmt.Errorf("SCIM-enabled environment not found"))
+		return
+	}
+	projected, err := stateForApp(state, state.Apps[index].ID)
+	if err != nil {
+		a.redirectError(w, r, "apps", err)
+		return
+	}
+	capabilities, err := discoverSCIMCapabilities(projected.Config)
+	a.rememberTrace(state.Apps[index].ID, capabilities.Traces)
+	if err != nil {
+		a.redirectError(w, r, "apps", err)
+		return
+	}
+	state.Apps[index].SCIMCapabilitiesKnown = true
+	state.Apps[index].SCIMPatchSupported = capabilities.PatchSupported
+	if err := saveState(state); err != nil {
+		a.redirectError(w, r, "apps", err)
+		return
+	}
+	message := "SCIM capabilities discovered: PATCH is not supported"
+	if capabilities.PatchSupported {
+		message = "SCIM capabilities discovered: PATCH is supported"
+	}
+	redirectWithFlash(w, r, dashboardURL("apps", map[string]string{"modal": "app", "id": state.Apps[index].ID}), flashMessage{Kind: "success", Message: message})
 }
 
 func (a *webApp) handleAppDelete(w http.ResponseWriter, r *http.Request) {

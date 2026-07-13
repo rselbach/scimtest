@@ -143,4 +143,6 @@ type App struct {
 	SCIMBaseURL            string   `json:"scim_base_url,omitempty"`
 	SCIMBearerToken        string   `json:"scim_bearer_token,omitempty"`
 	SCIMAutoOpenTrace      bool     `json:"scim_auto_open_trace,omitempty"`
+	SCIMCapabilitiesKnown  bool     `json:"scim_capabilities_known,omitempty"`
+	SCIMPatchSupported     bool     `json:"scim_patch_supported,omitempty"`
 }
