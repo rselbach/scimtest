@@ -117,6 +117,21 @@ func TestBrowserOpenerReceivesSelectedURLAndReturnsFailure(t *testing.T) {
 	r.False(strings.HasSuffix(got, ":0"))
 }
 
+func TestMaybeOpenBrowserHonorsDisabled(t *testing.T) {
+	r := require.New(t)
+	called := false
+	opener := browserOpener(func(string) error {
+		called = true
+		return nil
+	})
+
+	maybeOpenBrowser("http://127.0.0.1:8080", true, opener)
+
+	r.False(called)
+	maybeOpenBrowser("http://127.0.0.1:8080", false, opener)
+	r.True(called)
+}
+
 func TestAdminListenerOwnsPortUntilClosed(t *testing.T) {
 	r := require.New(t)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

@@ -14,6 +14,7 @@ type cliOptions struct {
 	port         string
 	debug        bool
 	debugSecrets bool
+	noOpen       bool
 	help         bool
 }
 
@@ -30,7 +31,7 @@ func main() {
 	}
 	switch opts.command {
 	case "", "web":
-		if err := web.Run(web.RunOptions{Debug: opts.debug, DebugSecrets: opts.debugSecrets, Port: opts.port}); err != nil {
+		if err := web.Run(web.RunOptions{Debug: opts.debug, DebugSecrets: opts.debugSecrets, NoOpen: opts.noOpen, Port: opts.port}); err != nil {
 			mustWriteOutput(os.Stderr, "run web: %v\n", err)
 			os.Exit(1)
 		}
@@ -53,6 +54,8 @@ func parseArgs(args []string) (cliOptions, error) {
 		case arg == "--debug-secrets":
 			opts.debug = true
 			opts.debugSecrets = true
+		case arg == "--no-open":
+			opts.noOpen = true
 		case arg == "--port":
 			if i+1 >= len(args) {
 				return cliOptions{}, fmt.Errorf("--port requires a value")
@@ -87,13 +90,14 @@ func setPort(opts *cliOptions, value string) error {
 }
 
 func usage(w *os.File) {
-	mustWriteOutput(w, "Usage: scimtest [--debug] [--port N] [web]\n")
-	mustWriteOutput(w, "       scimtest web [--debug] [--port N]\n\n")
+	mustWriteOutput(w, "Usage: scimtest [--debug] [--no-open] [--port N] [web]\n")
+	mustWriteOutput(w, "       scimtest web [--debug] [--no-open] [--port N]\n\n")
 	mustWriteOutput(w, "  (no args)  launch the web UI and auth endpoints (default port 8080)\n")
 	mustWriteOutput(w, "  web        launch the web UI and auth endpoints (default port 8080)\n")
 	mustWriteOutput(w, "  --port N   require this exact admin port (overrides $PORT; no fallback)\n")
 	mustWriteOutput(w, "  --debug    print OIDC/SAML RP requests and responses to stdout\n")
-	mustWriteOutput(w, "  --debug-secrets  include credentials and tokens in debug output\n\n")
+	mustWriteOutput(w, "  --debug-secrets  include credentials and tokens in debug output\n")
+	mustWriteOutput(w, "  --no-open  start without opening the admin UI in a browser\n\n")
 	mustWriteOutput(w, "  $PORT      same as --port; without either, ports are tried upward from 8080\n")
 }
 

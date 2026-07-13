@@ -16,6 +16,7 @@ func TestParseArgs(t *testing.T) {
 		"web command":        {args: []string{"web"}, want: cliOptions{command: "web"}},
 		"debug":              {args: []string{"--debug"}, want: cliOptions{debug: true}},
 		"debug secrets":      {args: []string{"--debug-secrets"}, want: cliOptions{debug: true, debugSecrets: true}},
+		"no open":            {args: []string{"--no-open"}, want: cliOptions{noOpen: true}},
 		"help":               {args: []string{"--debug", "--help"}, want: cliOptions{help: true}},
 		"port separate":      {args: []string{"--port", "9000"}, want: cliOptions{port: "9000"}},
 		"port equals":        {args: []string{"--port=9000"}, want: cliOptions{port: "9000"}},

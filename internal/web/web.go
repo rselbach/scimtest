@@ -338,6 +338,7 @@ type pageData struct {
 type RunOptions struct {
 	Debug        bool
 	DebugSecrets bool
+	NoOpen       bool
 	Port         string
 	browserOpen  browserOpener
 }
@@ -454,13 +455,7 @@ func Run(options ...RunOptions) error {
 	if identity != nil {
 		go app.startAutomaticRgrokTunnel(*identity)
 	}
-	opener := opts.browserOpen
-	if opener == nil {
-		opener = openBrowser
-	}
-	if err := opener(localURL); err != nil {
-		log.Printf("warning: open browser at %s: %v", localURL, err)
-	}
+	maybeOpenBrowser(localURL, opts.NoOpen, opts.browserOpen)
 
 	result := <-serveErrors
 	other := idpListener

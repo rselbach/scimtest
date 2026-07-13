@@ -91,3 +91,15 @@ func openBrowser(localURL string) error {
 	}()
 	return nil
 }
+
+func maybeOpenBrowser(localURL string, disabled bool, opener browserOpener) {
+	if disabled {
+		return
+	}
+	if opener == nil {
+		opener = openBrowser
+	}
+	if err := opener(localURL); err != nil {
+		log.Printf("warning: open browser at %s: %v", localURL, err)
+	}
+}
