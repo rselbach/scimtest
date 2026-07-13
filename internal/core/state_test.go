@@ -638,6 +638,42 @@ func TestMergeAppImportPreservesOtherAppRemoteIDs(t *testing.T) {
 	r.True(state.UserSync["app-b"]["abed"].Deleted)
 }
 
+func TestMergeAppImportRetainsOperationHistory(t *testing.T) {
+	r := require.New(t)
+	state := AppState{
+		Users:  []User{{ID: "troy", Active: true}},
+		Groups: []Group{{ID: "study-group", DisplayName: "Study Group"}},
+		Apps:   []App{{ID: "app-a", SCIMEnabled: true}},
+		UserOperations: map[string][]OperationLog{
+			"troy": {{AppID: "app-b", Kind: "sync", Summary: "Created", CreatedAt: "2026-05-01T10:00:00Z"}},
+		},
+		GroupOperations: map[string][]OperationLog{
+			"study-group": {{Kind: "local", Summary: "Created locally", CreatedAt: "2026-05-01T10:00:00Z"}},
+		},
+	}
+	imported := AppState{
+		Users:  []User{{ID: "troy", Active: true, RemoteID: "remote-troy"}},
+		Groups: []Group{{ID: "study-group", DisplayName: "Study Group", RemoteID: "remote-study-group"}},
+		UserOperations: map[string][]OperationLog{
+			"troy": {{Kind: "local", Summary: "Imported from SCIM", CreatedAt: "2026-05-01T11:00:00Z"}},
+		},
+		GroupOperations: map[string][]OperationLog{
+			"study-group": {{Kind: "local", Summary: "Imported from SCIM", CreatedAt: "2026-05-01T11:00:00Z"}},
+		},
+	}
+
+	MergeAppImportState(&state, "app-a", imported)
+
+	r.Equal([]string{"Imported from SCIM", "Created"}, []string{
+		state.UserOperations["troy"][0].Summary,
+		state.UserOperations["troy"][1].Summary,
+	})
+	r.Equal([]string{"Imported from SCIM", "Created locally"}, []string{
+		state.GroupOperations["study-group"][0].Summary,
+		state.GroupOperations["study-group"][1].Summary,
+	})
+}
+
 func TestAppendLocalOperationLogPrependsEntry(t *testing.T) {
 	r := require.New(t)
 	previousTime := currentTime

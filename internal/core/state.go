@@ -1542,6 +1542,12 @@ func MergeAppSyncState(state *AppState, appID string, synced AppState) {
 // resulting changes for every other sync-enabled app.
 func MergeAppImportState(state *AppState, appID string, imported AppState) {
 	MergeAppSyncState(state, appID, imported)
+	if state.UserOperations == nil {
+		state.UserOperations = make(map[string][]OperationLog)
+	}
+	if state.GroupOperations == nil {
+		state.GroupOperations = make(map[string][]OperationLog)
+	}
 	previousUsers := make(map[string]User, len(state.Users))
 	for _, user := range state.Users {
 		previousUsers[user.ID] = user
@@ -1555,6 +1561,7 @@ func MergeAppImportState(state *AppState, appID string, imported AppState) {
 	importedUserIDs := make(map[string]bool, len(imported.Users))
 	for i := range state.Users {
 		importedUserIDs[state.Users[i].ID] = true
+		mergeImportOperationLog(state.UserOperations, imported.UserOperations, state.Users[i].ID)
 		state.Users[i].RemoteID = ""
 		state.Users[i].Dirty = false
 		state.Users[i].Deleted = false
@@ -1575,6 +1582,7 @@ func MergeAppImportState(state *AppState, appID string, imported AppState) {
 	importedGroupIDs := make(map[string]bool, len(imported.Groups))
 	for i := range state.Groups {
 		importedGroupIDs[state.Groups[i].ID] = true
+		mergeImportOperationLog(state.GroupOperations, imported.GroupOperations, state.Groups[i].ID)
 		state.Groups[i].RemoteID = ""
 		state.Groups[i].Dirty = false
 		state.Groups[i].Deleted = false
@@ -1601,6 +1609,16 @@ func MergeAppImportState(state *AppState, appID string, imported AppState) {
 		for _, group := range state.Groups {
 			markResourceDirty(state.GroupSync, app.ID, group.ID, group.Deleted)
 		}
+	}
+}
+
+func mergeImportOperationLog(destination map[string][]OperationLog, imported map[string][]OperationLog, resourceID string) {
+	for _, entry := range imported[resourceID] {
+		if entry.Kind != "local" || entry.Summary != "Imported from SCIM" {
+			continue
+		}
+		destination[resourceID] = append([]OperationLog{entry}, destination[resourceID]...)
+		return
 	}
 }
 

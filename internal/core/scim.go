@@ -1441,8 +1441,6 @@ func replaceStateFromSCIM(state AppState, userResources []SCIMUserResource, grou
 
 	state.Users = importedUsers
 	state.Groups = importedGroups
-	state.UserOperations = make(map[string][]OperationLog, len(importedUsers))
-	state.GroupOperations = make(map[string][]OperationLog, len(importedGroups))
 
 	for _, importedUser := range importedUsers {
 		AppendLocalOperationLog(&state, "user", importedUser.ID, "Imported from SCIM")

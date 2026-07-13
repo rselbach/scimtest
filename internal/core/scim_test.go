@@ -632,29 +632,48 @@ func TestImportStateFromSCIM(t *testing.T) {
 			BaseURL:     server.URL,
 			BearerToken: "chang-secret",
 		},
-		Users: []User{{
-			ID:         "old-user",
-			GivenName:  "Old",
-			FamilyName: "Name",
-			Username:   "old-abed",
-			Email:      "old@greendale.edu",
-			Active:     false,
-			RemoteID:   "stale-remote",
-			Dirty:      true,
-			LastError:  "boom",
-		}},
-		Groups: []Group{{
-			ID:          "old-group",
-			DisplayName: "Old Group",
-			MemberIDs:   []string{"old-user"},
-			RemoteID:    "stale-group",
-			Dirty:       true,
-		}},
+		Users: []User{
+			{
+				ID:         "local-1",
+				GivenName:  "Abed",
+				FamilyName: "Nadir",
+				Username:   "old-abed",
+				Email:      "old-abed@greendale.edu",
+				Active:     false,
+			},
+			{
+				ID:         "old-user",
+				GivenName:  "Old",
+				FamilyName: "Name",
+				Username:   "old-user",
+				Email:      "old@greendale.edu",
+				Active:     false,
+				RemoteID:   "stale-remote",
+				Dirty:      true,
+				LastError:  "boom",
+			},
+		},
+		Groups: []Group{
+			{
+				ID:          "local-group-1",
+				DisplayName: "Old Study Group",
+				MemberIDs:   []string{"local-1"},
+			},
+			{
+				ID:          "old-group",
+				DisplayName: "Old Group",
+				MemberIDs:   []string{"old-user"},
+				RemoteID:    "stale-group",
+				Dirty:       true,
+			},
+		},
 		UserOperations: map[string][]OperationLog{
-			"old-user": {{Kind: "local", Summary: "Created", CreatedAt: "2026-05-01T10:00:00Z"}},
+			"local-1":  {{Kind: "local", Summary: "Created Abed", CreatedAt: "2026-05-01T09:00:00Z"}},
+			"old-user": {{Kind: "local", Summary: "Created old user", CreatedAt: "2026-05-01T10:00:00Z"}},
 		},
 		GroupOperations: map[string][]OperationLog{
-			"old-group": {{Kind: "local", Summary: "Created", CreatedAt: "2026-05-01T10:00:00Z"}},
+			"local-group-1": {{Kind: "local", Summary: "Created Study Group", CreatedAt: "2026-05-01T09:00:00Z"}},
+			"old-group":     {{Kind: "local", Summary: "Created old group", CreatedAt: "2026-05-01T10:00:00Z"}},
 		},
 	}
 
@@ -694,16 +713,18 @@ func TestImportStateFromSCIM(t *testing.T) {
 	r.Equal([]string{result.State.Users[0].ID, result.State.Users[1].ID}, result.State.Groups[0].MemberIDs)
 
 	_, oldUserStillExists := result.State.UserOperations["old-user"]
-	r.False(oldUserStillExists)
+	r.True(oldUserStillExists)
 	_, oldGroupStillExists := result.State.GroupOperations["old-group"]
-	r.False(oldGroupStillExists)
+	r.True(oldGroupStillExists)
 
-	r.Len(result.State.UserOperations[result.State.Users[0].ID], 1)
+	r.Len(result.State.UserOperations[result.State.Users[0].ID], 2)
 	r.Equal("Imported from SCIM", result.State.UserOperations[result.State.Users[0].ID][0].Summary)
+	r.Equal("Created Abed", result.State.UserOperations[result.State.Users[0].ID][1].Summary)
 	r.Len(result.State.UserOperations[result.State.Users[1].ID], 1)
 	r.Equal("Imported from SCIM", result.State.UserOperations[result.State.Users[1].ID][0].Summary)
-	r.Len(result.State.GroupOperations[result.State.Groups[0].ID], 1)
+	r.Len(result.State.GroupOperations[result.State.Groups[0].ID], 2)
 	r.Equal("Imported from SCIM", result.State.GroupOperations[result.State.Groups[0].ID][0].Summary)
+	r.Equal("Created Study Group", result.State.GroupOperations[result.State.Groups[0].ID][1].Summary)
 	r.Len(result.Traces, 3)
 	r.Equal("import", result.Traces[0].Operation)
 	r.Equal("GET", result.Traces[0].Method)
