@@ -442,6 +442,7 @@
     const syncActivityList = document.querySelector('[data-sync-activity-list]');
     const syncActivityEmpty = document.querySelector('[data-sync-activity-empty]');
     const syncNewEvents = document.querySelector('[data-sync-new-events]');
+    const syncCancelButtons = Array.from(document.querySelectorAll('[data-sync-cancel]'));
     let syncPollTimer = null;
     let reloadWhenSyncFinishes = false;
     let syncDetailsVisible = false;
@@ -480,6 +481,10 @@
 	  if (syncTrace) syncTrace.classList.toggle('is-hidden', !job.traceAvailable);
 	  if (syncModalTrace) syncModalTrace.classList.toggle('is-hidden', !job.traceAvailable);
 	  for (const button of syncDetailsOpenButtons) button.classList.remove('is-hidden');
+	  for (const button of syncCancelButtons) {
+		button.classList.toggle('is-hidden', !job.running);
+		button.disabled = false;
+	  }
 		for (const button of syncSubmits) button.disabled = Boolean(job.running);
 		for (const button of document.querySelectorAll('form[method="post"] button[type="submit"]')) {
 		  if (!syncSubmits.includes(button)) button.disabled = Boolean(job.running);
@@ -664,6 +669,30 @@
           console.error(err);
           setSyncProgress({ done: true, error: err.message, message: err.message, percent: 100 });
         }
+      });
+    }
+
+    for (const button of syncCancelButtons) {
+      button.addEventListener('click', async function () {
+		for (const candidate of syncCancelButtons) candidate.disabled = true;
+		const form = new FormData();
+		form.set('environment', document.body.dataset.environmentId || '');
+		try {
+		  const response = await fetch('/sync/cancel', {
+			method: 'POST',
+			body: form,
+			headers: { 'Accept': 'application/json', 'X-Requested-With': 'fetch' }
+		  });
+		  const result = await response.json();
+		  if (!response.ok) throw new Error(result.error || 'sync could not be cancelled');
+		  if (syncMessage) syncMessage.textContent = result.message;
+		  if (syncModalMessage) syncModalMessage.textContent = result.message;
+		  if (!syncPollTimer) syncPollTimer = setTimeout(pollSyncStatus, 100);
+		} catch (err) {
+		  console.error(err);
+		  for (const candidate of syncCancelButtons) candidate.disabled = false;
+		  if (syncMessage) syncMessage.textContent = err.message;
+		}
       });
     }
 

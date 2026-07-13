@@ -1155,6 +1155,66 @@ func TestSyncStartsAsyncAndReportsStatus(t *testing.T) {
 	r.Equal("done", incrementalJob.Events[0].Phase)
 }
 
+func TestSyncCanBeCancelled(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+	}))
+	defer server.Close()
+	defer close(release)
+
+	r.NoError(saveState(appState{
+		Config: config{BaseURL: server.URL, BearerToken: "chang-secret"},
+		Users: []user{{
+			ID: "troy", GivenName: "Troy", FamilyName: "Barnes",
+			Username: "troy", Email: "troy@greendale.edu", Active: true, Dirty: true,
+		}},
+		UserOperations:  map[string][]operationLog{},
+		GroupOperations: map[string][]operationLog{},
+	}))
+
+	app := newTestIDPApp(t)
+	startReq := httptest.NewRequest(http.MethodPost, "/sync", strings.NewReader("tab=users"))
+	startReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	startReq.Header.Set("Accept", "application/json")
+	startRec := httptest.NewRecorder()
+	app.routes().ServeHTTP(startRec, startReq)
+	r.Equal(http.StatusOK, startRec.Code)
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("SCIM request did not start")
+	}
+
+	cancelReq := httptest.NewRequest(http.MethodPost, "/sync/cancel", strings.NewReader("environment="))
+	cancelReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	cancelReq.Header.Set("Accept", "application/json")
+	cancelRec := httptest.NewRecorder()
+	app.routes().ServeHTTP(cancelRec, cancelReq)
+	r.Equal(http.StatusOK, cancelRec.Code)
+	r.JSONEq(`{"message":"stopping sync"}`, cancelRec.Body.String())
+
+	job := waitForSyncDone(t, app)
+	r.False(job.Success)
+	r.Contains(job.Error, "context canceled")
+	state, err := loadState()
+	r.NoError(err)
+	projected, err := stateForApp(state, state.Apps[0].ID)
+	r.NoError(err)
+	r.True(projected.Users[0].Dirty)
+	r.Contains(projected.Users[0].LastError, "context canceled")
+
+	indexRec := httptest.NewRecorder()
+	app.routes().ServeHTTP(indexRec, httptest.NewRequest(http.MethodGet, "/?tab=users", nil))
+	r.Contains(indexRec.Body.String(), "data-sync-cancel")
+	r.Contains(dashboardAsset(t, app, "/assets/app.js"), "fetch('/sync/cancel'")
+}
+
 func TestSyncStatusRejectsInvalidEventSequence(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)

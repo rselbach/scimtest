@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"slices"
@@ -64,6 +65,26 @@ func (a *webApp) handleSyncStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, a.currentSyncJobAfter(requestSyncAppID(r, state), after))
 }
 
+func (a *webApp) handleSyncCancel(w http.ResponseWriter, r *http.Request) {
+	state, err := loadRequestState(r)
+	if err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	appID := requestSyncAppID(r, state)
+	a.syncJobMu.Lock()
+	cancel := a.syncCancels[appID]
+	a.syncJobMu.Unlock()
+	if cancel == nil {
+		writeJSONStatus(w, http.StatusConflict, map[string]string{"error": "no sync is running"})
+		return
+	}
+
+	cancel()
+	writeJSON(w, map[string]string{"message": "stopping sync"})
+}
+
 func syncEventSequence(value string) (int, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -92,6 +113,9 @@ func (a *webApp) startSyncJob(appID string, environmentName string, kind string)
 	if a.syncJobs == nil {
 		a.syncJobs = make(map[string]*syncJobSnapshot)
 	}
+	if a.syncCancels == nil {
+		a.syncCancels = make(map[string]context.CancelFunc)
+	}
 	for jobAppID, job := range a.syncJobs {
 		if job == nil || !job.Running {
 			continue
@@ -110,12 +134,14 @@ func (a *webApp) startSyncJob(appID string, environmentName string, kind string)
 		StartedAt:       time.Now().UTC().Format(time.RFC3339),
 	}
 	a.syncJobs[appID] = job
-	go a.runSyncJob(job.ID, appID, kind)
+	ctx, cancel := context.WithCancel(context.Background())
+	a.syncCancels[appID] = cancel
+	go a.runSyncJob(ctx, job.ID, appID, kind)
 
 	return cloneSyncJob(job), nil
 }
 
-func (a *webApp) runSyncJob(id string, appID string, kind string) {
+func (a *webApp) runSyncJob(ctx context.Context, id string, appID string, kind string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -130,11 +156,11 @@ func (a *webApp) runSyncJob(id string, appID string, kind string) {
 		return
 	}
 
-	run := syncDirtyStateWithProgress
+	run := syncDirtyStateWithContext
 	if kind == "reconcile" {
-		run = reconcileStateWithProgress
+		run = reconcileStateWithContext
 	}
-	result := run(projected, func(progress syncProgress) {
+	result := run(ctx, projected, func(progress syncProgress) {
 		a.updateSyncJobProgress(appID, id, progress)
 	})
 	a.rememberTrace(appID, result.Traces)
@@ -204,6 +230,10 @@ func (a *webApp) finishSyncJob(appID string, id string, success bool, message st
 	job.Message = message
 	job.Percent = syncProgressPercent(job.Processed, job.Total, true)
 	job.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+	if cancel := a.syncCancels[appID]; cancel != nil {
+		cancel()
+	}
+	delete(a.syncCancels, appID)
 	if !success {
 		job.Error = message
 	}

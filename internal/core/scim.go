@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,6 +13,7 @@ const scimUserSchema = "urn:ietf:params:scim:schemas:core:2.0:User"
 const scimGroupSchema = "urn:ietf:params:scim:schemas:core:2.0:Group"
 
 type SCIMClient struct {
+	ctx         context.Context
 	baseURL     string
 	token       string
 	client      *http.Client
@@ -173,6 +175,10 @@ var rateLimitSleep = time.Sleep
 var errSCIMNotFound = errors.New("resource not found")
 
 func NewSCIMClient(cfg Config) (*SCIMClient, error) {
+	return newSCIMClient(context.Background(), cfg)
+}
+
+func newSCIMClient(ctx context.Context, cfg Config) (*SCIMClient, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
 	token := strings.TrimSpace(cfg.BearerToken)
 
@@ -190,6 +196,7 @@ func NewSCIMClient(cfg Config) (*SCIMClient, error) {
 	}
 
 	return &SCIMClient{
+		ctx:     ctx,
 		baseURL: baseURL,
 		token:   token,
 		client: &http.Client{
@@ -203,9 +210,18 @@ func SyncDirtyState(state AppState) SyncResult {
 	return SyncDirtyStateWithProgress(state, nil)
 }
 
+func isStoppingSCIMError(err error) bool {
+	return isRateLimitError(err) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
 // SyncDirtyStateWithProgress syncs dirty resources and reports per-resource progress.
 func SyncDirtyStateWithProgress(state AppState, onProgress func(SyncProgress)) SyncResult {
-	client, err := NewSCIMClient(state.Config)
+	return SyncDirtyStateWithContext(context.Background(), state, onProgress)
+}
+
+// SyncDirtyStateWithContext syncs dirty resources until completion or cancellation.
+func SyncDirtyStateWithContext(ctx context.Context, state AppState, onProgress func(SyncProgress)) SyncResult {
+	client, err := newSCIMClient(ctx, state.Config)
 	if err != nil {
 		return SyncResult{Fatal: err}
 	}
@@ -280,7 +296,12 @@ func ReconcileState(state AppState) SyncResult {
 
 // ReconcileStateWithProgress reconciles all resources and reports per-resource progress.
 func ReconcileStateWithProgress(state AppState, onProgress func(SyncProgress)) SyncResult {
-	client, err := NewSCIMClient(state.Config)
+	return ReconcileStateWithContext(context.Background(), state, onProgress)
+}
+
+// ReconcileStateWithContext reconciles resources until completion or cancellation.
+func ReconcileStateWithContext(ctx context.Context, state AppState, onProgress func(SyncProgress)) SyncResult {
+	client, err := newSCIMClient(ctx, state.Config)
 	if err != nil {
 		return SyncResult{Fatal: err}
 	}
@@ -520,7 +541,7 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 				counts.failed++
 				nextUsers = append(nextUsers, u)
 				progress.reportUser(u, operation, "Failed")
-				if isRateLimitError(err) {
+				if isStoppingSCIMError(err) {
 					nextUsers = append(nextUsers, state.Users[i+1:]...)
 					state.Users = nextUsers
 					return state, counts, err
@@ -538,7 +559,7 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 				counts.failed++
 				nextUsers = append(nextUsers, u)
 				progress.reportUser(u, operation, "Failed")
-				if isRateLimitError(err) {
+				if isStoppingSCIMError(err) {
 					nextUsers = append(nextUsers, state.Users[i+1:]...)
 					state.Users = nextUsers
 					return state, counts, err
@@ -557,7 +578,7 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 				counts.failed++
 				nextUsers = append(nextUsers, u)
 				progress.reportUser(u, operation, "Failed")
-				if isRateLimitError(err) {
+				if isStoppingSCIMError(err) {
 					nextUsers = append(nextUsers, state.Users[i+1:]...)
 					state.Users = nextUsers
 					return state, counts, err
@@ -632,7 +653,7 @@ func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressR
 				counts.failed++
 				nextGroups = append(nextGroups, g)
 				progress.reportGroup(g, operation, "Failed")
-				if isRateLimitError(err) {
+				if isStoppingSCIMError(err) {
 					nextGroups = append(nextGroups, state.Groups[i+1:]...)
 					state.Groups = nextGroups
 					return state, counts, err
@@ -649,7 +670,7 @@ func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressR
 				counts.failed++
 				nextGroups = append(nextGroups, g)
 				progress.reportGroup(g, operation, "Failed")
-				if isRateLimitError(err) {
+				if isStoppingSCIMError(err) {
 					nextGroups = append(nextGroups, state.Groups[i+1:]...)
 					state.Groups = nextGroups
 					return state, counts, err
@@ -668,7 +689,7 @@ func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressR
 				counts.failed++
 				nextGroups = append(nextGroups, g)
 				progress.reportGroup(g, operation, "Failed")
-				if isRateLimitError(err) {
+				if isStoppingSCIMError(err) {
 					nextGroups = append(nextGroups, state.Groups[i+1:]...)
 					state.Groups = nextGroups
 					return state, counts, err
@@ -708,7 +729,7 @@ func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 			counts.failed++
 			nextUsers = append(nextUsers, u)
 			progress.reportUser(u, operation, "Failed")
-			if isRateLimitError(err) {
+			if isStoppingSCIMError(err) {
 				nextUsers = append(nextUsers, state.Users[i+1:]...)
 				state.Users = nextUsers
 				return err
@@ -813,7 +834,7 @@ func reconcileGroups(client *SCIMClient, state AppState, progress *syncProgressR
 			counts.failed++
 			nextGroups = append(nextGroups, g)
 			progress.reportGroup(g, operation, "Failed")
-			if isRateLimitError(err) {
+			if isStoppingSCIMError(err) {
 				nextGroups = append(nextGroups, state.Groups[i+1:]...)
 				state.Groups = nextGroups
 				return err

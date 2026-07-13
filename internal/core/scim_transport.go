@@ -257,7 +257,22 @@ func (c *SCIMClient) doJSON(method string, path string, body any, out any, targe
 		if c.onRateLimit != nil {
 			c.onRateLimit(target, delay, rateLimitErr.RetryAfterHeader, attempt+1)
 		}
-		rateLimitSleep(delay)
+		if c.ctx.Done() == nil {
+			rateLimitSleep(delay)
+			continue
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-timer.C:
+		case <-c.ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return fmt.Errorf("wait for SCIM rate limit retry: %w", c.ctx.Err())
+		}
 	}
 }
 
@@ -267,7 +282,7 @@ func (c *SCIMClient) doJSONOnce(method string, path string, payload []byte, requ
 		reader = bytes.NewReader(payload)
 	}
 
-	req, err := http.NewRequest(method, c.baseURL+path, reader)
+	req, err := http.NewRequestWithContext(c.ctx, method, c.baseURL+path, reader)
 	if err != nil {
 		return fmt.Errorf("build SCIM %s %s request: %w", method, path, err)
 	}

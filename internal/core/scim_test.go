@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -11,6 +12,48 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestSyncDirtyStateWithContextCancelsInFlightRequest(t *testing.T) {
+	r := require.New(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+	}))
+	defer server.Close()
+	defer close(release)
+
+	state := AppState{
+		Config: Config{BaseURL: server.URL, BearerToken: "chang-secret"},
+		Users: []User{{
+			ID: "troy", GivenName: "Troy", FamilyName: "Barnes",
+			Username: "troy", Email: "troy@greendale.edu", Active: true, Dirty: true,
+		}},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	resultCh := make(chan SyncResult, 1)
+	go func() {
+		resultCh <- SyncDirtyStateWithContext(ctx, state, nil)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("SCIM request did not start")
+	}
+	cancel()
+
+	select {
+	case result := <-resultCh:
+		r.ErrorIs(result.Stopped, context.Canceled)
+		r.Contains(result.Status, "sync stopped")
+		r.True(result.State.Users[0].Dirty)
+		r.Contains(result.State.Users[0].LastError, "context canceled")
+	case <-time.After(time.Second):
+		t.Fatal("SCIM sync did not stop after cancellation")
+	}
+}
 
 func TestReadSCIMResponseBodyRejectsOversizedBody(t *testing.T) {
 	r := require.New(t)

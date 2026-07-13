@@ -197,6 +197,7 @@
           <span class="sync-progress-current" data-sync-current>{{if .SyncJob}}{{.SyncJob.Current}}{{end}}</span>
           <span class="sync-progress-actions">
             <button class="link-button sync-details-open {{if not .SyncJob}}is-hidden{{end}}" type="button" data-sync-details-open>View details</button>
+            <button class="link-button {{if not (and .SyncJob .SyncJob.Running)}}is-hidden{{end}}" type="button" data-sync-cancel>Cancel</button>
             <a class="sync-progress-trace {{if not (and .SyncJob .SyncJob.TraceAvailable)}}is-hidden{{end}}" href="{{.TraceURL}}" data-sync-trace>View trace</a>
           </span>
         </div>
@@ -245,6 +246,7 @@
       </div>
       <div class="sync-details-footer">
         <a class="sync-progress-trace {{if not (and .SyncJob .SyncJob.TraceAvailable)}}is-hidden{{end}}" href="{{.TraceURL}}" data-sync-modal-trace>View trace</a>
+        <button class="btn btn-danger {{if not (and .SyncJob .SyncJob.Running)}}is-hidden{{end}}" type="button" data-sync-cancel>Cancel sync</button>
         <button class="btn" type="button" data-sync-details-close>Close</button>
       </div>
     </div>

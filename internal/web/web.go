@@ -43,6 +43,7 @@ type webApp struct {
 	rgrokLastError   string
 	syncJobMu        sync.Mutex
 	syncJobs         map[string]*syncJobSnapshot
+	syncCancels      map[string]context.CancelFunc
 	// oidcMu guards authCodes and accessTokens so sign-in flows never
 	// wait on mu, which is held for the full duration of a SCIM sync.
 	oidcMu           sync.Mutex
@@ -594,6 +595,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /restore", a.rejectWhileSyncing(a.handleBackupRestore))
 	mux.HandleFunc("GET /sync/status", a.handleSyncStatus)
 	mux.HandleFunc("POST /sync", a.handleSync)
+	mux.HandleFunc("POST /sync/cancel", a.handleSyncCancel)
 	mux.HandleFunc("POST /reconcile", a.handleReconcile)
 	mux.HandleFunc("POST /import", a.rejectWhileSyncing(a.handleImport))
 	mux.HandleFunc("POST /reset", a.rejectWhileSyncing(a.handleReset))
