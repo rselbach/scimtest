@@ -1453,6 +1453,8 @@ func TestNewEnvironmentFormGeneratesSlugLocally(t *testing.T) {
 	r.Contains(body, `data-environment-form`)
 	r.Contains(body, `data-environment-name`)
 	r.Contains(body, `data-environment-slug`)
+	r.Contains(body, `name="oidc_claim_username" value="preferred_username"`)
+	r.Contains(body, `name="saml_attribute_groups" value="groups"`)
 	assetJS := dashboardAsset(t, app, "/assets/app.js")
 	r.Contains(assetJS, `if (environmentForm && !environmentForm.elements.id.value)`)
 	r.Contains(assetJS, `.replace(/[^a-z0-9]+/g, '-')`)
@@ -1570,15 +1572,26 @@ func TestAppSaveStoresSCIMSettingsAndInitializesSyncState(t *testing.T) {
 	}))
 	appService := newTestIDPApp(t)
 	form := url.Values{
-		"tab":                     {"apps"},
-		"name":                    {"Greendale Portal"},
-		"slug":                    {"greendale-portal"},
-		"protocol":                {"oidc"},
-		"allow_any_oidc_redirect": {"on"},
-		"scim_enabled":            {"on"},
-		"scim_base_url":           {"https://portal.test/scim/v2"},
-		"scim_bearer_token":       {"chang-secret"},
-		"scim_auto_open_trace":    {"on"},
+		"tab":                        {"apps"},
+		"name":                       {"Greendale Portal"},
+		"slug":                       {"greendale-portal"},
+		"protocol":                   {"oidc"},
+		"allow_any_oidc_redirect":    {"on"},
+		"scim_enabled":               {"on"},
+		"scim_base_url":              {"https://portal.test/scim/v2"},
+		"scim_bearer_token":          {"chang-secret"},
+		"scim_auto_open_trace":       {"on"},
+		"oidc_claim_name":            {"display_name"},
+		"oidc_claim_given_name":      {"first_name"},
+		"oidc_claim_family_name":     {"last_name"},
+		"oidc_claim_username":        {"login"},
+		"oidc_claim_email":           {"mail"},
+		"oidc_claim_groups":          {"roles"},
+		"saml_email_attribute_name":  {"mail"},
+		"saml_attribute_username":    {"login"},
+		"saml_attribute_given_name":  {"first_name"},
+		"saml_attribute_family_name": {"last_name"},
+		"saml_attribute_groups":      {"roles"},
 	}
 	req := httptest.NewRequest(http.MethodPost, "/apps/save", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -1596,6 +1609,10 @@ func TestAppSaveStoresSCIMSettingsAndInitializesSyncState(t *testing.T) {
 	r.Equal("https://portal.test/scim/v2", savedApp.SCIMBaseURL)
 	r.Equal("chang-secret", savedApp.SCIMBearerToken)
 	r.True(savedApp.SCIMAutoOpenTrace)
+	r.Equal("login", savedApp.OIDCClaimMappings.Username)
+	r.Equal("roles", savedApp.OIDCClaimMappings.Groups)
+	r.Equal("mail", savedApp.SAMLAttributeMappings.Email)
+	r.Equal("roles", savedApp.SAMLAttributeMappings.Groups)
 	r.True(state.UserSync[savedApp.ID]["troy"].Dirty)
 	r.True(state.GroupSync[savedApp.ID]["study-group"].Dirty)
 	state.UserSync[savedApp.ID]["troy"] = resourceSyncState{RemoteID: "remote-troy", LastError: "old user error"}

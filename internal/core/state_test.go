@@ -51,6 +51,14 @@ func TestSaveAndLoadState(t *testing.T) {
 			SCIMBaseURL:            "https://example.com/scim/v2",
 			SCIMBearerToken:        "secret",
 			SCIMAutoOpenTrace:      true,
+			OIDCClaimMappings: OIDCClaimMappings{
+				Name: "display_name", GivenName: "first_name", FamilyName: "last_name",
+				Username: "login", Email: "mail", Groups: "roles",
+			},
+			SAMLAttributeMappings: SAMLAttributeMappings{
+				GivenName: "first_name", FamilyName: "last_name", Username: "login",
+				Email: "mail", Groups: "roles",
+			},
 		}},
 		UserSync: map[string]map[string]ResourceSyncState{
 			"app-1": {"local-1": {RemoteID: "remote-1", Dirty: true}},
@@ -918,6 +926,34 @@ func TestValidateAppRequiresSafeOIDCRedirect(t *testing.T) {
 				return
 			}
 			r.ErrorContains(err, tc.wantErr)
+		})
+	}
+}
+
+func TestValidateAppRejectsUnsafeClaimMappings(t *testing.T) {
+	tests := map[string]struct {
+		mutate  func(*OIDCClaimMappings)
+		wantErr string
+	}{
+		"reserved": {
+			mutate:  func(mappings *OIDCClaimMappings) { mappings.Email = "sub" },
+			wantErr: `OIDC claim name "sub" is reserved`,
+		},
+		"duplicate": {
+			mutate:  func(mappings *OIDCClaimMappings) { mappings.Email = mappings.Username },
+			wantErr: `OIDC claim name "preferred_username" is configured more than once`,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			mappings := DefaultOIDCClaimMappings()
+			tc.mutate(&mappings)
+			err := ValidateApp(App{
+				ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "oidc",
+				OIDCClientID: "greendale-client", AllowAnyOIDCRedirect: true, OIDCClaimMappings: mappings,
+			}, nil)
+			require.EqualError(t, err, tc.wantErr)
 		})
 	}
 }

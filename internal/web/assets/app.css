@@ -1131,6 +1131,8 @@
       font-size: 12.5px;
       margin-top: 6px;
     }
+	.claim-mappings summary { margin: 0; font-weight: 600; }
+	.claim-mappings .form-grid { margin-top: 10px; }
     pre {
       margin: 8px 0 0;
       max-height: 360px;

@@ -288,6 +288,21 @@ func TestUserClaimsHonorScopes(t *testing.T) {
 
 	withoutConfiguredGroups := userClaims(state, app{}, troy, "openid groups")
 	r.NotContains(withoutConfiguredGroups, "groups")
+
+	custom := userClaims(state, app{
+		IncludeGroupsClaim: true,
+		OIDCClaimMappings: oidcClaimMappings{
+			Name: "display_name", GivenName: "first_name", FamilyName: "last_name",
+			Username: "login", Email: "mail", Groups: "roles",
+		},
+	}, troy, "openid profile email groups")
+	r.Equal("Troy Barnes", custom["display_name"])
+	r.Equal("troy", custom["login"])
+	r.Equal("troy@greendale.edu", custom["mail"])
+	r.Equal([]string{"Study Group"}, custom["roles"])
+	r.NotContains(custom, "preferred_username")
+	r.Contains(oidcClaimsSupported(app{OIDCClaimMappings: oidcClaimMappings{Username: "login"}}), "login")
+	r.NotContains(oidcClaimsSupported(app{OIDCClaimMappings: oidcClaimMappings{Username: "login"}}), "preferred_username")
 }
 
 func TestEffectiveIDPBaseURLOnlyTrustsForwardedProtoWhenConfigured(t *testing.T) {
@@ -818,13 +833,19 @@ func TestSignedSAMLResponseUsesConfiguredNameIDField(t *testing.T) {
 			SAMLNameIDField:        "username",
 			SAMLNameIDFormat:       samlNameIDFormatForField("username"),
 			SAMLEmailAttributeName: defaultSAMLEmailAttributeName,
+			SAMLAttributeMappings: samlAttributeMappings{
+				GivenName: "given_name", FamilyName: "family_name", Username: "login",
+				Email: "mail", Groups: "roles",
+			},
 		}},
 	}
 
 	response, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], state.Users[0], samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL})
 	r.NoError(err)
 	r.Contains(response, `<saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">tbarnes</saml:NameID>`)
-	r.Contains(response, `<saml:Attribute Name="http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress"><saml:AttributeValue>troy@example.test</saml:AttributeValue></saml:Attribute>`)
+	r.Contains(response, `<saml:Attribute Name="mail"><saml:AttributeValue>troy@example.test</saml:AttributeValue></saml:Attribute>`)
+	r.Contains(response, `<saml:Attribute Name="login"><saml:AttributeValue>tbarnes</saml:AttributeValue></saml:Attribute>`)
+	r.NotContains(response, `Name="username"`)
 }
 
 func newTestIDPApp(t *testing.T) *webApp {

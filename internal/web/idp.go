@@ -116,13 +116,23 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		SAMLNameIDField:        normalizeSAMLNameIDField(r.FormValue("saml_name_id_field")),
 		SAMLEmailAttributeName: strings.TrimSpace(r.FormValue("saml_email_attribute_name")),
 		IncludeGroupsClaim:     r.FormValue("include_groups_claim") == "on",
-		SCIMEnabled:            r.FormValue("scim_enabled") == "on",
-		SCIMBaseURL:            strings.TrimSpace(r.FormValue("scim_base_url")),
-		SCIMBearerToken:        scimBearerToken,
-		SCIMAutoOpenTrace:      r.FormValue("scim_auto_open_trace") == "on",
-		SCIMCapabilitiesKnown:  scimCapabilitiesKnown,
-		SCIMPatchSupported:     scimPatchSupported,
-		SCIMFilterSupported:    scimFilterSupported,
+		OIDCClaimMappings: oidcClaimMappings{
+			Name: strings.TrimSpace(r.FormValue("oidc_claim_name")), GivenName: strings.TrimSpace(r.FormValue("oidc_claim_given_name")),
+			FamilyName: strings.TrimSpace(r.FormValue("oidc_claim_family_name")), Username: strings.TrimSpace(r.FormValue("oidc_claim_username")),
+			Email: strings.TrimSpace(r.FormValue("oidc_claim_email")), Groups: strings.TrimSpace(r.FormValue("oidc_claim_groups")),
+		},
+		SAMLAttributeMappings: samlAttributeMappings{
+			GivenName: strings.TrimSpace(r.FormValue("saml_attribute_given_name")), FamilyName: strings.TrimSpace(r.FormValue("saml_attribute_family_name")),
+			Username: strings.TrimSpace(r.FormValue("saml_attribute_username")), Email: strings.TrimSpace(r.FormValue("saml_email_attribute_name")),
+			Groups: strings.TrimSpace(r.FormValue("saml_attribute_groups")),
+		},
+		SCIMEnabled:           r.FormValue("scim_enabled") == "on",
+		SCIMBaseURL:           strings.TrimSpace(r.FormValue("scim_base_url")),
+		SCIMBearerToken:       scimBearerToken,
+		SCIMAutoOpenTrace:     r.FormValue("scim_auto_open_trace") == "on",
+		SCIMCapabilitiesKnown: scimCapabilitiesKnown,
+		SCIMPatchSupported:    scimPatchSupported,
+		SCIMFilterSupported:   scimFilterSupported,
 	}
 	if app.Slug == "" {
 		app.Slug = slugify(app.Name)
@@ -133,6 +143,9 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 	if app.Protocol == "scim" {
 		app.SCIMEnabled = true
 	}
+	app.OIDCClaimMappings = oidcClaimMappingsForApp(app)
+	app.SAMLAttributeMappings = samlAttributeMappingsForApp(app)
+	app.SAMLEmailAttributeName = app.SAMLAttributeMappings.Email
 	if supportsOIDC(app) {
 		if app.OIDCClientID == "" {
 			app.OIDCClientID = app.Slug
@@ -357,7 +370,7 @@ func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 		"subject_types_supported":               []string{"public"},
 		"id_token_signing_alg_values_supported": []string{"RS256"},
 		"scopes_supported":                      []string{"openid", "profile", "email", "groups"},
-		"claims_supported":                      []string{"sub", "name", "given_name", "family_name", "preferred_username", "email", "email_verified", "groups"},
+		"claims_supported":                      oidcClaimsSupported(app),
 		"code_challenge_methods_supported":      []string{"S256"},
 		"token_endpoint_auth_methods_supported": authMethods,
 	})
@@ -862,20 +875,29 @@ func clientAuthenticated(r *http.Request, app app) bool {
 
 func userClaims(state appState, app app, user user, scope string) map[string]any {
 	claims := map[string]any{"sub": user.ID}
+	mappings := oidcClaimMappingsForApp(app)
 	if hasOIDCScope(scope, "profile") {
-		claims["name"] = userLabel(user)
-		claims["given_name"] = user.GivenName
-		claims["family_name"] = user.FamilyName
-		claims["preferred_username"] = user.Username
+		claims[mappings.Name] = userLabel(user)
+		claims[mappings.GivenName] = user.GivenName
+		claims[mappings.FamilyName] = user.FamilyName
+		claims[mappings.Username] = user.Username
 	}
 	if hasOIDCScope(scope, "email") {
-		claims["email"] = user.Email
+		claims[mappings.Email] = user.Email
 		claims["email_verified"] = true
 	}
 	if app.IncludeGroupsClaim && hasOIDCScope(scope, "groups") {
-		claims["groups"] = userGroups(state, user.ID)
+		claims[mappings.Groups] = userGroups(state, user.ID)
 	}
 	return claims
+}
+
+func oidcClaimsSupported(app app) []string {
+	mappings := oidcClaimMappingsForApp(app)
+	return []string{
+		"sub", mappings.Name, mappings.GivenName, mappings.FamilyName,
+		mappings.Username, mappings.Email, "email_verified", mappings.Groups,
+	}
 }
 
 func hasOIDCScope(scope string, target string) bool {
@@ -1349,17 +1371,7 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user, respo
 	if audience == "" {
 		audience = responseContext.ACSURL
 	}
-	groups := userGroups(state, user.ID)
-	var groupAttribute string
-	if app.IncludeGroupsClaim {
-		var groupAttrs strings.Builder
-		for _, group := range groups {
-			groupAttrs.WriteString("<saml:AttributeValue>")
-			groupAttrs.WriteString(xmlEscape(group))
-			groupAttrs.WriteString("</saml:AttributeValue>")
-		}
-		groupAttribute = "<saml:Attribute Name=\"groups\">" + groupAttrs.String() + "</saml:Attribute>"
-	}
+	attributeStatement := samlAttributeStatement(state, app, user)
 	nameIDValue := samlNameIDValue(app, user)
 	nameIDFormat := app.SAMLNameIDFormat
 	if nameIDFormat == "" {
@@ -1386,10 +1398,6 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user, respo
     <saml:Conditions NotBefore="%s" NotOnOrAfter="%s"><saml:AudienceRestriction><saml:Audience>%s</saml:Audience></saml:AudienceRestriction></saml:Conditions>
     <saml:AuthnStatement AuthnInstant="%s"><saml:AuthnContext><saml:AuthnContextClassRef>urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport</saml:AuthnContextClassRef></saml:AuthnContext></saml:AuthnStatement>
     <saml:AttributeStatement>
-      <saml:Attribute Name="%s"><saml:AttributeValue>%s</saml:AttributeValue></saml:Attribute>
-      <saml:Attribute Name="username"><saml:AttributeValue>%s</saml:AttributeValue></saml:Attribute>
-      <saml:Attribute Name="firstName"><saml:AttributeValue>%s</saml:AttributeValue></saml:Attribute>
-      <saml:Attribute Name="lastName"><saml:AttributeValue>%s</saml:AttributeValue></saml:Attribute>
       %s
     </saml:AttributeStatement>
   </saml:Assertion>
@@ -1398,7 +1406,32 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user, respo
 		xmlEscape(assertionID), now.Format(time.RFC3339), xmlEscape(issuer),
 		xmlEscape(nameIDFormat), xmlEscape(nameIDValue), subjectInResponseTo, now.Add(5*time.Minute).Format(time.RFC3339), xmlEscape(responseContext.ACSURL),
 		now.Add(-time.Minute).Format(time.RFC3339), now.Add(5*time.Minute).Format(time.RFC3339), xmlEscape(audience),
-		now.Format(time.RFC3339), xmlEscape(app.SAMLEmailAttributeName), xmlEscape(user.Email), xmlEscape(user.Username), xmlEscape(user.GivenName), xmlEscape(user.FamilyName), groupAttribute), nil
+		now.Format(time.RFC3339), attributeStatement), nil
+}
+
+func samlAttributeStatement(state appState, app app, user user) string {
+	mappings := samlAttributeMappingsForApp(app)
+	var attributes strings.Builder
+	writeSAMLAttribute(&attributes, mappings.Email, []string{user.Email})
+	writeSAMLAttribute(&attributes, mappings.Username, []string{user.Username})
+	writeSAMLAttribute(&attributes, mappings.GivenName, []string{user.GivenName})
+	writeSAMLAttribute(&attributes, mappings.FamilyName, []string{user.FamilyName})
+	if app.IncludeGroupsClaim {
+		writeSAMLAttribute(&attributes, mappings.Groups, userGroups(state, user.ID))
+	}
+	return attributes.String()
+}
+
+func writeSAMLAttribute(attributes *strings.Builder, name string, values []string) {
+	attributes.WriteString(`<saml:Attribute Name="`)
+	attributes.WriteString(xmlEscape(name))
+	attributes.WriteString(`">`)
+	for _, value := range values {
+		attributes.WriteString("<saml:AttributeValue>")
+		attributes.WriteString(xmlEscape(value))
+		attributes.WriteString("</saml:AttributeValue>")
+	}
+	attributes.WriteString("</saml:Attribute>")
 }
 
 func renderPostBack(w http.ResponseWriter, target string, values map[string]string) {

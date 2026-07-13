@@ -589,6 +589,17 @@
 				  Allow arbitrary redirect URIs (unsafe when tunneled publicly)
 				</span>
 			  </label>
+			  <details class="field full claim-mappings">
+			  <summary>OIDC claim mappings</summary>
+			  <div class="form-grid">
+			  <label class="field"><span class="label">Full name</span><input name="oidc_claim_name" value="{{.AppForm.App.OIDCClaimMappings.Name}}" autocomplete="off"></label>
+			  <label class="field"><span class="label">Username</span><input name="oidc_claim_username" value="{{.AppForm.App.OIDCClaimMappings.Username}}" autocomplete="off"></label>
+			  <label class="field"><span class="label">Given name</span><input name="oidc_claim_given_name" value="{{.AppForm.App.OIDCClaimMappings.GivenName}}" autocomplete="off"></label>
+			  <label class="field"><span class="label">Family name</span><input name="oidc_claim_family_name" value="{{.AppForm.App.OIDCClaimMappings.FamilyName}}" autocomplete="off"></label>
+			  <label class="field"><span class="label">Email</span><input name="oidc_claim_email" value="{{.AppForm.App.OIDCClaimMappings.Email}}" autocomplete="off"></label>
+			  <label class="field"><span class="label">Groups</span><input name="oidc_claim_groups" value="{{.AppForm.App.OIDCClaimMappings.Groups}}" autocomplete="off"></label>
+			  </div>
+			  </details>
               {{if .AppForm.OIDCIssuer}}
               <div class="field full">
                 <div class="saml-setup">
@@ -676,9 +687,18 @@
               </label>
               <label class="field full">
                 <span class="label">Email attribute assertion name</span>
-                <input name="saml_email_attribute_name" value="{{.AppForm.App.SAMLEmailAttributeName}}" autocomplete="off">
+                <input name="saml_email_attribute_name" value="{{.AppForm.App.SAMLAttributeMappings.Email}}" autocomplete="off">
                 <span class="hint">Use the value expected by the relying party.</span>
               </label>
+              <details class="field full claim-mappings">
+              <summary>SAML attribute mappings</summary>
+              <div class="form-grid">
+              <label class="field"><span class="label">Username</span><input name="saml_attribute_username" value="{{.AppForm.App.SAMLAttributeMappings.Username}}" autocomplete="off"></label>
+              <label class="field"><span class="label">Given name</span><input name="saml_attribute_given_name" value="{{.AppForm.App.SAMLAttributeMappings.GivenName}}" autocomplete="off"></label>
+              <label class="field"><span class="label">Family name</span><input name="saml_attribute_family_name" value="{{.AppForm.App.SAMLAttributeMappings.FamilyName}}" autocomplete="off"></label>
+              <label class="field"><span class="label">Groups</span><input name="saml_attribute_groups" value="{{.AppForm.App.SAMLAttributeMappings.Groups}}" autocomplete="off"></label>
+              </div>
+              </details>
               {{if .AppForm.SAMLIDPSSO}}
               <div class="field full">
                 <div class="saml-setup">

@@ -23,6 +23,59 @@ var currentTime = time.Now
 const DefaultSAMLEmailAttributeName = "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress"
 const DefaultSAMLNameIDField = "email"
 const SAMLNameIDFormatEmail = "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"
+
+// DefaultOIDCClaimMappings returns the standard profile claim names.
+func DefaultOIDCClaimMappings() OIDCClaimMappings {
+	return OIDCClaimMappings{
+		Name: "name", GivenName: "given_name", FamilyName: "family_name",
+		Username: "preferred_username", Email: "email", Groups: "groups",
+	}
+}
+
+// DefaultSAMLAttributeMappings returns the legacy assertion attribute names.
+func DefaultSAMLAttributeMappings() SAMLAttributeMappings {
+	return SAMLAttributeMappings{
+		GivenName: "firstName", FamilyName: "lastName", Username: "username",
+		Email: DefaultSAMLEmailAttributeName, Groups: "groups",
+	}
+}
+
+// OIDCClaimMappingsForApp fills missing mappings with compatible defaults.
+func OIDCClaimMappingsForApp(app App) OIDCClaimMappings {
+	mappings := app.OIDCClaimMappings
+	defaults := DefaultOIDCClaimMappings()
+	fillClaimMappingDefaults(&mappings.Name, defaults.Name)
+	fillClaimMappingDefaults(&mappings.GivenName, defaults.GivenName)
+	fillClaimMappingDefaults(&mappings.FamilyName, defaults.FamilyName)
+	fillClaimMappingDefaults(&mappings.Username, defaults.Username)
+	fillClaimMappingDefaults(&mappings.Email, defaults.Email)
+	fillClaimMappingDefaults(&mappings.Groups, defaults.Groups)
+	return mappings
+}
+
+// SAMLAttributeMappingsForApp fills missing mappings with compatible defaults.
+func SAMLAttributeMappingsForApp(app App) SAMLAttributeMappings {
+	mappings := app.SAMLAttributeMappings
+	defaults := DefaultSAMLAttributeMappings()
+	if strings.TrimSpace(mappings.Email) == "" && strings.TrimSpace(app.SAMLEmailAttributeName) != "" {
+		mappings.Email = app.SAMLEmailAttributeName
+	}
+	fillClaimMappingDefaults(&mappings.GivenName, defaults.GivenName)
+	fillClaimMappingDefaults(&mappings.FamilyName, defaults.FamilyName)
+	fillClaimMappingDefaults(&mappings.Username, defaults.Username)
+	fillClaimMappingDefaults(&mappings.Email, defaults.Email)
+	fillClaimMappingDefaults(&mappings.Groups, defaults.Groups)
+	return mappings
+}
+
+func fillClaimMappingDefaults(value *string, fallback string) {
+	if strings.TrimSpace(*value) == "" {
+		*value = fallback
+		return
+	}
+	*value = strings.TrimSpace(*value)
+}
+
 const SAMLNameIDFormatUnspecified = "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified"
 const DefaultEnvironmentID = "env_default"
 
@@ -301,7 +354,9 @@ func initStateDB(db *sql.DB) error {
 			scim_auto_open_trace INTEGER NOT NULL DEFAULT 0,
 			scim_capabilities_known INTEGER NOT NULL DEFAULT 0,
 			scim_patch_supported INTEGER NOT NULL DEFAULT 0,
-			scim_filter_supported INTEGER NOT NULL DEFAULT 0
+			scim_filter_supported INTEGER NOT NULL DEFAULT 0,
+			oidc_claim_mappings TEXT NOT NULL DEFAULT '',
+			saml_attribute_mappings TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE TABLE IF NOT EXISTS app_user_sync (
 			app_id TEXT NOT NULL,
@@ -375,6 +430,8 @@ func initStateDB(db *sql.DB) error {
 		`ALTER TABLE apps ADD COLUMN scim_capabilities_known INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE apps ADD COLUMN scim_patch_supported INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE apps ADD COLUMN scim_filter_supported INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE apps ADD COLUMN oidc_claim_mappings TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE apps ADD COLUMN saml_attribute_mappings TEXT NOT NULL DEFAULT ''`,
 	}
 	for _, migration := range migrations {
 		if _, err := db.Exec(migration); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -658,7 +715,7 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 		return AppState{}, fmt.Errorf("iterate sqlite group member rows: %w", err)
 	}
 
-	appRows, err := db.Query(`SELECT id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, include_groups_claim, allow_any_oidc_redirect, scim_enabled, scim_base_url, scim_bearer_token, scim_auto_open_trace, scim_capabilities_known, scim_patch_supported, scim_filter_supported FROM apps WHERE environment_id = ? ORDER BY rowid`, environmentID)
+	appRows, err := db.Query(`SELECT id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, include_groups_claim, allow_any_oidc_redirect, scim_enabled, scim_base_url, scim_bearer_token, scim_auto_open_trace, scim_capabilities_known, scim_patch_supported, scim_filter_supported, oidc_claim_mappings, saml_attribute_mappings FROM apps WHERE environment_id = ? ORDER BY rowid`, environmentID)
 	if err != nil {
 		return AppState{}, fmt.Errorf("load apps from sqlite: %w", err)
 	}
@@ -675,7 +732,9 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 		var scimCapabilitiesKnown int
 		var scimPatchSupported int
 		var scimFilterSupported int
-		if err := appRows.Scan(&app.ID, &app.Name, &app.Slug, &app.Protocol, &app.OIDCClientID, &app.OIDCClientSecret, &publicClient, &redirectURIs, &app.SAMLEntityID, &app.SAMLACSURL, &app.SAMLAudience, &app.SAMLNameIDField, &app.SAMLNameIDFormat, &app.SAMLEmailAttributeName, &includeGroups, &allowAnyRedirect, &scimEnabled, &app.SCIMBaseURL, &app.SCIMBearerToken, &scimAutoOpenTrace, &scimCapabilitiesKnown, &scimPatchSupported, &scimFilterSupported); err != nil {
+		var oidcClaimMappings string
+		var samlAttributeMappings string
+		if err := appRows.Scan(&app.ID, &app.Name, &app.Slug, &app.Protocol, &app.OIDCClientID, &app.OIDCClientSecret, &publicClient, &redirectURIs, &app.SAMLEntityID, &app.SAMLACSURL, &app.SAMLAudience, &app.SAMLNameIDField, &app.SAMLNameIDFormat, &app.SAMLEmailAttributeName, &includeGroups, &allowAnyRedirect, &scimEnabled, &app.SCIMBaseURL, &app.SCIMBearerToken, &scimAutoOpenTrace, &scimCapabilitiesKnown, &scimPatchSupported, &scimFilterSupported, &oidcClaimMappings, &samlAttributeMappings); err != nil {
 			return AppState{}, fmt.Errorf("scan sqlite app row: %w", err)
 		}
 		app.OIDCRedirectURIs = Lines(redirectURIs)
@@ -687,6 +746,16 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 		app.SCIMCapabilitiesKnown = scimCapabilitiesKnown != 0
 		app.SCIMPatchSupported = scimPatchSupported != 0
 		app.SCIMFilterSupported = scimFilterSupported != 0
+		if oidcClaimMappings != "" {
+			if err := json.Unmarshal([]byte(oidcClaimMappings), &app.OIDCClaimMappings); err != nil {
+				return AppState{}, fmt.Errorf("decode OIDC claim mappings for app %s: %w", app.ID, err)
+			}
+		}
+		if samlAttributeMappings != "" {
+			if err := json.Unmarshal([]byte(samlAttributeMappings), &app.SAMLAttributeMappings); err != nil {
+				return AppState{}, fmt.Errorf("decode SAML attribute mappings for app %s: %w", app.ID, err)
+			}
+		}
 		state.Apps = append(state.Apps, app)
 	}
 	if err := appRows.Err(); err != nil {
@@ -1006,14 +1075,22 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 		}
 	}
 
-	appStmt, err := tx.Prepare(`INSERT INTO apps(id, environment_id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, include_groups_claim, allow_any_oidc_redirect, scim_enabled, scim_base_url, scim_bearer_token, scim_auto_open_trace, scim_capabilities_known, scim_patch_supported, scim_filter_supported) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET environment_id = excluded.environment_id, name = excluded.name, slug = excluded.slug, protocol = excluded.protocol, oidc_client_id = excluded.oidc_client_id, oidc_client_secret = excluded.oidc_client_secret, oidc_public_client = excluded.oidc_public_client, oidc_redirect_uris = excluded.oidc_redirect_uris, saml_entity_id = excluded.saml_entity_id, saml_acs_url = excluded.saml_acs_url, saml_audience = excluded.saml_audience, saml_name_id_field = excluded.saml_name_id_field, saml_name_id_format = excluded.saml_name_id_format, saml_email_attribute_name = excluded.saml_email_attribute_name, include_groups_claim = excluded.include_groups_claim, allow_any_oidc_redirect = excluded.allow_any_oidc_redirect, scim_enabled = excluded.scim_enabled, scim_base_url = excluded.scim_base_url, scim_bearer_token = excluded.scim_bearer_token, scim_auto_open_trace = excluded.scim_auto_open_trace, scim_capabilities_known = excluded.scim_capabilities_known, scim_patch_supported = excluded.scim_patch_supported, scim_filter_supported = excluded.scim_filter_supported`)
+	appStmt, err := tx.Prepare(`INSERT INTO apps(id, environment_id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, include_groups_claim, allow_any_oidc_redirect, scim_enabled, scim_base_url, scim_bearer_token, scim_auto_open_trace, scim_capabilities_known, scim_patch_supported, scim_filter_supported, oidc_claim_mappings, saml_attribute_mappings) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET environment_id = excluded.environment_id, name = excluded.name, slug = excluded.slug, protocol = excluded.protocol, oidc_client_id = excluded.oidc_client_id, oidc_client_secret = excluded.oidc_client_secret, oidc_public_client = excluded.oidc_public_client, oidc_redirect_uris = excluded.oidc_redirect_uris, saml_entity_id = excluded.saml_entity_id, saml_acs_url = excluded.saml_acs_url, saml_audience = excluded.saml_audience, saml_name_id_field = excluded.saml_name_id_field, saml_name_id_format = excluded.saml_name_id_format, saml_email_attribute_name = excluded.saml_email_attribute_name, include_groups_claim = excluded.include_groups_claim, allow_any_oidc_redirect = excluded.allow_any_oidc_redirect, scim_enabled = excluded.scim_enabled, scim_base_url = excluded.scim_base_url, scim_bearer_token = excluded.scim_bearer_token, scim_auto_open_trace = excluded.scim_auto_open_trace, scim_capabilities_known = excluded.scim_capabilities_known, scim_patch_supported = excluded.scim_patch_supported, scim_filter_supported = excluded.scim_filter_supported, oidc_claim_mappings = excluded.oidc_claim_mappings, saml_attribute_mappings = excluded.saml_attribute_mappings`)
 	if err != nil {
 		return fmt.Errorf("prepare sqlite app insert: %w", err)
 	}
 	defer closeStmt(appStmt)
 
 	for _, app := range state.Apps {
-		if _, err := appStmt.Exec(app.ID, environmentID, app.Name, app.Slug, app.Protocol, app.OIDCClientID, app.OIDCClientSecret, boolToInt(app.OIDCPublicClient), JoinLines(app.OIDCRedirectURIs), app.SAMLEntityID, app.SAMLACSURL, app.SAMLAudience, app.SAMLNameIDField, app.SAMLNameIDFormat, app.SAMLEmailAttributeName, boolToInt(app.IncludeGroupsClaim), boolToInt(app.AllowAnyOIDCRedirect), boolToInt(app.SCIMEnabled), app.SCIMBaseURL, app.SCIMBearerToken, boolToInt(app.SCIMAutoOpenTrace), boolToInt(app.SCIMCapabilitiesKnown), boolToInt(app.SCIMPatchSupported), boolToInt(app.SCIMFilterSupported)); err != nil {
+		oidcClaimMappings, err := json.Marshal(app.OIDCClaimMappings)
+		if err != nil {
+			return fmt.Errorf("encode OIDC claim mappings for app %s: %w", app.ID, err)
+		}
+		samlAttributeMappings, err := json.Marshal(app.SAMLAttributeMappings)
+		if err != nil {
+			return fmt.Errorf("encode SAML attribute mappings for app %s: %w", app.ID, err)
+		}
+		if _, err := appStmt.Exec(app.ID, environmentID, app.Name, app.Slug, app.Protocol, app.OIDCClientID, app.OIDCClientSecret, boolToInt(app.OIDCPublicClient), JoinLines(app.OIDCRedirectURIs), app.SAMLEntityID, app.SAMLACSURL, app.SAMLAudience, app.SAMLNameIDField, app.SAMLNameIDFormat, app.SAMLEmailAttributeName, boolToInt(app.IncludeGroupsClaim), boolToInt(app.AllowAnyOIDCRedirect), boolToInt(app.SCIMEnabled), app.SCIMBaseURL, app.SCIMBearerToken, boolToInt(app.SCIMAutoOpenTrace), boolToInt(app.SCIMCapabilitiesKnown), boolToInt(app.SCIMPatchSupported), boolToInt(app.SCIMFilterSupported), string(oidcClaimMappings), string(samlAttributeMappings)); err != nil {
 			return fmt.Errorf("insert sqlite app %s: %w", app.ID, err)
 		}
 	}
@@ -1201,6 +1278,11 @@ func NormalizeState(state *AppState) {
 		}
 		if SupportsSAML(state.Apps[i]) && state.Apps[i].SAMLEmailAttributeName == "" {
 			state.Apps[i].SAMLEmailAttributeName = DefaultSAMLEmailAttributeName
+		}
+		state.Apps[i].OIDCClaimMappings = OIDCClaimMappingsForApp(state.Apps[i])
+		state.Apps[i].SAMLAttributeMappings = SAMLAttributeMappingsForApp(state.Apps[i])
+		if SupportsSAML(state.Apps[i]) {
+			state.Apps[i].SAMLEmailAttributeName = state.Apps[i].SAMLAttributeMappings.Email
 		}
 		state.Apps[i].OIDCRedirectURIs = cleanLines(state.Apps[i].OIDCRedirectURIs)
 		state.Apps[i].SCIMBaseURL = strings.TrimRight(strings.TrimSpace(state.Apps[i].SCIMBaseURL), "/")
@@ -1455,6 +1537,10 @@ func ValidateApp(app App, apps []App) error {
 				return fmt.Errorf("OIDC redirect URI %q must be an absolute HTTP(S) URL without a fragment", rawURI)
 			}
 		}
+		mappings := OIDCClaimMappingsForApp(app)
+		if err := validateMappedNames("OIDC claim", []string{mappings.Name, mappings.GivenName, mappings.FamilyName, mappings.Username, mappings.Email, mappings.Groups}, "sub", "iss", "aud", "iat", "exp", "nonce", "email_verified"); err != nil {
+			return err
+		}
 	}
 	if SupportsSAML(app) {
 		rawACSURL := strings.TrimSpace(app.SAMLACSURL)
@@ -1468,9 +1554,36 @@ func ValidateApp(app App, apps []App) error {
 		if !acsURL.IsAbs() || acsURL.Host == "" || (acsURL.Scheme != "http" && acsURL.Scheme != "https") || acsURL.Fragment != "" {
 			return fmt.Errorf("SAML ACS URL must be an absolute HTTP(S) URL without a fragment")
 		}
+		mappings := SAMLAttributeMappingsForApp(app)
+		if err := validateMappedNames("SAML attribute", []string{mappings.GivenName, mappings.FamilyName, mappings.Username, mappings.Email, mappings.Groups}); err != nil {
+			return err
+		}
 	}
 	if SupportsSAML(app) && strings.TrimSpace(app.SAMLNameIDField) != "" && NormalizeSAMLNameIDField(app.SAMLNameIDField) != app.SAMLNameIDField {
 		return fmt.Errorf("SAML NameID field must be email, username, firstName, or lastName")
+	}
+	return nil
+}
+
+func validateMappedNames(kind string, names []string, reserved ...string) error {
+	seen := make(map[string]bool, len(names))
+	reservedNames := make(map[string]bool, len(reserved))
+	for _, name := range reserved {
+		seen[name] = true
+		reservedNames[name] = true
+	}
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return fmt.Errorf("%s names are required", kind)
+		}
+		if seen[name] {
+			if reservedNames[name] {
+				return fmt.Errorf("%s name %q is reserved", kind, name)
+			}
+			return fmt.Errorf("%s name %q is configured more than once", kind, name)
+		}
+		seen[name] = true
 	}
 	return nil
 }

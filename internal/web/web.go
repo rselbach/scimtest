@@ -1297,6 +1297,15 @@ func applyFormDraft(data *pageData, draft formDraft) {
 		data.AppForm.App.SAMLAudience = values.Get("saml_audience")
 		data.AppForm.App.SAMLNameIDField = values.Get("saml_name_id_field")
 		data.AppForm.App.SAMLEmailAttributeName = values.Get("saml_email_attribute_name")
+		data.AppForm.App.OIDCClaimMappings = oidcClaimMappings{
+			Name: values.Get("oidc_claim_name"), GivenName: values.Get("oidc_claim_given_name"),
+			FamilyName: values.Get("oidc_claim_family_name"), Username: values.Get("oidc_claim_username"),
+			Email: values.Get("oidc_claim_email"), Groups: values.Get("oidc_claim_groups"),
+		}
+		data.AppForm.App.SAMLAttributeMappings = samlAttributeMappings{
+			GivenName: values.Get("saml_attribute_given_name"), FamilyName: values.Get("saml_attribute_family_name"),
+			Username: values.Get("saml_attribute_username"), Email: values.Get("saml_email_attribute_name"), Groups: values.Get("saml_attribute_groups"),
+		}
 		data.AppForm.App.IncludeGroupsClaim = values.Get("include_groups_claim") == "on"
 		data.AppForm.App.SCIMEnabled = values.Get("scim_enabled") == "on"
 		data.AppForm.App.SCIMBaseURL = values.Get("scim_base_url")
@@ -1819,6 +1828,8 @@ func buildAppFormView(state appState, tab string, id string, baseURL string, cer
 			SAMLNameIDFormat:       samlNameIDFormatForField(defaultSAMLNameIDField),
 			SAMLEmailAttributeName: defaultSAMLEmailAttributeName,
 			IncludeGroupsClaim:     true,
+			OIDCClaimMappings:      defaultOIDCClaimMappings(),
+			SAMLAttributeMappings:  defaultSAMLAttributeMappings(),
 		},
 		SAMLCertificatePEM: certPEM,
 		Close:              dashboardURL(tab, nil),
@@ -1832,6 +1843,8 @@ func buildAppFormView(state appState, tab string, id string, baseURL string, cer
 	}
 	form.Title = "Edit Environment"
 	form.App = existing
+	form.App.OIDCClaimMappings = oidcClaimMappingsForApp(form.App)
+	form.App.SAMLAttributeMappings = samlAttributeMappingsForApp(form.App)
 	form.App.SAMLNameIDField = normalizeSAMLNameIDField(form.App.SAMLNameIDField)
 	form.App.SAMLNameIDFormat = samlNameIDFormatForField(form.App.SAMLNameIDField)
 	form.OIDCRedirectURIs = joinLines(form.App.OIDCRedirectURIs)
