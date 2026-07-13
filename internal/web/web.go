@@ -53,6 +53,8 @@ type webApp struct {
 	accessTokens     map[string]accessToken
 	oidcInspectorMu  sync.Mutex
 	oidcInspections  map[string]oidcInspection
+	samlInspectorMu  sync.Mutex
+	samlInspections  map[string]samlInspection
 	lastTraces       map[string][]syncTraceEntry
 	lastTraceContent map[string]string
 	formDraftMu      sync.Mutex
@@ -224,6 +226,7 @@ type appRowView struct {
 	EditURL          string
 	OIDCTestURL      string
 	OIDCInspectorURL string
+	SAMLInspectorURL string
 	// OIDCPKCETestURL is an authorize URL missing its code_challenge; the
 	// page script generates a PKCE pair on click and appends the challenge.
 	OIDCPKCETestURL string
@@ -616,6 +619,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /tools/create-users", a.rejectWhileSyncing(a.handleToolsCreateUsers))
 	mux.HandleFunc("GET /backup", a.handleBackupDownload)
 	mux.HandleFunc("GET /inspect/oidc/{slug}", a.handleOIDCInspector)
+	mux.HandleFunc("GET /inspect/saml/{slug}", a.handleSAMLInspector)
 	mux.HandleFunc("POST /restore", a.rejectWhileSyncing(a.handleBackupRestore))
 	mux.HandleFunc("GET /sync/status", a.handleSyncStatus)
 	mux.HandleFunc("POST /sync", a.handleSync)
@@ -1608,6 +1612,7 @@ func buildAppRows(state appState, environmentID string, base string) []appRowVie
 		if row.SupportsSAML {
 			row.SAMLMetadata = base + "/saml/" + app.Slug + "/metadata"
 			row.SAMLTestURL = base + "/saml/" + app.Slug + "/sso"
+			row.SAMLInspectorURL = "/inspect/saml/" + url.PathEscape(app.Slug)
 		}
 		rows = append(rows, row)
 	}

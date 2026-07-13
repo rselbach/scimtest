@@ -1404,6 +1404,8 @@ func TestDashboardRendersCriticalFlowAffordances(t *testing.T) {
 	r.Contains(body, ">Test OIDC</a>")
 	r.Contains(body, ">Metadata</a>")
 	r.Contains(body, ">Test SAML</a>")
+	r.Contains(body, ">Inspect OIDC</a>")
+	r.Contains(body, ">Inspect SAML</a>")
 	r.NotContains(body, "Get ready to test")
 	listRec := httptest.NewRecorder()
 	app.routes().ServeHTTP(listRec, httptest.NewRequest(http.MethodGet, "/?tab=apps&partial=list", nil))

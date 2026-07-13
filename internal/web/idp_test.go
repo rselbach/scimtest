@@ -737,6 +737,19 @@ func TestSAMLResponseMatchesAuthnRequest(t *testing.T) {
 			r.NotNil(subjectConfirmation)
 			r.Equal("https://sp.greendale.test/acs", subjectConfirmation.SelectAttrValue("Recipient", ""))
 			r.Equal("_request-troy", subjectConfirmation.SelectAttrValue("InResponseTo", ""))
+
+			inspector := httptest.NewRecorder()
+			svc.routes().ServeHTTP(inspector, httptest.NewRequest(http.MethodGet, "/inspect/saml/greendale", nil))
+			r.Equal(http.StatusOK, inspector.Code)
+			body := inspector.Body.String()
+			r.Contains(body, "Latest signed response")
+			r.Contains(body, "Troy Barnes")
+			r.Contains(body, "https://sp.greendale.test/acs")
+			r.Contains(body, "_request-troy")
+			r.Contains(body, "Decoded SAML response")
+			r.Contains(body, "troy@greendale.edu")
+			r.NotContains(body, encodedResponse)
+			r.NotContains(body, "study-room-f")
 		})
 	}
 }

@@ -1,0 +1,43 @@
+{{define "saml-inspector.html"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SAML inspector · {{.App.Name}} · scimtest</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/?tab=apps">scimtest</a>
+  </header>
+  <main class="content inspector-page">
+    <div class="page-heading">
+      <div>
+        <h1>SAML assertion inspector</h1>
+        <p>{{.App.Name}}</p>
+      </div>
+      <a class="btn" href="/?tab=apps">Back to environments</a>
+    </div>
+    {{if .Found}}
+    <section class="card inspector-card" aria-labelledby="assertion-heading">
+      <h2 id="assertion-heading">Latest signed response</h2>
+      <dl class="inspector-details">
+        <div><dt>Updated</dt><dd>{{.Inspection.UpdatedAt}}</dd></div>
+        <div><dt>User</dt><dd>{{.Inspection.User}}</dd></div>
+        <div><dt>ACS URL</dt><dd class="mono">{{.Inspection.ACSURL}}</dd></div>
+        <div><dt>InResponseTo</dt><dd class="mono">{{if .Inspection.InResponseTo}}{{.Inspection.InResponseTo}}{{else}}Unsolicited{{end}}</dd></div>
+      </dl>
+      <h3>Decoded SAML response</h3>
+      <pre class="inspector-payload">{{.Inspection.ResponseXML}}</pre>
+    </section>
+    {{else}}
+    <section class="card card-empty">
+      <div class="h">No SAML response recorded</div>
+      <p>Run Test SAML for this environment, then return here to inspect the latest signed response.</p>
+    </section>
+    {{end}}
+  </main>
+</body>
+</html>
+{{end}}

@@ -657,6 +657,7 @@ func (a *webApp) handleSAMLSSOPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	a.rememberSAMLInspection(app, user, responseContext, response, time.Now())
 	renderPostBack(w, responseContext.ACSURL, map[string]string{
 		"SAMLResponse": base64.StdEncoding.EncodeToString([]byte(response)),
 		"RelayState":   r.FormValue("RelayState"),
