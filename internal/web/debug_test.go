@@ -124,3 +124,20 @@ func TestSensitiveDebugHeaders(t *testing.T) {
 		})
 	}
 }
+
+func TestDebugRedactsAuthorizationCodeInLocationHeader(t *testing.T) {
+	r := require.New(t)
+	response := &debugResponseWriter{ResponseWriter: httptest.NewRecorder(), status: http.StatusFound}
+	response.Header().Set("Location", "https://rp.example/callback?code=paintball&state=xyz")
+	var output bytes.Buffer
+
+	(&webApp{}).writeDebugHTTPResponse(&output, response)
+
+	r.NotContains(output.String(), "paintball")
+	r.Contains(output.String(), "code=%5BREDACTED%5D")
+	r.Contains(output.String(), "state=xyz")
+
+	var secretsOutput bytes.Buffer
+	(&webApp{debugSecrets: true}).writeDebugHTTPResponse(&secretsOutput, response)
+	r.Contains(secretsOutput.String(), "code=paintball")
+}

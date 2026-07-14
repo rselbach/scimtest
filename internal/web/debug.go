@@ -142,9 +142,33 @@ func writeDebugHeaders(w io.Writer, headers http.Header, includeSecrets bool) {
 			if !includeSecrets && isSensitiveHeader(key) {
 				value = "[REDACTED]"
 			}
+			if !includeSecrets && http.CanonicalHeaderKey(key) == "Location" {
+				value = redactLocationHeader(value)
+			}
 			writeDebugf(w, "%s: %s\n", key, value)
 		}
 	}
+}
+
+// redactLocationHeader hides sensitive query values such as the
+// authorization code carried by the authorize endpoint's redirect.
+func redactLocationHeader(value string) string {
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return "[REDACTED]"
+	}
+	query := parsed.Query()
+	redacted := false
+	for key := range query {
+		if isSensitiveDebugKey(key) {
+			query[key] = []string{"[REDACTED]"}
+			redacted = true
+		}
+	}
+	if redacted {
+		parsed.RawQuery = query.Encode()
+	}
+	return parsed.String()
 }
 
 func isSensitiveHeader(key string) bool {
@@ -209,9 +233,12 @@ func redactJSONValue(value any) {
 	}
 }
 
+// isSensitiveDebugKey reports whether a parameter carries a credential.
+// SAMLRequest is deliberately absent: AuthnRequests contain no secrets and
+// redacted mode prints them decoded anyway.
 func isSensitiveDebugKey(key string) bool {
 	switch strings.ToLower(key) {
-	case "client_secret", "code", "access_token", "id_token", "refresh_token", "assertion", "samlrequest", "samlresponse":
+	case "client_secret", "code", "access_token", "id_token", "refresh_token", "assertion", "samlresponse":
 		return true
 	default:
 		return false
