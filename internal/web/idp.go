@@ -144,6 +144,15 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 	if app.Protocol == "scim" {
 		app.SCIMEnabled = true
 	}
+	// While the sync toggle is off the SCIM section's inputs are disabled
+	// and never submitted, so an empty value means "unchanged", not
+	// "cleared" — mirror the bearer-token fallback above. This also keeps
+	// discovered capabilities and remote IDs intact across a temporary
+	// disable, since the endpoint no longer looks changed.
+	if appExists && !app.SCIMEnabled {
+		app.SCIMBaseURL = state.Apps[existingIndex].SCIMBaseURL
+		app.SCIMAutoOpenTrace = state.Apps[existingIndex].SCIMAutoOpenTrace
+	}
 	app.OIDCClaimMappings = oidcClaimMappingsForApp(app)
 	app.SAMLAttributeMappings = samlAttributeMappingsForApp(app)
 	app.SAMLEmailAttributeName = app.SAMLAttributeMappings.Email

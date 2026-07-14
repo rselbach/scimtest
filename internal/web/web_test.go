@@ -2518,3 +2518,52 @@ func TestEnvironmentFormDefaultSubmitIsSave(t *testing.T) {
 	r.Positive(discoverIndex)
 	r.Less(defaultIndex, discoverIndex)
 }
+
+func TestDisablingSCIMKeepsStoredSettings(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{Apps: []app{{
+		ID:                    "app-1",
+		Name:                  "Greendale Portal",
+		Slug:                  "greendale",
+		Protocol:              "oidc",
+		OIDCClientID:          "greendale",
+		OIDCClientSecret:      "chang-secret",
+		AllowAnyOIDCRedirect:  true,
+		SCIMEnabled:           true,
+		SCIMBaseURL:           "https://portal.test/scim/v2",
+		SCIMBearerToken:       "chang-token",
+		SCIMAutoOpenTrace:     true,
+		SCIMCapabilitiesKnown: true,
+		SCIMPatchSupported:    true,
+		SCIMFilterSupported:   true,
+	}}}))
+	appService := newTestIDPApp(t)
+
+	// The SCIM section's controls are disabled while the toggle is off, so
+	// the browser omits every scim_* field from the submission.
+	form := url.Values{
+		"id":                      {"app-1"},
+		"tab":                     {"apps"},
+		"name":                    {"Greendale Portal"},
+		"slug":                    {"greendale"},
+		"protocol":                {"oidc"},
+		"allow_any_oidc_redirect": {"on"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/apps/save", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	appService.routes().ServeHTTP(rec, req)
+	r.Equal(http.StatusSeeOther, rec.Code)
+
+	state, err := loadState()
+	r.NoError(err)
+	saved := state.Apps[0]
+	r.False(saved.SCIMEnabled)
+	r.Equal("https://portal.test/scim/v2", saved.SCIMBaseURL)
+	r.Equal("chang-token", saved.SCIMBearerToken)
+	r.True(saved.SCIMAutoOpenTrace)
+	r.True(saved.SCIMCapabilitiesKnown)
+	r.True(saved.SCIMPatchSupported)
+	r.True(saved.SCIMFilterSupported)
+}
