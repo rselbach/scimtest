@@ -851,10 +851,12 @@ func clientAuthenticated(r *http.Request, app app) bool {
 		return r.FormValue("client_id") == app.OIDCClientID
 	}
 	clientID, secret, ok := r.BasicAuth()
-	if ok {
-		return clientID == app.OIDCClientID && secret == app.OIDCClientSecret
+	if !ok {
+		clientID, secret = r.FormValue("client_id"), r.FormValue("client_secret")
 	}
-	return r.FormValue("client_id") == app.OIDCClientID && r.FormValue("client_secret") == app.OIDCClientSecret
+	// The token endpoint is reachable through the public tunnel, so the
+	// secret comparison must not leak timing.
+	return clientID == app.OIDCClientID && subtle.ConstantTimeCompare([]byte(secret), []byte(app.OIDCClientSecret)) == 1
 }
 
 func userClaims(state appState, app app, user user, scope string) map[string]any {
