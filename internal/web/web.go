@@ -616,6 +616,11 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /apps/{id}/discover-scim", a.rejectWhileSyncing(a.handleAppDiscoverSCIM))
 	mux.HandleFunc("POST /apps/test-scim", a.rejectWhileSyncing(a.handleAppTestSCIM))
 	mux.HandleFunc("POST /config/save", a.rejectWhileSyncing(a.handleConfigSave))
+	mux.HandleFunc("POST /config/tunnel/retry", a.handleAutomaticRgrokTunnelRetry)
+	mux.HandleFunc("GET /config/tunnel/retry", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	})
 	mux.HandleFunc("POST /tools/delete-all", a.rejectWhileSyncing(a.handleToolsDeleteAll))
 	mux.HandleFunc("POST /tools/clear-users-local", a.rejectWhileSyncing(a.handleToolsClearUsersLocal))
 	mux.HandleFunc("POST /tools/deactivate-all", a.rejectWhileSyncing(a.handleToolsDeactivateAll))
@@ -846,10 +851,45 @@ func (a *webApp) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: "config saved"})
 }
 
+func (a *webApp) handleAutomaticRgrokTunnelRetry(w http.ResponseWriter, r *http.Request) {
+	tab := normalizedTab(r.FormValue("tab"))
+	a.retryAutomaticRgrokTunnel()
+	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), map[string]string{"modal": "config"}), flashMessage{})
+}
+
+func (a *webApp) retryAutomaticRgrokTunnel() {
+	if !a.rgrokRetryAvailable() {
+		return
+	}
+
+	identity, err := loadRgrokApplicationIdentity()
+	if err != nil {
+		a.setRgrokError(fmt.Sprintf("retry automatic tunnel: load embedded application identity: %v", err))
+		return
+	}
+	if identity == nil {
+		a.setRgrokError("retry automatic tunnel: embedded application identity is unavailable")
+		return
+	}
+
+	if !a.rgrokLifecycleMu.TryLock() {
+		return
+	}
+	defer a.rgrokLifecycleMu.Unlock()
+	if !a.rgrokRetryAvailable() {
+		return
+	}
+	a.startAutomaticRgrokTunnelLocked(*identity)
+}
+
 func (a *webApp) startAutomaticRgrokTunnel(identity rgrokApplicationIdentity) {
 	a.rgrokLifecycleMu.Lock()
 	defer a.rgrokLifecycleMu.Unlock()
+	a.startAutomaticRgrokTunnelLocked(identity)
+}
 
+func (a *webApp) startAutomaticRgrokTunnelLocked(identity rgrokApplicationIdentity) {
+	a.setRgrokError("")
 	instanceID, err := ensureRgrokInstanceID()
 	if err != nil {
 		a.setRgrokError(fmt.Sprintf("load rgrok instance identity: %v", err))
@@ -1028,6 +1068,12 @@ func (a *webApp) rgrokTunnelView() *rgrokTunnelView {
 		Name:      a.rgrokTunnel.Name,
 		PublicURL: a.rgrokTunnel.PublicURL,
 	}
+}
+
+func (a *webApp) rgrokRetryAvailable() bool {
+	a.rgrokMu.Lock()
+	defer a.rgrokMu.Unlock()
+	return a.rgrokTunnel == nil && a.rgrokLastError != ""
 }
 
 func (a *webApp) setRgrokError(message string) {

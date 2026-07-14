@@ -775,7 +775,10 @@
 			<div class="tunnel-row">
 			  <strong>Automatic tunnel:</strong> waiting for connection
 			</div>
-			{{if .ConfigForm.TunnelError}}<div class="inline-error" role="alert">Tunnel connection failed: {{.ConfigForm.TunnelError}}</div>{{end}}
+			{{if .ConfigForm.TunnelError}}
+			<div class="inline-error" role="alert">Tunnel connection failed: {{.ConfigForm.TunnelError}}</div>
+			<button class="btn btn-sm btn-ghost" type="submit" formaction="/config/tunnel/retry">Retry</button>
+			{{end}}
               {{end}}
             </div>
             <label class="field full">

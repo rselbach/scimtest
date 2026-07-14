@@ -1946,14 +1946,181 @@ func TestConfigRendersAutomaticRgrokStatus(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{}))
-	rec := httptest.NewRecorder()
+	app := newTestIDPApp(t)
 
-	newTestIDPApp(t).routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=users&modal=config", nil))
+	rec := httptest.NewRecorder()
+	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=users&modal=config", nil))
 
 	r.Equal(http.StatusOK, rec.Code)
 	r.Contains(rec.Body.String(), "Automatic tunnel:")
+	r.NotContains(rec.Body.String(), `formaction="/config/tunnel/retry"`)
 	r.NotContains(rec.Body.String(), "rgrok_token")
 	r.NotContains(rec.Body.String(), "rgrok_name")
+
+	app.setRgrokError("application profile rejected")
+	rec = httptest.NewRecorder()
+	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=users&modal=config", nil))
+
+	r.Equal(http.StatusOK, rec.Code)
+	r.Contains(rec.Body.String(), `formaction="/config/tunnel/retry"`)
+
+	app.rgrokMu.Lock()
+	app.rgrokTunnel = &activeRgrokTunnel{PublicURL: "https://study-group.rgrok.rselbach.com", Tunnel: &fakeTunnel{}}
+	app.rgrokMu.Unlock()
+	rec = httptest.NewRecorder()
+	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=users&modal=config", nil))
+
+	r.Equal(http.StatusOK, rec.Code)
+	r.Contains(rec.Body.String(), "Tunnel connected:")
+	r.NotContains(rec.Body.String(), `formaction="/config/tunnel/retry"`)
+}
+
+func TestAutomaticRgrokTunnelRetry(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	r.NoError(err)
+	oldProfileID, oldSeed, oldRequired := rgrokApplicationProfileID, rgrokApplicationPrivateSeed, rgrokReleaseIdentityRequired
+	t.Cleanup(func() {
+		rgrokApplicationProfileID, rgrokApplicationPrivateSeed, rgrokReleaseIdentityRequired = oldProfileID, oldSeed, oldRequired
+	})
+	rgrokApplicationProfileID = strings.Repeat("a", 32)
+	rgrokApplicationPrivateSeed = base64.StdEncoding.EncodeToString(privateKey.Seed())
+	rgrokReleaseIdentityRequired = "true"
+
+	attempts := 0
+	app := &webApp{
+		localPort: 8080,
+		rgrokStart: func(context.Context, rgrokclient.Config) (*startedRgrokTunnel, error) {
+			attempts++
+			return &startedRgrokTunnel{PublicURL: "https://study-group.rgrok.rselbach.com", Tunnel: &fakeTunnel{}}, nil
+		},
+	}
+	app.setRgrokError("application profile rejected")
+	form := url.Values{
+		"environment": {"env_default"},
+		"tab":         {"groups"},
+		"page":        {"2"},
+		"pageSize":    {"25"},
+		"q":           {"study group"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/config/tunnel/retry", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	r.Equal("/?environment=env_default&modal=config&page=2&pageSize=25&q=study+group&tab=groups", rec.Header().Get("Location"))
+	r.Equal(1, attempts)
+	r.Equal("https://study-group.rgrok.rselbach.com", app.rgrokPublicURL())
+	r.Empty(app.rgrokError())
+}
+
+func TestAutomaticRgrokTunnelRetrySurfacesRegistrationError(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	r.NoError(err)
+	oldProfileID, oldSeed, oldRequired := rgrokApplicationProfileID, rgrokApplicationPrivateSeed, rgrokReleaseIdentityRequired
+	t.Cleanup(func() {
+		rgrokApplicationProfileID, rgrokApplicationPrivateSeed, rgrokReleaseIdentityRequired = oldProfileID, oldSeed, oldRequired
+	})
+	rgrokApplicationProfileID = strings.Repeat("a", 32)
+	rgrokApplicationPrivateSeed = base64.StdEncoding.EncodeToString(privateKey.Seed())
+	rgrokReleaseIdentityRequired = "true"
+
+	app := &webApp{
+		rgrokStart: func(context.Context, rgrokclient.Config) (*startedRgrokTunnel, error) {
+			return nil, fmt.Errorf("application profile rejected again")
+		},
+	}
+	app.setRgrokError("application profile rejected")
+	req := httptest.NewRequest(http.MethodPost, "/config/tunnel/retry", strings.NewReader("tab=users"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	r.Equal("/?modal=config&tab=users", rec.Header().Get("Location"))
+	r.Equal("start automatic tunnel: application profile rejected again", app.rgrokError())
+	r.Empty(app.rgrokPublicURL())
+}
+
+func TestAutomaticRgrokTunnelRetrySurfacesMissingIdentity(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+	oldProfileID, oldSeed, oldRequired := rgrokApplicationProfileID, rgrokApplicationPrivateSeed, rgrokReleaseIdentityRequired
+	t.Cleanup(func() {
+		rgrokApplicationProfileID, rgrokApplicationPrivateSeed, rgrokReleaseIdentityRequired = oldProfileID, oldSeed, oldRequired
+	})
+	rgrokApplicationProfileID, rgrokApplicationPrivateSeed, rgrokReleaseIdentityRequired = "", "", ""
+
+	app := &webApp{}
+	app.setRgrokError("application profile rejected")
+	req := httptest.NewRequest(http.MethodPost, "/config/tunnel/retry", strings.NewReader("tab=users"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	app.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	r.Equal("/?modal=config&tab=users", rec.Header().Get("Location"))
+	r.Equal("retry automatic tunnel: embedded application identity is unavailable", app.rgrokError())
+}
+
+func TestAutomaticRgrokTunnelRetryAvoidsConcurrentAttempts(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	r.NoError(err)
+	oldProfileID, oldSeed, oldRequired := rgrokApplicationProfileID, rgrokApplicationPrivateSeed, rgrokReleaseIdentityRequired
+	t.Cleanup(func() {
+		rgrokApplicationProfileID, rgrokApplicationPrivateSeed, rgrokReleaseIdentityRequired = oldProfileID, oldSeed, oldRequired
+	})
+	rgrokApplicationProfileID = strings.Repeat("a", 32)
+	rgrokApplicationPrivateSeed = base64.StdEncoding.EncodeToString(privateKey.Seed())
+	rgrokReleaseIdentityRequired = "true"
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	attempts := 0
+	app := &webApp{
+		rgrokStart: func(context.Context, rgrokclient.Config) (*startedRgrokTunnel, error) {
+			attempts++
+			close(started)
+			<-release
+			return nil, fmt.Errorf("registration unavailable")
+		},
+	}
+	app.setRgrokError("application profile rejected")
+	done := make(chan struct{})
+	go func() {
+		app.retryAutomaticRgrokTunnel()
+		close(done)
+	}()
+	<-started
+
+	app.retryAutomaticRgrokTunnel()
+	close(release)
+	<-done
+
+	r.Equal(1, attempts)
+	r.Equal("start automatic tunnel: registration unavailable", app.rgrokError())
+}
+
+func TestAutomaticRgrokTunnelRetryIsPostOnly(t *testing.T) {
+	r := require.New(t)
+	rec := httptest.NewRecorder()
+
+	newTestIDPApp(t).routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/config/tunnel/retry", nil))
+
+	r.Equal(http.StatusMethodNotAllowed, rec.Code)
 }
 
 func TestLoadRgrokApplicationIdentity(t *testing.T) {
