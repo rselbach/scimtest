@@ -37,10 +37,13 @@ type SCIMEmail struct {
 	Primary bool   `json:"primary,omitempty"`
 }
 
+// SCIMName sub-attributes are marshaled even when empty so clearing a name
+// locally clears it on the remote; omitted attributes are left untouched by
+// PUT/PATCH on most providers (RFC 7644 section 3.5.2.3).
 type SCIMName struct {
-	GivenName  string `json:"givenName,omitempty"`
-	FamilyName string `json:"familyName,omitempty"`
-	Formatted  string `json:"formatted,omitempty"`
+	GivenName  string `json:"givenName"`
+	FamilyName string `json:"familyName"`
+	Formatted  string `json:"formatted"`
 }
 
 type SCIMUserResource struct {
@@ -48,7 +51,7 @@ type SCIMUserResource struct {
 	ID          string      `json:"id,omitempty"`
 	ExternalID  string      `json:"externalId,omitempty"`
 	UserName    string      `json:"userName"`
-	DisplayName string      `json:"displayName,omitempty"`
+	DisplayName string      `json:"displayName"`
 	Active      *bool       `json:"active,omitempty"`
 	Name        *SCIMName   `json:"name,omitempty"`
 	Emails      []SCIMEmail `json:"emails,omitempty"`
@@ -60,11 +63,14 @@ type SCIMMember struct {
 }
 
 type SCIMGroupResource struct {
-	Schemas     []string     `json:"schemas,omitempty"`
-	ID          string       `json:"id,omitempty"`
-	ExternalID  string       `json:"externalId,omitempty"`
-	DisplayName string       `json:"displayName"`
-	Members     []SCIMMember `json:"members,omitempty"`
+	Schemas     []string `json:"schemas,omitempty"`
+	ID          string   `json:"id,omitempty"`
+	ExternalID  string   `json:"externalId,omitempty"`
+	DisplayName string   `json:"displayName"`
+	// Members must marshal even when empty: dropping the attribute would
+	// leave the remote membership untouched (RFC 7644 section 3.5.2.3),
+	// so emptied groups would never converge.
+	Members []SCIMMember `json:"members"`
 }
 
 type SyncResult struct {

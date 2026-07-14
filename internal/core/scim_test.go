@@ -1181,3 +1181,42 @@ func TestReconcileStateMarksFailuresDirty(t *testing.T) {
 	r.True(result.State.Users[0].Dirty)
 	r.Contains(result.State.Users[0].LastError, "500 Internal Server Error")
 }
+
+func TestSCIMResourcePayloadsAssertClearedAttributes(t *testing.T) {
+	tests := map[string]struct {
+		payload func(r *require.Assertions) any
+		want    []string
+	}{
+		"empty group members are explicit": {
+			payload: func(r *require.Assertions) any {
+				resource, err := newSCIMGroupResource(Group{ID: "study-group", DisplayName: "Study Group"}, nil)
+				r.NoError(err)
+				return resource
+			},
+			want: []string{`"members":[]`},
+		},
+		"cleared name fields are explicit": {
+			payload: func(r *require.Assertions) any {
+				return newSCIMUserResource(User{ID: "troy", Username: "troy", GivenName: "Troy", Email: "troy@greendale.edu", Active: true})
+			},
+			want: []string{`"givenName":"Troy"`, `"familyName":""`, `"displayName":"Troy"`},
+		},
+		"fully cleared names send empty strings": {
+			payload: func(r *require.Assertions) any {
+				return newSCIMUserResource(User{ID: "troy", Username: "troy", Email: "troy@greendale.edu", Active: true})
+			},
+			want: []string{`"givenName":""`, `"familyName":""`, `"formatted":""`, `"displayName":""`},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			data, err := json.Marshal(tc.payload(r))
+			r.NoError(err)
+			for _, want := range tc.want {
+				r.Contains(string(data), want)
+			}
+		})
+	}
+}
