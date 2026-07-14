@@ -17,6 +17,8 @@ type (
 	samlAttributeMappings = core.SAMLAttributeMappings
 )
 
+var errAppNotFound = core.ErrAppNotFound
+
 var (
 	loadState                    = core.LoadState
 	loadStateForAppSlug          = core.LoadStateForAppSlug

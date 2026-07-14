@@ -695,7 +695,7 @@ func (a *webApp) handleSAMLSSOPost(w http.ResponseWriter, r *http.Request) {
 func appForProtocol(w http.ResponseWriter, r *http.Request, supports func(app) bool) (appState, app, bool) {
 	state, err := loadStateForAppSlug(r.PathValue("slug"))
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, errAppNotFound) {
 			http.NotFound(w, r)
 			return appState{}, app{}, false
 		}

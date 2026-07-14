@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -17,6 +18,10 @@ import (
 
 	_ "modernc.org/sqlite"
 )
+
+// ErrAppNotFound marks lookups for an unknown app slug so handlers can
+// answer 404 without matching on error text.
+var ErrAppNotFound = errors.New("app not found")
 
 var currentTime = time.Now
 
@@ -188,7 +193,7 @@ func LoadStateForAppSlug(slug string) (AppState, error) {
 			return state, nil
 		}
 	}
-	return AppState{}, fmt.Errorf("app slug %q not found", slug)
+	return AppState{}, fmt.Errorf("app slug %q: %w", slug, ErrAppNotFound)
 }
 
 func LoadAllApps() ([]App, error) {
