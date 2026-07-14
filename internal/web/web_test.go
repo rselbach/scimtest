@@ -2488,3 +2488,33 @@ func TestStylesheetHidesIsHiddenEverywhere(t *testing.T) {
 	css := dashboardAsset(t, &webApp{}, "/assets/app.css")
 	r.Contains(css, ".is-hidden { display: none !important; }")
 }
+
+func TestEnvironmentFormDefaultSubmitIsSave(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Apps: []app{{
+			ID:              "app-1",
+			Name:            "Greendale Portal",
+			Slug:            "greendale",
+			Protocol:        "oidc",
+			SCIMEnabled:     true,
+			SCIMBaseURL:     "https://scim.example.test",
+			SCIMBearerToken: "token",
+		}},
+	}))
+	app := newTestIDPApp(t)
+
+	rec := httptest.NewRecorder()
+	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=apps&modal=app&id=app-1", nil))
+	r.Equal(http.StatusOK, rec.Code)
+	body := rec.Body.String()
+
+	// The hidden default submit must precede the Discover formaction button,
+	// otherwise pressing Enter runs discovery and discards form edits.
+	defaultIndex := strings.Index(body, "data-default-submit")
+	discoverIndex := strings.Index(body, "/apps/app-1/discover-scim")
+	r.Positive(defaultIndex)
+	r.Positive(discoverIndex)
+	r.Less(defaultIndex, discoverIndex)
+}

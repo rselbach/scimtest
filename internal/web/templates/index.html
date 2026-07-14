@@ -500,6 +500,10 @@
         <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
         <input type="hidden" name="tab" value="apps">
         <input type="hidden" name="id" value="{{.AppForm.App.ID}}">
+        {{/* Default button for Enter: without it, the first submit button in
+             tree order is "Discover capabilities" (a formaction submit that
+             ignores every field), so pressing Enter would discard edits. */}}
+        <button type="submit" class="is-hidden" tabindex="-1" aria-hidden="true" data-default-submit></button>
         <div class="modal-body">
           <div class="form-grid">
             <label class="field">
