@@ -2577,3 +2577,21 @@ func TestSyncStatusPollingRetriesTransientFailures(t *testing.T) {
 	r.Contains(javascript, "Reconnecting to sync status")
 	r.Contains(javascript, "syncPollFailures")
 }
+
+func TestReconcileAsksForConfirmation(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Apps: []app{{
+			ID: "app-1", Name: "Greendale Portal", Slug: "greendale", Protocol: "scim",
+			SCIMEnabled: true, SCIMBaseURL: "https://scim.example.test", SCIMBearerToken: "token",
+		}},
+	}))
+	app := newTestIDPApp(t)
+
+	rec := httptest.NewRecorder()
+	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=users", nil))
+	r.Equal(http.StatusOK, rec.Code)
+	r.Contains(rec.Body.String(), `data-sync-confirm="Reconcile Greendale Portal?`)
+	r.Contains(dashboardAsset(t, app, "/assets/app.js"), "form.dataset.syncConfirm")
+}

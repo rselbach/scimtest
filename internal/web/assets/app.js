@@ -690,6 +690,7 @@
     for (const form of syncForms) {
       form.addEventListener('submit', async function (event) {
         event.preventDefault();
+        if (form.dataset.syncConfirm && !window.confirm(form.dataset.syncConfirm)) return;
         if (syncPollTimer) clearTimeout(syncPollTimer);
         syncPollTimer = null;
         syncPollFailures = 0;
