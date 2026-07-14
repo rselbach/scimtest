@@ -561,10 +561,11 @@ func TestSAMLSSOLoginHintPreselectsUniqueUser(t *testing.T) {
 			{ID: "usr-troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.community", Active: true},
 		},
 		Apps: []app{{
-			ID:       "app-1",
-			Name:     "prde",
-			Slug:     "prde",
-			Protocol: "saml",
+			ID:         "app-1",
+			Name:       "prde",
+			Slug:       "prde",
+			Protocol:   "saml",
+			SAMLACSURL: "https://rp.example.test/saml/acs",
 		}},
 	}))
 
@@ -589,10 +590,11 @@ func TestSAMLSSOLoginHintFromSAMLRequestPreselectsUniqueUser(t *testing.T) {
 			{ID: "usr-troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.community", Active: true},
 		},
 		Apps: []app{{
-			ID:       "app-1",
-			Name:     "prde",
-			Slug:     "prde",
-			Protocol: "saml",
+			ID:         "app-1",
+			Name:       "prde",
+			Slug:       "prde",
+			Protocol:   "saml",
+			SAMLACSURL: "https://rp.example.test/saml/acs",
 		}},
 	}))
 	samlRequest := encodeRedirectSAMLRequest(t, `<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_request-jeff"><saml:Subject><saml:NameID>jeff@greendale.community</saml:NameID></saml:Subject></samlp:AuthnRequest>`)
@@ -616,10 +618,11 @@ func TestSAMLSSOLoginHintFromRelayStatePreselectsUniqueUser(t *testing.T) {
 			{ID: "usr-troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.community", Active: true},
 		},
 		Apps: []app{{
-			ID:       "app-1",
-			Name:     "prde",
-			Slug:     "prde",
-			Protocol: "saml",
+			ID:         "app-1",
+			Name:       "prde",
+			Slug:       "prde",
+			Protocol:   "saml",
+			SAMLACSURL: "https://rp.example.test/saml/acs",
 		}},
 	}))
 	relayState := "https://rp.example.test/authorize?client_id=example&login_hint=jeff%40greendale.community&state=opaque"
@@ -643,10 +646,11 @@ func TestSAMLSSOPostBindingLoginHintPreselectsUniqueUser(t *testing.T) {
 			{ID: "usr-troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.community", Active: true},
 		},
 		Apps: []app{{
-			ID:       "app-1",
-			Name:     "prde",
-			Slug:     "prde",
-			Protocol: "saml",
+			ID:         "app-1",
+			Name:       "prde",
+			Slug:       "prde",
+			Protocol:   "saml",
+			SAMLACSURL: "https://rp.example.test/saml/acs",
 		}},
 	}))
 	form := url.Values{
@@ -1090,4 +1094,25 @@ func TestOIDCTokenBasicAuthHandling(t *testing.T) {
 	r.Equal(http.StatusUnauthorized, failure.Code)
 	r.Contains(failure.Header().Get("WWW-Authenticate"), "Basic")
 	r.Contains(failure.Body.String(), "invalid_client")
+}
+
+func TestSAMLSSOWithoutConfiguredACSFailsBeforeChooser(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	svc := newTestIDPApp(t)
+	r.NoError(saveState(appState{
+		Users: []user{{ID: "usr-troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.community", Active: true}},
+		Apps: []app{{
+			ID:       "app-1",
+			Name:     "prde",
+			Slug:     "prde",
+			Protocol: "saml",
+		}},
+	}))
+
+	rec := httptest.NewRecorder()
+	svc.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/saml/prde/sso", nil))
+
+	r.Equal(http.StatusBadRequest, rec.Code)
+	r.Contains(rec.Body.String(), "SAML ACS URL must be configured")
 }

@@ -647,7 +647,7 @@ func (a *webApp) handleSAMLSSO(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	baseURL := a.effectiveIDPBaseURL(r, state)
-	if _, err := resolveSAMLResponseContext(r.URL.Query(), app, baseURL, false); err != nil {
+	if _, err := resolveSAMLResponseContext(r.URL.Query(), app, baseURL); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -665,7 +665,7 @@ func (a *webApp) handleSAMLSSOPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	baseURL := a.effectiveIDPBaseURL(r, state)
-	responseContext, err := resolveSAMLResponseContext(r.Form, app, baseURL, chooserSelectionProvided(app, r.Form))
+	responseContext, err := resolveSAMLResponseContext(r.Form, app, baseURL)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -735,16 +735,17 @@ func oidcIssuer(baseURL string, app app) string {
 	return baseURL + "/oidc/" + app.Slug
 }
 
-func resolveSAMLResponseContext(values url.Values, app app, baseURL string, requireACS bool) (samlResponseContext, error) {
+func resolveSAMLResponseContext(values url.Values, app app, baseURL string) (samlResponseContext, error) {
+	// Every response ends up posted to the configured ACS URL, so its
+	// absence fails here - before the user is shown a chooser - rather
+	// than after account selection.
 	configuredACS := strings.TrimSpace(app.SAMLACSURL)
+	if configuredACS == "" {
+		return samlResponseContext{}, fmt.Errorf("SAML ACS URL must be configured on the app")
+	}
 	requestedACS := strings.TrimSpace(values.Get("acs_url"))
-	if requestedACS != "" {
-		if configuredACS == "" {
-			return samlResponseContext{}, fmt.Errorf("SAML ACS URL must be configured on the app")
-		}
-		if requestedACS != configuredACS {
-			return samlResponseContext{}, fmt.Errorf("SAML ACS URL does not match the configured app")
-		}
+	if requestedACS != "" && requestedACS != configuredACS {
+		return samlResponseContext{}, fmt.Errorf("SAML ACS URL does not match the configured app")
 	}
 
 	context := samlResponseContext{ACSURL: configuredACS}
@@ -766,16 +767,13 @@ func resolveSAMLResponseContext(values url.Values, app app, baseURL string, requ
 		if request.Destination != "" && request.Destination != expectedDestination {
 			return samlResponseContext{}, fmt.Errorf("SAML AuthnRequest destination does not match this IDP")
 		}
-		if request.ACSURL != "" && configuredACS != "" && request.ACSURL != configuredACS {
+		if request.ACSURL != "" && request.ACSURL != configuredACS {
 			return samlResponseContext{}, fmt.Errorf("SAML AuthnRequest ACS URL does not match the configured app")
 		}
 		if request.ProtocolBinding != "" && request.ProtocolBinding != samlHTTPPostBinding {
 			return samlResponseContext{}, fmt.Errorf("SAML AuthnRequest must request the HTTP-POST response binding")
 		}
 		context.InResponseTo = request.ID
-	}
-	if requireACS && configuredACS == "" {
-		return samlResponseContext{}, fmt.Errorf("SAML ACS URL must be configured on the app")
 	}
 	return context, nil
 }
