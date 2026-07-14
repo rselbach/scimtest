@@ -11,8 +11,6 @@ import (
 const maxBackupBytes = 25 << 20
 
 func (a *webApp) handleBackupDownload(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	state, err := loadRequestState(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

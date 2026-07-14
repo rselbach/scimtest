@@ -20,9 +20,7 @@ func (a *webApp) handleReconcile(w http.ResponseWriter, r *http.Request) {
 
 func (a *webApp) startSyncRequest(w http.ResponseWriter, r *http.Request, kind string) {
 	tab := normalizedTab(r.FormValue("tab"))
-	a.mu.Lock()
 	state, err := loadRequestState(r)
-	a.mu.Unlock()
 	if err != nil {
 		a.respondSyncStartError(w, r, tab, err)
 		return
@@ -143,9 +141,8 @@ func (a *webApp) startSyncJob(appID string, environmentName string, kind string)
 
 func (a *webApp) runSyncJob(ctx context.Context, id string, appID string, kind string) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	state, err := loadState()
+	a.mu.Unlock()
 	if err != nil {
 		a.finishSyncJob(appID, id, false, err.Error(), false)
 		return
@@ -156,6 +153,9 @@ func (a *webApp) runSyncJob(ctx context.Context, id string, appID string, kind s
 		return
 	}
 
+	// The remote walk runs without a.mu so the dashboard, backups, and
+	// status polling stay responsive; rejectWhileSyncing keeps state
+	// mutations out while the job is running.
 	run := syncDirtyStateWithContext
 	if kind == "reconcile" {
 		run = reconcileStateWithContext
@@ -169,16 +169,40 @@ func (a *webApp) runSyncJob(ctx context.Context, id string, appID string, kind s
 		return
 	}
 
-	mergeAppSyncState(&state, appID, result.State)
-	appendOperationLogs(&state, appID, result.Traces)
-	purgeFullySyncedDeletions(&state)
-	if err := saveState(state); err != nil {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	// Reload before merging: edits that slipped in while the walk ran
+	// must not be clobbered by the snapshot taken at sync start.
+	fresh, err := loadState()
+	if err != nil {
+		a.finishSyncJob(appID, id, false, err.Error(), len(result.Traces) > 0)
+		return
+	}
+	userSyncBeforeMerge := fresh.UserSync[appID]
+	groupSyncBeforeMerge := fresh.GroupSync[appID]
+	mergeAppSyncState(&fresh, appID, result.State)
+	restoreMidSyncEdits(fresh.UserSync[appID], state.UserSync[appID], userSyncBeforeMerge)
+	restoreMidSyncEdits(fresh.GroupSync[appID], state.GroupSync[appID], groupSyncBeforeMerge)
+	appendOperationLogs(&fresh, appID, result.Traces)
+	purgeFullySyncedDeletions(&fresh)
+	if err := saveState(fresh); err != nil {
 		a.finishSyncJob(appID, id, false, err.Error(), len(result.Traces) > 0)
 		return
 	}
 
 	success := result.Stopped == nil
 	a.finishSyncJob(appID, id, success, result.Status, len(result.Traces) > 0)
+}
+
+// restoreMidSyncEdits keeps sync entries that changed while the remote walk
+// ran: those record local edits the sync result never saw, so they must stay
+// scheduled instead of being overwritten by the merge.
+func restoreMidSyncEdits(merged map[string]resourceSyncState, atStart map[string]resourceSyncState, beforeMerge map[string]resourceSyncState) {
+	for id, entry := range beforeMerge {
+		if atStart[id] != entry {
+			merged[id] = entry
+		}
+	}
 }
 
 func (a *webApp) updateSyncJobProgress(appID string, id string, progress syncProgress) {
@@ -299,6 +323,48 @@ func wantsJSON(r *http.Request) bool {
 
 func (a *webApp) handleImport(w http.ResponseWriter, r *http.Request) {
 	tab := normalizedTab(r.FormValue("tab"))
+	if r.FormValue("apply") == "on" {
+		a.applyImport(w, r, tab)
+		return
+	}
+	a.previewImport(w, r, tab)
+}
+
+// previewImport walks the remote SCIM directory and caches the result. It
+// only reads state, so it runs without a.mu and cannot stall the admin UI
+// on a slow remote.
+func (a *webApp) previewImport(w http.ResponseWriter, r *http.Request, tab string) {
+	state, err := loadRequestState(r)
+	if err != nil {
+		a.redirectError(w, r, tab, err)
+		return
+	}
+	appID := requestSyncAppID(r, state)
+	if appID == "" {
+		a.redirectError(w, r, tab, fmt.Errorf("SCIM is not enabled for the active environment"))
+		return
+	}
+	projected, err := stateForApp(state, appID)
+	if err != nil {
+		a.redirectError(w, r, tab, err)
+		return
+	}
+	result := importStateFromSCIM(projected)
+	a.rememberTrace(appID, result.Traces)
+	if result.Fatal != nil {
+		if len(result.Traces) > 0 && projected.Config.AutoOpenSyncTrace {
+			setShowTraceCookie(w)
+		}
+		redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "error", Message: result.Fatal.Error()})
+		return
+	}
+	added, updated, removed := importChangeCounts(projected, result.State)
+	a.storeImportPreview(appID, importPreview{State: result.State, Traces: result.Traces, Status: result.Status, Added: added, Updated: updated, Removed: removed, CreatedAt: time.Now()})
+	message := fmt.Sprintf("import preview: %d added, %d updated, %d removed", added, updated, removed)
+	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: message})
+}
+
+func (a *webApp) applyImport(w http.ResponseWriter, r *http.Request, tab string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -312,29 +378,7 @@ func (a *webApp) handleImport(w http.ResponseWriter, r *http.Request) {
 		a.redirectError(w, r, tab, fmt.Errorf("SCIM is not enabled for the active environment"))
 		return
 	}
-	preview, apply := a.cachedImportPreview(appID), r.FormValue("apply") == "on"
-	if !apply {
-		projected, err := stateForApp(state, appID)
-		if err != nil {
-			a.redirectError(w, r, tab, err)
-			return
-		}
-		result := importStateFromSCIM(projected)
-		a.rememberTrace(appID, result.Traces)
-		if result.Fatal != nil {
-			if len(result.Traces) > 0 && projected.Config.AutoOpenSyncTrace {
-				setShowTraceCookie(w)
-			}
-			redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "error", Message: result.Fatal.Error()})
-			return
-		}
-		added, updated, removed := importChangeCounts(projected, result.State)
-		preview = &importPreview{State: result.State, Traces: result.Traces, Status: result.Status, Added: added, Updated: updated, Removed: removed, CreatedAt: time.Now()}
-		a.storeImportPreview(appID, *preview)
-		message := fmt.Sprintf("import preview: %d added, %d updated, %d removed", added, updated, removed)
-		redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: message})
-		return
-	}
+	preview := a.cachedImportPreview(appID)
 	if preview == nil {
 		a.redirectError(w, r, tab, fmt.Errorf("import preview expired; preview the directory again"))
 		return

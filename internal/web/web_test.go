@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -2370,4 +2371,112 @@ func setTestStateFile(t *testing.T) {
 	t.Setenv("SCIMTEST_STATE_FILE", path)
 	r := require.New(t)
 	r.NoError(os.RemoveAll(path))
+}
+
+func TestAdminUIRespondsDuringRunningSync(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseSync := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseSync()
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+	}))
+	defer server.Close()
+
+	r.NoError(saveState(appState{
+		Config: config{BaseURL: server.URL, BearerToken: "chang-secret"},
+		Users: []user{{
+			ID: "troy", GivenName: "Troy", FamilyName: "Barnes",
+			Username: "troy", Email: "troy@greendale.edu", Active: true, Dirty: true,
+		}},
+		UserOperations:  map[string][]operationLog{},
+		GroupOperations: map[string][]operationLog{},
+	}))
+
+	app := newTestIDPApp(t)
+	startReq := httptest.NewRequest(http.MethodPost, "/sync", strings.NewReader("tab=users"))
+	startReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	startReq.Header.Set("Accept", "application/json")
+	startRec := httptest.NewRecorder()
+	app.routes().ServeHTTP(startRec, startReq)
+	r.Equal(http.StatusOK, startRec.Code)
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("SCIM request did not start")
+	}
+
+	type adminResult struct {
+		name string
+		code int
+	}
+	results := make(chan adminResult, 3)
+	go func() {
+		rec := httptest.NewRecorder()
+		app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=users", nil))
+		results <- adminResult{"index", rec.Code}
+	}()
+	go func() {
+		rec := httptest.NewRecorder()
+		app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/backup", nil))
+		results <- adminResult{"backup", rec.Code}
+	}()
+	go func() {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/sync", strings.NewReader("tab=users"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Accept", "application/json")
+		app.routes().ServeHTTP(rec, req)
+		results <- adminResult{"second-sync", rec.Code}
+	}()
+
+	got := make(map[string]int, 3)
+	for range 3 {
+		select {
+		case result := <-results:
+			got[result.name] = result.code
+		case <-time.After(2 * time.Second):
+			t.Fatalf("admin request blocked behind the running sync; finished so far: %v", got)
+		}
+	}
+	r.Equal(http.StatusOK, got["index"])
+	r.Equal(http.StatusOK, got["backup"])
+	r.Equal(http.StatusConflict, got["second-sync"])
+
+	releaseSync()
+	job := waitForSyncDone(t, app)
+	r.True(job.Success)
+}
+
+func TestRestoreMidSyncEditsKeepsNewerEntries(t *testing.T) {
+	r := require.New(t)
+
+	atStart := map[string]resourceSyncState{
+		"troy":    {Dirty: true},
+		"abed":    {RemoteID: "remote-abed"},
+		"shirley": {RemoteID: "remote-shirley"},
+	}
+	// troy synced clean, abed synced clean, shirley deleted mid-sync.
+	merged := map[string]resourceSyncState{
+		"troy":    {RemoteID: "remote-troy"},
+		"abed":    {RemoteID: "remote-abed"},
+		"shirley": {RemoteID: "remote-shirley"},
+	}
+	// While the sync ran, shirley was edited (marked dirty and deleted).
+	beforeMerge := map[string]resourceSyncState{
+		"troy":    {Dirty: true},
+		"abed":    {RemoteID: "remote-abed"},
+		"shirley": {RemoteID: "remote-shirley", Dirty: true, Deleted: true},
+	}
+
+	restoreMidSyncEdits(merged, atStart, beforeMerge)
+
+	r.Equal(resourceSyncState{RemoteID: "remote-troy"}, merged["troy"])
+	r.Equal(resourceSyncState{RemoteID: "remote-abed"}, merged["abed"])
+	r.Equal(resourceSyncState{RemoteID: "remote-shirley", Dirty: true, Deleted: true}, merged["shirley"])
 }

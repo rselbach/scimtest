@@ -32,6 +32,9 @@ var pageTemplate = template.Must(template.New("index.html").Funcs(template.FuncM
 }).ParseFS(templateFS, "templates/*.html"))
 
 type webApp struct {
+	// mu serializes the read-modify-write state sections of the admin
+	// handlers. Long-running remote walks (sync, import preview) must not
+	// hold it: they snapshot state, run unlocked, and re-lock to merge.
 	mu               sync.Mutex
 	signingKey       *rsa.PrivateKey
 	certDER          []byte
@@ -47,7 +50,7 @@ type webApp struct {
 	syncJobs         map[string]*syncJobSnapshot
 	syncCancels      map[string]context.CancelFunc
 	// oidcMu guards authCodes and accessTokens so sign-in flows never
-	// wait on mu, which is held for the full duration of a SCIM sync.
+	// contend with admin handlers holding mu.
 	oidcMu           sync.Mutex
 	authCodes        map[string]authCode
 	accessTokens     map[string]accessToken
@@ -55,6 +58,7 @@ type webApp struct {
 	oidcInspections  map[string]oidcInspection
 	samlInspectorMu  sync.Mutex
 	samlInspections  map[string]samlInspection
+	traceMu          sync.Mutex
 	lastTraces       map[string][]syncTraceEntry
 	lastTraceContent map[string]string
 	formDraftMu      sync.Mutex
@@ -1340,6 +1344,8 @@ func (a *webApp) redirectError(w http.ResponseWriter, r *http.Request, tab strin
 }
 
 func (a *webApp) rememberTrace(appID string, traces []syncTraceEntry) {
+	a.traceMu.Lock()
+	defer a.traceMu.Unlock()
 	if a.lastTraces == nil {
 		a.lastTraces = make(map[string][]syncTraceEntry)
 		a.lastTraceContent = make(map[string]string)
@@ -1349,14 +1355,14 @@ func (a *webApp) rememberTrace(appID string, traces []syncTraceEntry) {
 }
 
 func (a *webApp) hasTrace(appID string) bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.traceMu.Lock()
+	defer a.traceMu.Unlock()
 	return len(a.lastTraces[appID]) > 0
 }
 
 func (a *webApp) traceContent(appID string) string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.traceMu.Lock()
+	defer a.traceMu.Unlock()
 	return a.lastTraceContent[appID]
 }
 
