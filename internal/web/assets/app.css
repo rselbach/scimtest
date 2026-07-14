@@ -47,6 +47,9 @@
 	  outline: 2px solid var(--accent);
 	  outline-offset: 2px;
 	}
+    /* Utility toggled from JS and templates; !important beats
+       equal-specificity display rules like .overlay and .protocol-section. */
+    .is-hidden { display: none !important; }
 
     /* Topbar (black) */
     .topbar {
@@ -376,7 +379,6 @@
       background: var(--bg-soft);
       box-shadow: var(--shadow-sm);
     }
-    .sync-progress.is-hidden { display: none; }
     .sync-progress.is-error { border-color: rgba(199, 52, 68, 0.28); background: var(--danger-soft); }
     .sync-progress.is-rate-limited { border-color: rgba(180, 83, 9, 0.3); background: var(--warn-soft); }
     .sync-progress.is-success { border-color: rgba(0, 133, 62, 0.3); background: var(--success-soft); }
@@ -413,9 +415,7 @@
       font-size: 12.5px;
     }
     .sync-progress-current { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .sync-progress-trace.is-hidden { display: none; }
     .sync-progress-actions { display: inline-flex; gap: 10px; white-space: nowrap; }
-    .sync-details-open.is-hidden { display: none; }
 
     .sync-details-modal { width: min(760px, 100%); overflow: hidden; }
     .sync-details-body { display: grid; gap: 14px; padding: 18px; }
@@ -461,7 +461,6 @@
     .sync-activity-row.is-failed .sync-activity-state { background: var(--danger-soft); color: var(--danger); }
     .sync-activity-row.is-waiting .sync-activity-state { background: var(--warn-soft); color: var(--warn-text); }
     .sync-new-events { justify-self: center; }
-    .sync-new-events.is-hidden { display: none; }
     .sync-details-footer {
       display: flex;
       justify-content: space-between;
@@ -756,7 +755,6 @@
       background: rgba(15, 23, 42, 0.4);
       z-index: 30;
     }
-    .overlay.is-hidden { display: none; }
     .modal {
       width: min(640px, 100%);
       max-height: calc(100vh - 32px);
@@ -1094,7 +1092,6 @@
       box-shadow: var(--shadow-sm);
     }
     .protocol-section { display: contents; }
-    .protocol-section.is-hidden { display: none; }
 	.section-label {
       grid-column: 1 / -1;
       margin-top: 4px;

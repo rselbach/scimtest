@@ -2480,3 +2480,11 @@ func TestRestoreMidSyncEditsKeepsNewerEntries(t *testing.T) {
 	r.Equal(resourceSyncState{RemoteID: "remote-abed"}, merged["abed"])
 	r.Equal(resourceSyncState{RemoteID: "remote-shirley", Dirty: true, Deleted: true}, merged["shirley"])
 }
+
+func TestStylesheetHidesIsHiddenEverywhere(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+
+	css := dashboardAsset(t, &webApp{}, "/assets/app.css")
+	r.Contains(css, ".is-hidden { display: none !important; }")
+}
