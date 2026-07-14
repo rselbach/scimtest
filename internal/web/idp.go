@@ -502,6 +502,11 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !clientAuthenticated(r, app) {
+		// RFC 6749 section 5.2: a 401 for an attempted Basic
+		// authentication must carry a WWW-Authenticate challenge.
+		if _, _, usedBasic := r.BasicAuth(); usedBasic {
+			w.Header().Set("WWW-Authenticate", `Basic realm="scimtest", charset="UTF-8"`)
+		}
 		writeOAuthError(w, http.StatusUnauthorized, "invalid_client", "client authentication failed")
 		return
 	}
@@ -912,7 +917,16 @@ func clientAuthenticated(r *http.Request, app app) bool {
 		return r.FormValue("client_id") == app.OIDCClientID
 	}
 	clientID, secret, ok := r.BasicAuth()
-	if !ok {
+	if ok {
+		// RFC 6749 section 2.3.1: Basic credentials are form-url-encoded
+		// before being base64-encoded.
+		if decoded, err := url.QueryUnescape(clientID); err == nil {
+			clientID = decoded
+		}
+		if decoded, err := url.QueryUnescape(secret); err == nil {
+			secret = decoded
+		}
+	} else {
 		clientID, secret = r.FormValue("client_id"), r.FormValue("client_secret")
 	}
 	// The token endpoint is reachable through the public tunnel, so the

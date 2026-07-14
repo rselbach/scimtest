@@ -1044,3 +1044,50 @@ func TestOIDCTokenRejectsUnexpectedCodeVerifier(t *testing.T) {
 	r.Contains(rec.Body.String(), "invalid_grant")
 	r.Contains(rec.Body.String(), "no code_challenge")
 }
+
+func TestOIDCTokenBasicAuthHandling(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Users: []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.edu", Active: true}},
+		Apps: []app{{
+			ID: "app-1", Name: "Portal", Slug: "portal", Protocol: "oidc",
+			OIDCClientID: "client with spaces", OIDCClientSecret: "chang+secret/2026",
+			OIDCRedirectURIs: []string{"http://client.test/callback"},
+		}},
+	}))
+	svc := newTestIDPApp(t)
+
+	tokenRequest := func(authorization string) *httptest.ResponseRecorder {
+		svc.authCodes["paintball"] = authCode{
+			AppSlug: "portal", ClientID: "client with spaces", UserID: "troy",
+			RedirectURI: "http://client.test/callback",
+			ExpiresAt:   time.Now().Add(time.Minute),
+		}
+		form := url.Values{
+			"grant_type":   {"authorization_code"},
+			"code":         {"paintball"},
+			"redirect_uri": {"http://client.test/callback"},
+		}
+		req := httptest.NewRequest(http.MethodPost, "/oidc/portal/token", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Authorization", authorization)
+		rec := httptest.NewRecorder()
+		svc.routes().ServeHTTP(rec, req)
+		return rec
+	}
+
+	// RFC 6749 section 2.3.1: credentials are form-url-encoded before the
+	// base64 encoding, so special characters must round-trip.
+	encoded := base64.StdEncoding.EncodeToString([]byte(url.QueryEscape("client with spaces") + ":" + url.QueryEscape("chang+secret/2026")))
+	success := tokenRequest("Basic " + encoded)
+	r.Equal(http.StatusOK, success.Code)
+
+	// RFC 6749 section 5.2: rejected Basic authentication must carry a
+	// WWW-Authenticate challenge.
+	wrong := base64.StdEncoding.EncodeToString([]byte("client:wrong-secret"))
+	failure := tokenRequest("Basic " + wrong)
+	r.Equal(http.StatusUnauthorized, failure.Code)
+	r.Contains(failure.Header().Get("WWW-Authenticate"), "Basic")
+	r.Contains(failure.Body.String(), "invalid_client")
+}
