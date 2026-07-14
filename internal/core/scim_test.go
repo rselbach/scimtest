@@ -1261,3 +1261,23 @@ func TestImportSkipsGroupMembersThatAreNotImportedUsers(t *testing.T) {
 	r.Equal([]string{"troy"}, result.State.Groups[0].MemberIDs)
 	r.Contains(result.Status, "skipped 1 group members that are not imported users")
 }
+
+func TestImportRejectsDuplicateExternalIDs(t *testing.T) {
+	r := require.New(t)
+
+	duplicates := []SCIMUserResource{
+		{ID: "remote-1", ExternalID: "troy", UserName: "troy", Emails: []SCIMEmail{{Value: "troy@greendale.edu"}}},
+		{ID: "remote-2", ExternalID: "troy", UserName: "t-bone", Emails: []SCIMEmail{{Value: "tbone@greendale.edu"}}},
+	}
+
+	_, _, err := replaceStateFromSCIM(AppState{}, duplicates, nil)
+	r.ErrorContains(err, `more than one user with externalId "troy"`)
+
+	duplicateGroups := []SCIMGroupResource{
+		{ID: "remote-g1", ExternalID: "study-group", DisplayName: "Study Group"},
+		{ID: "remote-g2", ExternalID: "study-group", DisplayName: "Other Study Group"},
+	}
+
+	_, _, err = replaceStateFromSCIM(AppState{}, nil, duplicateGroups)
+	r.ErrorContains(err, `more than one group with externalId "study-group"`)
+}

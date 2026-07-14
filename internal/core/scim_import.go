@@ -1,18 +1,27 @@
 package core
 
 import (
+	"fmt"
 	"strings"
 )
 
 func replaceStateFromSCIM(state AppState, userResources []SCIMUserResource, groupResources []SCIMGroupResource) (AppState, int, error) {
 	importedUsers := make([]User, 0, len(userResources))
 	remoteToLocalUserID := make(map[string]string, len(userResources))
+	seenUserIDs := make(map[string]bool, len(userResources))
 
 	for _, resource := range userResources {
 		importedUser, err := importedUserFromSCIM(state.Users, resource)
 		if err != nil {
 			return AppState{}, 0, err
 		}
+		// Duplicate local IDs would silently collapse into one row on
+		// save, rewiring group memberships; surface the remote's
+		// misbehavior instead.
+		if seenUserIDs[importedUser.ID] {
+			return AppState{}, 0, fmt.Errorf("SCIM /Users returned more than one user with externalId %q", importedUser.ID)
+		}
+		seenUserIDs[importedUser.ID] = true
 		importedUsers = append(importedUsers, importedUser)
 		if importedUser.RemoteID != "" {
 			remoteToLocalUserID[importedUser.RemoteID] = importedUser.ID
@@ -20,12 +29,17 @@ func replaceStateFromSCIM(state AppState, userResources []SCIMUserResource, grou
 	}
 
 	importedGroups := make([]Group, 0, len(groupResources))
+	seenGroupIDs := make(map[string]bool, len(groupResources))
 	skippedMembers := 0
 	for _, resource := range groupResources {
 		importedGroup, skipped, err := importedGroupFromSCIM(state.Groups, resource, remoteToLocalUserID)
 		if err != nil {
 			return AppState{}, 0, err
 		}
+		if seenGroupIDs[importedGroup.ID] {
+			return AppState{}, 0, fmt.Errorf("SCIM /Groups returned more than one group with externalId %q", importedGroup.ID)
+		}
+		seenGroupIDs[importedGroup.ID] = true
 		importedGroups = append(importedGroups, importedGroup)
 		skippedMembers += skipped
 	}
