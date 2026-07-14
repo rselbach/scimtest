@@ -408,8 +408,12 @@ func (a *webApp) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := validateAuthorizeRequest(app, r.URL.Query()); err != nil {
+	if err := validateAuthorizeClient(app, r.URL.Query()); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := validateAuthorizeRequest(app, r.URL.Query()); err != nil {
+		redirectAuthorizeError(w, r, r.URL.Query(), err)
 		return
 	}
 	loginHint := loginHintFromRequest(r)
@@ -428,8 +432,12 @@ func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := validateAuthorizeRequest(app, r.Form); err != nil {
+	if err := validateAuthorizeClient(app, r.Form); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := validateAuthorizeRequest(app, r.Form); err != nil {
+		redirectAuthorizeError(w, r, r.Form, err)
 		return
 	}
 	redirectURI, err := parseOIDCRedirectURI(r.FormValue("redirect_uri"))
@@ -788,10 +796,10 @@ func childElementTextByLocalName(parent *etree.Element, localName string) string
 	return ""
 }
 
-func validateAuthorizeRequest(app app, values url.Values) error {
-	if values.Get("response_type") != "code" {
-		return fmt.Errorf("response_type must be code")
-	}
+// validateAuthorizeClient checks client_id and redirect_uri. Failures here
+// must never redirect: an unverified redirect_uri is not a safe target
+// (RFC 6749 section 4.1.2.1).
+func validateAuthorizeClient(app app, values url.Values) error {
 	if values.Get("client_id") != app.OIDCClientID {
 		return fmt.Errorf("client_id is invalid")
 	}
@@ -805,24 +813,62 @@ func validateAuthorizeRequest(app app, values url.Values) error {
 	if !app.AllowAnyOIDCRedirect && !stringIn(app.OIDCRedirectURIs, redirectURI) {
 		return fmt.Errorf("redirect_uri is not registered for this app")
 	}
+	return nil
+}
+
+type authorizeError struct {
+	code        string
+	description string
+}
+
+func (e *authorizeError) Error() string { return e.description }
+
+// validateAuthorizeRequest checks the authorize parameters whose failures
+// are delivered to the already-validated redirect_uri.
+func validateAuthorizeRequest(app app, values url.Values) error {
+	if values.Get("response_type") != "code" {
+		return &authorizeError{code: "unsupported_response_type", description: "response_type must be code"}
+	}
 	if !strings.Contains(" "+values.Get("scope")+" ", " openid ") {
-		return fmt.Errorf("scope must include openid")
+		return &authorizeError{code: "invalid_scope", description: "scope must include openid"}
 	}
 	challenge := values.Get("code_challenge")
 	method := values.Get("code_challenge_method")
-	if app.OIDCPublicClient && challenge == "" {
-		return fmt.Errorf("public clients must use PKCE")
-	}
-	if challenge != "" && method != "S256" {
-		return fmt.Errorf("code_challenge_method must be S256")
-	}
-	if challenge != "" && len(challenge) != 43 {
-		return fmt.Errorf("code_challenge must be a valid S256 challenge")
-	}
-	if challenge == "" && method != "" {
-		return fmt.Errorf("code_challenge is required when code_challenge_method is set")
+	switch {
+	case app.OIDCPublicClient && challenge == "":
+		return &authorizeError{code: "invalid_request", description: "public clients must use PKCE"}
+	case challenge != "" && method != "S256":
+		return &authorizeError{code: "invalid_request", description: "code_challenge_method must be S256"}
+	case challenge != "" && len(challenge) != 43:
+		return &authorizeError{code: "invalid_request", description: "code_challenge must be a valid S256 challenge"}
+	case challenge == "" && method != "":
+		return &authorizeError{code: "invalid_request", description: "code_challenge is required when code_challenge_method is set"}
 	}
 	return nil
+}
+
+// redirectAuthorizeError delivers an authorize failure to the RP on the
+// already-validated redirect_uri with error, error_description, and state,
+// per RFC 6749 section 4.1.2.1.
+func redirectAuthorizeError(w http.ResponseWriter, r *http.Request, values url.Values, failure error) {
+	redirectURI, err := parseOIDCRedirectURI(values.Get("redirect_uri"))
+	if err != nil {
+		http.Error(w, failure.Error(), http.StatusBadRequest)
+		return
+	}
+	code := "invalid_request"
+	var authorizeErr *authorizeError
+	if errors.As(failure, &authorizeErr) {
+		code = authorizeErr.code
+	}
+	query := redirectURI.Query()
+	query.Set("error", code)
+	query.Set("error_description", failure.Error())
+	if stateValue := values.Get("state"); stateValue != "" {
+		query.Set("state", stateValue)
+	}
+	redirectURI.RawQuery = query.Encode()
+	http.Redirect(w, r, redirectURI.String(), http.StatusFound)
 }
 
 func parseOIDCRedirectURI(value string) (*url.URL, error) {

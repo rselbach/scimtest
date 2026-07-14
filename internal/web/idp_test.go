@@ -272,7 +272,7 @@ func TestOIDCRedirectURIValidation(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			r := require.New(t)
-			err := validateAuthorizeRequest(app{
+			err := validateAuthorizeClient(app{
 				OIDCClientID:         "greendale-client",
 				AllowAnyOIDCRedirect: true,
 			}, url.Values{
@@ -957,4 +957,54 @@ func encodeRedirectSAMLRequest(t *testing.T, value string) string {
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 	return base64.StdEncoding.EncodeToString(compressed.Bytes())
+}
+
+func TestOIDCAuthorizeErrorsRedirectBackToRP(t *testing.T) {
+	setTestStateFile(t)
+	require.NoError(t, saveState(appState{
+		Users: []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.edu", Active: true}},
+		Apps: []app{{
+			ID: "app-1", Name: "Portal", Slug: "portal", Protocol: "oidc",
+			OIDCClientID: "client", OIDCClientSecret: "secret",
+			OIDCRedirectURIs: []string{"http://client.test/callback"},
+		}},
+	}))
+	svc := newTestIDPApp(t)
+
+	tests := map[string]struct {
+		query     string
+		wantError string
+	}{
+		"unsupported response type": {
+			query:     "response_type=token&client_id=client&redirect_uri=http%3A%2F%2Fclient.test%2Fcallback&scope=openid&state=abc",
+			wantError: "unsupported_response_type",
+		},
+		"missing openid scope": {
+			query:     "response_type=code&client_id=client&redirect_uri=http%3A%2F%2Fclient.test%2Fcallback&scope=profile&state=abc",
+			wantError: "invalid_scope",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			rec := httptest.NewRecorder()
+			svc.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/oidc/portal/authorize?"+tc.query, nil))
+
+			r.Equal(http.StatusFound, rec.Code)
+			location, err := url.Parse(rec.Header().Get("Location"))
+			r.NoError(err)
+			r.Equal("client.test", location.Host)
+			r.Equal(tc.wantError, location.Query().Get("error"))
+			r.Equal("abc", location.Query().Get("state"))
+			r.NotEmpty(location.Query().Get("error_description"))
+		})
+	}
+
+	// client_id/redirect_uri failures must stay plain 400s: the redirect
+	// target is not trustworthy before it validates.
+	r := require.New(t)
+	rec := httptest.NewRecorder()
+	svc.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/oidc/portal/authorize?response_type=code&client_id=client&redirect_uri=http%3A%2F%2Fevil.test%2Fcallback&scope=openid", nil))
+	r.Equal(http.StatusBadRequest, rec.Code)
 }
