@@ -524,6 +524,12 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "PKCE code verifier is invalid")
 		return
 	}
+	// OAuth 2.0 Security BCP: a verifier for a code issued without a
+	// challenge signals a confused or attacked client - reject it.
+	if code.CodeChallenge == "" && r.FormValue("code_verifier") != "" {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "code_verifier provided but the authorization request used no code_challenge")
+		return
+	}
 	user, ok := userByID(state.Users, code.UserID)
 	if !ok || !user.Active || user.Deleted {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "user is inactive or missing")

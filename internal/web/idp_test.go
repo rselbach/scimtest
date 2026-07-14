@@ -1008,3 +1008,39 @@ func TestOIDCAuthorizeErrorsRedirectBackToRP(t *testing.T) {
 	svc.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/oidc/portal/authorize?response_type=code&client_id=client&redirect_uri=http%3A%2F%2Fevil.test%2Fcallback&scope=openid", nil))
 	r.Equal(http.StatusBadRequest, rec.Code)
 }
+
+func TestOIDCTokenRejectsUnexpectedCodeVerifier(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Users: []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.edu", Active: true}},
+		Apps: []app{{
+			ID: "app-1", Name: "Portal", Slug: "portal", Protocol: "oidc",
+			OIDCClientID: "client", OIDCClientSecret: "secret",
+			OIDCRedirectURIs: []string{"http://client.test/callback"},
+		}},
+	}))
+	svc := newTestIDPApp(t)
+	svc.authCodes["paintball"] = authCode{
+		AppSlug: "portal", ClientID: "client", UserID: "troy",
+		RedirectURI: "http://client.test/callback",
+		ExpiresAt:   time.Now().Add(time.Minute),
+	}
+
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {"paintball"},
+		"redirect_uri":  {"http://client.test/callback"},
+		"client_id":     {"client"},
+		"client_secret": {"secret"},
+		"code_verifier": {"an-unsolicited-but-well-formed-code-verifier-value"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/oidc/portal/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	svc.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusBadRequest, rec.Code)
+	r.Contains(rec.Body.String(), "invalid_grant")
+	r.Contains(rec.Body.String(), "no code_challenge")
+}
