@@ -1,18 +1,17 @@
 package core
 
 import (
-	"fmt"
 	"strings"
 )
 
-func replaceStateFromSCIM(state AppState, userResources []SCIMUserResource, groupResources []SCIMGroupResource) (AppState, error) {
+func replaceStateFromSCIM(state AppState, userResources []SCIMUserResource, groupResources []SCIMGroupResource) (AppState, int, error) {
 	importedUsers := make([]User, 0, len(userResources))
 	remoteToLocalUserID := make(map[string]string, len(userResources))
 
 	for _, resource := range userResources {
 		importedUser, err := importedUserFromSCIM(state.Users, resource)
 		if err != nil {
-			return AppState{}, err
+			return AppState{}, 0, err
 		}
 		importedUsers = append(importedUsers, importedUser)
 		if importedUser.RemoteID != "" {
@@ -21,12 +20,14 @@ func replaceStateFromSCIM(state AppState, userResources []SCIMUserResource, grou
 	}
 
 	importedGroups := make([]Group, 0, len(groupResources))
+	skippedMembers := 0
 	for _, resource := range groupResources {
-		importedGroup, err := importedGroupFromSCIM(state.Groups, resource, remoteToLocalUserID)
+		importedGroup, skipped, err := importedGroupFromSCIM(state.Groups, resource, remoteToLocalUserID)
 		if err != nil {
-			return AppState{}, err
+			return AppState{}, 0, err
 		}
 		importedGroups = append(importedGroups, importedGroup)
+		skippedMembers += skipped
 	}
 
 	state.Users = importedUsers
@@ -39,7 +40,7 @@ func replaceStateFromSCIM(state AppState, userResources []SCIMUserResource, grou
 		AppendLocalOperationLog(&state, "group", importedGroup.ID, "Imported from SCIM")
 	}
 
-	return state, nil
+	return state, skippedMembers, nil
 }
 
 func importedUserFromSCIM(existingUsers []User, resource SCIMUserResource) (User, error) {
@@ -97,7 +98,7 @@ func importedUserFromSCIM(existingUsers []User, resource SCIMUserResource) (User
 	}, nil
 }
 
-func importedGroupFromSCIM(existingGroups []Group, resource SCIMGroupResource, remoteToLocalUserID map[string]string) (Group, error) {
+func importedGroupFromSCIM(existingGroups []Group, resource SCIMGroupResource, remoteToLocalUserID map[string]string) (Group, int, error) {
 	localID := strings.TrimSpace(resource.ExternalID)
 	if localID == "" {
 		remoteID := strings.TrimSpace(resource.ID)
@@ -111,16 +112,21 @@ func importedGroupFromSCIM(existingGroups []Group, resource SCIMGroupResource, r
 			var err error
 			localID, err = NewGroupID()
 			if err != nil {
-				return Group{}, err
+				return Group{}, 0, err
 			}
 		}
 	}
 
+	// Members that do not resolve to an imported user are skipped rather
+	// than failing the import: RFC 7643 section 4.2 allows Group-type
+	// members (nested groups), which this directory does not model.
 	memberIDs := make([]string, 0, len(resource.Members))
+	skipped := 0
 	for _, member := range resource.Members {
 		localUserID, ok := remoteToLocalUserID[strings.TrimSpace(member.Value)]
 		if !ok {
-			return Group{}, fmt.Errorf("group %q references unknown imported user %q", strings.TrimSpace(resource.DisplayName), strings.TrimSpace(member.Value))
+			skipped++
+			continue
 		}
 		memberIDs = append(memberIDs, localUserID)
 	}
@@ -133,7 +139,7 @@ func importedGroupFromSCIM(existingGroups []Group, resource SCIMGroupResource, r
 		Dirty:       false,
 		Deleted:     false,
 		LastError:   "",
-	}, nil
+	}, skipped, nil
 }
 
 func importedUserIndex(users []User, resource SCIMUserResource, localID string) (int, bool) {

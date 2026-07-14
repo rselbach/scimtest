@@ -290,14 +290,18 @@ func ImportStateFromSCIM(state AppState) ImportResult {
 		return ImportResult{Fatal: err, Traces: client.traces}
 	}
 
-	updatedState, err := replaceStateFromSCIM(state, userResources, groupResources)
+	updatedState, skippedMembers, err := replaceStateFromSCIM(state, userResources, groupResources)
 	if err != nil {
 		return ImportResult{Fatal: err, Traces: client.traces}
 	}
 
+	status := fmt.Sprintf("imported %d users and %d groups from SCIM", len(updatedState.Users), len(updatedState.Groups))
+	if skippedMembers > 0 {
+		status += fmt.Sprintf("; skipped %d group members that are not imported users", skippedMembers)
+	}
 	return ImportResult{
 		State:  updatedState,
-		Status: fmt.Sprintf("imported %d users and %d groups from SCIM", len(updatedState.Users), len(updatedState.Groups)),
+		Status: status,
 		Traces: client.traces,
 	}
 }

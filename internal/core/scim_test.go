@@ -927,12 +927,12 @@ func TestReplaceStateFromSCIMPreservesUserIDByRemoteID(t *testing.T) {
 		Emails: []SCIMEmail{{Value: "troy@greendale.edu", Primary: true}},
 	}}
 
-	first, err := replaceStateFromSCIM(state, resources, nil)
+	first, _, err := replaceStateFromSCIM(state, resources, nil)
 	r.NoError(err)
 	r.Len(first.Users, 1)
 	r.Equal("local-troy", first.Users[0].ID)
 
-	second, err := replaceStateFromSCIM(first, resources, nil)
+	second, _, err := replaceStateFromSCIM(first, resources, nil)
 	r.NoError(err)
 	r.Len(second.Users, 1)
 	r.Equal("local-troy", second.Users[0].ID)
@@ -952,12 +952,12 @@ func TestReplaceStateFromSCIMPreservesGroupIDByRemoteID(t *testing.T) {
 		DisplayName: "Greendale Study Group",
 	}}
 
-	first, err := replaceStateFromSCIM(state, nil, resources)
+	first, _, err := replaceStateFromSCIM(state, nil, resources)
 	r.NoError(err)
 	r.Len(first.Groups, 1)
 	r.Equal("local-study-group", first.Groups[0].ID)
 
-	second, err := replaceStateFromSCIM(first, nil, resources)
+	second, _, err := replaceStateFromSCIM(first, nil, resources)
 	r.NoError(err)
 	r.Len(second.Groups, 1)
 	r.Equal("local-study-group", second.Groups[0].ID)
@@ -1219,4 +1219,45 @@ func TestSCIMResourcePayloadsAssertClearedAttributes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestImportSkipsGroupMembersThatAreNotImportedUsers(t *testing.T) {
+	r := require.New(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/scim+json")
+		switch req.URL.Path {
+		case "/Users":
+			r.NoError(json.NewEncoder(w).Encode(SCIMListResponse[SCIMUserResource]{
+				TotalResults: 1,
+				Resources: []SCIMUserResource{{
+					ID: "remote-troy", ExternalID: "troy", UserName: "troy", Active: boolPtr(true),
+					Emails: []SCIMEmail{{Value: "troy@greendale.edu"}},
+				}},
+			}))
+		case "/Groups":
+			r.NoError(json.NewEncoder(w).Encode(SCIMListResponse[SCIMGroupResource]{
+				TotalResults: 1,
+				Resources: []SCIMGroupResource{{
+					ID: "remote-study-group", ExternalID: "study-group", DisplayName: "Study Group",
+					Members: []SCIMMember{
+						{Value: "remote-troy", Type: "User"},
+						{Value: "remote-nested-group", Type: "Group"},
+					},
+				}},
+			}))
+		default:
+			t.Fatalf("unexpected import request: %s", req.URL.RequestURI())
+		}
+	}))
+	defer server.Close()
+
+	result := ImportStateFromSCIM(AppState{
+		Config: Config{BaseURL: server.URL, BearerToken: "chang-secret"},
+	})
+
+	r.NoError(result.Fatal)
+	r.Len(result.State.Groups, 1)
+	r.Equal([]string{"troy"}, result.State.Groups[0].MemberIDs)
+	r.Contains(result.Status, "skipped 1 group members that are not imported users")
 }
