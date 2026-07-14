@@ -2567,3 +2567,13 @@ func TestDisablingSCIMKeepsStoredSettings(t *testing.T) {
 	r.True(saved.SCIMPatchSupported)
 	r.True(saved.SCIMFilterSupported)
 }
+
+func TestSyncStatusPollingRetriesTransientFailures(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+
+	javascript := dashboardAsset(t, newTestIDPApp(t), "/assets/app.js")
+	r.Contains(javascript, "Reconnecting to sync status")
+	r.Contains(javascript, "syncPollFailures")
+}

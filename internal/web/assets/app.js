@@ -484,6 +484,7 @@
     const syncNewEvents = document.querySelector('[data-sync-new-events]');
     const syncCancelButtons = Array.from(document.querySelectorAll('[data-sync-cancel]'));
     let syncPollTimer = null;
+    let syncPollFailures = 0;
     let reloadWhenSyncFinishes = false;
     let syncDetailsVisible = false;
     let syncJobDone = false;
@@ -658,6 +659,7 @@
           throw new Error('sync status failed: ' + response.status);
         }
         const job = await response.json();
+        syncPollFailures = 0;
         if (!job) return;
         setSyncProgress(job);
         renderSyncEvents(job.events);
@@ -671,6 +673,14 @@
         }
       } catch (err) {
         console.error(err);
+        syncPollFailures += 1;
+        if (syncPollFailures < 8) {
+          // A dropped request must not orphan the server-side job: keep
+          // polling with backoff instead of freezing the progress view.
+          if (syncMessage) syncMessage.textContent = 'Reconnecting to sync status…';
+          syncPollTimer = setTimeout(pollSyncStatus, Math.min(1000 * syncPollFailures, 5000));
+          return;
+        }
         if (syncMessage) syncMessage.textContent = err.message;
         if (syncProgress) syncProgress.classList.add('is-error');
         for (const button of syncSubmits) button.disabled = false;
@@ -682,6 +692,7 @@
         event.preventDefault();
         if (syncPollTimer) clearTimeout(syncPollTimer);
         syncPollTimer = null;
+        syncPollFailures = 0;
         reloadWhenSyncFinishes = true;
         syncJobDone = false;
         resetSyncActivity();
