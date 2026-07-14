@@ -282,7 +282,11 @@ func openStateDBAt(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("secure sqlite state db %s: %w", path, err)
 	}
 
-	db, err := sql.Open("sqlite", path)
+	// busy_timeout makes concurrent connections wait instead of failing with
+	// SQLITE_BUSY (which could discard a finished sync's state write while a
+	// status poll held a read lock); WAL lets readers and the writer proceed
+	// concurrently.
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite state db %s: %w", path, err)
 	}

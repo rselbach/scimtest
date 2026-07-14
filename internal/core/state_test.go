@@ -958,3 +958,21 @@ func TestValidateAppRejectsUnsafeClaimMappings(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenStateDBAtSetsConcurrencyPragmas(t *testing.T) {
+	r := require.New(t)
+
+	db, err := openStateDBAt(filepath.Join(t.TempDir(), "state.db"))
+	r.NoError(err)
+	defer func() {
+		r.NoError(db.Close())
+	}()
+
+	var mode string
+	r.NoError(db.QueryRow("PRAGMA journal_mode").Scan(&mode))
+	r.Equal("wal", mode)
+
+	var timeout int
+	r.NoError(db.QueryRow("PRAGMA busy_timeout").Scan(&timeout))
+	r.Equal(5000, timeout)
+}
