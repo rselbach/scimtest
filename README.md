@@ -30,6 +30,10 @@ go run . --port 8090
 
 Use `--no-open` to start the server without opening the admin UI in a browser.
 
+Only one process runs for each state file. Launching `scimtest` again opens the
+existing admin UI and exits; use a different `SCIMTEST_STATE_FILE` for an
+independent instance.
+
 State is stored at the OS user config path under `scimtest/state.db`. Set `SCIMTEST_STATE_FILE` to use an isolated SQLite state file.
 
 Use `--debug` to log redacted OIDC and SAML interactions. Use

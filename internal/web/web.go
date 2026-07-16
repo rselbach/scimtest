@@ -41,6 +41,7 @@ type webApp struct {
 	debugRP          bool
 	debugSecrets     bool
 	localPort        int
+	instanceToken    string
 	rgrokStart       rgrokStarter
 	rgrokLifecycleMu sync.Mutex
 	rgrokMu          sync.Mutex
@@ -428,6 +429,38 @@ func Run(options ...RunOptions) error {
 	if err != nil {
 		return err
 	}
+	statePath, err := stateFilePath()
+	if err != nil {
+		return fmt.Errorf("resolve state file for instance lock: %w", err)
+	}
+	lease, acquired, err := acquireInstanceLease(statePath)
+	if err != nil {
+		return err
+	}
+	if !acquired {
+		ctx, cancel := context.WithTimeout(context.Background(), instanceHandoffTimeout)
+		defer cancel()
+		metadata, tookOver, waitErr := waitForRunningInstance(ctx, lease)
+		if waitErr != nil {
+			if closeErr := lease.Close(); closeErr != nil {
+				return fmt.Errorf("%w; close instance lock file: %v", waitErr, closeErr)
+			}
+			return waitErr
+		}
+		if !tookOver {
+			if err := lease.Close(); err != nil {
+				return err
+			}
+			log.Printf("scimtest is already running at %s", metadata.URL)
+			maybeOpenBrowser(metadata.URL, opts.NoOpen, opts.browserOpen)
+			return nil
+		}
+	}
+	defer func() {
+		if err := lease.Close(); err != nil {
+			log.Printf("close instance lock: %v", err)
+		}
+	}()
 
 	port := strings.TrimSpace(opts.Port)
 	if port == "" {
@@ -465,6 +498,13 @@ func Run(options ...RunOptions) error {
 		authCodes:    make(map[string]authCode),
 		accessTokens: make(map[string]accessToken),
 	}
+	app.instanceToken, err = newInstanceToken()
+	if err != nil {
+		if closeErr := idpListener.Close(); closeErr != nil {
+			return fmt.Errorf("%w; close tunneled IDP listener: %v", err, closeErr)
+		}
+		return err
+	}
 	listener, err := listenForAdmin(defaultHost, port, !portSpecified)
 	if err != nil {
 		if closeErr := idpListener.Close(); closeErr != nil {
@@ -474,6 +514,11 @@ func Run(options ...RunOptions) error {
 	}
 	localURL, err := listenerURL(listener)
 	if err != nil {
+		adminCloseErr := listener.Close()
+		idpCloseErr := idpListener.Close()
+		return fmt.Errorf("%w; close admin listener: %v; close tunneled IDP listener: %v", err, adminCloseErr, idpCloseErr)
+	}
+	if err := lease.Publish(instanceMetadata{URL: localURL, Token: app.instanceToken}); err != nil {
 		adminCloseErr := listener.Close()
 		idpCloseErr := idpListener.Close()
 		return fmt.Errorf("%w; close admin listener: %v; close tunneled IDP listener: %v", err, adminCloseErr, idpCloseErr)
@@ -602,6 +647,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 		assets.ServeHTTP(w, r)
 	}))
 	mux.HandleFunc("GET /", a.handleIndex)
+	mux.HandleFunc("GET "+instanceReadyPath, a.handleInstanceReady)
 	mux.HandleFunc("POST /users/save", a.rejectWhileSyncing(a.handleUserSave))
 	mux.HandleFunc("POST /users/{id}/toggle-active", a.rejectWhileSyncing(a.handleUserToggleActive))
 	mux.HandleFunc("POST /users/delete", a.rejectWhileSyncing(a.handleUsersDelete))

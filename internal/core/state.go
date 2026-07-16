@@ -1219,6 +1219,11 @@ func stateFilePath() (string, error) {
 	return filepath.Join(configDir, "scimtest", "state.db"), nil
 }
 
+// StateFilePath returns the resolved SQLite state file path.
+func StateFilePath() (string, error) {
+	return stateFilePath()
+}
+
 func legacyStateFilePath() (string, error) {
 	path, err := stateFilePath()
 	if err != nil {
