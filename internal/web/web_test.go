@@ -1658,6 +1658,72 @@ func TestAppSaveStoresSCIMSettingsAndInitializesSyncState(t *testing.T) {
 	r.False(state.Apps[0].SCIMFilterSupported)
 }
 
+func TestAppSaveChangesSAMLProtocolToBoth(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{Apps: []app{{
+		ID: "app-prod", Name: "Greendale", Slug: "prod", Protocol: "saml",
+		SAMLEntityID: "https://greendale.test/saml", SAMLACSURL: "https://greendale.test/saml/acs",
+		SAMLAudience: "https://greendale.test", SAMLNameIDField: "email",
+	}}}))
+	appService := newTestIDPApp(t)
+	form := url.Values{
+		"tab":                {"apps"},
+		"id":                 {"app-prod"},
+		"name":               {"Greendale"},
+		"slug":               {"prod"},
+		"protocol":           {"both"},
+		"oidc_client_id":     {"greendale-client"},
+		"saml_entity_id":     {"https://greendale.test/saml"},
+		"saml_acs_url":       {"https://greendale.test/saml/acs"},
+		"saml_audience":      {"https://greendale.test"},
+		"saml_name_id_field": {"email"},
+	}
+
+	postApp := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/apps/save", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		appService.routes().ServeHTTP(rec, req)
+		return rec
+	}
+
+	invalidRec := postApp()
+	r.Equal(http.StatusSeeOther, invalidRec.Code)
+	state, err := loadState()
+	r.NoError(err)
+	r.Equal("saml", state.Apps[0].Protocol)
+
+	get := httptest.NewRequest(http.MethodGet, invalidRec.Header().Get("Location"), nil)
+	for _, cookie := range invalidRec.Result().Cookies() {
+		get.AddCookie(cookie)
+	}
+	getRec := httptest.NewRecorder()
+	appService.routes().ServeHTTP(getRec, get)
+	r.Equal(http.StatusOK, getRec.Code)
+	body := getRec.Body.String()
+	formStart := strings.Index(body, `<form method="post" action="/apps/save"`)
+	r.NotEqual(-1, formStart)
+	formEnd := strings.Index(body[formStart:], "</form>")
+	r.NotEqual(-1, formEnd)
+	appForm := body[formStart : formStart+formEnd]
+	r.Contains(appForm, "at least one OIDC redirect URI is required")
+	r.Contains(appForm, `value="both" checked`)
+
+	form.Set("oidc_redirect_uris", "https://greendale.test/oidc/callback")
+	validRec := postApp()
+	r.Equal(http.StatusSeeOther, validRec.Code)
+	state, err = loadState()
+	r.NoError(err)
+	r.Equal("both", state.Apps[0].Protocol)
+	r.Equal("greendale-client", state.Apps[0].OIDCClientID)
+	r.Equal([]string{"https://greendale.test/oidc/callback"}, state.Apps[0].OIDCRedirectURIs)
+
+	discoveryRec := httptest.NewRecorder()
+	appService.routes().ServeHTTP(discoveryRec, httptest.NewRequest(http.MethodGet, "/oidc/prod/.well-known/openid-configuration", nil))
+	r.Equal(http.StatusOK, discoveryRec.Code)
+}
+
 func TestDeletingActiveEnvironmentSelectsNextEnvironment(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)

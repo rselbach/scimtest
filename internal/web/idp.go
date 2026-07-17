@@ -22,6 +22,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -973,6 +974,7 @@ func (a *webApp) signJWT(claims map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	a.writeDebugOIDCTokenPayload(os.Stdout, claimData)
 	unsigned := base64.RawURLEncoding.EncodeToString(headerData) + "." + base64.RawURLEncoding.EncodeToString(claimData)
 	digest := sha256.Sum256([]byte(unsigned))
 	sig, err := rsa.SignPKCS1v15(rand.Reader, a.signingKey, crypto.SHA256, digest[:])

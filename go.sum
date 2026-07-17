@@ -29,8 +29,8 @@ github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=
 github.com/rogpeppe/go-internal v1.8.0 h1:FCbCCtXNOY3UtUuHUYaghJg4y7Fd14rXifAYUAtL9R8=
 github.com/rogpeppe/go-internal v1.8.0/go.mod h1:WmiCO8CzOY8rg0OYDC4/i/2WRWAB6poM+XZ2dLUbcbE=
-github.com/rselbach/rgrok v0.0.4 h1:CEmldb6CObhvEewk2/wI2N16byFYtl/KxFBJKcvyW3M=
-github.com/rselbach/rgrok v0.0.4/go.mod h1:FjvdaCUToVtKQ3Wnpf7X9ftiTQ1Gp/YPgMaTrhI02Ek=
+github.com/rselbach/rgrok v0.0.7 h1:rj03PjmWPoqC58gxbETSEwUjpRkdihCE+mxYm5Ltbik=
+github.com/rselbach/rgrok v0.0.7/go.mod h1:U/CUf9rjNK3nk18mPjT0uOvGJxLG1p6Zx9Hgx43riTs=
 github.com/russellhaering/goxmldsig v1.6.0 h1:8fdWXEPh2k/NZNQBPFNoVfS3JmzS4ZprY/sAOpKQLks=
 github.com/russellhaering/goxmldsig v1.6.0/go.mod h1:TrnaquDcYxWXfJrOjeMBTX4mLBeYAqaHEyUeWPxZlBM=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=

@@ -150,7 +150,7 @@
     const overlays = Array.from(document.querySelectorAll('[data-overlay]'));
 	const activeOverlay = overlays[overlays.length - 1];
 	const formError = document.querySelector('[data-form-error]');
-	if (activeOverlay && formError) {
+	if (activeOverlay && formError && !activeOverlay.contains(formError)) {
 	  const modalBody = activeOverlay.querySelector('.modal-body');
 	  if (modalBody) modalBody.prepend(formError);
 	}

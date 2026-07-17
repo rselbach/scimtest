@@ -320,6 +320,7 @@
               <input type="hidden" name="tab" value="{{.Tab}}">
               {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
               <div class="form-grid">
+				{{if .FormError}}<div class="inline-error" role="alert" data-form-error>{{.FormError}}</div>{{end}}
                 <label class="field">
                   <span class="label">Number</span>
 			  <input name="count" type="number" min="1" max="10000" value="{{.ToolsForm.Count}}" inputmode="numeric" data-autofocus>
@@ -401,6 +402,7 @@
         <input type="hidden" name="id" value="{{.UserForm.ID}}">
         <div class="modal-body">
           <div class="form-grid">
+			{{if .FormError}}<div class="inline-error" role="alert" data-form-error>{{.FormError}}</div>{{end}}
             <label class="field">
               <span class="label field-label">Username{{if not .UserForm.ID}}<span class="hint">Uses email when left blank</span>{{end}}</span>
               <input name="username" value="{{.UserForm.User.Username}}" autocomplete="off" data-autofocus>
@@ -445,6 +447,7 @@
         <input type="hidden" name="id" value="{{.GroupForm.ID}}">
         <div class="modal-body">
           <div class="form-grid">
+			{{if .FormError}}<div class="inline-error" role="alert" data-form-error>{{.FormError}}</div>{{end}}
             <label class="field full">
               <span class="label">Group name</span>
               <input name="display_name" value="{{.GroupForm.Group.DisplayName}}" autocomplete="off" data-autofocus>
@@ -506,6 +509,7 @@
         <button type="submit" class="is-hidden" tabindex="-1" aria-hidden="true" data-default-submit></button>
         <div class="modal-body">
           <div class="form-grid">
+			{{if .FormError}}<div class="inline-error" role="alert" data-form-error>{{.FormError}}</div>{{end}}
             <label class="field">
               <span class="label">Environment name</span>
               <input name="name" value="{{.AppForm.App.Name}}" autocomplete="off" data-environment-name data-autofocus>
@@ -764,6 +768,7 @@
         {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
         <div class="modal-body">
 		  <div class="form-grid">
+			{{if .FormError}}<div class="inline-error" role="alert" data-form-error>{{.FormError}}</div>{{end}}
 			<div class="section-label full">Global IDP and tunnel settings</div>
             <div class="field full">
 			{{if .ConfigForm.Tunnel}}
@@ -803,7 +808,6 @@
 
   {{end}}
 
-	{{if .FormError}}<div class="inline-error" role="alert" data-form-error>{{.FormError}}</div>{{end}}
   <script src="/assets/app.js"></script>
 </body>
 </html>

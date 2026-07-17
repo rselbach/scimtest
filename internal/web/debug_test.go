@@ -65,6 +65,33 @@ func TestDebugHandlerRejectsOversizedRequestBody(t *testing.T) {
 	r.Contains(rec.Body.String(), "exceeds 10485760 bytes")
 }
 
+func TestDebugOIDCTokenPayload(t *testing.T) {
+	tests := map[string]struct {
+		debug bool
+		want  string
+	}{
+		"disabled": {},
+		"enabled": {
+			debug: true,
+			want: "\n===== OIDC ID token payload =====\n" +
+				`{"aud":"greendale-client","sub":"troy"}` +
+				"\n===== end OIDC ID token payload =====\n",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			var output bytes.Buffer
+			app := &webApp{debugRP: tc.debug}
+
+			app.writeDebugOIDCTokenPayload(&output, []byte(`{"aud":"greendale-client","sub":"troy"}`))
+
+			r.Equal(tc.want, output.String())
+		})
+	}
+}
+
 type zeroReader struct{}
 
 func (zeroReader) Read(p []byte) (int, error) {

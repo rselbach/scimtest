@@ -95,7 +95,7 @@ func usage(w *os.File) {
 	mustWriteOutput(w, "  (no args)  launch the web UI and auth endpoints (default port 8080)\n")
 	mustWriteOutput(w, "  web        launch the web UI and auth endpoints (default port 8080)\n")
 	mustWriteOutput(w, "  --port N   require this exact admin port (overrides $PORT; no fallback)\n")
-	mustWriteOutput(w, "  --debug    print OIDC/SAML RP requests and responses to stdout\n")
+	mustWriteOutput(w, "  --debug    print OIDC/SAML RP traffic and ID token payloads to stdout\n")
 	mustWriteOutput(w, "  --debug-secrets  include credentials and tokens in debug output\n")
 	mustWriteOutput(w, "  --no-open  start without opening the admin UI in a browser\n\n")
 	mustWriteOutput(w, "  $PORT      same as --port; without either, ports are tried upward from 8080\n")
