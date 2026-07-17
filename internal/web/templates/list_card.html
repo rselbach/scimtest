@@ -99,7 +99,6 @@
               <tr>
                 <th>Environment</th>
                 <th>Protocol</th>
-                <th>Client ID</th>
                 <th class="col-actions">Actions</th>
               </tr>
             </thead>
@@ -108,17 +107,22 @@
               <tr>
                 <td><div class="row-title">{{.Name}} {{if .Active}}<span class="status synced">ACTIVE</span>{{end}}</div><div class="mono">{{.Slug}}</div></td>
                 <td><span class="status">{{.Protocol}}</span>{{if and .SCIMEnabled (ne .Protocol "SCIM")}} <span class="status synced">SCIM</span>{{end}}</td>
-                <td class="mono" title="{{.OIDCClientID}}">{{if .SupportsOIDC}}{{.OIDCClientID}}{{else}}-{{end}}</td>
                 <td class="col-actions cell-widget">
-				  <div class="row-actions">
-					{{if not .Active}}<a class="btn btn-sm" href="{{.OpenURL}}">Use environment</a>{{end}}
-					{{if .SupportsOIDC}}<a class="btn btn-sm" href="{{.OIDCDiscovery}}" target="_blank" rel="noreferrer">Discovery</a>{{end}}
-					{{if .OIDCTestURL}}<a class="btn btn-sm" href="{{.OIDCTestURL}}" target="_blank" rel="noreferrer">Test OIDC</a>{{end}}
-					{{if .OIDCPKCETestURL}}<a class="btn btn-sm" href="{{.OIDCPKCETestURL}}" data-pkce-test target="_blank" rel="noreferrer" title="Opens the authorize endpoint with a generated PKCE challenge">Test OIDC</a>{{end}}
-					{{if .OIDCInspectorURL}}<a class="btn btn-sm" href="{{.OIDCInspectorURL}}">Inspect OIDC</a>{{end}}
-					{{if .SupportsSAML}}<a class="btn btn-sm" href="{{.SAMLMetadata}}" target="_blank" rel="noreferrer">Metadata</a>{{end}}
-					{{if .SAMLTestURL}}<a class="btn btn-sm" href="{{.SAMLTestURL}}" target="_blank" rel="noreferrer">Test SAML</a>{{end}}
-					{{if .SAMLInspectorURL}}<a class="btn btn-sm" href="{{.SAMLInspectorURL}}">Inspect SAML</a>{{end}}
+				  <div class="row-actions environment-actions">
+					{{if not .Active}}<a class="btn btn-sm environment-use" href="{{.OpenURL}}" title="Use environment">Use</a>{{end}}
+					{{if .SupportsOIDC}}<span class="environment-action-group">
+					  <span class="environment-action-label">OIDC</span>
+					  <a class="environment-action-link" href="{{.OIDCDiscovery}}" target="_blank" rel="noreferrer">Discovery</a>
+					  {{if .OIDCTestURL}}<a class="environment-action-link" href="{{.OIDCTestURL}}" target="_blank" rel="noreferrer">Test</a>{{end}}
+					  {{if .OIDCPKCETestURL}}<a class="environment-action-link" href="{{.OIDCPKCETestURL}}" data-pkce-test target="_blank" rel="noreferrer" title="Opens the authorize endpoint with a generated PKCE challenge">Test</a>{{end}}
+					  {{if .OIDCInspectorURL}}<a class="environment-action-link" href="{{.OIDCInspectorURL}}">Inspect</a>{{end}}
+					</span>{{end}}
+					{{if .SupportsSAML}}<span class="environment-action-group">
+					  <span class="environment-action-label">SAML</span>
+					  <a class="environment-action-link" href="{{.SAMLMetadata}}" target="_blank" rel="noreferrer">Metadata</a>
+					  {{if .SAMLTestURL}}<a class="environment-action-link" href="{{.SAMLTestURL}}" target="_blank" rel="noreferrer">Test</a>{{end}}
+					  {{if .SAMLInspectorURL}}<a class="environment-action-link" href="{{.SAMLInspectorURL}}">Inspect</a>{{end}}
+					</span>{{end}}
                     <a class="icon-btn" href="{{.EditURL}}" title="Edit environment" aria-label="Edit environment">
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M10 4l2 2"/></svg>
                     </a>
@@ -132,7 +136,7 @@
                 </td>
               </tr>
               {{else}}
-              <tr><td colspan="4">
+              <tr><td colspan="3">
                 <div class="card-empty">
                   <div class="h">No environments yet</div>
                   <div>Add an environment to configure OIDC, SAML, or SCIM.</div>
