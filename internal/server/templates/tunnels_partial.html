@@ -1,0 +1,30 @@
+{{if .Tunnels}}
+{{range .Tunnels}}
+<div class="tunnel">
+  <div class="row">
+    <div>
+      <div class="name">{{.ApplicationName}} <span class="muted">/ {{.InstanceID}}</span></div>
+      <a class="url" href="{{.PublicURL}}" target="_blank" rel="noopener">{{.PublicURL}}</a>
+    </div>
+    <div class="actions">
+      <button type="button" data-copy="{{.PublicURL}}">copy URL</button>
+      <form method="post" action="/dashboard/tunnels/disconnect" data-confirm="disconnect?">
+        <input type="hidden" name="csrf_token" value="{{$.Session.CSRFToken}}">
+        <input type="hidden" name="id" value="{{.ID}}">
+        <button class="danger" type="submit">disconnect</button>
+      </form>
+    </div>
+  </div>
+  <div class="meta">
+    <span>name <code>{{.ID}}</code></span>
+    <span>up <b data-connected="{{.ConnectedAt}}">{{.Uptime}}</b></span>
+    <span>requests <b>{{.Requests}}</b></span>
+    {{if .LocalPort}}<span>local port <b>{{.LocalPort}}</b></span>{{end}}
+  </div>
+</div>
+{{end}}
+{{else}}
+<div class="empty">No application tunnels are connected.</div>
+{{end}}
+<strong id="tunnel-count" hx-swap-oob="innerHTML">{{len .Tunnels}}</strong>
+<strong id="request-count" hx-swap-oob="innerHTML">{{.TotalRequests}}</strong>

@@ -18,11 +18,32 @@ type Config struct {
 	SCIMDisabled          bool   `json:"scim_disabled,omitempty"`
 	IDPBaseURL            string `json:"idp_base_url,omitempty"`
 	TrustForwardedHeaders bool   `json:"trust_forwarded_headers,omitempty"`
-	RgrokInstanceID       string `json:"rgrok_instance_id,omitempty"`
+	TunnelInstanceID      string `json:"tunnel_instance_id,omitempty"`
 	SigningPrivateKeyPEM  string `json:"signing_private_key_pem,omitempty"`
 	SigningCertificatePEM string `json:"signing_certificate_pem,omitempty"`
 	FilterSupported       bool   `json:"filter_supported,omitempty"`
 	PatchSupported        bool   `json:"patch_supported,omitempty"`
+}
+
+func (c *Config) UnmarshalJSON(data []byte) error {
+	type config Config
+	var value config
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*c = Config(value)
+	if c.TunnelInstanceID != "" {
+		return nil
+	}
+
+	var legacy struct {
+		TunnelInstanceID string `json:"rgrok_instance_id"`
+	}
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+	c.TunnelInstanceID = legacy.TunnelInstanceID
+	return nil
 }
 
 type User struct {

@@ -90,9 +90,9 @@ func fillClaimMappingDefaults(value *string, fallback string) {
 const SAMLNameIDFormatUnspecified = "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified"
 const DefaultEnvironmentID = "env_default"
 
-// EnsureRgrokInstanceID returns the stable identity used for rgrok tunnel
+// EnsureTunnelInstanceID returns the stable identity used for tunnel
 // reservations, generating and persisting it when necessary.
-func EnsureRgrokInstanceID() (string, error) {
+func EnsureTunnelInstanceID() (string, error) {
 	db, err := openStateDB()
 	if err != nil {
 		return "", err
@@ -101,32 +101,38 @@ func EnsureRgrokInstanceID() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := db.Exec(`INSERT OR IGNORE INTO config(key, value) VALUES('rgrok_instance_id', ?)`, instanceID); err != nil {
-		return "", fmt.Errorf("persist rgrok instance id: %w", err)
+	if _, err := db.Exec(`
+		INSERT OR IGNORE INTO config(key, value)
+		SELECT 'tunnel_instance_id', value FROM config WHERE key = 'rgrok_instance_id'
+	`); err != nil {
+		return "", fmt.Errorf("migrate tunnel instance id: %w", err)
+	}
+	if _, err := db.Exec(`INSERT OR IGNORE INTO config(key, value) VALUES('tunnel_instance_id', ?)`, instanceID); err != nil {
+		return "", fmt.Errorf("persist tunnel instance id: %w", err)
 	}
 
 	var saved string
-	if err := db.QueryRow(`SELECT value FROM config WHERE key = 'rgrok_instance_id'`).Scan(&saved); err != nil {
-		return "", fmt.Errorf("load rgrok instance id: %w", err)
+	if err := db.QueryRow(`SELECT value FROM config WHERE key = 'tunnel_instance_id'`).Scan(&saved); err != nil {
+		return "", fmt.Errorf("load tunnel instance id: %w", err)
 	}
 	if validUUID(saved) {
 		return saved, nil
 	}
 
-	result, err := db.Exec(`UPDATE config SET value = ? WHERE key = 'rgrok_instance_id' AND value = ?`, instanceID, saved)
+	result, err := db.Exec(`UPDATE config SET value = ? WHERE key = 'tunnel_instance_id' AND value = ?`, instanceID, saved)
 	if err != nil {
-		return "", fmt.Errorf("repair rgrok instance id: %w", err)
+		return "", fmt.Errorf("repair tunnel instance id: %w", err)
 	}
 	changed, err := result.RowsAffected()
 	if err != nil {
-		return "", fmt.Errorf("check repaired rgrok instance id: %w", err)
+		return "", fmt.Errorf("check repaired tunnel instance id: %w", err)
 	}
 	if changed == 0 {
-		if err := db.QueryRow(`SELECT value FROM config WHERE key = 'rgrok_instance_id'`).Scan(&saved); err != nil {
-			return "", fmt.Errorf("reload rgrok instance id: %w", err)
+		if err := db.QueryRow(`SELECT value FROM config WHERE key = 'tunnel_instance_id'`).Scan(&saved); err != nil {
+			return "", fmt.Errorf("reload tunnel instance id: %w", err)
 		}
 		if !validUUID(saved) {
-			return "", fmt.Errorf("reload rgrok instance id: invalid concurrent value %q", saved)
+			return "", fmt.Errorf("reload tunnel instance id: invalid concurrent value %q", saved)
 		}
 		return saved, nil
 	}
@@ -136,7 +142,7 @@ func EnsureRgrokInstanceID() (string, error) {
 func newUUID() (string, error) {
 	value := make([]byte, 16)
 	if _, err := rand.Read(value); err != nil {
-		return "", fmt.Errorf("generate rgrok instance id: %w", err)
+		return "", fmt.Errorf("generate tunnel instance id: %w", err)
 	}
 	value[6] = value[6]&0x0f | 0x40
 	value[8] = value[8]&0x3f | 0x80
@@ -606,6 +612,7 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 	}
 	defer closeRows(configRows)
 
+	legacyTunnelInstanceID := ""
 	for configRows.Next() {
 		var key string
 		var value string
@@ -626,8 +633,10 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 			state.Config.IDPBaseURL = value
 		case "trust_forwarded_headers":
 			state.Config.TrustForwardedHeaders = value == "1"
+		case "tunnel_instance_id":
+			state.Config.TunnelInstanceID = value
 		case "rgrok_instance_id":
-			state.Config.RgrokInstanceID = value
+			legacyTunnelInstanceID = value
 		case "signing_private_key_pem":
 			state.Config.SigningPrivateKeyPEM = value
 		case "signing_certificate_pem":
@@ -636,6 +645,9 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 	}
 	if err := configRows.Err(); err != nil {
 		return AppState{}, fmt.Errorf("iterate sqlite config rows: %w", err)
+	}
+	if state.Config.TunnelInstanceID == "" {
+		state.Config.TunnelInstanceID = legacyTunnelInstanceID
 	}
 	environmentConfigRows, err := db.Query(`SELECT key, value FROM environment_config WHERE environment_id = ?`, environmentID)
 	if err != nil {
@@ -1017,7 +1029,7 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 		"app_scim_migrated":       "1",
 		"idp_base_url":            state.Config.IDPBaseURL,
 		"trust_forwarded_headers": BoolString(state.Config.TrustForwardedHeaders),
-		"rgrok_instance_id":       state.Config.RgrokInstanceID,
+		"tunnel_instance_id":      state.Config.TunnelInstanceID,
 		"signing_private_key_pem": state.Config.SigningPrivateKeyPEM,
 		"signing_certificate_pem": state.Config.SigningCertificatePEM,
 	}
@@ -1274,7 +1286,7 @@ func NormalizeState(state *AppState) {
 	capOperationLogs(state.GroupOperations)
 	state.Config.BaseURL = strings.TrimRight(strings.TrimSpace(state.Config.BaseURL), "/")
 	state.Config.IDPBaseURL = strings.TrimRight(strings.TrimSpace(state.Config.IDPBaseURL), "/")
-	state.Config.RgrokInstanceID = strings.TrimSpace(state.Config.RgrokInstanceID)
+	state.Config.TunnelInstanceID = strings.TrimSpace(state.Config.TunnelInstanceID)
 
 	for i := range state.Users {
 		if strings.TrimSpace(state.Users[i].Username) == "" {

@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"scimtest/internal/web"
+	"github.com/rselbach/scimtest/internal/web"
 )
 
 type cliOptions struct {

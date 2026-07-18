@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>scimtest server</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f6f7f9;
+  --card: #fff;
+  --text: #1f2937;
+  --muted: #64748b;
+  --line: #dce1e8;
+  --accent: #155eef;
+  --danger: #b42318;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+main { width: min(1100px, calc(100% - 32px)); margin: 32px auto 64px; }
+header { display: flex; justify-content: space-between; gap: 24px; align-items: end; margin-bottom: 24px; }
+h1, h2, h3, p { margin-top: 0; }
+h1 { margin-bottom: 4px; font-size: 28px; }
+h2 { font-size: 19px; }
+h3 { font-size: 15px; }
+.muted, small { color: var(--muted); }
+.summary { text-align: right; }
+.grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.stat, section, .profile, .reservation, .tunnel {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.stat { padding: 14px 16px; }
+.stat strong { display: block; font-size: 22px; }
+section { padding: 20px; margin-top: 18px; }
+.section-head { display: flex; justify-content: space-between; gap: 16px; align-items: baseline; }
+.list { display: grid; gap: 10px; }
+.tunnel, .profile, .reservation { padding: 14px; }
+.row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.meta { display: flex; flex-wrap: wrap; gap: 12px; color: var(--muted); margin-top: 6px; }
+.name { font-weight: 650; }
+.url, code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.url { overflow-wrap: anywhere; }
+a { color: var(--accent); }
+form { margin: 0; }
+.form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.wide { grid-column: 1 / -1; }
+label { display: grid; gap: 5px; font-weight: 600; }
+input, textarea, button {
+  font: inherit;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+input, textarea { width: 100%; padding: 8px 10px; background: #fff; }
+textarea { resize: vertical; }
+button, .button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 6px 11px;
+  background: #fff;
+  color: var(--text);
+  text-decoration: none;
+  cursor: pointer;
+}
+button.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+button.danger { color: var(--danger); }
+details { margin-top: 12px; }
+summary { color: var(--accent); cursor: pointer; }
+.edit-form { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.empty { color: var(--muted); text-align: center; padding: 24px; border: 1px dashed var(--line); border-radius: 8px; }
+.copied::after { content: " copied"; }
+.confirm { display: inline-flex; align-items: center; gap: 6px; }
+@media (max-width: 720px) {
+  header { align-items: start; flex-direction: column; }
+  .summary { text-align: left; }
+  .grid, .form-grid { grid-template-columns: 1fr; }
+  .wide { grid-column: auto; }
+  .row { align-items: start; flex-direction: column; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>scimtest server</h1>
+      <p class="muted">Application-scoped HTTP tunnels.</p>
+    </div>
+    <div class="summary">
+      <div class="url">{{.BaseURL}}</div>
+      <small>Signed in as {{.Session.Login}}</small>
+      <form method="post" action="/logout">
+        <input type="hidden" name="csrf_token" value="{{.Session.CSRFToken}}">
+        <button type="submit">sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <div class="grid">
+    <div class="stat"><strong id="tunnel-count">{{len .Tunnels}}</strong><span class="muted">active tunnels</span></div>
+    <div class="stat"><strong>{{len .Applications}}</strong><span class="muted">applications</span></div>
+    <div class="stat"><strong id="request-count">{{.TotalRequests}}</strong><span class="muted">requests this connection</span></div>
+  </div>
+
+  <section id="tunnels">
+    <div class="section-head">
+      <h2>Active tunnels</h2>
+      <small>Refreshes every 5 seconds</small>
+    </div>
+    <div id="tunnel-list" class="list" hx-get="/dashboard/tunnels" hx-trigger="every 5s" hx-swap="innerHTML">
+      {{if .Tunnels}}
+      {{range .Tunnels}}
+      <div class="tunnel">
+        <div class="row">
+          <div>
+            <div class="name">{{.ApplicationName}} <span class="muted">/ {{.InstanceID}}</span></div>
+            <a class="url" href="{{.PublicURL}}" target="_blank" rel="noopener">{{.PublicURL}}</a>
+          </div>
+          <div class="actions">
+            <button type="button" data-copy="{{.PublicURL}}">copy URL</button>
+            <form method="post" action="/dashboard/tunnels/disconnect" data-confirm="disconnect?">
+              <input type="hidden" name="csrf_token" value="{{$.Session.CSRFToken}}">
+              <input type="hidden" name="id" value="{{.ID}}">
+              <button class="danger" type="submit">disconnect</button>
+            </form>
+          </div>
+        </div>
+        <div class="meta">
+          <span>name <code>{{.ID}}</code></span>
+          <span>up <b data-connected="{{.ConnectedAt}}">{{.Uptime}}</b></span>
+          <span>requests <b>{{.Requests}}</b></span>
+          {{if .LocalPort}}<span>local port <b>{{.LocalPort}}</b></span>{{end}}
+        </div>
+      </div>
+      {{end}}
+      {{else}}
+      <div class="empty">No application tunnels are connected.</div>
+      {{end}}
+    </div>
+  </section>
+
+  <section id="applications">
+    <div class="section-head">
+      <div>
+        <h2>Applications</h2>
+        <p class="muted">Each application authenticates with its Ed25519 key and can expose only the configured routes.</p>
+      </div>
+    </div>
+
+    <div class="list">
+      {{range .Applications}}
+      <div class="profile">
+        <div class="row">
+          <div>
+            <div class="name">{{.Name}}</div>
+            <div><code>{{.ID}}</code></div>
+            <small>{{.PublicKeyFingerprint}}</small>
+          </div>
+          <form method="post" action="/dashboard/applications/delete" data-confirm="delete application and reservations?">
+            <input type="hidden" name="csrf_token" value="{{$.Session.CSRFToken}}">
+            <input type="hidden" name="id" value="{{.ID}}">
+            <button class="danger" type="submit">delete</button>
+          </form>
+        </div>
+        <div class="meta">
+          <span>{{.RequestsPerMinute}} requests/minute</span>
+          <span>burst {{.RequestBurst}}</span>
+          <span>{{.ConcurrentRequests}} concurrent</span>
+        </div>
+        <pre>{{.RoutesText}}</pre>
+        <details id="edit-application-{{.ID}}">
+          <summary>edit application</summary>
+          <form class="edit-form form-grid" method="post" action="/dashboard/applications/update">
+            <input type="hidden" name="csrf_token" value="{{$.Session.CSRFToken}}">
+            <input type="hidden" name="id" value="{{.ID}}">
+            <label class="wide">Name<input name="name" maxlength="80" value="{{.Name}}" required></label>
+            <label class="wide">Ed25519 OpenSSH public key<textarea name="public_key" rows="3" required>{{.PublicKey}}</textarea></label>
+            <label class="wide">Routes, one <code>METHOD[,METHOD] PATH</code> per line<textarea name="routes" rows="6" required>{{.RoutesText}}</textarea></label>
+            <label>Requests per minute<input type="number" name="requests_per_minute" min="1" value="{{.RequestsPerMinute}}" required></label>
+            <label>Request burst<input type="number" name="request_burst" min="1" value="{{.RequestBurst}}" required></label>
+            <label>Concurrent requests<input type="number" name="concurrent_requests" min="1" value="{{.ConcurrentRequests}}" required></label>
+            <div class="wide"><button class="primary" type="submit">save application</button></div>
+          </form>
+        </details>
+      </div>
+      {{else}}
+      <div class="empty">No applications configured yet.</div>
+      {{end}}
+    </div>
+
+    <h3 style="margin-top: 24px">Create application</h3>
+    <form class="form-grid" method="post" action="/dashboard/applications/create">
+      <input type="hidden" name="csrf_token" value="{{.Session.CSRFToken}}">
+      <label class="wide">Name<input name="name" maxlength="80" placeholder="Greendale SCIM client" required></label>
+      <label class="wide">Ed25519 OpenSSH public key<textarea name="public_key" rows="3" placeholder="ssh-ed25519 AAAA..." required></textarea></label>
+      <label class="wide">Routes, one <code>METHOD[,METHOD] PATH</code> per line<textarea name="routes" rows="6" placeholder="GET /scim/v2/ServiceProviderConfig&#10;GET,POST /scim/v2/Users" required></textarea></label>
+      <label>Requests per minute<input type="number" name="requests_per_minute" min="1" value="60" required></label>
+      <label>Request burst<input type="number" name="request_burst" min="1" value="10" required></label>
+      <label>Concurrent requests<input type="number" name="concurrent_requests" min="1" value="4" required></label>
+      <div class="wide"><button class="primary" type="submit">create application</button></div>
+    </form>
+  </section>
+
+  <section id="reserved-names">
+    <div class="section-head">
+      <div>
+        <h2>Reserved names</h2>
+        <p class="muted">An instance reuses its random public name when it reconnects.</p>
+      </div>
+    </div>
+    <div class="list">
+      {{range .Reservations}}
+      <div class="reservation row">
+        <div>
+          <div class="name">{{.ProfileName}} <span class="muted">/ {{.InstanceID}}</span></div>
+          <a class="url" href="{{.PublicURL}}">{{.TunnelID}}</a>
+          <div><small>Last used {{.LastUsedAt.Format "2006-01-02 15:04 MST"}}</small></div>
+        </div>
+        <form method="post" action="/dashboard/applications/reservations/delete" data-confirm="release name?">
+          <input type="hidden" name="csrf_token" value="{{$.Session.CSRFToken}}">
+          <input type="hidden" name="profile_id" value="{{.ProfileID}}">
+          <input type="hidden" name="instance_id" value="{{.InstanceID}}">
+          <button class="danger" type="submit">release</button>
+        </form>
+      </div>
+      {{else}}
+      <div class="empty">No names have been reserved.</div>
+      {{end}}
+    </div>
+  </section>
+</main>
+<script src="https://unpkg.com/htmx.org@2"></script>
+<script src="/dashboard/app.js" defer></script>
+</body>
+</html>

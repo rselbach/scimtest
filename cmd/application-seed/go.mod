@@ -1,4 +1,4 @@
-module scimtest/cmd/rgrok-key
+module github.com/rselbach/scimtest/cmd/application-seed
 
 go 1.25.10
 

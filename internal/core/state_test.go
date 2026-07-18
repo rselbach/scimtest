@@ -2,6 +2,7 @@ package core
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,8 +19,8 @@ func TestSaveAndLoadState(t *testing.T) {
 
 	want := AppState{
 		Config: Config{
-			IDPBaseURL:      "https://demo.rgrok.rselbach.com",
-			RgrokInstanceID: "12345678-1234-4234-8234-123456789abc",
+			IDPBaseURL:       "https://scimtest.rselbach.com/human-timeline-club",
+			TunnelInstanceID: "12345678-1234-4234-8234-123456789abc",
 		},
 		Users: []User{{
 			ID:         "local-1",
@@ -115,59 +116,84 @@ func TestSaveAndLoadState(t *testing.T) {
 	r.NotZero(info.Size())
 }
 
-func TestEnsureRgrokInstanceIDGeneratesAndReusesUUID(t *testing.T) {
+func TestEnsureTunnelInstanceIDGeneratesAndReusesUUID(t *testing.T) {
 	r := require.New(t)
 	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
 	r.NoError(SaveState(AppState{}))
 
-	first, err := EnsureRgrokInstanceID()
+	first, err := EnsureTunnelInstanceID()
 	r.NoError(err)
 	r.True(validUUID(first))
-	second, err := EnsureRgrokInstanceID()
+	second, err := EnsureTunnelInstanceID()
 	r.NoError(err)
 	r.Equal(first, second)
 
 	state, err := LoadState()
 	r.NoError(err)
-	r.Equal(first, state.Config.RgrokInstanceID)
+	r.Equal(first, state.Config.TunnelInstanceID)
 }
 
-func TestEnsureRgrokInstanceIDRepairsInvalidLegacyValue(t *testing.T) {
+func TestEnsureTunnelInstanceIDRepairsInvalidValue(t *testing.T) {
 	r := require.New(t)
 	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
-	r.NoError(SaveState(AppState{Config: Config{RgrokInstanceID: "legacy-invalid"}}))
+	r.NoError(SaveState(AppState{Config: Config{TunnelInstanceID: "invalid"}}))
 
-	instanceID, err := EnsureRgrokInstanceID()
+	instanceID, err := EnsureTunnelInstanceID()
 	r.NoError(err)
 	r.True(validUUID(instanceID))
-	r.NotEqual("legacy-invalid", instanceID)
+	r.NotEqual("invalid", instanceID)
 }
 
-func TestEnsureRgrokInstanceIDIgnoresLegacyTokenAndName(t *testing.T) {
+func TestEnsureTunnelInstanceIDMigratesLegacyValue(t *testing.T) {
 	r := require.New(t)
 	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
-	r.NoError(SaveState(AppState{}))
 	db, err := openStateDB()
 	r.NoError(err)
-	_, err = db.Exec(`INSERT INTO config(key, value) VALUES ('rgrok_name', 'legacy-name'), ('rgrok_token', 'legacy-token')`)
+	legacyID := "12345678-1234-4234-8234-123456789abc"
+	_, err = db.Exec(`INSERT INTO config(key, value) VALUES ('rgrok_instance_id', ?)`, legacyID)
 	r.NoError(err)
 
-	instanceID, err := EnsureRgrokInstanceID()
+	instanceID, err := EnsureTunnelInstanceID()
 	r.NoError(err)
-	r.True(validUUID(instanceID))
+	r.Equal(legacyID, instanceID)
 	state, err := LoadState()
 	r.NoError(err)
-	r.Equal(instanceID, state.Config.RgrokInstanceID)
+	r.Equal(instanceID, state.Config.TunnelInstanceID)
 }
 
-func TestEnsureRgrokInstanceIDSurfacesStateError(t *testing.T) {
+func TestEnsureTunnelInstanceIDSurfacesStateError(t *testing.T) {
 	r := require.New(t)
 	root := t.TempDir()
 	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(root, "parent-file", "state.db"))
 	r.NoError(os.WriteFile(filepath.Join(root, "parent-file"), nil, 0o600))
 
-	_, err := EnsureRgrokInstanceID()
+	_, err := EnsureTunnelInstanceID()
 	r.ErrorContains(err, "create state directory")
+}
+
+func TestConfigUnmarshalMigratesLegacyTunnelInstanceID(t *testing.T) {
+	tests := map[string]struct {
+		value string
+		want  string
+	}{
+		"legacy value": {
+			value: `{"rgrok_instance_id":"12345678-1234-4234-8234-123456789abc"}`,
+			want:  "12345678-1234-4234-8234-123456789abc",
+		},
+		"current value wins": {
+			value: `{"tunnel_instance_id":"87654321-4321-4321-8321-cba987654321","rgrok_instance_id":"12345678-1234-4234-8234-123456789abc"}`,
+			want:  "87654321-4321-4321-8321-cba987654321",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			var cfg Config
+			r.NoError(json.Unmarshal([]byte(tc.value), &cfg))
+			r.Equal(tc.want, cfg.TunnelInstanceID)
+		})
+	}
 }
 
 func TestStateDatabaseUsesPrivatePermissions(t *testing.T) {

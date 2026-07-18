@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"html/template"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -21,7 +22,7 @@ import (
 	"sync"
 	"time"
 
-	rgrokclient "github.com/rselbach/rgrok/client"
+	scimtestclient "github.com/rselbach/scimtest/client"
 )
 
 //go:embed templates/*.html assets/*
@@ -35,21 +36,21 @@ type webApp struct {
 	// mu serializes the read-modify-write state sections of the admin
 	// handlers. Long-running remote walks (sync, import preview) must not
 	// hold it: they snapshot state, run unlocked, and re-lock to merge.
-	mu               sync.Mutex
-	signingKey       *rsa.PrivateKey
-	certDER          []byte
-	debugRP          bool
-	debugSecrets     bool
-	localPort        int
-	instanceToken    string
-	rgrokStart       rgrokStarter
-	rgrokLifecycleMu sync.Mutex
-	rgrokMu          sync.Mutex
-	rgrokTunnel      *activeRgrokTunnel
-	rgrokLastError   string
-	syncJobMu        sync.Mutex
-	syncJobs         map[string]*syncJobSnapshot
-	syncCancels      map[string]context.CancelFunc
+	mu                sync.Mutex
+	signingKey        *rsa.PrivateKey
+	certDER           []byte
+	debugRP           bool
+	debugSecrets      bool
+	localPort         int
+	instanceToken     string
+	tunnelStart       tunnelStarter
+	tunnelLifecycleMu sync.Mutex
+	tunnelMu          sync.Mutex
+	tunnel            *activeTunnel
+	tunnelLastError   string
+	syncJobMu         sync.Mutex
+	syncJobs          map[string]*syncJobSnapshot
+	syncCancels       map[string]context.CancelFunc
 	// oidcMu guards authCodes and accessTokens so sign-in flows never
 	// contend with admin handlers holding mu.
 	oidcMu           sync.Mutex
@@ -84,9 +85,9 @@ type importPreviewView struct {
 	Removed int
 }
 
-type rgrokStarter func(context.Context, rgrokclient.Config) (*startedRgrokTunnel, error)
+type tunnelStarter func(context.Context, scimtestclient.Config) (*startedTunnel, error)
 
-type startedRgrokTunnel struct {
+type startedTunnel struct {
 	PublicURL string
 	Tunnel    tunnelCloser
 }
@@ -109,26 +110,27 @@ func (c cancelingTunnelCloser) Close() error {
 	return c.tunnel.Close()
 }
 
-type activeRgrokTunnel struct {
-	Name      string
-	PublicURL string
-	Tunnel    tunnelCloser
+type activeTunnel struct {
+	PathPrefix string
+	PublicURL  string
+	Tunnel     tunnelCloser
 }
 
-type rgrokTunnelView struct {
-	Name      string
+type tunnelView struct {
 	PublicURL string
 }
 
-type rgrokApplicationIdentity struct {
+type tunnelApplicationIdentity struct {
 	profileID  string
 	privateKey ed25519.PrivateKey
 }
 
+const tunnelServerBaseURL = "https://scimtest.rselbach.com"
+
 var (
-	rgrokApplicationProfileID    string
-	rgrokApplicationPrivateSeed  string
-	rgrokReleaseIdentityRequired string
+	tunnelApplicationProfileID    string
+	tunnelApplicationPrivateSeed  string
+	tunnelReleaseIdentityRequired string
 )
 
 type flashMessage struct {
@@ -332,7 +334,7 @@ type configFormView struct {
 	Close              string
 	IDPBaseURLValue    string
 	IDPBaseURLDisabled bool
-	Tunnel             *rgrokTunnelView
+	Tunnel             *tunnelView
 	TunnelError        string
 }
 
@@ -425,7 +427,7 @@ func Run(options ...RunOptions) error {
 	if len(options) > 0 {
 		opts = options[0]
 	}
-	identity, err := loadRgrokApplicationIdentity()
+	identity, err := loadTunnelApplicationIdentity()
 	if err != nil {
 		return err
 	}
@@ -494,7 +496,7 @@ func Run(options ...RunOptions) error {
 		debugRP:      opts.Debug,
 		debugSecrets: opts.DebugSecrets,
 		localPort:    idpAddress.Port,
-		rgrokStart:   startRgrokTunnel,
+		tunnelStart:  startTunnel,
 		authCodes:    make(map[string]authCode),
 		accessTokens: make(map[string]accessToken),
 	}
@@ -545,10 +547,13 @@ func Run(options ...RunOptions) error {
 		serveErrors <- serverError{name: "admin", err: http.Serve(listener, app.routes())}
 	}()
 	go func() {
-		serveErrors <- serverError{name: "tunneled IDP", err: http.Serve(idpListener, app.idpRoutes())}
+		serveErrors <- serverError{name: "tunneled IDP", err: http.Serve(idpListener, app.tunneledIDPRoutes())}
 	}()
 	if identity != nil {
-		go app.startAutomaticRgrokTunnel(*identity)
+		go app.startAutomaticTunnel(*identity)
+	}
+	if identity == nil {
+		log.Printf("automatic tunnel disabled: build has no embedded application identity")
 	}
 	maybeOpenBrowser(localURL, opts.NoOpen, opts.browserOpen)
 
@@ -558,14 +563,14 @@ func Run(options ...RunOptions) error {
 		other = listener
 	}
 	listenerCloseErr := other.Close()
-	tunnelCloseErr := app.closeAutomaticRgrokTunnel()
+	tunnelCloseErr := app.closeAutomaticTunnel()
 	switch {
 	case listenerCloseErr != nil && tunnelCloseErr != nil:
-		return fmt.Errorf("serve %s: %w; close other listener: %v; close rgrok tunnel: %v", result.name, result.err, listenerCloseErr, tunnelCloseErr)
+		return fmt.Errorf("serve %s: %w; close other listener: %v; close tunnel: %v", result.name, result.err, listenerCloseErr, tunnelCloseErr)
 	case listenerCloseErr != nil:
 		return fmt.Errorf("serve %s: %w; close other listener: %v", result.name, result.err, listenerCloseErr)
 	case tunnelCloseErr != nil:
-		return fmt.Errorf("serve %s: %w; close rgrok tunnel: %v", result.name, result.err, tunnelCloseErr)
+		return fmt.Errorf("serve %s: %w; close tunnel: %v", result.name, result.err, tunnelCloseErr)
 	}
 	return fmt.Errorf("serve %s: %w", result.name, result.err)
 }
@@ -640,6 +645,28 @@ func (a *webApp) idpRoutes() http.Handler {
 	return mux
 }
 
+type publicRequestURIContextKey struct{}
+
+func (a *webApp) tunneledIDPRoutes() http.Handler {
+	routes := a.idpRoutes()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		prefix := a.tunnelPathPrefix()
+		if prefix == "" || !strings.HasPrefix(r.URL.Path, prefix+"/") {
+			http.NotFound(w, r)
+			return
+		}
+		ctx := context.WithValue(r.Context(), publicRequestURIContextKey{}, r.URL.RequestURI())
+		http.StripPrefix(prefix, routes).ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func publicRequestURI(r *http.Request) string {
+	if value, ok := r.Context().Value(publicRequestURIContextKey{}).(string); ok {
+		return value
+	}
+	return r.URL.RequestURI()
+}
+
 func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	assets := http.FileServer(http.FS(templateFS))
 	mux.Handle("GET /assets/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -662,7 +689,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /apps/{id}/discover-scim", a.rejectWhileSyncing(a.handleAppDiscoverSCIM))
 	mux.HandleFunc("POST /apps/test-scim", a.rejectWhileSyncing(a.handleAppTestSCIM))
 	mux.HandleFunc("POST /config/save", a.rejectWhileSyncing(a.handleConfigSave))
-	mux.HandleFunc("POST /config/tunnel/retry", a.handleAutomaticRgrokTunnelRetry)
+	mux.HandleFunc("POST /config/tunnel/retry", a.handleAutomaticTunnelRetry)
 	mux.HandleFunc("GET /config/tunnel/retry", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -810,7 +837,7 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		HasLocalUsers:          len(state.Users) > 0,
 		HasApps:                len(state.Apps) > 0,
 		HasSCIMEnvironments:    scimEnabled(globalState),
-		HasPublicIDP:           a.rgrokPublicURL() != "" || strings.TrimSpace(state.Config.IDPBaseURL) != "",
+		HasPublicIDP:           a.tunnelPublicURL() != "" || strings.TrimSpace(state.Config.IDPBaseURL) != "",
 		Environments:           globalState.Apps,
 		ActiveEnvironment:      activeEnvironment,
 	}
@@ -881,11 +908,11 @@ func (a *webApp) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 	state.Config = config{
 		IDPBaseURL:            idpBaseURL,
 		TrustForwardedHeaders: r.FormValue("trust_forwarded_headers") == "on",
-		RgrokInstanceID:       state.Config.RgrokInstanceID,
+		TunnelInstanceID:      state.Config.TunnelInstanceID,
 		SigningPrivateKeyPEM:  state.Config.SigningPrivateKeyPEM,
 		SigningCertificatePEM: state.Config.SigningCertificatePEM,
 	}
-	if publicURL := a.rgrokPublicURL(); publicURL != "" {
+	if publicURL := a.tunnelPublicURL(); publicURL != "" {
 		state.Config.IDPBaseURL = publicURL
 	}
 
@@ -897,126 +924,145 @@ func (a *webApp) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: "config saved"})
 }
 
-func (a *webApp) handleAutomaticRgrokTunnelRetry(w http.ResponseWriter, r *http.Request) {
+func (a *webApp) handleAutomaticTunnelRetry(w http.ResponseWriter, r *http.Request) {
 	tab := normalizedTab(r.FormValue("tab"))
-	a.retryAutomaticRgrokTunnel()
+	a.retryAutomaticTunnel()
 	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), map[string]string{"modal": "config"}), flashMessage{})
 }
 
-func (a *webApp) retryAutomaticRgrokTunnel() {
-	if !a.rgrokRetryAvailable() {
+func (a *webApp) retryAutomaticTunnel() {
+	if !a.tunnelRetryAvailable() {
 		return
 	}
 
-	identity, err := loadRgrokApplicationIdentity()
+	identity, err := loadTunnelApplicationIdentity()
 	if err != nil {
-		a.setRgrokError(fmt.Sprintf("retry automatic tunnel: load embedded application identity: %v", err))
+		a.setTunnelError(fmt.Sprintf("retry automatic tunnel: load embedded application identity: %v", err))
 		return
 	}
 	if identity == nil {
-		a.setRgrokError("retry automatic tunnel: embedded application identity is unavailable")
+		a.setTunnelError("retry automatic tunnel: embedded application identity is unavailable")
 		return
 	}
 
-	if !a.rgrokLifecycleMu.TryLock() {
+	if !a.tunnelLifecycleMu.TryLock() {
 		return
 	}
-	defer a.rgrokLifecycleMu.Unlock()
-	if !a.rgrokRetryAvailable() {
+	defer a.tunnelLifecycleMu.Unlock()
+	if !a.tunnelRetryAvailable() {
 		return
 	}
-	a.startAutomaticRgrokTunnelLocked(*identity)
+	a.startAutomaticTunnelLocked(*identity)
 }
 
-func (a *webApp) startAutomaticRgrokTunnel(identity rgrokApplicationIdentity) {
-	a.rgrokLifecycleMu.Lock()
-	defer a.rgrokLifecycleMu.Unlock()
-	a.startAutomaticRgrokTunnelLocked(identity)
+func (a *webApp) startAutomaticTunnel(identity tunnelApplicationIdentity) {
+	a.tunnelLifecycleMu.Lock()
+	defer a.tunnelLifecycleMu.Unlock()
+	a.startAutomaticTunnelLocked(identity)
 }
 
-func (a *webApp) startAutomaticRgrokTunnelLocked(identity rgrokApplicationIdentity) {
-	a.setRgrokError("")
-	instanceID, err := ensureRgrokInstanceID()
+func (a *webApp) startAutomaticTunnelLocked(identity tunnelApplicationIdentity) {
+	a.setTunnelError("")
+	instanceID, err := ensureTunnelInstanceID()
 	if err != nil {
-		a.setRgrokError(fmt.Sprintf("load rgrok instance identity: %v", err))
-		log.Printf("start rgrok tunnel: load instance identity: %v", err)
+		a.setTunnelError(fmt.Sprintf("load tunnel instance identity: %v", err))
+		log.Printf("start tunnel: load instance identity: %v", err)
 		return
 	}
-	starter := a.rgrokStart
+	log.Printf(
+		"starting tunnel: server=%s profile_id=%s instance_id=%s local_port=%d",
+		tunnelServerBaseURL,
+		identity.profileID,
+		instanceID,
+		a.localPort,
+	)
+	starter := a.tunnelStart
 	if starter == nil {
-		starter = startRgrokTunnel
+		starter = startTunnel
 	}
-	started, err := startRgrokWithTimeout(starter, rgrokclient.Config{
-		ServerBaseURL:         "https://rgrok.rselbach.com",
+	started, err := startTunnelWithTimeout(starter, scimtestclient.Config{
+		ServerBaseURL:         tunnelServerBaseURL,
 		ApplicationProfileID:  identity.profileID,
 		InstanceID:            instanceID,
 		ApplicationPrivateKey: identity.privateKey,
 		LocalPort:             a.localPort,
+		Logger:                slog.Default(),
 	}, 20*time.Second)
 	if err != nil {
-		a.setRgrokError(fmt.Sprintf("start automatic tunnel: %v", err))
-		log.Printf("start rgrok tunnel: %v", err)
+		a.setTunnelError(fmt.Sprintf("start automatic tunnel: %v", err))
+		log.Printf("start tunnel: %v", err)
 		return
 	}
 	if started == nil || started.Tunnel == nil || strings.TrimSpace(started.PublicURL) == "" {
-		err := fmt.Errorf("rgrok did not return a public URL")
+		err := fmt.Errorf("tunnel did not return a public URL")
 		if started != nil && started.Tunnel != nil {
 			if closeErr := started.Tunnel.Close(); closeErr != nil {
 				err = fmt.Errorf("%w; close tunnel: %v", err, closeErr)
 			}
 		}
-		a.setRgrokError(err.Error())
-		log.Printf("start rgrok tunnel: %v", err)
+		a.setTunnelError(err.Error())
+		log.Printf("start tunnel: %v", err)
 		return
 	}
 
 	publicURL := strings.TrimRight(strings.TrimSpace(started.PublicURL), "/")
-	a.rgrokMu.Lock()
-	a.rgrokTunnel = &activeRgrokTunnel{
-		PublicURL: publicURL,
-		Tunnel:    started.Tunnel,
+	pathPrefix, err := tunnelPathPrefix(publicURL)
+	if err != nil {
+		if closeErr := started.Tunnel.Close(); closeErr != nil {
+			err = fmt.Errorf("%w; close tunnel: %v", err, closeErr)
+		}
+		a.setTunnelError(err.Error())
+		log.Printf("start tunnel: %v", err)
+		return
 	}
-	a.rgrokLastError = ""
-	a.rgrokMu.Unlock()
-	log.Printf("rgrok tunnel established at %s", publicURL)
+
+	a.tunnelMu.Lock()
+	a.tunnel = &activeTunnel{
+		PathPrefix: pathPrefix,
+		PublicURL:  publicURL,
+		Tunnel:     started.Tunnel,
+	}
+	a.tunnelLastError = ""
+	a.tunnelMu.Unlock()
+	log.Printf("tunnel established at %s", publicURL)
 }
 
-func (a *webApp) closeAutomaticRgrokTunnel() error {
-	a.rgrokLifecycleMu.Lock()
-	defer a.rgrokLifecycleMu.Unlock()
+func (a *webApp) closeAutomaticTunnel() error {
+	a.tunnelLifecycleMu.Lock()
+	defer a.tunnelLifecycleMu.Unlock()
 
-	a.rgrokMu.Lock()
-	tunnel := a.rgrokTunnel
-	a.rgrokTunnel = nil
-	a.rgrokMu.Unlock()
+	a.tunnelMu.Lock()
+	tunnel := a.tunnel
+	a.tunnel = nil
+	a.tunnelMu.Unlock()
 	if tunnel == nil || tunnel.Tunnel == nil {
 		return nil
 	}
 	return tunnel.Tunnel.Close()
 }
 
-func startRgrokTunnel(ctx context.Context, cfg rgrokclient.Config) (*startedRgrokTunnel, error) {
-	tunnel, err := rgrokclient.Start(ctx, cfg)
+func startTunnel(ctx context.Context, cfg scimtestclient.Config) (*startedTunnel, error) {
+	tunnel, err := scimtestclient.Start(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
-	return &startedRgrokTunnel{
+	return &startedTunnel{
 		PublicURL: tunnel.PublicURL,
 		Tunnel:    tunnel,
 	}, nil
 }
 
-func startRgrokWithTimeout(starter rgrokStarter, cfg rgrokclient.Config, timeout time.Duration) (*startedRgrokTunnel, error) {
+func startTunnelWithTimeout(starter tunnelStarter, cfg scimtestclient.Config, timeout time.Duration) (*startedTunnel, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan struct {
-		tunnel *startedRgrokTunnel
+		tunnel *startedTunnel
 		err    error
 	}, 1)
 
 	go func() {
 		tunnel, err := starter(ctx, cfg)
 		result <- struct {
-			tunnel *startedRgrokTunnel
+			tunnel *startedTunnel
 			err    error
 		}{tunnel: tunnel, err: err}
 	}()
@@ -1027,14 +1073,14 @@ func startRgrokWithTimeout(starter rgrokStarter, cfg rgrokclient.Config, timeout
 			cancel()
 			return nil, outcome.err
 		}
-		return startedRgrokTunnelWithCancel(outcome.tunnel, cancel), nil
+		return startedTunnelWithCancel(outcome.tunnel, cancel), nil
 	case <-time.After(timeout):
 		cancel()
-		return nil, fmt.Errorf("timed out waiting for rgrok tunnel registration")
+		return nil, fmt.Errorf("timed out after %s waiting for tunnel registration", timeout)
 	}
 }
 
-func startedRgrokTunnelWithCancel(started *startedRgrokTunnel, cancel context.CancelFunc) *startedRgrokTunnel {
+func startedTunnelWithCancel(started *startedTunnel, cancel context.CancelFunc) *startedTunnel {
 	if started == nil || started.Tunnel == nil {
 		cancel()
 		return started
@@ -1044,29 +1090,41 @@ func startedRgrokTunnelWithCancel(started *startedRgrokTunnel, cancel context.Ca
 	return started
 }
 
-var rgrokApplicationProfilePattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+func tunnelPathPrefix(publicURL string) (string, error) {
+	parsed, err := url.Parse(publicURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("tunnel returned invalid public URL %q", publicURL)
+	}
+	pathPrefix := strings.TrimRight(parsed.Path, "/")
+	if pathPrefix == "" || pathPrefix == "/" || strings.Contains(strings.TrimPrefix(pathPrefix, "/"), "/") {
+		return "", fmt.Errorf("tunnel returned invalid public URL %q", publicURL)
+	}
+	return pathPrefix, nil
+}
 
-func loadRgrokApplicationIdentity() (*rgrokApplicationIdentity, error) {
-	profileID := strings.TrimSpace(rgrokApplicationProfileID)
-	encodedSeed := strings.TrimSpace(rgrokApplicationPrivateSeed)
-	required := strings.EqualFold(strings.TrimSpace(rgrokReleaseIdentityRequired), "true")
+var tunnelApplicationProfilePattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+
+func loadTunnelApplicationIdentity() (*tunnelApplicationIdentity, error) {
+	profileID := strings.TrimSpace(tunnelApplicationProfileID)
+	encodedSeed := strings.TrimSpace(tunnelApplicationPrivateSeed)
+	required := strings.EqualFold(strings.TrimSpace(tunnelReleaseIdentityRequired), "true")
 	if profileID == "" && encodedSeed == "" && !required {
 		return nil, nil
 	}
-	if !rgrokApplicationProfilePattern.MatchString(profileID) {
-		return nil, fmt.Errorf("rgrok application profile id must be 32 lowercase hexadecimal characters")
+	if !tunnelApplicationProfilePattern.MatchString(profileID) {
+		return nil, fmt.Errorf("tunnel application profile id must be 32 lowercase hexadecimal characters")
 	}
 	if encodedSeed == "" {
-		return nil, fmt.Errorf("rgrok application private seed is required")
+		return nil, fmt.Errorf("tunnel application private seed is required")
 	}
 	seed, err := base64.StdEncoding.DecodeString(encodedSeed)
 	if err != nil {
-		return nil, fmt.Errorf("decode rgrok application private seed: invalid base64")
+		return nil, fmt.Errorf("decode tunnel application private seed: invalid base64")
 	}
 	if len(seed) != ed25519.SeedSize {
-		return nil, fmt.Errorf("rgrok application private seed must decode to %d bytes", ed25519.SeedSize)
+		return nil, fmt.Errorf("tunnel application private seed must decode to %d bytes", ed25519.SeedSize)
 	}
-	return &rgrokApplicationIdentity{
+	return &tunnelApplicationIdentity{
 		profileID:  profileID,
 		privateKey: ed25519.NewKeyFromSeed(seed),
 	}, nil
@@ -1078,9 +1136,9 @@ func (a *webApp) buildConfigFormView(cfg config, tab string, page int, pageSize 
 		Config:          cfg,
 		Close:           closeURL,
 		IDPBaseURLValue: cfg.IDPBaseURL,
-		TunnelError:     a.rgrokError(),
+		TunnelError:     a.tunnelError(),
 	}
-	if tunnel := a.rgrokTunnelView(); tunnel != nil {
+	if tunnel := a.tunnelView(); tunnel != nil {
 		form.Tunnel = tunnel
 		form.IDPBaseURLValue = tunnel.PublicURL
 		form.IDPBaseURLDisabled = true
@@ -1089,49 +1147,57 @@ func (a *webApp) buildConfigFormView(cfg config, tab string, page int, pageSize 
 }
 
 func (a *webApp) effectiveIDPBaseURL(r *http.Request, state appState) string {
-	if publicURL := a.rgrokPublicURL(); publicURL != "" {
+	if publicURL := a.tunnelPublicURL(); publicURL != "" {
 		return publicURL
 	}
 	return effectiveIDPBaseURL(r, state)
 }
 
-func (a *webApp) rgrokPublicURL() string {
-	a.rgrokMu.Lock()
-	defer a.rgrokMu.Unlock()
-	if a.rgrokTunnel == nil {
+func (a *webApp) tunnelPublicURL() string {
+	a.tunnelMu.Lock()
+	defer a.tunnelMu.Unlock()
+	if a.tunnel == nil {
 		return ""
 	}
-	return a.rgrokTunnel.PublicURL
+	return a.tunnel.PublicURL
 }
 
-func (a *webApp) rgrokTunnelView() *rgrokTunnelView {
-	a.rgrokMu.Lock()
-	defer a.rgrokMu.Unlock()
-	if a.rgrokTunnel == nil {
+func (a *webApp) tunnelPathPrefix() string {
+	a.tunnelMu.Lock()
+	defer a.tunnelMu.Unlock()
+	if a.tunnel == nil {
+		return ""
+	}
+	return a.tunnel.PathPrefix
+}
+
+func (a *webApp) tunnelView() *tunnelView {
+	a.tunnelMu.Lock()
+	defer a.tunnelMu.Unlock()
+	if a.tunnel == nil {
 		return nil
 	}
-	return &rgrokTunnelView{
-		Name:      a.rgrokTunnel.Name,
-		PublicURL: a.rgrokTunnel.PublicURL,
+	return &tunnelView{
+		PublicURL: a.tunnel.PublicURL,
 	}
 }
 
-func (a *webApp) rgrokRetryAvailable() bool {
-	a.rgrokMu.Lock()
-	defer a.rgrokMu.Unlock()
-	return a.rgrokTunnel == nil && a.rgrokLastError != ""
+func (a *webApp) tunnelRetryAvailable() bool {
+	a.tunnelMu.Lock()
+	defer a.tunnelMu.Unlock()
+	return a.tunnel == nil && a.tunnelLastError != ""
 }
 
-func (a *webApp) setRgrokError(message string) {
-	a.rgrokMu.Lock()
-	defer a.rgrokMu.Unlock()
-	a.rgrokLastError = message
+func (a *webApp) setTunnelError(message string) {
+	a.tunnelMu.Lock()
+	defer a.tunnelMu.Unlock()
+	a.tunnelLastError = message
 }
 
-func (a *webApp) rgrokError() string {
-	a.rgrokMu.Lock()
-	defer a.rgrokMu.Unlock()
-	return a.rgrokLastError
+func (a *webApp) tunnelError() string {
+	a.tunnelMu.Lock()
+	defer a.tunnelMu.Unlock()
+	return a.tunnelLastError
 }
 
 func (a *webApp) handleToolsDeleteAll(w http.ResponseWriter, r *http.Request) {

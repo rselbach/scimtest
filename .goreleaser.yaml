@@ -4,7 +4,7 @@ project_name: scimtest
 
 builds:
   - id: scimtest
-    main: .
+    main: ./cmd/scimtest
     binary: scimtest
     env:
       - CGO_ENABLED=0
@@ -12,9 +12,20 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      - -X=scimtest/internal/web.rgrokApplicationProfileID={{ .Env.RGROK_APPLICATION_PROFILE_ID }}
-      - -X=scimtest/internal/web.rgrokApplicationPrivateSeed={{ .Env.RGROK_APPLICATION_PRIVATE_SEED_BASE64 }}
-      - -X=scimtest/internal/web.rgrokReleaseIdentityRequired=true
+      - -X=github.com/rselbach/scimtest/internal/web.tunnelApplicationProfileID={{ .Env.SCIMTEST_APPLICATION_PROFILE_ID }}
+      - -X=github.com/rselbach/scimtest/internal/web.tunnelApplicationPrivateSeed={{ .Env.SCIMTEST_APPLICATION_PRIVATE_SEED_BASE64 }}
+      - -X=github.com/rselbach/scimtest/internal/web.tunnelReleaseIdentityRequired=true
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+  - id: scimtest-server
+    main: ./cmd/scimtest-server
+    binary: scimtest-server
+    env:
+      - CGO_ENABLED=0
     goos:
       - darwin
       - linux
@@ -30,6 +41,13 @@ archives:
       - tar.gz
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+  - id: scimtest-server
+    ids:
+      - scimtest-server
+    formats:
+      - tar.gz
+    name_template: >-
+      scimtest-server_{{ .Version }}_{{ .Os }}_{{ .Arch }}
 
 checksum:
   name_template: checksums.txt

@@ -418,7 +418,7 @@ func (a *webApp) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	loginHint := loginHintFromRequest(r)
-	renderChooser(w, newChooserData("OIDC sign-in", app, r.URL.RequestURI(), state.Users, loginHint, hiddenValues(r.URL.Query()), "Create an active user before starting an OIDC flow."))
+	renderChooser(w, newChooserData("OIDC sign-in", app, publicRequestURI(r), state.Users, loginHint, hiddenValues(r.URL.Query()), "Create an active user before starting an OIDC flow."))
 }
 
 func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request) {
@@ -653,7 +653,7 @@ func (a *webApp) handleSAMLSSO(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	loginHint := loginHintFromRequest(r)
-	renderChooser(w, newChooserData("SAML sign-in", app, r.URL.RequestURI(), state.Users, loginHint, hiddenValues(r.URL.Query()), "Create an active user before starting a SAML flow."))
+	renderChooser(w, newChooserData("SAML sign-in", app, publicRequestURI(r), state.Users, loginHint, hiddenValues(r.URL.Query()), "Create an active user before starting a SAML flow."))
 }
 
 func (a *webApp) handleSAMLSSOPost(w http.ResponseWriter, r *http.Request) {
@@ -673,7 +673,7 @@ func (a *webApp) handleSAMLSSOPost(w http.ResponseWriter, r *http.Request) {
 	}
 	if !chooserSelectionProvided(app, r.Form) && (r.FormValue("SAMLRequest") != "" || r.FormValue("login_hint") != "" || r.FormValue("RelayState") != "") {
 		loginHint := loginHintFromValues(r.Form)
-		renderChooser(w, newChooserData("SAML sign-in", app, r.URL.RequestURI(), state.Users, loginHint, hiddenValues(r.Form), "Create an active user before starting a SAML flow."))
+		renderChooser(w, newChooserData("SAML sign-in", app, publicRequestURI(r), state.Users, loginHint, hiddenValues(r.Form), "Create an active user before starting a SAML flow."))
 		return
 	}
 	user, ok := chooserUser(state.Users, app, r.Form)

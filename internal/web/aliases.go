@@ -1,6 +1,6 @@
 package web
 
-import "scimtest/internal/core"
+import "github.com/rselbach/scimtest/internal/core"
 
 type (
 	config                = core.Config
@@ -24,7 +24,7 @@ var (
 	loadStateForAppSlug          = core.LoadStateForAppSlug
 	loadAllApps                  = core.LoadAllApps
 	stateFilePath                = core.StateFilePath
-	ensureRgrokInstanceID        = core.EnsureRgrokInstanceID
+	ensureTunnelInstanceID       = core.EnsureTunnelInstanceID
 	saveState                    = core.SaveState
 	appendOperationLogs          = core.AppendOperationLogs
 	appendLocalOperationLog      = core.AppendLocalOperationLog

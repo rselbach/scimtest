@@ -17,7 +17,7 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 1 {
-		if _, err := fmt.Fprintln(stderr, "usage: rgrok-key /path/to/openssh-private-key"); err != nil {
+		if _, err := fmt.Fprintln(stderr, "usage: application-seed /path/to/openssh-private-key"); err != nil {
 			return 1
 		}
 		return 2
