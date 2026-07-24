@@ -857,10 +857,26 @@
       overflow: hidden;
     }
     .environment-modal > form {
+      display: flex;
+      flex-direction: column;
       flex: 1;
       min-height: 0;
-      overflow-y: auto;
+      overflow: hidden;
     }
+	.environment-modal .modal-body {
+	  display: flex;
+	  flex: 1;
+	  flex-direction: column;
+	  min-height: 0;
+	  padding: 0;
+	}
+	.setup-wizard-content {
+	  flex: 1;
+	  min-height: 0;
+	  overflow-y: auto;
+	  padding: 18px;
+	  scrollbar-gutter: stable;
+	}
     .modal.history-modal { width: min(960px, 100%); }
     .modal-header {
       display: flex;
@@ -911,6 +927,17 @@
 	.setup-tab:hover { color: var(--text-strong); background: var(--bg-soft); }
 	.setup-tab.active { color: #fff; background: var(--accent); border-color: var(--accent); }
 	.setup-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+	.setup-step-number {
+	  display: inline-grid;
+	  place-items: center;
+	  width: 20px;
+	  height: 20px;
+	  border-radius: 50%;
+	  background: var(--bg-soft);
+	  color: var(--muted);
+	  font-size: 10px;
+	}
+	.setup-tab.active .setup-step-number { background: rgba(255, 255, 255, 0.2); color: inherit; }
 	.setup-check, .setup-warning { font-weight: 700; }
 	.setup-check { color: inherit; }
 	.setup-tab:not(.active) .setup-check { color: var(--success); }
@@ -951,6 +978,24 @@
 	.setup-summary > span:first-child { display: grid; gap: 2px; min-width: 0; }
 	.setup-summary strong { color: var(--text-strong); font-size: 13px; }
 	.setup-summary small { color: var(--muted); font-size: 11px; }
+	.setup-review-environment {
+	  display: grid;
+	  grid-template-columns: repeat(2, minmax(0, 1fr));
+	  gap: 10px;
+	  margin-bottom: 18px;
+	}
+	.setup-review-environment > span {
+	  display: grid;
+	  gap: 4px;
+	  min-width: 0;
+	  padding: 12px;
+	  border: 1px solid var(--line);
+	  border-radius: var(--radius);
+	  background: var(--bg-soft);
+	}
+	.setup-review-environment small { color: var(--muted); font-size: 11px; }
+	.setup-review-environment strong { overflow: hidden; color: var(--text-strong); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+	.setup-review-hint { margin: 0; color: var(--muted); font-size: 11.5px; }
 	.setup-status {
 	  display: inline-flex;
 	  align-items: center;
@@ -1094,6 +1139,15 @@
       margin-top: 18px;
       flex-wrap: wrap;
     }
+	.setup-wizard-actions {
+	  align-items: center;
+	  flex: 0 0 auto;
+	  margin: 0;
+	  padding: 14px 18px;
+	  border-top: 1px solid var(--line);
+	  background: var(--card);
+	}
+	.setup-wizard-actions .setup-cancel { margin-right: auto; }
     .form-actions .spacer { flex: 1; }
     .tool-grid {
       display: grid;
@@ -1343,6 +1397,7 @@
 	  .page-header .actions .btn { width: 100%; }
 	  .setup-guide { padding: 16px; }
 	  .setup-overview-grid { grid-template-columns: 1fr; }
+	  .setup-review-environment { grid-template-columns: 1fr; }
 	  .setup-panel-header, .setup-remove { align-items: stretch; flex-direction: column; }
 	  .setup-remove .btn { width: 100%; }
 	  table.environments-table { min-width: 0; }

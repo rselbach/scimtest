@@ -708,7 +708,7 @@ func isTunneledRequest(r *http.Request) bool {
 func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	assets := http.FileServer(http.FS(templateFS))
 	mux.Handle("GET /assets/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "public, max-age=3600")
+		w.Header().Set("Cache-Control", "no-store")
 		assets.ServeHTTP(w, r)
 	}))
 	mux.HandleFunc("GET /", a.handleIndex)
@@ -2171,7 +2171,7 @@ func newSetupStatusView(status string) setupStatusView {
 
 func normalizeSetupSection(section string) string {
 	switch strings.TrimSpace(section) {
-	case "oidc", "saml", "scim":
+	case "oidc", "saml", "scim", "review":
 		return strings.TrimSpace(section)
 	default:
 		return "overview"

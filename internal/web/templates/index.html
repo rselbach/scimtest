@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>scimtest</title>
-  <link rel="stylesheet" href="/assets/app.css">
+  <link rel="stylesheet" href="/assets/app.css?v=wizard">
 </head>
 <body data-flash-error="{{if eq .Flash.Kind "error"}}true{{else}}false{{end}}" data-has-scim-environments="{{.HasSCIMEnvironments}}" data-environment-id="{{.ActiveEnvironment.ID}}" data-environment-name="{{.ActiveEnvironment.Name}}">
   <header class="topbar">
@@ -538,22 +538,19 @@
              ignores every field), so pressing Enter would discard edits. */}}
         <button type="submit" class="is-hidden" tabindex="-1" aria-hidden="true" data-default-submit></button>
         <div class="modal-body">
+		  <div class="setup-wizard-content" data-setup-content>
 		  {{if .FormError}}<div class="inline-error" role="alert" data-form-error>{{.FormError}}</div>{{end}}
 		  <nav class="setup-tabs" role="tablist" aria-label="Environment setup">
-			<button class="setup-tab {{if eq .AppForm.Section "overview"}}active{{end}}" type="button" role="tab" aria-selected="{{if eq .AppForm.Section "overview"}}true{{else}}false{{end}}" data-setup-tab="overview">Overview</button>
-			<button class="setup-tab {{if eq .AppForm.Section "oidc"}}active{{end}}" type="button" role="tab" aria-selected="{{if eq .AppForm.Section "oidc"}}true{{else}}false{{end}}" data-setup-tab="oidc">OIDC{{if .AppForm.OIDCStatus.Configured}} <span class="setup-check" aria-label="Configured">✓</span>{{else if .AppForm.OIDCStatus.Started}} <span class="setup-warning" aria-label="Incomplete">!</span>{{end}}</button>
-			<button class="setup-tab {{if eq .AppForm.Section "saml"}}active{{end}}" type="button" role="tab" aria-selected="{{if eq .AppForm.Section "saml"}}true{{else}}false{{end}}" data-setup-tab="saml">SAML{{if .AppForm.SAMLStatus.Configured}} <span class="setup-check" aria-label="Configured">✓</span>{{else if .AppForm.SAMLStatus.Started}} <span class="setup-warning" aria-label="Incomplete">!</span>{{end}}</button>
-			<button class="setup-tab {{if eq .AppForm.Section "scim"}}active{{end}}" type="button" role="tab" aria-selected="{{if eq .AppForm.Section "scim"}}true{{else}}false{{end}}" data-setup-tab="scim">SCIM{{if .AppForm.SCIMStatus.Configured}} <span class="setup-check" aria-label="Configured">✓</span>{{else if .AppForm.SCIMStatus.Started}} <span class="setup-warning" aria-label="Incomplete">!</span>{{end}}</button>
+			<button class="setup-tab {{if eq .AppForm.Section "overview"}}active{{end}}" type="button" role="tab" aria-selected="{{if eq .AppForm.Section "overview"}}true{{else}}false{{end}}" data-setup-tab="overview"><span class="setup-step-number">1</span> Environment</button>
+			<button class="setup-tab {{if eq .AppForm.Section "oidc"}}active{{end}}" type="button" role="tab" aria-selected="{{if eq .AppForm.Section "oidc"}}true{{else}}false{{end}}" data-setup-tab="oidc"><span class="setup-step-number">2</span> OIDC{{if .AppForm.OIDCStatus.Configured}} <span class="setup-check" aria-label="Configured">✓</span>{{else if .AppForm.OIDCStatus.Started}} <span class="setup-warning" aria-label="Incomplete">!</span>{{end}}</button>
+			<button class="setup-tab {{if eq .AppForm.Section "saml"}}active{{end}}" type="button" role="tab" aria-selected="{{if eq .AppForm.Section "saml"}}true{{else}}false{{end}}" data-setup-tab="saml"><span class="setup-step-number">3</span> SAML{{if .AppForm.SAMLStatus.Configured}} <span class="setup-check" aria-label="Configured">✓</span>{{else if .AppForm.SAMLStatus.Started}} <span class="setup-warning" aria-label="Incomplete">!</span>{{end}}</button>
+			<button class="setup-tab {{if eq .AppForm.Section "scim"}}active{{end}}" type="button" role="tab" aria-selected="{{if eq .AppForm.Section "scim"}}true{{else}}false{{end}}" data-setup-tab="scim"><span class="setup-step-number">4</span> SCIM{{if .AppForm.SCIMStatus.Configured}} <span class="setup-check" aria-label="Configured">✓</span>{{else if .AppForm.SCIMStatus.Started}} <span class="setup-warning" aria-label="Incomplete">!</span>{{end}}</button>
+			<button class="setup-tab {{if eq .AppForm.Section "review"}}active{{end}}" type="button" role="tab" aria-selected="{{if eq .AppForm.Section "review"}}true{{else}}false{{end}}" data-setup-tab="review"><span class="setup-step-number">5</span> Review</button>
 		  </nav>
 
 		  <section class="setup-panel {{if eq .AppForm.Section "overview"}}active{{end}}" role="tabpanel" data-setup-panel="overview">
 			<div class="setup-panel-header">
-			  <div><h3>Environment overview</h3><p>Set up any combination of OIDC, SAML, and SCIM. Each integration is saved independently.</p></div>
-			</div>
-			<div class="setup-overview-grid">
-			  <button class="setup-summary" type="button" data-setup-open="oidc"><span><strong>OIDC</strong><small>OpenID Connect sign-in</small></span><span class="setup-status {{.AppForm.OIDCStatus.Class}}">{{if .AppForm.OIDCStatus.Configured}}✓ {{end}}{{.AppForm.OIDCStatus.Label}}</span></button>
-			  <button class="setup-summary" type="button" data-setup-open="saml"><span><strong>SAML</strong><small>SAML sign-in</small></span><span class="setup-status {{.AppForm.SAMLStatus.Class}}">{{if .AppForm.SAMLStatus.Configured}}✓ {{end}}{{.AppForm.SAMLStatus.Label}}</span></button>
-			  <button class="setup-summary" type="button" data-setup-open="scim"><span><strong>SCIM</strong><small>User and group provisioning</small></span><span class="setup-status {{.AppForm.SCIMStatus.Class}}">{{if .AppForm.SCIMStatus.Configured}}✓ {{end}}{{.AppForm.SCIMStatus.Label}}</span></button>
+			  <div><h3>Environment</h3><p>Name this test environment and choose the shared sign-in behavior.</p></div>
 			</div>
 			<div class="form-grid">
 			  <label class="field">
@@ -739,7 +736,7 @@
 			</div>
 		  </section>
 
-		  <section class="setup-panel {{if eq .AppForm.Section "saml"}}active{{end}}" role="tabpanel" data-setup-panel="saml">
+		  <section class="setup-panel {{if eq .AppForm.Section "saml"}}active{{end}}" role="tabpanel" data-setup-panel="saml" data-saml-base-url="{{.IDPBaseURL}}">
 			<div class="setup-panel-header">
 			  <div><h3>SAML</h3><p>Configure scimtest as the identity provider for your service provider.</p></div>
 			  <span class="setup-status {{.AppForm.SAMLStatus.Class}}">{{if .AppForm.SAMLStatus.Configured}}✓ {{end}}{{.AppForm.SAMLStatus.Label}}</span>
@@ -783,21 +780,21 @@
               <label class="field"><span class="label">Groups</span><input name="saml_attribute_groups" value="{{.AppForm.App.SAMLAttributeMappings.Groups}}" autocomplete="off"></label>
               </div>
               </details>
-              {{if .AppForm.SAMLIDPSSO}}
+              {{if .AppForm.SAMLCertificatePEM}}
               <div class="field full">
                 <div class="saml-setup">
                   <div class="saml-setup-title">Copy these values into your app</div>
                   <div class="copy-field">
                     <span class="k">Sign-on URL</span>
-                    <span class="v" title="{{.AppForm.SAMLIDPSSO}}">{{.AppForm.SAMLIDPSSO}}</span>
-                    <button class="copy-btn" type="button" data-copy-button aria-label="Copy IDP SSO URL" title="Copy IDP SSO URL">
+                    <span class="v" title="{{.AppForm.SAMLIDPSSO}}" data-saml-setup-url="sso">{{if .AppForm.SAMLIDPSSO}}{{.AppForm.SAMLIDPSSO}}{{else}}Enter an endpoint name to generate this URL{{end}}</span>
+                    <button class="copy-btn" type="button" data-copy-button data-saml-copy-url="sso" aria-label="Copy sign-on URL" title="Copy sign-on URL" {{if not .AppForm.SAMLIDPSSO}}disabled{{end}}>
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="7" height="8" rx="1.2"/><path d="M3 10.5V4a1 1 0 0 1 1-1h6.5"/></svg>
                     </button>
                   </div>
                   <div class="copy-field">
                     <span class="k">IDP entity ID</span>
-                    <span class="v" title="{{.AppForm.SAMLIDPEntityID}}">{{.AppForm.SAMLIDPEntityID}}</span>
-                    <button class="copy-btn" type="button" data-copy-button aria-label="Copy IDP entity ID" title="Copy IDP entity ID">
+                    <span class="v" title="{{.AppForm.SAMLIDPEntityID}}" data-saml-setup-url="metadata">{{if .AppForm.SAMLIDPEntityID}}{{.AppForm.SAMLIDPEntityID}}{{else}}Enter an endpoint name to generate this URL{{end}}</span>
+                    <button class="copy-btn" type="button" data-copy-button data-saml-copy-url="metadata" aria-label="Copy IDP entity ID" title="Copy IDP entity ID" {{if not .AppForm.SAMLIDPEntityID}}disabled{{end}}>
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="7" height="8" rx="1.2"/><path d="M3 10.5V4a1 1 0 0 1 1-1h6.5"/></svg>
                     </button>
                   </div>
@@ -816,9 +813,28 @@
 			  {{end}}
 			</div>
 		  </section>
-          <div class="form-actions">
-            <a class="btn btn-ghost" href="{{.AppForm.Close}}">Cancel</a>
-            <button class="btn btn-primary" type="submit">Save environment</button>
+
+		  <section class="setup-panel {{if eq .AppForm.Section "review"}}active{{end}}" role="tabpanel" data-setup-panel="review" data-oidc-started="{{.AppForm.OIDCStatus.Started}}" data-saml-started="{{.AppForm.SAMLStatus.Started}}" data-scim-started="{{.AppForm.SCIMStatus.Started}}" data-scim-token="{{if .AppForm.App.SCIMBearerToken}}true{{else}}false{{end}}">
+			<div class="setup-panel-header">
+			  <div><h3>Review environment</h3><p>Confirm the environment and integrations before saving.</p></div>
+			</div>
+			<div class="setup-review-environment">
+			  <span><small>Environment name</small><strong data-review-name>Not named</strong></span>
+			  <span><small>Endpoint name</small><strong class="mono" data-review-slug>Not set</strong></span>
+			</div>
+			<div class="setup-overview-grid">
+			  <button class="setup-summary" type="button" data-setup-open="oidc"><span><strong>OIDC</strong><small data-review-detail="oidc">Not set up</small></span><span class="setup-status" data-review-status="oidc">Not set up</span></button>
+			  <button class="setup-summary" type="button" data-setup-open="saml"><span><strong>SAML</strong><small data-review-detail="saml">Not set up</small></span><span class="setup-status" data-review-status="saml">Not set up</span></button>
+			  <button class="setup-summary" type="button" data-setup-open="scim"><span><strong>SCIM</strong><small data-review-detail="scim">Not set up</small></span><span class="setup-status" data-review-status="scim">Not set up</span></button>
+			</div>
+			<p class="setup-review-hint">Select an integration to make corrections, or save the environment to apply these settings.</p>
+		  </section>
+		  </div>
+          <div class="form-actions setup-wizard-actions">
+            <a class="btn btn-ghost setup-cancel" href="{{.AppForm.Close}}">Cancel</a>
+            <button class="btn {{if eq .AppForm.Section "overview"}}is-hidden{{end}}" type="button" data-setup-previous>Previous</button>
+            <button class="btn btn-primary {{if eq .AppForm.Section "review"}}is-hidden{{end}}" type="button" data-setup-next>Next</button>
+            <button class="btn btn-primary {{if ne .AppForm.Section "review"}}is-hidden{{end}}" type="submit" data-setup-save>Save environment</button>
           </div>
         </div>
       </form>
@@ -884,7 +900,7 @@
 
   {{end}}
 
-  <script src="/assets/app.js"></script>
+  <script src="/assets/app.js?v=wizard"></script>
 </body>
 </html>
 {{end}}

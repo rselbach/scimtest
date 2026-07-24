@@ -235,11 +235,115 @@
       closeActiveOverlay();
     });
 
+    const environmentForm = document.querySelector('[data-environment-form]');
 	const setupTabs = document.querySelectorAll('[data-setup-tab]');
 	const setupPanels = document.querySelectorAll('[data-setup-panel]');
 	const setupSection = document.querySelector('[data-setup-section]');
-	function showSetupSection(section) {
-	  if (!setupTabs.length || !setupPanels.length) return;
+	const setupPrevious = document.querySelector('[data-setup-previous]');
+	const setupNext = document.querySelector('[data-setup-next]');
+	const setupSave = document.querySelector('[data-setup-save]');
+	const setupContent = document.querySelector('[data-setup-content]');
+	const setupReview = document.querySelector('[data-setup-panel="review"]');
+	const setupSteps = ['overview', 'oidc', 'saml', 'scim', 'review'];
+
+	function setupFieldValue(name) {
+	  if (!environmentForm) return '';
+	  const field = environmentForm.elements.namedItem(name);
+	  return field && 'value' in field ? String(field.value).trim() : '';
+	}
+
+	function setupFieldChecked(name) {
+	  if (!environmentForm) return false;
+	  const field = environmentForm.elements.namedItem(name);
+	  return Boolean(field && 'checked' in field && field.checked);
+	}
+
+	function setupHTTPURLValid(value) {
+	  try {
+		const url = new URL(value);
+		return (url.protocol === 'http:' || url.protocol === 'https:') && Boolean(url.host) && !url.hash;
+	  } catch (_error) {
+		return false;
+	  }
+	}
+
+	function setReviewStatus(protocol, started, configured, detail) {
+	  if (!setupReview) return;
+	  const status = setupReview.querySelector('[data-review-status="' + protocol + '"]');
+	  const detailElement = setupReview.querySelector('[data-review-detail="' + protocol + '"]');
+	  if (!status || !detailElement) return;
+	  status.classList.remove('configured', 'incomplete', 'not-set-up');
+	  status.classList.add(configured ? 'configured' : started ? 'incomplete' : 'not-set-up');
+	  status.textContent = configured ? 'Configured' : started ? 'Incomplete' : 'Not set up';
+	  detailElement.textContent = detail;
+	}
+
+	function updateSetupReview() {
+	  if (!environmentForm || !setupReview) return;
+	  const name = setupFieldValue('name');
+	  const slug = setupFieldValue('slug');
+	  const reviewName = setupReview.querySelector('[data-review-name]');
+	  const reviewSlug = setupReview.querySelector('[data-review-slug]');
+	  if (reviewName) reviewName.textContent = name || 'Not named';
+	  if (reviewSlug) reviewSlug.textContent = slug || 'Not set';
+
+	  const oidcClientID = setupFieldValue('oidc_client_id');
+	  const oidcSecret = setupFieldValue('oidc_client_secret');
+	  const oidcRedirects = setupFieldValue('oidc_redirect_uris')
+		.split(/\r?\n/)
+		.map(function (value) { return value.trim(); })
+		.filter(Boolean);
+	  const oidcPublic = setupFieldChecked('oidc_public_client');
+	  const oidcAllowAny = setupFieldChecked('allow_any_oidc_redirect') || setupFieldValue('allow_any_oidc_redirect') === 'on';
+	  const oidcStarted = setupReview.dataset.oidcStarted === 'true' || Boolean(oidcClientID || oidcSecret || oidcRedirects.length || oidcPublic || oidcAllowAny);
+	  const oidcConfigured = oidcStarted && Boolean(oidcClientID) && (oidcAllowAny || oidcRedirects.length > 0 && oidcRedirects.every(setupHTTPURLValid));
+	  let oidcDetail = 'Not included';
+	  if (oidcConfigured) {
+		oidcDetail = oidcAllowAny && !oidcRedirects.length ? 'Any redirect URI allowed' : oidcRedirects.length + (oidcRedirects.length === 1 ? ' redirect URI' : ' redirect URIs');
+	  } else if (oidcStarted) {
+		oidcDetail = 'Some required details are missing';
+	  }
+	  setReviewStatus('oidc', oidcStarted, oidcConfigured, oidcDetail);
+
+	  const samlEntityID = setupFieldValue('saml_entity_id');
+	  const samlACSURL = setupFieldValue('saml_acs_url');
+	  const samlAudience = setupFieldValue('saml_audience');
+	  const samlStarted = setupReview.dataset.samlStarted === 'true' || Boolean(samlEntityID || samlACSURL || samlAudience);
+	  const samlConfigured = samlStarted && setupHTTPURLValid(samlACSURL);
+	  setReviewStatus('saml', samlStarted, samlConfigured, samlConfigured ? samlACSURL : samlStarted ? 'Some required details are missing' : 'Not included');
+
+	  const scimBaseURL = setupFieldValue('scim_base_url');
+	  const scimToken = setupFieldValue('scim_bearer_token');
+	  const scimStarted = setupReview.dataset.scimStarted === 'true' || Boolean(scimBaseURL || scimToken);
+	  const scimConfigured = scimStarted && setupHTTPURLValid(scimBaseURL) && (Boolean(scimToken) || setupReview.dataset.scimToken === 'true');
+	  setReviewStatus('scim', scimStarted, scimConfigured, scimConfigured ? scimBaseURL : scimStarted ? 'Some required details are missing' : 'Not included');
+	}
+
+	function updateSAMLSetupURLs() {
+	  const samlPanel = document.querySelector('[data-setup-panel="saml"]');
+	  if (!samlPanel) return;
+	  const baseURL = String(samlPanel.dataset.samlBaseUrl || '').replace(/\/+$/, '');
+	  const slug = setupFieldValue('slug');
+	  for (const value of samlPanel.querySelectorAll('[data-saml-setup-url]')) {
+		const kind = value.dataset.samlSetupUrl;
+		const path = kind === 'sso' ? 'sso' : 'metadata';
+		const url = baseURL && slug ? baseURL + '/saml/' + encodeURIComponent(slug) + '/' + path : '';
+		value.textContent = url || 'Enter an endpoint name to generate this URL';
+		value.title = url;
+		const copyButton = samlPanel.querySelector('[data-saml-copy-url="' + kind + '"]');
+		if (copyButton) copyButton.disabled = !url;
+	  }
+	}
+
+	function updateSetupActions(section) {
+	  const index = setupSteps.indexOf(section);
+	  if (setupPrevious) setupPrevious.classList.toggle('is-hidden', index <= 0);
+	  if (setupNext) setupNext.classList.toggle('is-hidden', index < 0 || index >= setupSteps.length - 1);
+	  if (setupSave) setupSave.classList.toggle('is-hidden', section !== 'review');
+	}
+
+	function showSetupSection(section, focusTab) {
+	  if (!setupTabs.length || !setupPanels.length || !setupSteps.includes(section)) return;
 	  for (const tab of setupTabs) {
 		const active = tab.dataset.setupTab === section;
 		tab.classList.toggle('active', active);
@@ -251,21 +355,35 @@
 		panel.setAttribute('aria-hidden', active ? 'false' : 'true');
 	  }
 	  if (setupSection) setupSection.value = section;
+	  if (section === 'review') updateSetupReview();
+	  updateSetupActions(section);
+	  if (setupContent) setupContent.scrollTop = 0;
+	  if (focusTab) {
+		const activeTab = document.querySelector('[data-setup-tab].active');
+		if (activeTab) activeTab.focus();
+	  }
 	}
+
+	function moveSetupSection(direction) {
+	  const current = setupSection ? setupSection.value : 'overview';
+	  const index = setupSteps.indexOf(current);
+	  const nextIndex = Math.min(Math.max(index + direction, 0), setupSteps.length - 1);
+	  showSetupSection(setupSteps[nextIndex], true);
+	}
+
 	for (const tab of setupTabs) {
 	  tab.addEventListener('click', function () {
-		showSetupSection(tab.dataset.setupTab);
+		showSetupSection(tab.dataset.setupTab, false);
 	  });
 	}
 	for (const button of document.querySelectorAll('[data-setup-open]')) {
 	  button.addEventListener('click', function () {
-		showSetupSection(button.dataset.setupOpen);
-		const activeTab = document.querySelector('[data-setup-tab].active');
-		if (activeTab) activeTab.focus();
+		showSetupSection(button.dataset.setupOpen, true);
 	  });
 	}
+	if (setupPrevious) setupPrevious.addEventListener('click', function () { moveSetupSection(-1); });
+	if (setupNext) setupNext.addEventListener('click', function () { moveSetupSection(1); });
 
-    const environmentForm = document.querySelector('[data-environment-form]');
     if (environmentForm && !environmentForm.elements.id.value) {
       const environmentName = environmentForm.querySelector('[data-environment-name]');
       const environmentSlug = environmentForm.querySelector('[data-environment-slug]');
@@ -291,6 +409,26 @@
         syncEnvironmentSlug();
       }
     }
+
+	if (environmentForm) {
+	  environmentForm.addEventListener('input', function () {
+		updateSAMLSetupURLs();
+		if (setupSection && setupSection.value === 'review') updateSetupReview();
+	  });
+	  environmentForm.addEventListener('change', function () {
+		if (setupSection && setupSection.value === 'review') updateSetupReview();
+	  });
+	  environmentForm.addEventListener('submit', function (event) {
+		const submitter = event.submitter;
+		if (submitter && (submitter.matches('[data-setup-save]') || submitter.name === 'remove_protocol' || submitter.hasAttribute('formaction'))) return;
+		if (setupSection && setupSection.value === 'review') return;
+		event.preventDefault();
+		moveSetupSection(1);
+	  });
+	  updateSetupReview();
+	  updateSAMLSetupURLs();
+	  updateSetupActions(setupSection ? setupSection.value : 'overview');
+	}
 
     function listURLFromForm(form) {
       const url = new URL(form.action, window.location.href);

@@ -1674,9 +1674,9 @@ func TestDashboardJavaScriptDoesNotContainStyles(t *testing.T) {
 	r.NoError(saveState(appState{}))
 	app := newTestIDPApp(t)
 	rec := httptest.NewRecorder()
-	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/assets/app.js", nil))
+	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/assets/app.js?v=wizard", nil))
 	r.Equal(http.StatusOK, rec.Code)
-	r.Equal("public, max-age=3600", rec.Header().Get("Cache-Control"))
+	r.Equal("no-store", rec.Header().Get("Cache-Control"))
 	r.NotContains(rec.Body.String(), ".section-label")
 	r.NotContains(rec.Body.String(), "grid-column:")
 	r.Contains(dashboardAsset(t, app, "/assets/app.css"), ".section-label")
@@ -1695,11 +1695,15 @@ func TestNewEnvironmentFormGeneratesSlugLocally(t *testing.T) {
 	r.Contains(body, `data-environment-form`)
 	r.Contains(body, `data-environment-name`)
 	r.Contains(body, `data-environment-slug`)
+	r.Contains(body, `data-saml-setup-url="sso"`)
+	r.Contains(body, `data-saml-setup-url="metadata"`)
+	r.Contains(body, "-----BEGIN CERTIFICATE-----")
 	r.Contains(body, `name="oidc_claim_username" value="preferred_username"`)
 	r.Contains(body, `name="saml_attribute_groups" value="groups"`)
 	assetJS := dashboardAsset(t, app, "/assets/app.js")
 	r.Contains(assetJS, `if (environmentForm && !environmentForm.elements.id.value)`)
 	r.Contains(assetJS, `.replace(/[^a-z0-9]+/g, '-')`)
+	r.Contains(assetJS, `updateSAMLSetupURLs()`)
 }
 
 func TestDashboardUsesOneGlobalDirectory(t *testing.T) {
@@ -2711,7 +2715,13 @@ func TestAppFormShowsOIDCSetupPanel(t *testing.T) {
 	r.Contains(body, `data-setup-tab="oidc"`)
 	r.Contains(body, `data-setup-tab="saml"`)
 	r.Contains(body, `data-setup-tab="scim"`)
+	r.Contains(body, `data-setup-tab="review"`)
 	r.Contains(body, `data-setup-panel="oidc"`)
+	r.Contains(body, `data-setup-panel="review"`)
+	r.Contains(body, `data-setup-content`)
+	r.Contains(body, `data-setup-previous`)
+	r.Contains(body, `data-setup-next`)
+	r.Contains(body, `data-setup-save`)
 	r.NotContains(body, `name="protocol"`)
 	r.NotContains(body, `name="scim_enabled"`)
 	r.NotContains(body, `>Both<`)
@@ -2860,7 +2870,7 @@ func TestFormDraftRedactsSecrets(t *testing.T) {
 	appService := newTestIDPApp(t)
 	form := url.Values{
 		"tab":                {"apps"},
-		"setup_section":      {"oidc"},
+		"setup_section":      {"review"},
 		"name":               {"Greendale Portal"},
 		"oidc_client_id":     {"greendale"},
 		"oidc_redirect_uris": {"/invalid"},
@@ -2881,7 +2891,7 @@ func TestFormDraftRedactsSecrets(t *testing.T) {
 		r.Empty(draft.Values.Get("scim_bearer_token"))
 		r.Empty(draft.Values.Get("oidc_client_secret"))
 		r.Equal("Greendale Portal", draft.Values.Get("name"))
-		r.Equal("oidc", draft.Values.Get("setup_section"))
+		r.Equal("review", draft.Values.Get("setup_section"))
 	}
 }
 
