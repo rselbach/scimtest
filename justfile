@@ -21,6 +21,9 @@ run-server:
 build-server:
   go build -o ./bin/{{SERVER_BINARY}} ./cmd/scimtest-server
 
+deploy-server: test
+  ./deploy/deploy.sh
+
 install-server-binary: build-server
   sudo install -d -m 0755 {{BINDIR}}
   sudo install -m 0755 ./bin/{{SERVER_BINARY}} {{BINDIR}}/{{SERVER_BINARY}}

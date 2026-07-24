@@ -228,7 +228,32 @@ proxy runs elsewhere.
 The JSON data file contains the dashboard whitelist and sessions, application
 profiles, and remembered instance names. GitHub access tokens are not stored.
 
-Sample Caddy, systemd, environment, and deployment files live in `deploy/`.
+#### Deploy to exe.dev
+
+The production server runs on the `scimtest` exe.dev VM. exe.dev terminates TLS
+for `scimtest.rselbach.com` and `admin.scimtest.rselbach.com`, then forwards
+both hosts to `127.0.0.1:8000`; the VM does not need Caddy.
+
+The one-time VM setup requires the root-owned environment file at
+`/etc/scimtest-server/scimtest-server.env`. Start from
+`deploy/scimtest-server.env.example`, add the GitHub OAuth credentials, and
+keep the file mode at `0600`. The OAuth application callback URL is
+`https://admin.scimtest.rselbach.com/auth/github/callback`.
+
+Deploy from a local checkout with:
+
+```sh
+just deploy-server
+```
+
+The recipe runs the tests, builds a static Linux/amd64 server, copies it and
+the systemd unit over SSH, restarts the service, and checks the local port on
+the VM. A failed restart or health check restores the previous binary and
+unit. exe.dev must remain configured with a public proxy on port 8000 and both
+custom domains registered.
+
+The systemd unit, environment example, and deployment script live in
+`deploy/`. Persistent application data remains in `/var/lib/scimtest-server`.
 
 ### Current Limits
 
