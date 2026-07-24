@@ -419,6 +419,7 @@ func TestFailedSyncHistoryReportsFailure(t *testing.T) {
 				progressEvents = append(progressEvents, progress)
 			})
 			r.NoError(result.Fatal)
+			r.True(result.Failed)
 			r.Len(result.Traces, 1)
 			r.ErrorContains(errors.New(result.Traces[0].Err), tc.wantError)
 
@@ -1122,6 +1123,7 @@ func TestReconcileState(t *testing.T) {
 	result := ReconcileState(state)
 	r.NoError(result.Fatal)
 	r.NoError(result.Stopped)
+	r.False(result.Failed)
 	r.Equal(
 		"reconcile finished: users 2 created, 1 updated, 1 deleted, 1 in sync, 0 failed; groups 1 created, 1 updated, 0 deleted, 1 in sync, 0 failed",
 		result.Status,
@@ -1173,6 +1175,7 @@ func TestReconcileStateMarksFailuresDirty(t *testing.T) {
 	result := ReconcileState(state)
 	r.NoError(result.Fatal)
 	r.NoError(result.Stopped)
+	r.True(result.Failed)
 	r.Equal(
 		"reconcile finished: users 0 created, 0 updated, 0 deleted, 0 in sync, 1 failed; groups 0 created, 0 updated, 0 deleted, 0 in sync, 0 failed",
 		result.Status,

@@ -1110,6 +1110,42 @@ func TestSyncPersistsRemoteStateAndTraceCookie(t *testing.T) {
 	r.Contains(app.traceContent("app_legacy_scim"), "POST /Users")
 }
 
+func TestSyncMarksResourceFailuresAsFailed(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "Greendale is unavailable", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	state := appState{
+		Config: config{BaseURL: server.URL, BearerToken: "chang-secret"},
+		Users: []user{{
+			ID: "troy", GivenName: "Troy", FamilyName: "Barnes",
+			Username: "troy", Email: "troy@greendale.edu", Active: true, Dirty: true,
+		}},
+		UserOperations:  map[string][]operationLog{},
+		GroupOperations: map[string][]operationLog{},
+	}
+	r.NoError(saveState(state))
+
+	app := &webApp{}
+	req := httptest.NewRequest(http.MethodPost, "/sync", strings.NewReader("tab=users"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	app.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	job := waitForSyncDone(t, app)
+	r.False(job.Success)
+	r.Contains(job.Error, "1 failed")
+
+	indexRec := httptest.NewRecorder()
+	app.routes().ServeHTTP(indexRec, httptest.NewRequest(http.MethodGet, "/?tab=users", nil))
+	r.Contains(indexRec.Body.String(), `class="sync-progress is-error"`)
+}
+
 func TestReconcileRepairsDriftedSyncedUser(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
@@ -2672,9 +2708,12 @@ func TestAdminUIRespondsDuringRunningSync(t *testing.T) {
 	var releaseOnce sync.Once
 	releaseSync := func() { releaseOnce.Do(func() { close(release) }) }
 	defer releaseSync()
-	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		close(started)
 		<-release
+		w.Header().Set("Content-Type", "application/scim+json")
+		_, err := fmt.Fprint(w, `{"id":"remote-troy"}`)
+		r.NoError(err)
 	}))
 	defer server.Close()
 
@@ -2741,7 +2780,7 @@ func TestAdminUIRespondsDuringRunningSync(t *testing.T) {
 
 	releaseSync()
 	job := waitForSyncDone(t, app)
-	r.True(job.Success)
+	r.True(job.Success, job.Error)
 }
 
 func TestRestoreMidSyncEditsKeepsNewerEntries(t *testing.T) {

@@ -190,7 +190,7 @@ func (a *webApp) runSyncJob(ctx context.Context, id string, appID string, kind s
 		return
 	}
 
-	success := result.Stopped == nil
+	success := result.Stopped == nil && !result.Failed
 	a.finishSyncJob(appID, id, success, result.Status, len(result.Traces) > 0)
 }
 

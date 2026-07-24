@@ -78,6 +78,7 @@ type SyncResult struct {
 	Status  string
 	Fatal   error
 	Stopped error
+	Failed  bool
 	Changed bool
 	Traces  []SyncTraceEntry
 }
@@ -269,6 +270,7 @@ func SyncDirtyStateWithContext(ctx context.Context, state AppState, onProgress f
 		State:   state,
 		Status:  status,
 		Stopped: stopped,
+		Failed:  userCounts.failed+groupCounts.failed > 0,
 		Changed: userCounts.total()+groupCounts.total() > 0,
 		Traces:  client.traces,
 	}
@@ -355,6 +357,7 @@ func ReconcileStateWithContext(ctx context.Context, state AppState, onProgress f
 		State:   state,
 		Status:  status,
 		Stopped: stopped,
+		Failed:  userCounts.failed+groupCounts.failed > 0,
 		Changed: userCounts.total()+groupCounts.total() > 0,
 		Traces:  client.traces,
 	}
