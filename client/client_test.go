@@ -47,6 +47,7 @@ func TestStartReturnsApplicationTunnel(t *testing.T) {
 			Type:      protocol.TypeTunnelRegistered,
 			TunnelID:  "human-timeline-club",
 			PublicURL: "https://example.com/human-timeline-club",
+			ClientIP:  "203.0.113.10",
 		}))
 
 		for {
@@ -70,6 +71,7 @@ func TestStartReturnsApplicationTunnel(t *testing.T) {
 	r.NoError(err)
 	r.Equal("human-timeline-club", tunnel.ID)
 	r.Equal("https://example.com/human-timeline-club", tunnel.PublicURL)
+	r.Equal("203.0.113.10", tunnel.Registration().ClientIP)
 	r.NoError(tunnel.Close())
 	r.NoError(tunnel.Close())
 }
@@ -100,13 +102,16 @@ func TestTunnelReportsReplacementRegistrationAfterReconnect(t *testing.T) {
 
 		connection := connections.Add(1)
 		registrationID := "study-room-a"
+		clientIP := "203.0.113.10"
 		if connection == 2 {
 			registrationID = "study-room-f"
+			clientIP = "198.51.100.20"
 		}
 		r.NoError(conn.WriteJSON(protocol.Message{
 			Type:      protocol.TypeTunnelRegistered,
 			TunnelID:  registrationID,
 			PublicURL: "https://example.com/" + registrationID,
+			ClientIP:  clientIP,
 		}))
 		if connection == 1 {
 			return
@@ -136,6 +141,7 @@ func TestTunnelReportsReplacementRegistrationAfterReconnect(t *testing.T) {
 	r.Equal(Registration{
 		TunnelID:  "study-room-a",
 		PublicURL: "https://example.com/study-room-a",
+		ClientIP:  "203.0.113.10",
 	}, <-registrations)
 
 	select {
@@ -143,6 +149,7 @@ func TestTunnelReportsReplacementRegistrationAfterReconnect(t *testing.T) {
 		r.Equal(Registration{
 			TunnelID:  "study-room-f",
 			PublicURL: "https://example.com/study-room-f",
+			ClientIP:  "198.51.100.20",
 		}, registration)
 		r.Equal(registration, tunnel.Registration())
 	case <-ctx.Done():

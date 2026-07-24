@@ -89,6 +89,7 @@ type tunnelStarter func(context.Context, scimtestclient.Config) (*startedTunnel,
 
 type startedTunnel struct {
 	PublicURL string
+	ClientIP  string
 	Tunnel    tunnelCloser
 }
 
@@ -113,11 +114,13 @@ func (c cancelingTunnelCloser) Close() error {
 type activeTunnel struct {
 	PathPrefix string
 	PublicURL  string
+	ClientIP   string
 	Tunnel     tunnelCloser
 }
 
 type tunnelView struct {
 	PublicURL string
+	ClientIP  string
 }
 
 type tunnelApplicationIdentity struct {
@@ -315,18 +318,19 @@ type groupFormView struct {
 }
 
 type appFormView struct {
-	Title              string
-	App                app
-	OIDCRedirectURIs   string
-	OIDCIssuer         string
-	OIDCDiscoveryURL   string
-	OIDCAuthorizeURL   string
-	OIDCTokenURL       string
-	OIDCJWKSURL        string
-	SAMLCertificatePEM string
-	SAMLIDPEntityID    string
-	SAMLIDPSSO         string
-	Close              string
+	Title                        string
+	App                          app
+	OIDCRedirectURIs             string
+	OIDCIssuer                   string
+	OIDCDiscoveryURL             string
+	OIDCAuthorizeURL             string
+	OIDCTokenURL                 string
+	OIDCJWKSURL                  string
+	SAMLCertificatePEM           string
+	SAMLIDPEntityID              string
+	SAMLIDPSSO                   string
+	Close                        string
+	AllowAnyOIDCRedirectDisabled bool
 }
 
 type configFormView struct {
@@ -667,6 +671,11 @@ func publicRequestURI(r *http.Request) string {
 	return r.URL.RequestURI()
 }
 
+func isTunneledRequest(r *http.Request) bool {
+	_, ok := r.Context().Value(publicRequestURIContextKey{}).(string)
+	return ok
+}
+
 func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	assets := http.FileServer(http.FS(templateFS))
 	mux.Handle("GET /assets/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -871,6 +880,7 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		}
 	case "app":
 		if form, formErr := buildAppFormView(state, tab, r.URL.Query().Get("id"), data.IDPBaseURL, certificatePEM(a.certDER)); formErr == nil {
+			form.AllowAnyOIDCRedirectDisabled = a.tunnelPublicURL() != ""
 			data.AppForm = form
 		}
 	case "config":
@@ -1021,11 +1031,12 @@ func (a *webApp) startAutomaticTunnelLocked(identity tunnelApplicationIdentity) 
 	a.tunnel = &activeTunnel{
 		PathPrefix: pathPrefix,
 		PublicURL:  publicURL,
+		ClientIP:   strings.TrimSpace(started.ClientIP),
 		Tunnel:     started.Tunnel,
 	}
 	a.tunnelLastError = ""
 	a.tunnelMu.Unlock()
-	log.Printf("tunnel established at %s", publicURL)
+	log.Printf("tunnel established at %s (chooser restricted to %s)", publicURL, strings.TrimSpace(started.ClientIP))
 }
 
 func (a *webApp) updateAutomaticTunnelRegistration(registration scimtestclient.Registration) {
@@ -1044,8 +1055,9 @@ func (a *webApp) updateAutomaticTunnelRegistration(registration scimtestclient.R
 	}
 	a.tunnel.PathPrefix = pathPrefix
 	a.tunnel.PublicURL = publicURL
+	a.tunnel.ClientIP = strings.TrimSpace(registration.ClientIP)
 	a.tunnelLastError = ""
-	log.Printf("tunnel re-established at %s", publicURL)
+	log.Printf("tunnel re-established at %s (chooser restricted to %s)", publicURL, a.tunnel.ClientIP)
 }
 
 func (a *webApp) closeAutomaticTunnel() error {
@@ -1069,6 +1081,7 @@ func startTunnel(ctx context.Context, cfg scimtestclient.Config) (*startedTunnel
 	}
 	return &startedTunnel{
 		PublicURL: tunnel.PublicURL,
+		ClientIP:  tunnel.Registration().ClientIP,
 		Tunnel:    tunnel,
 	}, nil
 }
@@ -1200,7 +1213,52 @@ func (a *webApp) tunnelView() *tunnelView {
 	}
 	return &tunnelView{
 		PublicURL: a.tunnel.PublicURL,
+		ClientIP:  a.tunnel.ClientIP,
 	}
+}
+
+func (a *webApp) tunnelChooserClientIP() string {
+	a.tunnelMu.Lock()
+	defer a.tunnelMu.Unlock()
+	if a.tunnel == nil {
+		return ""
+	}
+	return a.tunnel.ClientIP
+}
+
+// allowTunneledChooser restricts the OIDC/SAML sign-in chooser on the public
+// tunnel to the egress IP observed when this installation registered. Local
+// (non-tunneled) IDP routes remain unrestricted. Visitor IP comes from
+// X-Forwarded-For, which the tunnel server sets and the local forwarder
+// preserves; it is only consulted for tunneled requests.
+func (a *webApp) allowTunneledChooser(w http.ResponseWriter, r *http.Request) bool {
+	if _, ok := r.Context().Value(publicRequestURIContextKey{}).(string); !ok {
+		return true
+	}
+	allowed := strings.TrimSpace(a.tunnelChooserClientIP())
+	visitor := forwardedClientIP(r)
+	if allowed == "" || visitor == "" || !sameIP(allowed, visitor) {
+		http.Error(w, "Sign-in is limited to the network where scimtest is running", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
+func forwardedClientIP(r *http.Request) string {
+	raw := strings.TrimSpace(strings.Join(r.Header.Values("X-Forwarded-For"), ","))
+	if raw == "" {
+		return ""
+	}
+	return strings.TrimSpace(strings.Split(raw, ",")[0])
+}
+
+func sameIP(a, b string) bool {
+	left := net.ParseIP(a)
+	right := net.ParseIP(b)
+	if left == nil || right == nil {
+		return false
+	}
+	return left.Equal(right)
 }
 
 func (a *webApp) tunnelRetryAvailable() bool {

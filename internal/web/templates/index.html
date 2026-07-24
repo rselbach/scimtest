@@ -601,9 +601,19 @@
 			  <label class="field full">
 				<span class="label">Unsafe redirect testing</span>
 				<span class="checkbox-row">
+				  {{if .AppForm.AllowAnyOIDCRedirectDisabled}}
+				  <input type="hidden" name="allow_any_oidc_redirect" value="{{if .AppForm.App.AllowAnyOIDCRedirect}}on{{end}}">
+				  <input type="checkbox" disabled {{if .AppForm.App.AllowAnyOIDCRedirect}}checked{{end}}>
+				  {{else}}
 				  <input type="checkbox" name="allow_any_oidc_redirect" {{if .AppForm.App.AllowAnyOIDCRedirect}}checked{{end}}>
-				  Allow arbitrary redirect URIs (unsafe when tunneled publicly)
+				  {{end}}
+				  Allow arbitrary redirect URIs
 				</span>
+				{{if .AppForm.AllowAnyOIDCRedirectDisabled}}
+				<span class="hint">Ignored on the public tunnel while connected; register exact redirect URIs instead.</span>
+				{{else}}
+				<span class="hint">Unsafe when the IDP is reachable publicly.</span>
+				{{end}}
 			  </label>
 			  <details class="field full claim-mappings">
 			  <summary>OIDC claim mappings</summary>
@@ -775,6 +785,11 @@
 			<div class="tunnel-row">
 			  <strong>Tunnel connected:</strong> <span class="mono">{{.ConfigForm.Tunnel.PublicURL}}</span>
 			</div>
+			{{if .ConfigForm.Tunnel.ClientIP}}
+			<span class="hint">Sign-in chooser is limited to your public IP <span class="mono">{{.ConfigForm.Tunnel.ClientIP}}</span>.</span>
+			{{else}}
+			<span class="hint">Sign-in chooser is limited to the network where scimtest is running.</span>
+			{{end}}
 			<span class="hint">Only OIDC and SAML endpoints are exposed through the tunnel.</span>
 			{{else}}
 			<div class="tunnel-row">

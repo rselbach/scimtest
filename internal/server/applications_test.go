@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -504,6 +505,9 @@ func TestEndToEndApplicationTunnel(t *testing.T) {
 	r.Equal(protocol.TypeTunnelRegistered, registration.Type)
 	r.Equal(registration.TunnelID, store.ApplicationTunnelID(profile.ID, "installation-1"))
 	r.Equal("http://localhost:7000/"+registration.TunnelID, registration.PublicURL)
+	clientIP := net.ParseIP(registration.ClientIP)
+	r.NotNil(clientIP)
+	r.True(clientIP.IsLoopback())
 
 	requestSeen := make(chan protocol.Message, 1)
 	go func() {

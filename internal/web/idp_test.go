@@ -280,7 +280,7 @@ func TestOIDCRedirectURIValidation(t *testing.T) {
 				"client_id":     {"greendale-client"},
 				"redirect_uri":  {tc.redirectURI},
 				"scope":         {"openid"},
-			})
+			}, false)
 			if tc.wantError == "" {
 				r.NoError(err)
 				return
@@ -288,6 +288,25 @@ func TestOIDCRedirectURIValidation(t *testing.T) {
 			r.ErrorContains(err, tc.wantError)
 		})
 	}
+}
+
+func TestValidateAuthorizeClientIgnoresAllowAnyWhenTunneled(t *testing.T) {
+	r := require.New(t)
+	configured := app{
+		OIDCClientID:         "greendale-client",
+		OIDCRedirectURIs:     []string{"https://rp.greendale.test/callback"},
+		AllowAnyOIDCRedirect: true,
+	}
+	values := url.Values{
+		"client_id":    {"greendale-client"},
+		"redirect_uri": {"https://evil.example/callback"},
+	}
+	r.NoError(validateAuthorizeClient(configured, values, false))
+	r.ErrorContains(validateAuthorizeClient(configured, values, true), "redirect_uri is not registered for this app")
+	r.NoError(validateAuthorizeClient(configured, url.Values{
+		"client_id":    {"greendale-client"},
+		"redirect_uri": {"https://rp.greendale.test/callback"},
+	}, true))
 }
 
 func TestUserClaimsHonorScopes(t *testing.T) {

@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -48,6 +51,7 @@ type Config struct {
 type Registration struct {
 	TunnelID  string
 	PublicURL string
+	ClientIP  string
 }
 
 type Client struct {
@@ -252,11 +256,13 @@ func (c *Client) runOnce(ctx context.Context) error {
 	registration := Registration{
 		TunnelID:  registered.TunnelID,
 		PublicURL: registered.PublicURL,
+		ClientIP:  registered.ClientIP,
 	}
 	c.cfg.Logger.Info(
 		"tunnel registered",
 		"tunnel_id", registration.TunnelID,
 		"public_url", registration.PublicURL,
+		"client_ip", registration.ClientIP,
 	)
 	if c.cfg.OnRegistered != nil {
 		c.cfg.OnRegistered(registration)
@@ -355,16 +361,31 @@ func (c *Client) handleRequest(msg protocol.Message, send chan<- protocol.Messag
 		StreamID: msg.StreamID,
 	}
 
-	localURL := "http://" + c.cfg.LocalHost + ":" + strconv.Itoa(c.cfg.LocalPort)
-	path := msg.Path
-	if path == "" {
-		path = "/"
+	localURL, err := localRequestURL(c.cfg.LocalHost, c.cfg.LocalPort, msg.Path)
+	if err != nil {
+		c.cfg.Logger.Warn("rejecting tunneled request path", "path", msg.Path, "error", err)
+		resp.Error = "invalid request path"
+		select {
+		case send <- resp:
+		case <-done:
+		}
+		return
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), msg.Method, localURL+path, bytes.NewReader(msg.Body))
+	req, err := http.NewRequestWithContext(context.Background(), msg.Method, localURL, bytes.NewReader(msg.Body))
 	if err != nil {
 		c.cfg.Logger.Warn("local forward failed", "error", err)
 		resp.Error = "failed to reach local application"
+		select {
+		case send <- resp:
+		case <-done:
+		}
+		return
+	}
+	expectedHost := net.JoinHostPort(c.cfg.LocalHost, strconv.Itoa(c.cfg.LocalPort))
+	if req.URL.Host != expectedHost {
+		c.cfg.Logger.Warn("rejecting tunneled request path", "path", msg.Path, "host", req.URL.Host)
+		resp.Error = "invalid request path"
 		select {
 		case send <- resp:
 		case <-done:
@@ -421,4 +442,29 @@ func (c *Client) handleRequest(msg protocol.Message, send chan<- protocol.Messag
 	case send <- resp:
 	case <-done:
 	}
+}
+
+// localRequestURL builds an http URL for the configured local application from a
+// tunneled request URI. The path must be a relative request URI beginning with a
+// single "/"; schemes, hosts, userinfo, and "//"-prefixed paths are rejected so a
+// malicious tunnel server cannot redirect the client off-loopback (SSRF).
+func localRequestURL(localHost string, localPort int, requestURI string) (string, error) {
+	if requestURI == "" {
+		requestURI = "/"
+	}
+	ref, err := url.ParseRequestURI(requestURI)
+	if err != nil {
+		return "", fmt.Errorf("parse request path: %w", err)
+	}
+	if ref.Scheme != "" || ref.Opaque != "" || ref.Host != "" || ref.User != nil {
+		return "", errors.New("request path must be relative")
+	}
+	if !strings.HasPrefix(ref.Path, "/") || strings.HasPrefix(ref.Path, "//") {
+		return "", errors.New("request path must begin with a single /")
+	}
+	base := &url.URL{
+		Scheme: "http",
+		Host:   net.JoinHostPort(localHost, strconv.Itoa(localPort)),
+	}
+	return base.ResolveReference(ref).String(), nil
 }

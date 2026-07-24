@@ -35,6 +35,7 @@ type Config struct {
 type Registration struct {
 	TunnelID  string
 	PublicURL string
+	ClientIP  string
 }
 
 type Tunnel struct {
@@ -109,6 +110,7 @@ func Start(ctx context.Context, cfg Config) (*Tunnel, error) {
 			current := Registration{
 				TunnelID:  reg.TunnelID,
 				PublicURL: reg.PublicURL,
+				ClientIP:  reg.ClientIP,
 			}
 			registration.set(current)
 			registeredOnce.Do(func() {

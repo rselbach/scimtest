@@ -290,6 +290,7 @@ func TestIDPRoutesExcludeAdminEndpoints(t *testing.T) {
 	app.tunnel = &activeTunnel{
 		PathPrefix: "/human-timeline-club",
 		PublicURL:  "https://scimtest.rselbach.com/human-timeline-club",
+		ClientIP:   "203.0.113.10",
 	}
 	tunneled := app.tunneledIDPRoutes()
 	tunneledDiscoveryReq := httptest.NewRequest(
@@ -312,7 +313,9 @@ func TestIDPRoutesExcludeAdminEndpoints(t *testing.T) {
 	}
 	authorizePath := "/human-timeline-club/oidc/greendale/authorize?" + authorizeValues.Encode()
 	authorizeRec := httptest.NewRecorder()
-	tunneled.ServeHTTP(authorizeRec, httptest.NewRequest(http.MethodGet, authorizePath, nil))
+	authorizeReq := httptest.NewRequest(http.MethodGet, authorizePath, nil)
+	authorizeReq.Header.Set("X-Forwarded-For", "203.0.113.10")
+	tunneled.ServeHTTP(authorizeRec, authorizeReq)
 	r.Equal(http.StatusOK, authorizeRec.Code)
 	r.Contains(
 		authorizeRec.Body.String(),
@@ -326,10 +329,31 @@ func TestIDPRoutesExcludeAdminEndpoints(t *testing.T) {
 		strings.NewReader(authorizeValues.Encode()),
 	)
 	authorizePost.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	authorizePost.Header.Set("X-Forwarded-For", "203.0.113.10")
 	authorizePostRec := httptest.NewRecorder()
 	tunneled.ServeHTTP(authorizePostRec, authorizePost)
 	r.Equal(http.StatusFound, authorizePostRec.Code)
 	r.Contains(authorizePostRec.Header().Get("Location"), "https://rp.greendale.test/callback?code=")
+
+	forbiddenRec := httptest.NewRecorder()
+	forbiddenReq := httptest.NewRequest(http.MethodGet, authorizePath, nil)
+	forbiddenReq.Header.Set("X-Forwarded-For", "198.51.100.20")
+	tunneled.ServeHTTP(forbiddenRec, forbiddenReq)
+	r.Equal(http.StatusForbidden, forbiddenRec.Code)
+	r.Contains(forbiddenRec.Body.String(), "Sign-in is limited to the network where scimtest is running")
+
+	missingIPRec := httptest.NewRecorder()
+	tunneled.ServeHTTP(missingIPRec, httptest.NewRequest(http.MethodGet, authorizePath, nil))
+	r.Equal(http.StatusForbidden, missingIPRec.Code)
+
+	app.tunnelMu.Lock()
+	app.tunnel.ClientIP = ""
+	app.tunnelMu.Unlock()
+	emptyAllowedRec := httptest.NewRecorder()
+	emptyAllowedReq := httptest.NewRequest(http.MethodGet, authorizePath, nil)
+	emptyAllowedReq.Header.Set("X-Forwarded-For", "203.0.113.10")
+	tunneled.ServeHTTP(emptyAllowedRec, emptyAllowedReq)
+	r.Equal(http.StatusForbidden, emptyAllowedRec.Code)
 
 	wrongPrefixRec := httptest.NewRecorder()
 	tunneled.ServeHTTP(
@@ -341,6 +365,83 @@ func TestIDPRoutesExcludeAdminEndpoints(t *testing.T) {
 	state, err := loadState()
 	r.NoError(err)
 	r.Len(state.Users, 1)
+}
+
+func TestTunneledAuthorizeIgnoresAllowAnyOIDCRedirect(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Users: []user{{
+			ID: "u1", GivenName: "Jeff", FamilyName: "Winger", Username: "jwinger",
+			Email: "jeff@greendale.edu", Active: true,
+		}},
+		Apps: []app{{
+			ID:                   "app-1",
+			Name:                 "Greendale",
+			Slug:                 "greendale",
+			Protocol:             "oidc",
+			OIDCClientID:         "greendale-client",
+			OIDCClientSecret:     "secret-dean",
+			OIDCRedirectURIs:     []string{"https://rp.greendale.test/callback"},
+			AllowAnyOIDCRedirect: true,
+		}},
+	}))
+
+	app := newTestIDPApp(t)
+	app.tunnel = &activeTunnel{
+		PathPrefix: "/human-timeline-club",
+		PublicURL:  "https://scimtest.rselbach.com/human-timeline-club",
+		ClientIP:   "203.0.113.10",
+	}
+	tunneled := app.tunneledIDPRoutes()
+
+	authorizeValues := url.Values{
+		"client_id":     {"greendale-client"},
+		"redirect_uri":  {"https://evil.example/steal"},
+		"response_type": {"code"},
+		"scope":         {"openid"},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/human-timeline-club/oidc/greendale/authorize?"+authorizeValues.Encode(), nil)
+	req.Header.Set("X-Forwarded-For", "203.0.113.10")
+	rec := httptest.NewRecorder()
+	tunneled.ServeHTTP(rec, req)
+	r.Equal(http.StatusBadRequest, rec.Code)
+	r.Contains(rec.Body.String(), "redirect_uri is not registered for this app")
+
+	local := app.idpRoutes()
+	localRec := httptest.NewRecorder()
+	local.ServeHTTP(localRec, httptest.NewRequest(http.MethodGet, "/oidc/greendale/authorize?"+authorizeValues.Encode(), nil))
+	r.Equal(http.StatusOK, localRec.Code)
+	r.Contains(localRec.Body.String(), "OIDC sign-in")
+}
+
+func TestAppFormDisablesAllowAnyRedirectWhileTunneled(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{Apps: []app{{
+		ID:                   "app-1",
+		Name:                 "Greendale Portal",
+		Slug:                 "greendale",
+		Protocol:             "oidc",
+		OIDCClientID:         "greendale",
+		AllowAnyOIDCRedirect: true,
+	}}}))
+	app := newTestIDPApp(t)
+	app.tunnelMu.Lock()
+	app.tunnel = &activeTunnel{
+		PathPrefix: "/study-group",
+		PublicURL:  "https://scimtest.rselbach.com/study-group",
+		ClientIP:   "203.0.113.10",
+	}
+	app.tunnelMu.Unlock()
+
+	rec := httptest.NewRecorder()
+	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=apps&modal=app&id=app-1", nil))
+	r.Equal(http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	r.Contains(body, "Ignored on the public tunnel while connected")
+	r.Contains(body, `name="allow_any_oidc_redirect" value="on"`)
+	r.Contains(body, `<input type="checkbox" disabled`)
 }
 
 func TestAdminRoutesRejectCrossOriginMutations(t *testing.T) {
@@ -2124,6 +2225,7 @@ func TestConfigRendersAutomaticTunnelStatus(t *testing.T) {
 	app.tunnel = &activeTunnel{
 		PathPrefix: "/study-group",
 		PublicURL:  "https://scimtest.rselbach.com/study-group",
+		ClientIP:   "203.0.113.10",
 		Tunnel:     &fakeTunnel{},
 	}
 	app.tunnelMu.Unlock()
@@ -2132,6 +2234,8 @@ func TestConfigRendersAutomaticTunnelStatus(t *testing.T) {
 
 	r.Equal(http.StatusOK, rec.Code)
 	r.Contains(rec.Body.String(), "Tunnel connected:")
+	r.Contains(rec.Body.String(), "Sign-in chooser is limited to your public IP")
+	r.Contains(rec.Body.String(), "203.0.113.10")
 	r.NotContains(rec.Body.String(), `formaction="/config/tunnel/retry"`)
 }
 
@@ -2341,7 +2445,11 @@ func TestAutomaticTunnelUsesApplicationIdentity(t *testing.T) {
 		localPort: 8080,
 		tunnelStart: func(_ context.Context, cfg scimtestclient.Config) (*startedTunnel, error) {
 			got = cfg
-			return &startedTunnel{PublicURL: "https://scimtest.rselbach.com/random-tunnel", Tunnel: tunnel}, nil
+			return &startedTunnel{
+				PublicURL: "https://scimtest.rselbach.com/random-tunnel",
+				ClientIP:  "203.0.113.50",
+				Tunnel:    tunnel,
+			}, nil
 		},
 	}
 
@@ -2356,12 +2464,15 @@ func TestAutomaticTunnelUsesApplicationIdentity(t *testing.T) {
 	r.NotNil(got.OnRegistered)
 	r.Equal("https://scimtest.rselbach.com/random-tunnel", app.tunnelPublicURL())
 	r.Equal("/random-tunnel", app.tunnelPathPrefix())
+	r.Equal("203.0.113.50", app.tunnelChooserClientIP())
 	got.OnRegistered(scimtestclient.Registration{
 		TunnelID:  "replacement-tunnel",
 		PublicURL: "https://scimtest.rselbach.com/replacement-tunnel/",
+		ClientIP:  "198.51.100.9",
 	})
 	r.Equal("https://scimtest.rselbach.com/replacement-tunnel", app.tunnelPublicURL())
 	r.Equal("/replacement-tunnel", app.tunnelPathPrefix())
+	r.Equal("198.51.100.9", app.tunnelChooserClientIP())
 	r.NoError(app.closeAutomaticTunnel())
 	r.True(tunnel.closed)
 	r.Empty(app.tunnelPublicURL())

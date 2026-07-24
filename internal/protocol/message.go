@@ -26,6 +26,7 @@ type Message struct {
 
 	TunnelID  string `json:"tunnel_id,omitempty"`
 	PublicURL string `json:"public_url,omitempty"`
+	ClientIP  string `json:"client_ip,omitempty"`
 
 	LocalPort            int    `json:"local_port,omitempty"`
 	ApplicationProfileID string `json:"application_profile_id,omitempty"`

@@ -443,6 +443,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		Type:      protocol.TypeTunnelRegistered,
 		TunnelID:  t.id,
 		PublicURL: t.publicURL,
+		ClientIP:  s.clientIP(r),
 	}
 
 	// The client answers every ping, so a healthy tunnel delivers a message

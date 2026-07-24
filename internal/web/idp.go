@@ -405,11 +405,14 @@ func (a *webApp) handleOIDCJWKS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *webApp) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
+	if !a.allowTunneledChooser(w, r) {
+		return
+	}
 	state, app, ok := appForProtocol(w, r, supportsOIDC)
 	if !ok {
 		return
 	}
-	if err := validateAuthorizeClient(app, r.URL.Query()); err != nil {
+	if err := validateAuthorizeClient(app, r.URL.Query(), isTunneledRequest(r)); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -422,6 +425,9 @@ func (a *webApp) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request) {
+	if !a.allowTunneledChooser(w, r) {
+		return
+	}
 	a.oidcMu.Lock()
 	defer a.oidcMu.Unlock()
 
@@ -433,7 +439,7 @@ func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := validateAuthorizeClient(app, r.Form); err != nil {
+	if err := validateAuthorizeClient(app, r.Form, isTunneledRequest(r)); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -643,6 +649,9 @@ func (a *webApp) handleSAMLMetadata(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *webApp) handleSAMLSSO(w http.ResponseWriter, r *http.Request) {
+	if !a.allowTunneledChooser(w, r) {
+		return
+	}
 	state, app, ok := appForProtocol(w, r, supportsSAML)
 	if !ok {
 		return
@@ -657,6 +666,9 @@ func (a *webApp) handleSAMLSSO(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *webApp) handleSAMLSSOPost(w http.ResponseWriter, r *http.Request) {
+	if !a.allowTunneledChooser(w, r) {
+		return
+	}
 	state, app, ok := appForProtocol(w, r, supportsSAML)
 	if !ok {
 		return
@@ -808,8 +820,9 @@ func childElementTextByLocalName(parent *etree.Element, localName string) string
 
 // validateAuthorizeClient checks client_id and redirect_uri. Failures here
 // must never redirect: an unverified redirect_uri is not a safe target
-// (RFC 6749 section 4.1.2.1).
-func validateAuthorizeClient(app app, values url.Values) error {
+// (RFC 6749 section 4.1.2.1). When tunneled is true, AllowAnyOIDCRedirect is
+// ignored so a public tunnel cannot mint codes to an attacker-chosen URI.
+func validateAuthorizeClient(app app, values url.Values, tunneled bool) error {
 	if values.Get("client_id") != app.OIDCClientID {
 		return fmt.Errorf("client_id is invalid")
 	}
@@ -820,7 +833,8 @@ func validateAuthorizeClient(app app, values url.Values) error {
 	if _, err := parseOIDCRedirectURI(redirectURI); err != nil {
 		return err
 	}
-	if !app.AllowAnyOIDCRedirect && !stringIn(app.OIDCRedirectURIs, redirectURI) {
+	allowAny := app.AllowAnyOIDCRedirect && !tunneled
+	if !allowAny && !stringIn(app.OIDCRedirectURIs, redirectURI) {
 		return fmt.Errorf("redirect_uri is not registered for this app")
 	}
 	return nil

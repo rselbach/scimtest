@@ -94,6 +94,125 @@ func TestRunContextLogsConnectionFailureWithoutPrivateKey(t *testing.T) {
 	r.NotContains(logs.String(), string(privateKey))
 }
 
+func TestLocalRequestURL(t *testing.T) {
+	tests := map[string]struct {
+		path    string
+		want    string
+		wantErr string
+	}{
+		"root": {
+			path: "/",
+			want: "http://127.0.0.1:8080/",
+		},
+		"empty becomes root": {
+			path: "",
+			want: "http://127.0.0.1:8080/",
+		},
+		"path with query": {
+			path: "/human-timeline-club/oidc/x/authorize?client_id=1",
+			want: "http://127.0.0.1:8080/human-timeline-club/oidc/x/authorize?client_id=1",
+		},
+		"at-host SSRF": {
+			path:    "@169.254.169.254:80/latest/meta-data/",
+			wantErr: "parse request path",
+		},
+		"scheme-relative path": {
+			path:    "//evil.example/x",
+			wantErr: "request path must begin with a single /",
+		},
+		"absolute http URL": {
+			path:    "http://evil.example/x",
+			wantErr: "request path must be relative",
+		},
+		"absolute https URL": {
+			path:    "https://evil.example/x",
+			wantErr: "request path must be relative",
+		},
+		"missing leading slash": {
+			path:    "oidc/x",
+			wantErr: "parse request path",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			got, err := localRequestURL("127.0.0.1", 8080, tc.path)
+			if tc.wantErr != "" {
+				r.ErrorContains(err, tc.wantErr)
+				return
+			}
+			r.NoError(err)
+			r.Equal(tc.want, got)
+		})
+	}
+}
+
+func TestHandleRequestRejectsOffLoopbackPaths(t *testing.T) {
+	r := require.New(t)
+	hit := false
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		hit = true
+	}))
+	defer srv.Close()
+
+	u, err := url.Parse(srv.URL)
+	r.NoError(err)
+	host, portValue, err := net.SplitHostPort(u.Host)
+	r.NoError(err)
+	port, err := strconv.Atoi(portValue)
+	r.NoError(err)
+
+	c := New(Config{LocalHost: host, LocalPort: port})
+	send := make(chan protocol.Message, 1)
+	done := make(chan struct{})
+	c.handleRequest(protocol.Message{
+		Type:     protocol.TypeRequest,
+		StreamID: 1,
+		Method:   http.MethodGet,
+		Path:     "@evil.example/x",
+	}, send, done)
+
+	resp := <-send
+	r.False(hit)
+	r.Equal("invalid request path", resp.Error)
+	r.Zero(resp.StatusCode)
+}
+
+func TestHandleRequestForwardsRelativePathAndQuery(t *testing.T) {
+	r := require.New(t)
+	var gotPath, gotRawQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		gotPath = req.URL.Path
+		gotRawQuery = req.URL.RawQuery
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	u, err := url.Parse(srv.URL)
+	r.NoError(err)
+	host, portValue, err := net.SplitHostPort(u.Host)
+	r.NoError(err)
+	port, err := strconv.Atoi(portValue)
+	r.NoError(err)
+
+	c := New(Config{LocalHost: host, LocalPort: port})
+	send := make(chan protocol.Message, 1)
+	done := make(chan struct{})
+	c.handleRequest(protocol.Message{
+		Type:     protocol.TypeRequest,
+		StreamID: 1,
+		Method:   http.MethodGet,
+		Path:     "/tunnel/oidc/app/authorize?client_id=x",
+	}, send, done)
+
+	resp := <-send
+	r.Empty(resp.Error)
+	r.Equal(http.StatusNoContent, resp.StatusCode)
+	r.Equal("/tunnel/oidc/app/authorize", gotPath)
+	r.Equal("client_id=x", gotRawQuery)
+}
+
 func TestHandleRequestDoesNotBlockWhenDoneClosed(t *testing.T) {
 	// Start a local HTTP server that returns instantly so handleRequest
 	// reaches the send on the unbuffered channel quickly.
