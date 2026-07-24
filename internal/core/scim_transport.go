@@ -21,7 +21,7 @@ func isRateLimitError(err error) bool {
 func (c *SCIMClient) createUser(u User) (string, bool, error) {
 	remoteID, found, err := c.findUserByExternalID(u)
 	switch {
-	case err != nil && c.filter:
+	case err != nil:
 		return "", false, err
 	case err == nil && found:
 		u.RemoteID = remoteID
@@ -56,7 +56,10 @@ func (c *SCIMClient) findUserByExternalID(u User) (string, bool, error) {
 		Label:        UserLabel(u),
 		Operation:    "adopt",
 	}); err != nil {
-		return "", false, err
+		if c.filter || isStoppingSCIMError(err) {
+			return "", false, err
+		}
+		return c.findUserByExternalIDWithoutFilter(u, err)
 	}
 	if err := validateExternalIDMatches(response.TotalResults, len(response.Resources), u.ID); err != nil {
 		c.setLastTraceError(err)
@@ -80,6 +83,10 @@ func (c *SCIMClient) findUserByExternalID(u User) (string, bool, error) {
 }
 
 func (c *SCIMClient) listUsers() ([]SCIMUserResource, error) {
+	return c.listUsersForOperation("import")
+}
+
+func (c *SCIMClient) listUsersForOperation(operation string) ([]SCIMUserResource, error) {
 	resources := make([]SCIMUserResource, 0, 32)
 	startIndex := 1
 	count := 100
@@ -90,7 +97,7 @@ func (c *SCIMClient) listUsers() ([]SCIMUserResource, error) {
 		if err := c.doJSON(http.MethodGet, path, nil, &response, TraceTarget{
 			ResourceType: "user",
 			Label:        "SCIM /Users",
-			Operation:    "import",
+			Operation:    operation,
 		}); err != nil {
 			return nil, err
 		}
@@ -122,6 +129,10 @@ func (c *SCIMClient) listUsers() ([]SCIMUserResource, error) {
 }
 
 func (c *SCIMClient) listGroups() ([]SCIMGroupResource, error) {
+	return c.listGroupsForOperation("import")
+}
+
+func (c *SCIMClient) listGroupsForOperation(operation string) ([]SCIMGroupResource, error) {
 	resources := make([]SCIMGroupResource, 0, 32)
 	startIndex := 1
 	count := 100
@@ -132,7 +143,7 @@ func (c *SCIMClient) listGroups() ([]SCIMGroupResource, error) {
 		if err := c.doJSON(http.MethodGet, path, nil, &response, TraceTarget{
 			ResourceType: "group",
 			Label:        "SCIM /Groups",
-			Operation:    "import",
+			Operation:    operation,
 		}); err != nil {
 			return nil, err
 		}
@@ -220,9 +231,14 @@ func (c *SCIMClient) deleteUser(u User, operation string) error {
 }
 
 func (c *SCIMClient) createGroup(g Group, users []User) (string, bool, error) {
+	resource, err := newSCIMGroupResource(g, users)
+	if err != nil {
+		return "", false, err
+	}
+
 	remoteID, found, err := c.findGroupByExternalID(g)
 	switch {
-	case err != nil && c.filter:
+	case err != nil:
 		return "", false, err
 	case err == nil && found:
 		g.RemoteID = remoteID
@@ -230,11 +246,6 @@ func (c *SCIMClient) createGroup(g Group, users []User) (string, bool, error) {
 			return "", false, err
 		}
 		return remoteID, true, nil
-	}
-
-	resource, err := newSCIMGroupResource(g, users)
-	if err != nil {
-		return "", false, err
 	}
 
 	var response SCIMGroupResource
@@ -260,7 +271,10 @@ func (c *SCIMClient) findGroupByExternalID(g Group) (string, bool, error) {
 		Label:        g.DisplayName,
 		Operation:    "adopt",
 	}); err != nil {
-		return "", false, err
+		if c.filter || isStoppingSCIMError(err) {
+			return "", false, err
+		}
+		return c.findGroupByExternalIDWithoutFilter(g, err)
 	}
 	if err := validateExternalIDMatches(response.TotalResults, len(response.Resources), g.ID); err != nil {
 		c.setLastTraceError(err)
@@ -281,6 +295,58 @@ func (c *SCIMClient) findGroupByExternalID(g Group) (string, bool, error) {
 		return "", false, err
 	}
 	return resource.ID, true, nil
+}
+
+func (c *SCIMClient) findUserByExternalIDWithoutFilter(u User, filterErr error) (string, bool, error) {
+	resources, err := c.listUsersForOperation("adopt")
+	if err != nil {
+		return "", false, fmt.Errorf("find SCIM user by externalId %q after filtered lookup failed (%v): %w", u.ID, filterErr, err)
+	}
+
+	remoteID := ""
+	for _, resource := range resources {
+		if resource.ExternalID != u.ID {
+			continue
+		}
+		if remoteID != "" {
+			err := fmt.Errorf("SCIM user list returned multiple resources for externalId %q", u.ID)
+			c.setLastTraceError(err)
+			return "", false, err
+		}
+		remoteID = strings.TrimSpace(resource.ID)
+		if remoteID == "" {
+			err := fmt.Errorf("SCIM user matched by externalId %q is missing id", u.ID)
+			c.setLastTraceError(err)
+			return "", false, err
+		}
+	}
+	return remoteID, remoteID != "", nil
+}
+
+func (c *SCIMClient) findGroupByExternalIDWithoutFilter(g Group, filterErr error) (string, bool, error) {
+	resources, err := c.listGroupsForOperation("adopt")
+	if err != nil {
+		return "", false, fmt.Errorf("find SCIM group by externalId %q after filtered lookup failed (%v): %w", g.ID, filterErr, err)
+	}
+
+	remoteID := ""
+	for _, resource := range resources {
+		if resource.ExternalID != g.ID {
+			continue
+		}
+		if remoteID != "" {
+			err := fmt.Errorf("SCIM group list returned multiple resources for externalId %q", g.ID)
+			c.setLastTraceError(err)
+			return "", false, err
+		}
+		remoteID = strings.TrimSpace(resource.ID)
+		if remoteID == "" {
+			err := fmt.Errorf("SCIM group matched by externalId %q is missing id", g.ID)
+			c.setLastTraceError(err)
+			return "", false, err
+		}
+	}
+	return remoteID, remoteID != "", nil
 }
 
 func externalIDFilterPath(resourcePath string, externalID string) string {

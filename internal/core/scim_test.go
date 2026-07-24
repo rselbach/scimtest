@@ -62,6 +62,8 @@ func TestSyncDirtyStateAdoptsAfterAmbiguousCreateWithoutFilterFlag(t *testing.T)
 		w.Header().Set("Content-Type", "application/scim+json")
 		switch {
 		case isSCIMExternalIDProbe(req):
+			http.Error(w, "filtering unsupported", http.StatusBadRequest)
+		case req.Method == http.MethodGet && req.URL.Path == "/Users":
 			if posts == 0 {
 				writeEmptySCIMListResponse(w)
 				return
@@ -107,6 +109,31 @@ func TestSyncDirtyStateAdoptsAfterAmbiguousCreateWithoutFilterFlag(t *testing.T)
 	r.Equal("remote-troy", second.State.Users[0].RemoteID)
 	r.False(second.State.Users[0].Dirty)
 	r.Contains(second.Status, "1 adopted")
+}
+
+func TestCreateWithoutFilterDoesNotPostWhenAdoptionLookupsFail(t *testing.T) {
+	r := require.New(t)
+	posts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodPost {
+			posts++
+		}
+		if req.URL.Query().Get("filter") != "" {
+			http.Error(w, "filtering unsupported", http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "listing unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	client, err := NewSCIMClient(Config{BaseURL: server.URL, BearerToken: "chang-secret"})
+	r.NoError(err)
+
+	_, _, err = client.createUser(User{ID: "troy"})
+	r.ErrorContains(err, "listing unavailable")
+	_, _, err = client.createGroup(Group{ID: "study-group", DisplayName: "Study Group"}, nil)
+	r.ErrorContains(err, "listing unavailable")
+	r.Zero(posts)
 }
 
 func TestSyncDirtyStateAdoptsResourcesByExternalID(t *testing.T) {
