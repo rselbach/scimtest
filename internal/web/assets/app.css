@@ -953,6 +953,57 @@
 	}
 	.setup-panel-header h3 { margin: 0 0 3px; color: var(--text-strong); font-size: 16px; }
 	.setup-panel-header p { margin: 0; color: var(--muted); font-size: 12.5px; }
+	.protocol-controls {
+	  display: flex;
+	  align-items: center;
+	  gap: 10px;
+	}
+	.protocol-switch {
+	  display: inline-flex;
+	  align-items: center;
+	  gap: 7px;
+	  color: var(--text);
+	  font-size: 12px;
+	  font-weight: 600;
+	  cursor: pointer;
+	  user-select: none;
+	}
+	.protocol-switch input {
+	  position: absolute;
+	  width: 1px;
+	  height: 1px;
+	  opacity: 0;
+	}
+	.protocol-switch-track {
+	  position: relative;
+	  width: 34px;
+	  height: 20px;
+	  border-radius: 999px;
+	  background: var(--line-strong);
+	  transition: background 120ms ease;
+	}
+	.protocol-switch-track::after {
+	  content: "";
+	  position: absolute;
+	  top: 3px;
+	  left: 3px;
+	  width: 14px;
+	  height: 14px;
+	  border-radius: 50%;
+	  background: #fff;
+	  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.25);
+	  transition: transform 120ms ease;
+	}
+	.protocol-switch input:checked + .protocol-switch-track { background: var(--success); }
+	.protocol-switch input:checked + .protocol-switch-track::after { transform: translateX(14px); }
+	.protocol-switch input:focus-visible + .protocol-switch-track { outline: 2px solid var(--accent); outline-offset: 2px; }
+	.protocol-fields {
+	  min-width: 0;
+	  margin: 0;
+	  padding: 0;
+	  border: 0;
+	}
+	.protocol-fields:disabled { opacity: 0.58; }
 	.setup-overview-grid {
 	  display: grid;
 	  grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -996,6 +1047,7 @@
 	.setup-review-environment small { color: var(--muted); font-size: 11px; }
 	.setup-review-environment strong { overflow: hidden; color: var(--text-strong); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 	.setup-review-hint { margin: 0; color: var(--muted); font-size: 11.5px; }
+	.setup-validation { margin-bottom: 14px; }
 	.setup-status {
 	  display: inline-flex;
 	  align-items: center;
@@ -1011,18 +1063,6 @@
 	}
 	.setup-status.configured { background: var(--success-soft); color: var(--success); }
 	.setup-status.incomplete { background: var(--warn-soft); color: var(--warn-text); }
-	.setup-remove {
-	  display: flex;
-	  align-items: center;
-	  justify-content: space-between;
-	  gap: 16px;
-	  margin-top: 8px;
-	  padding-top: 14px;
-	  border-top: 1px solid var(--line);
-	}
-	.setup-remove > span { display: grid; gap: 2px; }
-	.setup-remove strong { color: var(--text-strong); font-size: 12px; }
-	.setup-remove small { color: var(--muted); font-size: 11.5px; }
     /* align-content keeps rows content-sized at the top so a field with an
        extra row (e.g. a Show toggle) doesn't stretch its grid neighbors. */
     .field { display: grid; gap: 5px; align-content: start; }
@@ -1398,8 +1438,8 @@
 	  .setup-guide { padding: 16px; }
 	  .setup-overview-grid { grid-template-columns: 1fr; }
 	  .setup-review-environment { grid-template-columns: 1fr; }
-	  .setup-panel-header, .setup-remove { align-items: stretch; flex-direction: column; }
-	  .setup-remove .btn { width: 100%; }
+	  .setup-panel-header { align-items: stretch; flex-direction: column; }
+	  .protocol-controls { justify-content: space-between; }
 	  table.environments-table { min-width: 0; }
 	  .environments-table thead {
 		position: absolute;

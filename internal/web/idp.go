@@ -81,6 +81,15 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 	}
 	id := strings.TrimSpace(r.FormValue("id"))
 	removedProtocol := strings.TrimSpace(r.FormValue("remove_protocol"))
+	protocolSwitchesPresent := r.FormValue("protocol_switches_present") == "true"
+	protocolEnabled := map[string]bool{
+		"oidc": !protocolSwitchesPresent || r.FormValue("oidc_enabled") == "on",
+		"saml": !protocolSwitchesPresent || r.FormValue("saml_enabled") == "on",
+		"scim": !protocolSwitchesPresent || r.FormValue("scim_enabled") == "on",
+	}
+	if removedProtocol != "" {
+		protocolEnabled[removedProtocol] = false
+	}
 	oidcClientSecret := strings.TrimSpace(r.FormValue("oidc_client_secret"))
 	scimBearerToken := strings.TrimSpace(r.FormValue("scim_bearer_token"))
 	existingIndex, appExists := appIndexByID(state.Apps, id)
@@ -97,14 +106,18 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		scimCapabilitiesKnown = state.Apps[existingIndex].SCIMCapabilitiesKnown
 		scimPatchSupported = state.Apps[existingIndex].SCIMPatchSupported
 		scimFilterSupported = state.Apps[existingIndex].SCIMFilterSupported
-		if removedProtocol != "oidc" && oidcClientSecret == "" && r.FormValue("regenerate_oidc_secret") != "on" {
+		if protocolEnabled["oidc"] && oidcClientSecret == "" && r.FormValue("regenerate_oidc_secret") != "on" {
 			oidcClientSecret = state.Apps[existingIndex].OIDCClientSecret
 		}
-		if removedProtocol != "scim" && scimBearerToken == "" {
+		if protocolEnabled["scim"] && scimBearerToken == "" {
 			scimBearerToken = state.Apps[existingIndex].SCIMBearerToken
 		}
 	}
-	existingProtocol = protocolWithout(existingProtocol, removedProtocol)
+	for _, protocol := range []string{"oidc", "saml", "scim"} {
+		if !protocolEnabled[protocol] {
+			existingProtocol = protocolWithout(existingProtocol, protocol)
+		}
+	}
 	app := app{
 		ID:                     id,
 		Name:                   strings.TrimSpace(r.FormValue("name")),
@@ -142,24 +155,10 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 	if app.Slug == "" {
 		app.Slug = slugify(app.Name)
 	}
-	switch removedProtocol {
-	case "oidc":
-		app.OIDCClientID = ""
-		app.OIDCClientSecret = ""
-		app.OIDCPublicClient = false
-		app.OIDCRedirectURIs = nil
-		app.AllowAnyOIDCRedirect = false
-	case "saml":
-		app.SAMLEntityID = ""
-		app.SAMLACSURL = ""
-		app.SAMLAudience = ""
-	case "scim":
-		app.SCIMBaseURL = ""
-		app.SCIMBearerToken = ""
-		app.SCIMAutoOpenTrace = false
-		app.SCIMCapabilitiesKnown = false
-		app.SCIMPatchSupported = false
-		app.SCIMFilterSupported = false
+	for _, protocol := range []string{"oidc", "saml", "scim"} {
+		if !protocolEnabled[protocol] {
+			clearAppProtocol(&app, protocol)
+		}
 	}
 	app.OIDCClaimMappings = oidcClaimMappingsForApp(app)
 	app.SAMLAttributeMappings = samlAttributeMappingsForApp(app)
@@ -248,6 +247,28 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		location = addEnvironmentToURL(location, app.ID)
 	}
 	redirectWithFlash(w, r, location, flashMessage{Kind: "success", Message: status})
+}
+
+func clearAppProtocol(app *app, protocol string) {
+	switch protocol {
+	case "oidc":
+		app.OIDCClientID = ""
+		app.OIDCClientSecret = ""
+		app.OIDCPublicClient = false
+		app.OIDCRedirectURIs = nil
+		app.AllowAnyOIDCRedirect = false
+	case "saml":
+		app.SAMLEntityID = ""
+		app.SAMLACSURL = ""
+		app.SAMLAudience = ""
+	case "scim":
+		app.SCIMBaseURL = ""
+		app.SCIMBearerToken = ""
+		app.SCIMAutoOpenTrace = false
+		app.SCIMCapabilitiesKnown = false
+		app.SCIMPatchSupported = false
+		app.SCIMFilterSupported = false
+	}
 }
 
 func protocolWithout(protocol string, removed string) string {

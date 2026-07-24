@@ -533,6 +533,7 @@
         <input type="hidden" name="tab" value="apps">
         <input type="hidden" name="id" value="{{.AppForm.App.ID}}">
 		<input type="hidden" name="setup_section" value="{{.AppForm.Section}}" data-setup-section>
+		<input type="hidden" name="protocol_switches_present" value="true">
         {{/* Default button for Enter: without it, the first submit button in
              tree order is "Discover capabilities" (a formaction submit that
              ignores every field), so pressing Enter would discard edits. */}}
@@ -542,9 +543,9 @@
 		  {{if .FormError}}<div class="inline-error" role="alert" data-form-error>{{.FormError}}</div>{{end}}
 		  <nav class="setup-tabs" role="tablist" aria-label="Environment setup">
 			<button class="setup-tab {{if eq .AppForm.Section "overview"}}active{{end}}" type="button" role="tab" aria-selected="{{if eq .AppForm.Section "overview"}}true{{else}}false{{end}}" data-setup-tab="overview"><span class="setup-step-number">1</span> Environment</button>
-			<button class="setup-tab {{if eq .AppForm.Section "oidc"}}active{{end}}" type="button" role="tab" aria-selected="{{if eq .AppForm.Section "oidc"}}true{{else}}false{{end}}" data-setup-tab="oidc"><span class="setup-step-number">2</span> OIDC{{if .AppForm.OIDCStatus.Configured}} <span class="setup-check" aria-label="Configured">✓</span>{{else if .AppForm.OIDCStatus.Started}} <span class="setup-warning" aria-label="Incomplete">!</span>{{end}}</button>
-			<button class="setup-tab {{if eq .AppForm.Section "saml"}}active{{end}}" type="button" role="tab" aria-selected="{{if eq .AppForm.Section "saml"}}true{{else}}false{{end}}" data-setup-tab="saml"><span class="setup-step-number">3</span> SAML{{if .AppForm.SAMLStatus.Configured}} <span class="setup-check" aria-label="Configured">✓</span>{{else if .AppForm.SAMLStatus.Started}} <span class="setup-warning" aria-label="Incomplete">!</span>{{end}}</button>
-			<button class="setup-tab {{if eq .AppForm.Section "scim"}}active{{end}}" type="button" role="tab" aria-selected="{{if eq .AppForm.Section "scim"}}true{{else}}false{{end}}" data-setup-tab="scim"><span class="setup-step-number">4</span> SCIM{{if .AppForm.SCIMStatus.Configured}} <span class="setup-check" aria-label="Configured">✓</span>{{else if .AppForm.SCIMStatus.Started}} <span class="setup-warning" aria-label="Incomplete">!</span>{{end}}</button>
+			<button class="setup-tab {{if eq .AppForm.Section "oidc"}}active{{end}}" type="button" role="tab" aria-selected="{{if eq .AppForm.Section "oidc"}}true{{else}}false{{end}}" data-setup-tab="oidc"><span class="setup-step-number">2</span> OIDC <span class="{{if .AppForm.OIDCStatus.Configured}}setup-check{{else if .AppForm.OIDCStatus.Started}}setup-warning{{end}}" data-setup-tab-status="oidc" aria-label="{{.AppForm.OIDCStatus.Label}}">{{if .AppForm.OIDCStatus.Configured}}✓{{else if .AppForm.OIDCStatus.Started}}!{{end}}</span></button>
+			<button class="setup-tab {{if eq .AppForm.Section "saml"}}active{{end}}" type="button" role="tab" aria-selected="{{if eq .AppForm.Section "saml"}}true{{else}}false{{end}}" data-setup-tab="saml"><span class="setup-step-number">3</span> SAML <span class="{{if .AppForm.SAMLStatus.Configured}}setup-check{{else if .AppForm.SAMLStatus.Started}}setup-warning{{end}}" data-setup-tab-status="saml" aria-label="{{.AppForm.SAMLStatus.Label}}">{{if .AppForm.SAMLStatus.Configured}}✓{{else if .AppForm.SAMLStatus.Started}}!{{end}}</span></button>
+			<button class="setup-tab {{if eq .AppForm.Section "scim"}}active{{end}}" type="button" role="tab" aria-selected="{{if eq .AppForm.Section "scim"}}true{{else}}false{{end}}" data-setup-tab="scim"><span class="setup-step-number">4</span> SCIM <span class="{{if .AppForm.SCIMStatus.Configured}}setup-check{{else if .AppForm.SCIMStatus.Started}}setup-warning{{end}}" data-setup-tab-status="scim" aria-label="{{.AppForm.SCIMStatus.Label}}">{{if .AppForm.SCIMStatus.Configured}}✓{{else if .AppForm.SCIMStatus.Started}}!{{end}}</span></button>
 			<button class="setup-tab {{if eq .AppForm.Section "review"}}active{{end}}" type="button" role="tab" aria-selected="{{if eq .AppForm.Section "review"}}true{{else}}false{{end}}" data-setup-tab="review"><span class="setup-step-number">5</span> Review</button>
 		  </nav>
 
@@ -552,6 +553,7 @@
 			<div class="setup-panel-header">
 			  <div><h3>Environment</h3><p>Name this test environment and choose the shared sign-in behavior.</p></div>
 			</div>
+			<div class="inline-error setup-validation is-hidden" role="alert" data-setup-validation="overview"></div>
 			<div class="form-grid">
 			  <label class="field">
 				<span class="label">Environment name</span>
@@ -581,9 +583,17 @@
 		  <section class="setup-panel {{if eq .AppForm.Section "scim"}}active{{end}}" role="tabpanel" data-setup-panel="scim">
 			<div class="setup-panel-header">
 			  <div><h3>SCIM</h3><p>Provision users and groups from the shared directory to your app.</p></div>
-			  <span class="setup-status {{.AppForm.SCIMStatus.Class}}">{{if .AppForm.SCIMStatus.Configured}}✓ {{end}}{{.AppForm.SCIMStatus.Label}}</span>
+			  <div class="protocol-controls">
+				<span class="setup-status {{.AppForm.SCIMStatus.Class}} {{if not .AppForm.SCIMStatus.Started}}is-hidden{{end}}" data-setup-panel-status="scim">{{if .AppForm.SCIMStatus.Configured}}✓ {{end}}{{.AppForm.SCIMStatus.Label}}</span>
+				<label class="protocol-switch">
+				  <input type="checkbox" name="scim_enabled" data-protocol-toggle="scim" aria-label="Enable SCIM" {{if .AppForm.SCIMStatus.Started}}checked{{end}}>
+				  <span class="protocol-switch-track" aria-hidden="true"></span>
+				  <span data-protocol-toggle-label="scim">{{if .AppForm.SCIMStatus.Started}}Enabled{{else}}Disabled{{end}}</span>
+				</label>
+			  </div>
 			</div>
-			<div class="form-grid">
+			<div class="inline-error setup-validation is-hidden" role="alert" data-setup-validation="scim"></div>
+			<fieldset class="form-grid protocol-fields" data-protocol-fields="scim" {{if not .AppForm.SCIMStatus.Started}}disabled{{end}}>
 			  <label class="field full">
 				<span class="label">SCIM base URL</span>
 				<input name="scim_base_url" value="{{.AppForm.App.SCIMBaseURL}}" placeholder="https://service.example/scim/v2" autocomplete="off">
@@ -610,18 +620,23 @@
 				<button class="btn" type="submit" formaction="/apps/{{.AppForm.App.ID}}/discover-scim" formnovalidate>Discover capabilities</button>
 			  </div>
 			  {{end}}
-			  {{if and .AppForm.App.ID .AppForm.SCIMStatus.Started}}
-			  <div class="setup-remove field full"><span><strong>Remove SCIM setup</strong><small>Stops provisioning and clears the saved endpoint and token.</small></span><button class="btn btn-danger" type="submit" name="remove_protocol" value="scim" formnovalidate onclick="return confirm('Remove the SCIM setup from this environment? Saved sync state will be kept.')">Remove SCIM</button></div>
-			  {{end}}
-			</div>
+			</fieldset>
 		  </section>
 
 		  <section class="setup-panel {{if eq .AppForm.Section "oidc"}}active{{end}}" role="tabpanel" data-setup-panel="oidc">
 			<div class="setup-panel-header">
 			  <div><h3>OIDC</h3><p>Sign users in to your app with OpenID Connect.</p></div>
-			  <span class="setup-status {{.AppForm.OIDCStatus.Class}}">{{if .AppForm.OIDCStatus.Configured}}✓ {{end}}{{.AppForm.OIDCStatus.Label}}</span>
+			  <div class="protocol-controls">
+				<span class="setup-status {{.AppForm.OIDCStatus.Class}} {{if not .AppForm.OIDCStatus.Started}}is-hidden{{end}}" data-setup-panel-status="oidc">{{if .AppForm.OIDCStatus.Configured}}✓ {{end}}{{.AppForm.OIDCStatus.Label}}</span>
+				<label class="protocol-switch">
+				  <input type="checkbox" name="oidc_enabled" data-protocol-toggle="oidc" aria-label="Enable OIDC" {{if .AppForm.OIDCStatus.Started}}checked{{end}}>
+				  <span class="protocol-switch-track" aria-hidden="true"></span>
+				  <span data-protocol-toggle-label="oidc">{{if .AppForm.OIDCStatus.Started}}Enabled{{else}}Disabled{{end}}</span>
+				</label>
+			  </div>
 			</div>
-			<div class="form-grid">
+			<div class="inline-error setup-validation is-hidden" role="alert" data-setup-validation="oidc"></div>
+			<fieldset class="form-grid protocol-fields" data-protocol-fields="oidc" {{if not .AppForm.OIDCStatus.Started}}disabled{{end}}>
               <label class="field">
                 <span class="label">Client ID</span>
                 <input name="oidc_client_id" value="{{.AppForm.App.OIDCClientID}}" autocomplete="off">
@@ -730,18 +745,23 @@
                 </div>
               </div>
               {{end}}
-			  {{if and .AppForm.App.ID .AppForm.OIDCStatus.Started}}
-			  <div class="setup-remove field full"><span><strong>Remove OIDC setup</strong><small>Clears the saved client, secret, redirect URIs, and test actions.</small></span><button class="btn btn-danger" type="submit" name="remove_protocol" value="oidc" formnovalidate onclick="return confirm('Remove the OIDC setup from this environment?')">Remove OIDC</button></div>
-			  {{end}}
-			</div>
+			</fieldset>
 		  </section>
 
 		  <section class="setup-panel {{if eq .AppForm.Section "saml"}}active{{end}}" role="tabpanel" data-setup-panel="saml" data-saml-base-url="{{.IDPBaseURL}}">
 			<div class="setup-panel-header">
 			  <div><h3>SAML</h3><p>Configure scimtest as the identity provider for your service provider.</p></div>
-			  <span class="setup-status {{.AppForm.SAMLStatus.Class}}">{{if .AppForm.SAMLStatus.Configured}}✓ {{end}}{{.AppForm.SAMLStatus.Label}}</span>
+			  <div class="protocol-controls">
+				<span class="setup-status {{.AppForm.SAMLStatus.Class}} {{if not .AppForm.SAMLStatus.Started}}is-hidden{{end}}" data-setup-panel-status="saml">{{if .AppForm.SAMLStatus.Configured}}✓ {{end}}{{.AppForm.SAMLStatus.Label}}</span>
+				<label class="protocol-switch">
+				  <input type="checkbox" name="saml_enabled" data-protocol-toggle="saml" aria-label="Enable SAML" {{if .AppForm.SAMLStatus.Started}}checked{{end}}>
+				  <span class="protocol-switch-track" aria-hidden="true"></span>
+				  <span data-protocol-toggle-label="saml">{{if .AppForm.SAMLStatus.Started}}Enabled{{else}}Disabled{{end}}</span>
+				</label>
+			  </div>
 			</div>
-			<div class="form-grid">
+			<div class="inline-error setup-validation is-hidden" role="alert" data-setup-validation="saml"></div>
+			<fieldset class="form-grid protocol-fields" data-protocol-fields="saml" {{if not .AppForm.SAMLStatus.Started}}disabled{{end}}>
               <label class="field">
                 <span class="label">SP entity ID</span>
                 <input name="saml_entity_id" value="{{.AppForm.App.SAMLEntityID}}" autocomplete="off">
@@ -808,13 +828,10 @@
                 </div>
               </div>
               {{end}}
-			  {{if and .AppForm.App.ID .AppForm.SAMLStatus.Started}}
-			  <div class="setup-remove field full"><span><strong>Remove SAML setup</strong><small>Clears the saved service provider details and test actions.</small></span><button class="btn btn-danger" type="submit" name="remove_protocol" value="saml" formnovalidate onclick="return confirm('Remove the SAML setup from this environment?')">Remove SAML</button></div>
-			  {{end}}
-			</div>
+			</fieldset>
 		  </section>
 
-		  <section class="setup-panel {{if eq .AppForm.Section "review"}}active{{end}}" role="tabpanel" data-setup-panel="review" data-oidc-started="{{.AppForm.OIDCStatus.Started}}" data-saml-started="{{.AppForm.SAMLStatus.Started}}" data-scim-started="{{.AppForm.SCIMStatus.Started}}" data-scim-token="{{if .AppForm.App.SCIMBearerToken}}true{{else}}false{{end}}">
+		  <section class="setup-panel {{if eq .AppForm.Section "review"}}active{{end}}" role="tabpanel" data-setup-panel="review" data-scim-token="{{if .AppForm.App.SCIMBearerToken}}true{{else}}false{{end}}">
 			<div class="setup-panel-header">
 			  <div><h3>Review environment</h3><p>Confirm the environment and integrations before saving.</p></div>
 			</div>

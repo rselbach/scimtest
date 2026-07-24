@@ -2719,11 +2719,19 @@ func TestAppFormShowsOIDCSetupPanel(t *testing.T) {
 	r.Contains(body, `data-setup-panel="oidc"`)
 	r.Contains(body, `data-setup-panel="review"`)
 	r.Contains(body, `data-setup-content`)
+	r.Contains(body, `data-setup-tab-status="oidc"`)
+	r.Contains(body, `data-setup-panel-status="oidc"`)
+	r.Contains(body, `data-setup-validation="oidc"`)
 	r.Contains(body, `data-setup-previous`)
 	r.Contains(body, `data-setup-next`)
 	r.Contains(body, `data-setup-save`)
+	r.Contains(body, `name="protocol_switches_present" value="true"`)
+	r.Contains(body, `name="oidc_enabled" data-protocol-toggle="oidc"`)
+	r.Contains(body, `name="saml_enabled" data-protocol-toggle="saml"`)
+	r.Contains(body, `name="scim_enabled" data-protocol-toggle="scim"`)
+	r.Contains(body, `data-protocol-fields="oidc"`)
 	r.NotContains(body, `name="protocol"`)
-	r.NotContains(body, `name="scim_enabled"`)
+	r.NotContains(body, `name="remove_protocol"`)
 	r.NotContains(body, `>Both<`)
 	r.Contains(body, "http://idp.test/oidc/example/.well-known/openid-configuration")
 	r.Contains(body, "http://idp.test/oidc/example/token")
@@ -2732,6 +2740,59 @@ func TestAppFormShowsOIDCSetupPanel(t *testing.T) {
 	r.Contains(body, "generated-secret")
 	r.Contains(body, "http://idp.test/saml/example/sso")
 	r.Contains(body, "-----BEGIN CERTIFICATE-----")
+}
+
+func TestDisabledProtocolSwitchesClearSettingsAndSkipValidation(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{Apps: []app{{
+		ID:                    "app-1",
+		Name:                  "Greendale Portal",
+		Slug:                  "greendale",
+		Protocol:              "both",
+		OIDCClientID:          "greendale-client",
+		OIDCClientSecret:      "chang-secret",
+		AllowAnyOIDCRedirect:  true,
+		SAMLEntityID:          "greendale-sp",
+		SAMLACSURL:            "https://greendale.test/saml/acs",
+		SCIMEnabled:           true,
+		SCIMBaseURL:           "https://greendale.test/scim/v2",
+		SCIMBearerToken:       "chang-token",
+		SCIMCapabilitiesKnown: true,
+	}}}))
+	appService := newTestIDPApp(t)
+	form := url.Values{
+		"id":                        {"app-1"},
+		"tab":                       {"apps"},
+		"name":                      {"Greendale Portal"},
+		"slug":                      {"greendale"},
+		"protocol_switches_present": {"true"},
+		"saml_enabled":              {"on"},
+		"saml_entity_id":            {"greendale-sp"},
+		"saml_acs_url":              {"https://greendale.test/saml/acs"},
+		"oidc_client_id":            {"duplicate-or-invalid-but-disabled"},
+		"oidc_redirect_uris":        {"://invalid"},
+		"scim_base_url":             {"://invalid"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/apps/save", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	appService.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	state, err := loadState()
+	r.NoError(err)
+	saved := state.Apps[0]
+	r.Equal("saml", saved.Protocol)
+	r.Empty(saved.OIDCClientID)
+	r.Empty(saved.OIDCClientSecret)
+	r.Empty(saved.OIDCRedirectURIs)
+	r.Equal("https://greendale.test/saml/acs", saved.SAMLACSURL)
+	r.False(saved.SCIMEnabled)
+	r.Empty(saved.SCIMBaseURL)
+	r.Empty(saved.SCIMBearerToken)
+	r.False(saved.SCIMCapabilitiesKnown)
 }
 
 func TestAppSavePersistsIncompleteSCIMSetup(t *testing.T) {

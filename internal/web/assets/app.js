@@ -267,56 +267,139 @@
 	  }
 	}
 
-	function setReviewStatus(protocol, started, configured, detail) {
+	function setupHTTPBaseURLValid(value) {
+	  if (!setupHTTPURLValid(value)) return false;
+	  const url = new URL(value);
+	  return !url.username && !url.password && !url.search;
+	}
+
+	function setupMappingError(fields, reserved, label) {
+	  const seen = new Set(reserved);
+	  for (const field of fields) {
+		const value = setupFieldValue(field);
+		if (!value) return {message: label + ' names are required.', field: field};
+		if (seen.has(value)) return {message: label + ' names must be unique and cannot use reserved names.', field: field};
+		seen.add(value);
+	  }
+	  return null;
+	}
+
+	function environmentSetupState() {
+	  if (!setupFieldValue('name')) return {error: 'Enter an environment name.', field: 'name'};
+	  if (!setupFieldValue('slug')) return {error: 'Enter an endpoint name.', field: 'slug'};
+	  return {error: ''};
+	}
+
+	function oidcSetupState() {
+	  if (!setupFieldChecked('oidc_enabled')) return {enabled: false, started: false, configured: false, detail: 'Not included', error: ''};
+	  const clientID = setupFieldValue('oidc_client_id');
+	  const redirects = setupFieldValue('oidc_redirect_uris')
+		.split(/\r?\n/)
+		.map(function (value) { return value.trim(); })
+		.filter(Boolean);
+	  const allowAny = setupFieldChecked('allow_any_oidc_redirect') || setupFieldValue('allow_any_oidc_redirect') === 'on';
+	  if (!clientID) return {enabled: true, started: true, configured: false, detail: 'Client ID is missing', error: 'Enter a client ID to finish OIDC setup.', field: 'oidc_client_id'};
+	  if (redirects.some(function (value) { return !setupHTTPURLValid(value); })) return {enabled: true, started: true, configured: false, detail: 'A redirect URI is invalid', error: 'Redirect URIs must be absolute HTTP(S) URLs without fragments.', field: 'oidc_redirect_uris'};
+	  if (!allowAny && !redirects.length) return {enabled: true, started: true, configured: false, detail: 'Redirect URI is missing', error: 'Enter at least one redirect URI or allow arbitrary redirect URIs.', field: 'oidc_redirect_uris'};
+	  const mappingError = setupMappingError(
+		['oidc_claim_name', 'oidc_claim_given_name', 'oidc_claim_family_name', 'oidc_claim_username', 'oidc_claim_email', 'oidc_claim_groups'],
+		['sub', 'iss', 'aud', 'iat', 'exp', 'nonce', 'email_verified'],
+		'OIDC claim'
+	  );
+	  if (mappingError) return {enabled: true, started: true, configured: false, detail: 'Claim mappings are invalid', error: mappingError.message, field: mappingError.field};
+	  const detail = allowAny && !redirects.length ? 'Any redirect URI allowed' : redirects.length + (redirects.length === 1 ? ' redirect URI' : ' redirect URIs');
+	  return {enabled: true, started: true, configured: true, detail: detail, error: ''};
+	}
+
+	function samlSetupState() {
+	  if (!setupFieldChecked('saml_enabled')) return {enabled: false, started: false, configured: false, detail: 'Not included', error: ''};
+	  const acsURL = setupFieldValue('saml_acs_url');
+	  if (!acsURL) return {enabled: true, started: true, configured: false, detail: 'ACS URL is missing', error: 'Enter an ACS URL to finish SAML setup.', field: 'saml_acs_url'};
+	  if (!setupHTTPURLValid(acsURL)) return {enabled: true, started: true, configured: false, detail: 'ACS URL is invalid', error: 'The ACS URL must be an absolute HTTP(S) URL without a fragment.', field: 'saml_acs_url'};
+	  const mappingError = setupMappingError(
+		['saml_attribute_given_name', 'saml_attribute_family_name', 'saml_attribute_username', 'saml_email_attribute_name', 'saml_attribute_groups'],
+		[],
+		'SAML attribute'
+	  );
+	  if (mappingError) return {enabled: true, started: true, configured: false, detail: 'Attribute mappings are invalid', error: mappingError.message, field: mappingError.field};
+	  return {enabled: true, started: true, configured: true, detail: acsURL, error: ''};
+	}
+
+	function scimSetupState() {
+	  if (!setupFieldChecked('scim_enabled')) return {enabled: false, started: false, configured: false, detail: 'Not included', error: ''};
+	  const baseURL = setupFieldValue('scim_base_url');
+	  const token = setupFieldValue('scim_bearer_token');
+	  if (!baseURL) return {enabled: true, started: true, configured: false, detail: 'Base URL is missing', error: 'Enter a SCIM base URL.', field: 'scim_base_url'};
+	  if (!setupHTTPBaseURLValid(baseURL)) return {enabled: true, started: true, configured: false, detail: 'Base URL is invalid', error: 'The SCIM base URL must be an absolute HTTP(S) URL without credentials, a query, or a fragment.', field: 'scim_base_url'};
+	  if (!token && setupReview.dataset.scimToken !== 'true') return {enabled: true, started: true, configured: false, detail: 'Bearer token is missing', error: 'Enter a SCIM bearer token.', field: 'scim_bearer_token'};
+	  return {enabled: true, started: true, configured: true, detail: baseURL, error: ''};
+	}
+
+	function protocolSetupStates() {
+	  return {oidc: oidcSetupState(), saml: samlSetupState(), scim: scimSetupState()};
+	}
+
+	function setupStatusLabel(state) {
+	  if (!state.enabled) return 'Disabled';
+	  return state.configured ? 'Configured' : 'Incomplete';
+	}
+
+	function updateProtocolEnabledState() {
+	  for (const protocol of ['oidc', 'saml', 'scim']) {
+		const enabled = setupFieldChecked(protocol + '_enabled');
+		const fields = document.querySelector('[data-protocol-fields="' + protocol + '"]');
+		const label = document.querySelector('[data-protocol-toggle-label="' + protocol + '"]');
+		if (fields) fields.disabled = !enabled;
+		if (label) label.textContent = enabled ? 'Enabled' : 'Disabled';
+	  }
+	}
+
+	function updateProtocolStatus(protocol, state) {
+	  const label = setupStatusLabel(state);
+	  const tabStatus = document.querySelector('[data-setup-tab-status="' + protocol + '"]');
+	  if (tabStatus) {
+		tabStatus.classList.remove('setup-check', 'setup-warning');
+		if (state.configured) tabStatus.classList.add('setup-check');
+		if (state.started && !state.configured) tabStatus.classList.add('setup-warning');
+		tabStatus.textContent = state.configured ? '✓' : state.started ? '!' : '';
+		tabStatus.setAttribute('aria-label', label);
+	  }
+	  const panelStatus = document.querySelector('[data-setup-panel-status="' + protocol + '"]');
+	  if (panelStatus) {
+		panelStatus.classList.toggle('is-hidden', !state.enabled);
+		panelStatus.classList.remove('configured', 'incomplete', 'not-set-up');
+		panelStatus.classList.add(state.configured ? 'configured' : state.started ? 'incomplete' : 'not-set-up');
+		panelStatus.textContent = (state.configured ? '✓ ' : '') + label;
+	  }
+	}
+
+	function setReviewStatus(protocol, state) {
 	  if (!setupReview) return;
 	  const status = setupReview.querySelector('[data-review-status="' + protocol + '"]');
 	  const detailElement = setupReview.querySelector('[data-review-detail="' + protocol + '"]');
 	  if (!status || !detailElement) return;
 	  status.classList.remove('configured', 'incomplete', 'not-set-up');
-	  status.classList.add(configured ? 'configured' : started ? 'incomplete' : 'not-set-up');
-	  status.textContent = configured ? 'Configured' : started ? 'Incomplete' : 'Not set up';
-	  detailElement.textContent = detail;
+	  status.classList.add(state.configured ? 'configured' : state.started ? 'incomplete' : 'not-set-up');
+	  status.textContent = setupStatusLabel(state);
+	  detailElement.textContent = state.detail;
 	}
 
-	function updateSetupReview() {
+	function updateSetupReview(states) {
 	  if (!environmentForm || !setupReview) return;
-	  const name = setupFieldValue('name');
-	  const slug = setupFieldValue('slug');
 	  const reviewName = setupReview.querySelector('[data-review-name]');
 	  const reviewSlug = setupReview.querySelector('[data-review-slug]');
-	  if (reviewName) reviewName.textContent = name || 'Not named';
-	  if (reviewSlug) reviewSlug.textContent = slug || 'Not set';
+	  if (reviewName) reviewName.textContent = setupFieldValue('name') || 'Not named';
+	  if (reviewSlug) reviewSlug.textContent = setupFieldValue('slug') || 'Not set';
+	  for (const protocol of ['oidc', 'saml', 'scim']) setReviewStatus(protocol, states[protocol]);
+	}
 
-	  const oidcClientID = setupFieldValue('oidc_client_id');
-	  const oidcSecret = setupFieldValue('oidc_client_secret');
-	  const oidcRedirects = setupFieldValue('oidc_redirect_uris')
-		.split(/\r?\n/)
-		.map(function (value) { return value.trim(); })
-		.filter(Boolean);
-	  const oidcPublic = setupFieldChecked('oidc_public_client');
-	  const oidcAllowAny = setupFieldChecked('allow_any_oidc_redirect') || setupFieldValue('allow_any_oidc_redirect') === 'on';
-	  const oidcStarted = setupReview.dataset.oidcStarted === 'true' || Boolean(oidcClientID || oidcSecret || oidcRedirects.length || oidcPublic || oidcAllowAny);
-	  const oidcConfigured = oidcStarted && Boolean(oidcClientID) && (oidcAllowAny || oidcRedirects.length > 0 && oidcRedirects.every(setupHTTPURLValid));
-	  let oidcDetail = 'Not included';
-	  if (oidcConfigured) {
-		oidcDetail = oidcAllowAny && !oidcRedirects.length ? 'Any redirect URI allowed' : oidcRedirects.length + (oidcRedirects.length === 1 ? ' redirect URI' : ' redirect URIs');
-	  } else if (oidcStarted) {
-		oidcDetail = 'Some required details are missing';
-	  }
-	  setReviewStatus('oidc', oidcStarted, oidcConfigured, oidcDetail);
-
-	  const samlEntityID = setupFieldValue('saml_entity_id');
-	  const samlACSURL = setupFieldValue('saml_acs_url');
-	  const samlAudience = setupFieldValue('saml_audience');
-	  const samlStarted = setupReview.dataset.samlStarted === 'true' || Boolean(samlEntityID || samlACSURL || samlAudience);
-	  const samlConfigured = samlStarted && setupHTTPURLValid(samlACSURL);
-	  setReviewStatus('saml', samlStarted, samlConfigured, samlConfigured ? samlACSURL : samlStarted ? 'Some required details are missing' : 'Not included');
-
-	  const scimBaseURL = setupFieldValue('scim_base_url');
-	  const scimToken = setupFieldValue('scim_bearer_token');
-	  const scimStarted = setupReview.dataset.scimStarted === 'true' || Boolean(scimBaseURL || scimToken);
-	  const scimConfigured = scimStarted && setupHTTPURLValid(scimBaseURL) && (Boolean(scimToken) || setupReview.dataset.scimToken === 'true');
-	  setReviewStatus('scim', scimStarted, scimConfigured, scimConfigured ? scimBaseURL : scimStarted ? 'Some required details are missing' : 'Not included');
+	function updateSetupState() {
+	  if (!environmentForm || !setupReview) return null;
+	  updateProtocolEnabledState();
+	  const states = protocolSetupStates();
+	  for (const protocol of ['oidc', 'saml', 'scim']) updateProtocolStatus(protocol, states[protocol]);
+	  if (setupSection && setupSection.value === 'review') updateSetupReview(states);
+	  return states;
 	}
 
 	function updateSAMLSetupURLs() {
@@ -342,6 +425,55 @@
 	  if (setupSave) setupSave.classList.toggle('is-hidden', section !== 'review');
 	}
 
+	function setupSectionState(section, states) {
+	  if (section === 'overview') return environmentSetupState();
+	  return states && states[section] ? states[section] : {error: ''};
+	}
+
+	function renderSetupValidation(section, state, force) {
+	  const validation = document.querySelector('[data-setup-validation="' + section + '"]');
+	  if (!validation || !force && validation.dataset.active !== 'true') return;
+	  if (!state.error) {
+		validation.textContent = '';
+		validation.classList.add('is-hidden');
+		delete validation.dataset.active;
+		return;
+	  }
+	  validation.textContent = state.error;
+	  validation.classList.remove('is-hidden');
+	  validation.dataset.active = 'true';
+	}
+
+	function focusSetupStateField(state) {
+	  const field = state.field ? environmentForm.querySelector('[name="' + state.field + '"]') : null;
+	  if (!field) return;
+	  const details = field.closest('details');
+	  if (details) details.open = true;
+	  field.focus();
+	}
+
+	function validateSetupSection(section) {
+	  const states = updateSetupState();
+	  const state = setupSectionState(section, states);
+	  renderSetupValidation(section, state, true);
+	  if (!state.error) return true;
+	  focusSetupStateField(state);
+	  return false;
+	}
+
+	function validateAllSetupSections() {
+	  const states = updateSetupState();
+	  for (const section of ['overview', 'oidc', 'saml', 'scim']) {
+		const state = setupSectionState(section, states);
+		if (!state.error) continue;
+		showSetupSection(section, true);
+		renderSetupValidation(section, state, true);
+		focusSetupStateField(state);
+		return false;
+	  }
+	  return true;
+	}
+
 	function showSetupSection(section, focusTab) {
 	  if (!setupTabs.length || !setupPanels.length || !setupSteps.includes(section)) return;
 	  for (const tab of setupTabs) {
@@ -355,7 +487,7 @@
 		panel.setAttribute('aria-hidden', active ? 'false' : 'true');
 	  }
 	  if (setupSection) setupSection.value = section;
-	  if (section === 'review') updateSetupReview();
+	  updateSetupState();
 	  updateSetupActions(section);
 	  if (setupContent) setupContent.scrollTop = 0;
 	  if (focusTab) {
@@ -366,6 +498,7 @@
 
 	function moveSetupSection(direction) {
 	  const current = setupSection ? setupSection.value : 'overview';
+	  if (direction > 0 && !validateSetupSection(current)) return;
 	  const index = setupSteps.indexOf(current);
 	  const nextIndex = Math.min(Math.max(index + direction, 0), setupSteps.length - 1);
 	  showSetupSection(setupSteps[nextIndex], true);
@@ -411,21 +544,29 @@
     }
 
 	if (environmentForm) {
+	  function refreshSetupValidation() {
+		const states = updateSetupState();
+		const section = setupSection ? setupSection.value : 'overview';
+		renderSetupValidation(section, setupSectionState(section, states), false);
+	  }
 	  environmentForm.addEventListener('input', function () {
 		updateSAMLSetupURLs();
-		if (setupSection && setupSection.value === 'review') updateSetupReview();
+		refreshSetupValidation();
 	  });
 	  environmentForm.addEventListener('change', function () {
-		if (setupSection && setupSection.value === 'review') updateSetupReview();
+		refreshSetupValidation();
 	  });
 	  environmentForm.addEventListener('submit', function (event) {
 		const submitter = event.submitter;
-		if (submitter && (submitter.matches('[data-setup-save]') || submitter.name === 'remove_protocol' || submitter.hasAttribute('formaction'))) return;
-		if (setupSection && setupSection.value === 'review') return;
+		if (submitter && (submitter.name === 'remove_protocol' || submitter.hasAttribute('formaction'))) return;
+		if (setupSection && setupSection.value === 'review') {
+		  if (!validateAllSetupSections()) event.preventDefault();
+		  return;
+		}
 		event.preventDefault();
 		moveSetupSection(1);
 	  });
-	  updateSetupReview();
+	  updateSetupState();
 	  updateSAMLSetupURLs();
 	  updateSetupActions(setupSection ? setupSection.value : 'overview');
 	}
