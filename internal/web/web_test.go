@@ -2353,8 +2353,15 @@ func TestAutomaticTunnelUsesApplicationIdentity(t *testing.T) {
 	r.Equal(privateKey, got.ApplicationPrivateKey)
 	r.Equal(8080, got.LocalPort)
 	r.NotNil(got.Logger)
+	r.NotNil(got.OnRegistered)
 	r.Equal("https://scimtest.rselbach.com/random-tunnel", app.tunnelPublicURL())
 	r.Equal("/random-tunnel", app.tunnelPathPrefix())
+	got.OnRegistered(scimtestclient.Registration{
+		TunnelID:  "replacement-tunnel",
+		PublicURL: "https://scimtest.rselbach.com/replacement-tunnel/",
+	})
+	r.Equal("https://scimtest.rselbach.com/replacement-tunnel", app.tunnelPublicURL())
+	r.Equal("/replacement-tunnel", app.tunnelPathPrefix())
 	r.NoError(app.closeAutomaticTunnel())
 	r.True(tunnel.closed)
 	r.Empty(app.tunnelPublicURL())

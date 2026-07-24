@@ -987,6 +987,7 @@ func (a *webApp) startAutomaticTunnelLocked(identity tunnelApplicationIdentity) 
 		ApplicationPrivateKey: identity.privateKey,
 		LocalPort:             a.localPort,
 		Logger:                slog.Default(),
+		OnRegistered:          a.updateAutomaticTunnelRegistration,
 	}, 20*time.Second)
 	if err != nil {
 		a.setTunnelError(fmt.Sprintf("start automatic tunnel: %v", err))
@@ -1025,6 +1026,26 @@ func (a *webApp) startAutomaticTunnelLocked(identity tunnelApplicationIdentity) 
 	a.tunnelLastError = ""
 	a.tunnelMu.Unlock()
 	log.Printf("tunnel established at %s", publicURL)
+}
+
+func (a *webApp) updateAutomaticTunnelRegistration(registration scimtestclient.Registration) {
+	publicURL := strings.TrimRight(strings.TrimSpace(registration.PublicURL), "/")
+	pathPrefix, err := tunnelPathPrefix(publicURL)
+	if err != nil {
+		a.setTunnelError(fmt.Sprintf("update automatic tunnel registration: %v", err))
+		log.Printf("update tunnel registration: %v", err)
+		return
+	}
+
+	a.tunnelMu.Lock()
+	defer a.tunnelMu.Unlock()
+	if a.tunnel == nil {
+		return
+	}
+	a.tunnel.PathPrefix = pathPrefix
+	a.tunnel.PublicURL = publicURL
+	a.tunnelLastError = ""
+	log.Printf("tunnel re-established at %s", publicURL)
 }
 
 func (a *webApp) closeAutomaticTunnel() error {

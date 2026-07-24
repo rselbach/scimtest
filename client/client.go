@@ -28,18 +28,43 @@ type Config struct {
 	MaxConcurrentRequests int
 	Logger                *slog.Logger
 	ReconnectTimeout      time.Duration
+	OnRegistered          func(Registration)
+}
+
+// Registration identifies the current public tunnel assigned by the server.
+type Registration struct {
+	TunnelID  string
+	PublicURL string
 }
 
 type Tunnel struct {
 	ID        string
 	PublicURL string
 
-	cancel context.CancelFunc
-	done   chan error
+	cancel       context.CancelFunc
+	done         chan error
+	registration *registrationState
 
 	closeOnce sync.Once
 	waitOnce  sync.Once
 	waitErr   error
+}
+
+type registrationState struct {
+	mu    sync.RWMutex
+	value Registration
+}
+
+func (s *registrationState) set(registration Registration) {
+	s.mu.Lock()
+	s.value = registration
+	s.mu.Unlock()
+}
+
+func (s *registrationState) get() Registration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.value
 }
 
 func Start(ctx context.Context, cfg Config) (*Tunnel, error) {
@@ -63,7 +88,8 @@ func Start(ctx context.Context, cfg Config) (*Tunnel, error) {
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
-	registered := make(chan internalclient.Registration, 1)
+	registered := make(chan Registration, 1)
+	registration := &registrationState{}
 	var registeredOnce sync.Once
 
 	c := internalclient.New(internalclient.Config{
@@ -80,9 +106,17 @@ func Start(ctx context.Context, cfg Config) (*Tunnel, error) {
 		ReconnectTimeout:      cfg.ReconnectTimeout,
 		Output:                io.Discard,
 		OnRegistered: func(reg internalclient.Registration) {
+			current := Registration{
+				TunnelID:  reg.TunnelID,
+				PublicURL: reg.PublicURL,
+			}
+			registration.set(current)
 			registeredOnce.Do(func() {
-				registered <- reg
+				registered <- current
 			})
+			if cfg.OnRegistered != nil {
+				cfg.OnRegistered(current)
+			}
 		},
 	})
 
@@ -94,10 +128,11 @@ func Start(ctx context.Context, cfg Config) (*Tunnel, error) {
 	select {
 	case reg := <-registered:
 		return &Tunnel{
-			ID:        reg.TunnelID,
-			PublicURL: reg.PublicURL,
-			cancel:    cancel,
-			done:      done,
+			ID:           reg.TunnelID,
+			PublicURL:    reg.PublicURL,
+			cancel:       cancel,
+			done:         done,
+			registration: registration,
 		}, nil
 	case err := <-done:
 		cancel()
@@ -112,6 +147,11 @@ func Start(ctx context.Context, cfg Config) (*Tunnel, error) {
 		cancel()
 		return nil, ctx.Err()
 	}
+}
+
+// Registration returns the latest public tunnel assigned by the server.
+func (t *Tunnel) Registration() Registration {
+	return t.registration.get()
 }
 
 func (t *Tunnel) Close() error {
