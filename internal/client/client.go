@@ -25,7 +25,6 @@ const (
 	maxBodyBytesDefault          = 32 << 20
 	writeTimeout                 = 10 * time.Second
 	httpClientTimeout            = 2 * time.Minute
-	readLimitOverhead            = 1 << 20
 	sendChannelSize              = 64
 	maxConcurrentRequestsDefault = 32
 )
@@ -203,7 +202,7 @@ func (c *Client) runOnce(ctx context.Context) error {
 		})
 	}
 	defer closeConn()
-	conn.SetReadLimit(c.cfg.MaxBodyBytes + readLimitOverhead)
+	conn.SetReadLimit(protocol.MaxMessageBytes(c.cfg.MaxBodyBytes))
 
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

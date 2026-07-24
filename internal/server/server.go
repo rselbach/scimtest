@@ -35,7 +35,6 @@ const (
 	closeWriteTimeout     = 2 * time.Second
 	tunnelResponseTimeout = 2 * time.Minute
 	maxRandomIDAttempts   = 10
-	readLimitOverhead     = 1 << 20
 	sendChannelSize       = 64
 )
 
@@ -370,7 +369,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 			s.logger().Debug("close tunnel connection failed", "err", err)
 		}
 	}()
-	conn.SetReadLimit(s.cfg.MaxBodyBytes + readLimitOverhead)
+	conn.SetReadLimit(protocol.MaxMessageBytes(s.cfg.MaxBodyBytes))
 
 	// Bound the whole registration handshake, including the application
 	// challenge exchange, so unauthenticated connections cannot idle.

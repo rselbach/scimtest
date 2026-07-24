@@ -2,10 +2,13 @@ package protocol
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 )
 
 const MaxBodyBytesDefault = 32 << 20
+
+const maxMessageMetadataBytes = 1 << 20
 
 const (
 	TypeRegisterTunnel       = "register_tunnel"
@@ -40,6 +43,23 @@ type Message struct {
 
 	StatusCode int    `json:"status_code,omitempty"`
 	Error      string `json:"error,omitempty"`
+}
+
+// MaxMessageBytes returns the WebSocket read limit needed for a message with
+// maxBodyBytes of binary body data. JSON encodes byte slices as base64.
+func MaxMessageBytes(maxBodyBytes int64) int64 {
+	if maxBodyBytes <= 0 {
+		return maxMessageMetadataBytes
+	}
+
+	blocks := maxBodyBytes / 3
+	if maxBodyBytes%3 != 0 {
+		blocks++
+	}
+	if blocks > (math.MaxInt64-maxMessageMetadataBytes)/4 {
+		return math.MaxInt64
+	}
+	return blocks*4 + maxMessageMetadataBytes
 }
 
 // ApplicationChallengePayload returns the versioned bytes an application must
