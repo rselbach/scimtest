@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -57,4 +58,46 @@ func TestGitHubAuthorizeURL(t *testing.T) {
 func TestGitHubExchangeRequiresCredentials(t *testing.T) {
 	_, err := (GitHubClient{}).ExchangeWebCode(context.Background(), "code", "")
 	require.ErrorContains(t, err, "client id and secret are required")
+}
+
+func TestGitHubClientTimesOutHungEndpoints(t *testing.T) {
+	r := require.New(t)
+	started := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		close(started)
+		time.Sleep(time.Second)
+	}))
+	defer server.Close()
+
+	client := GitHubClient{
+		ClientID:     "test-client-id",
+		ClientSecret: "test-secret",
+		HTTPClient:   &http.Client{Timeout: 50 * time.Millisecond},
+		TokenURL:     server.URL + "/access-token",
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := client.ExchangeWebCode(context.Background(), "auth-code", "https://example.com/callback")
+		errCh <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("GitHub request did not start")
+	}
+
+	select {
+	case err := <-errCh:
+		r.Error(err)
+		r.ErrorContains(err, "context deadline exceeded")
+	case <-time.After(time.Second):
+		t.Fatal("GitHub token exchange did not time out")
+	}
+}
+
+func TestGitHubClientDefaultTimeoutIsFinite(t *testing.T) {
+	client := (GitHubClient{}).client()
+	require.Equal(t, defaultHTTPTimeout, client.Timeout)
 }

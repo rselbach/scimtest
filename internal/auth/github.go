@@ -9,12 +9,17 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 )
 
 const (
 	GitHubAuthorizeURL = "https://github.com/login/oauth/authorize"
 	GitHubTokenURL     = "https://github.com/login/oauth/access_token"
 	GitHubUserURL      = "https://api.github.com/user"
+
+	// defaultHTTPTimeout bounds token exchange and user lookup so a hung
+	// GitHub endpoint cannot pin dashboard callback handlers indefinitely.
+	defaultHTTPTimeout = 15 * time.Second
 )
 
 type GitHubClient struct {
@@ -153,5 +158,5 @@ func (c GitHubClient) client() *http.Client {
 	if c.HTTPClient != nil {
 		return c.HTTPClient
 	}
-	return http.DefaultClient
+	return &http.Client{Timeout: defaultHTTPTimeout}
 }
