@@ -209,7 +209,11 @@ func (c *Client) runOnce(ctx context.Context) error {
 	conn.SetReadLimit(protocol.MaxMessageBytes(c.cfg.MaxBodyBytes))
 
 	childCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	var requestWG sync.WaitGroup
+	defer func() {
+		cancel()
+		requestWG.Wait()
+	}()
 	go func() {
 		<-childCtx.Done()
 		closeConn()
@@ -305,10 +309,12 @@ func (c *Client) runOnce(ctx context.Context) error {
 		case protocol.TypeRequest:
 			select {
 			case requestSlots <- struct{}{}:
-				go func() {
+				requestWG.Add(1)
+				go func(msg protocol.Message) {
+					defer requestWG.Done()
 					defer func() { <-requestSlots }()
-					c.handleRequest(msg, send, done)
-				}()
+					c.handleRequest(childCtx, msg, send, done)
+				}(msg)
 			default:
 				c.sendBusyResponse(msg, send, done)
 			}
@@ -355,7 +361,7 @@ func (c *Client) sendBusyResponse(msg protocol.Message, send chan<- protocol.Mes
 	}
 }
 
-func (c *Client) handleRequest(msg protocol.Message, send chan<- protocol.Message, done <-chan struct{}) {
+func (c *Client) handleRequest(ctx context.Context, msg protocol.Message, send chan<- protocol.Message, done <-chan struct{}) {
 	resp := protocol.Message{
 		Type:     protocol.TypeResponse,
 		StreamID: msg.StreamID,
@@ -372,7 +378,7 @@ func (c *Client) handleRequest(msg protocol.Message, send chan<- protocol.Messag
 		return
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), msg.Method, localURL, bytes.NewReader(msg.Body))
+	req, err := http.NewRequestWithContext(ctx, msg.Method, localURL, bytes.NewReader(msg.Body))
 	if err != nil {
 		c.cfg.Logger.Warn("local forward failed", "error", err)
 		resp.Error = "failed to reach local application"

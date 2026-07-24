@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -74,6 +77,100 @@ func TestStartReturnsApplicationTunnel(t *testing.T) {
 	r.Equal("203.0.113.10", tunnel.Registration().ClientIP)
 	r.NoError(tunnel.Close())
 	r.NoError(tunnel.Close())
+}
+
+func TestTunnelCloseCancelsForwardedRequests(t *testing.T) {
+	r := require.New(t)
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	r.NoError(err)
+
+	requestStarted := make(chan struct{})
+	requestCanceled := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	localServer := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, req *http.Request) {
+		close(requestStarted)
+		select {
+		case <-req.Context().Done():
+			close(requestCanceled)
+		case <-releaseRequest:
+		}
+	}))
+	defer func() {
+		close(releaseRequest)
+		localServer.Close()
+	}()
+	localURL, err := url.Parse(localServer.URL)
+	r.NoError(err)
+	localHost, localPortValue, err := net.SplitHostPort(localURL.Host)
+	r.NoError(err)
+	localPort, err := strconv.Atoi(localPortValue)
+	r.NoError(err)
+
+	upgrader := websocket.Upgrader{}
+	tunnelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		conn, err := upgrader.Upgrade(w, req, nil)
+		r.NoError(err)
+		defer func() { r.NoError(conn.Close()) }()
+
+		var registration protocol.Message
+		r.NoError(conn.ReadJSON(&registration))
+		r.NoError(conn.WriteJSON(protocol.Message{
+			Type:      protocol.TypeApplicationChallenge,
+			Challenge: "greendale-challenge",
+		}))
+		var signature protocol.Message
+		r.NoError(conn.ReadJSON(&signature))
+		r.NoError(conn.WriteJSON(protocol.Message{
+			Type:      protocol.TypeTunnelRegistered,
+			TunnelID:  "study-room-f",
+			PublicURL: "https://example.com/study-room-f",
+		}))
+		r.NoError(conn.WriteJSON(protocol.Message{
+			Type:     protocol.TypeRequest,
+			StreamID: 1,
+			Method:   http.MethodPost,
+			Path:     "/sync",
+		}))
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer tunnelServer.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tunnel, err := Start(ctx, Config{
+		ServerURL:             "ws" + strings.TrimPrefix(tunnelServer.URL, "http"),
+		ApplicationProfileID:  "0123456789abcdef0123456789abcdef",
+		InstanceID:            "installation-1",
+		ApplicationPrivateKey: privateKey,
+		LocalHost:             localHost,
+		LocalPort:             localPort,
+	})
+	r.NoError(err)
+	select {
+	case <-requestStarted:
+	case <-ctx.Done():
+		r.Fail("forwarded request did not start")
+	}
+
+	closeResult := make(chan error, 1)
+	go func() {
+		closeResult <- tunnel.Close()
+	}()
+	select {
+	case <-requestCanceled:
+	case <-ctx.Done():
+		r.Fail("forwarded request context was not canceled")
+	}
+	select {
+	case err := <-closeResult:
+		r.NoError(err)
+	case <-ctx.Done():
+		r.Fail("tunnel close did not return")
+	}
 }
 
 func TestTunnelReportsReplacementRegistrationAfterReconnect(t *testing.T) {

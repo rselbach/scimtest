@@ -166,7 +166,7 @@ func TestHandleRequestRejectsOffLoopbackPaths(t *testing.T) {
 	c := New(Config{LocalHost: host, LocalPort: port})
 	send := make(chan protocol.Message, 1)
 	done := make(chan struct{})
-	c.handleRequest(protocol.Message{
+	c.handleRequest(context.Background(), protocol.Message{
 		Type:     protocol.TypeRequest,
 		StreamID: 1,
 		Method:   http.MethodGet,
@@ -199,7 +199,7 @@ func TestHandleRequestForwardsRelativePathAndQuery(t *testing.T) {
 	c := New(Config{LocalHost: host, LocalPort: port})
 	send := make(chan protocol.Message, 1)
 	done := make(chan struct{})
-	c.handleRequest(protocol.Message{
+	c.handleRequest(context.Background(), protocol.Message{
 		Type:     protocol.TypeRequest,
 		StreamID: 1,
 		Method:   http.MethodGet,
@@ -253,7 +253,58 @@ func TestHandleRequestDoesNotBlockWhenDoneClosed(t *testing.T) {
 
 	// handleRequest must return promptly because done is closed; if it
 	// blocks on the unbuffered send the test will time out.
-	c.handleRequest(msg, send, done)
+	c.handleRequest(context.Background(), msg, send, done)
+}
+
+func TestHandleRequestCancelsLocalRequest(t *testing.T) {
+	r := require.New(t)
+	requestStarted := make(chan struct{})
+	requestCanceled := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release)
+
+	c := New(Config{LocalHost: "127.0.0.1", LocalPort: 8080})
+	c.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		close(requestStarted)
+		select {
+		case <-req.Context().Done():
+			close(requestCanceled)
+			return nil, req.Context().Err()
+		case <-release:
+			return nil, fmt.Errorf("test request released")
+		}
+	})}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	send := make(chan protocol.Message, 1)
+	done := make(chan struct{})
+	handled := make(chan struct{})
+	go func() {
+		defer close(handled)
+		c.handleRequest(ctx, protocol.Message{
+			Type:     protocol.TypeRequest,
+			StreamID: 1,
+			Method:   http.MethodPost,
+			Path:     "/sync",
+		}, send, done)
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(2 * time.Second):
+		r.Fail("local request did not start")
+	}
+	cancel()
+	select {
+	case <-requestCanceled:
+	case <-time.After(2 * time.Second):
+		r.Fail("local request context was not canceled")
+	}
+	select {
+	case <-handled:
+	case <-time.After(2 * time.Second):
+		r.Fail("request handler did not stop")
+	}
 }
 
 func TestNewSetsDefaultMaxConcurrentRequests(t *testing.T) {
@@ -288,7 +339,7 @@ func TestHandleRequestDoesNotFollowRedirects(t *testing.T) {
 	c := New(Config{LocalHost: host, LocalPort: port})
 	send := make(chan protocol.Message, 1)
 	done := make(chan struct{})
-	c.handleRequest(protocol.Message{
+	c.handleRequest(context.Background(), protocol.Message{
 		Type:     protocol.TypeRequest,
 		StreamID: 1,
 		Method:   http.MethodGet,
@@ -385,7 +436,7 @@ func TestHandleRequestSanitizesErrors(t *testing.T) {
 		Path:     "/",
 	}
 
-	c.handleRequest(msg, send, done)
+	c.handleRequest(context.Background(), msg, send, done)
 
 	resp := <-send
 	r := require.New(t)
@@ -393,4 +444,10 @@ func TestHandleRequestSanitizesErrors(t *testing.T) {
 	r.Equal("failed to reach local application", resp.Error)
 	r.NotContains(resp.Error, "refused")
 	r.NotContains(resp.Error, "127.0.0.1")
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
