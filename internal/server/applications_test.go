@@ -258,6 +258,89 @@ func TestUpdateApplicationProfile(t *testing.T) {
 	r.Equal(other.PublicKey, otherUnchanged.PublicKey)
 }
 
+func TestApplicationProfileMutationsRollBackAfterSaveFailure(t *testing.T) {
+	t.Run("create", func(t *testing.T) {
+		r := require.New(t)
+		_, _, publicKey := testEd25519Key(t)
+		store, err := OpenStore(t.TempDir() + "/test.json")
+		r.NoError(err)
+		store.path = t.TempDir()
+
+		_, err = store.CreateApplicationProfile(
+			"Greendale Identity",
+			publicKey,
+			[]StoredApplicationRoute{{Methods: []string{"GET"}, Path: "/oidc/{slug}/jwks"}},
+			30,
+			10,
+			4,
+		)
+		r.Error(err)
+		r.Empty(store.ListApplicationProfiles())
+	})
+
+	t.Run("update", func(t *testing.T) {
+		r := require.New(t)
+		store, profile := newTestApplicationProfile(t)
+		_, _, replacementKey := testEd25519Key(t)
+		store.path = t.TempDir()
+
+		_, err := store.UpdateApplicationProfile(
+			profile.ID,
+			"Greendale Login",
+			replacementKey,
+			[]StoredApplicationRoute{{Methods: []string{"POST"}, Path: "/login/{slug}"}},
+			60,
+			15,
+			6,
+		)
+		r.Error(err)
+		got, ok := store.ApplicationProfile(profile.ID)
+		r.True(ok)
+		r.Equal(profile, got)
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		r := require.New(t)
+		store, profile := newTestApplicationProfile(t)
+		store.path = t.TempDir()
+
+		r.Error(store.DeleteApplicationProfile(profile.ID))
+		got, ok := store.ApplicationProfile(profile.ID)
+		r.True(ok)
+		r.Equal(profile, got)
+	})
+
+	t.Run("remember tunnel", func(t *testing.T) {
+		r := require.New(t)
+		store, profile := newTestApplicationProfile(t)
+		r.NoError(store.RememberApplicationTunnel(profile.ID, "installation-1", "study-room-a"))
+		before, ok := store.ApplicationProfile(profile.ID)
+		r.True(ok)
+		store.path = t.TempDir()
+
+		r.Error(store.RememberApplicationTunnel(profile.ID, "installation-2", "study-room-f"))
+		got, ok := store.ApplicationProfile(profile.ID)
+		r.True(ok)
+		r.Equal(before, got)
+	})
+
+	t.Run("unreserve tunnel", func(t *testing.T) {
+		r := require.New(t)
+		store, profile := newTestApplicationProfile(t)
+		r.NoError(store.RememberApplicationTunnel(profile.ID, "installation-1", "study-room-a"))
+		before, ok := store.ApplicationProfile(profile.ID)
+		r.True(ok)
+		store.path = t.TempDir()
+
+		removed, err := store.UnreserveApplicationTunnel(profile.ID, "installation-1")
+		r.Error(err)
+		r.False(removed)
+		got, ok := store.ApplicationProfile(profile.ID)
+		r.True(ok)
+		r.Equal(before, got)
+	})
+}
+
 func TestApplicationRateLimiter(t *testing.T) {
 	r := require.New(t)
 	limiter := newApplicationRateLimiter(1, 2)
@@ -507,6 +590,24 @@ func testEd25519Key(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey, string
 	binary.BigEndian.PutUint32(blob[offset:offset+4], uint32(len(publicKey)))
 	copy(blob[offset+4:], publicKey)
 	return publicKey, privateKey, "ssh-ed25519 " + base64.StdEncoding.EncodeToString(blob)
+}
+
+func newTestApplicationProfile(t *testing.T) (*Store, StoredApplicationProfile) {
+	t.Helper()
+	r := require.New(t)
+	_, _, publicKey := testEd25519Key(t)
+	store, err := OpenStore(t.TempDir() + "/test.json")
+	r.NoError(err)
+	profile, err := store.CreateApplicationProfile(
+		"Greendale Identity",
+		publicKey,
+		[]StoredApplicationRoute{{Methods: []string{"GET"}, Path: "/oidc/{slug}/jwks"}},
+		30,
+		10,
+		4,
+	)
+	r.NoError(err)
+	return store, profile
 }
 
 func mustApplicationPublicKey(t *testing.T, value string) ed25519.PublicKey {

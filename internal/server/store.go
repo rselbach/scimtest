@@ -181,7 +181,11 @@ func (s *Store) CreateApplicationProfile(name, publicKey string, routes []Stored
 		}
 	}
 	s.data.ApplicationProfiles[id] = profile
-	return cloneApplicationProfile(profile), s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		delete(s.data.ApplicationProfiles, id)
+		return StoredApplicationProfile{}, err
+	}
+	return cloneApplicationProfile(profile), nil
 }
 
 func (s *Store) UpdateApplicationProfile(id, name, publicKey string, routes []StoredApplicationRoute, requestsPerMinute, requestBurst, concurrentRequests int) (StoredApplicationProfile, error) {
@@ -196,6 +200,7 @@ func (s *Store) UpdateApplicationProfile(id, name, publicKey string, routes []St
 	if !ok {
 		return StoredApplicationProfile{}, errors.New("application profile not found")
 	}
+	previous := cloneApplicationProfile(profile)
 	for existingID, existing := range s.data.ApplicationProfiles {
 		if existingID != id && existing.PublicKey == values.publicKey {
 			return StoredApplicationProfile{}, errors.New("public key is already used by another application")
@@ -209,7 +214,11 @@ func (s *Store) UpdateApplicationProfile(id, name, publicKey string, routes []St
 	profile.RequestBurst = values.requestBurst
 	profile.ConcurrentRequests = values.concurrentRequests
 	s.data.ApplicationProfiles[id] = profile
-	return cloneApplicationProfile(profile), s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		s.data.ApplicationProfiles[id] = previous
+		return StoredApplicationProfile{}, err
+	}
+	return cloneApplicationProfile(profile), nil
 }
 
 func (s *Store) ApplicationProfile(id string) (StoredApplicationProfile, bool) {
@@ -241,11 +250,16 @@ func (s *Store) ListApplicationProfiles() []StoredApplicationProfile {
 func (s *Store) DeleteApplicationProfile(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.data.ApplicationProfiles[id]; !ok {
+	profile, ok := s.data.ApplicationProfiles[id]
+	if !ok {
 		return errors.New("application profile not found")
 	}
 	delete(s.data.ApplicationProfiles, id)
-	return s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		s.data.ApplicationProfiles[id] = profile
+		return err
+	}
+	return nil
 }
 
 // TunnelIDReserved reports whether id is remembered for any application
@@ -276,6 +290,8 @@ func (s *Store) RememberApplicationTunnel(profileID, instanceID, tunnelID string
 	if !ok {
 		return errors.New("application profile not found")
 	}
+	previous := cloneApplicationProfile(profile)
+	profile = cloneApplicationProfile(profile)
 	if profile.Instances == nil {
 		profile.Instances = make(map[string]StoredApplicationInstance)
 	}
@@ -296,7 +312,11 @@ func (s *Store) RememberApplicationTunnel(profileID, instanceID, tunnelID string
 	instance.LastUsedAt = now
 	profile.Instances[instanceID] = instance
 	s.data.ApplicationProfiles[profileID] = profile
-	return s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		s.data.ApplicationProfiles[profileID] = previous
+		return err
+	}
+	return nil
 }
 
 func (s *Store) UnreserveApplicationTunnel(profileID, instanceID string) (bool, error) {
@@ -309,9 +329,15 @@ func (s *Store) UnreserveApplicationTunnel(profileID, instanceID string) (bool, 
 	if _, ok := profile.Instances[instanceID]; !ok {
 		return false, nil
 	}
+	previous := cloneApplicationProfile(profile)
+	profile = cloneApplicationProfile(profile)
 	delete(profile.Instances, instanceID)
 	s.data.ApplicationProfiles[profileID] = profile
-	return true, s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		s.data.ApplicationProfiles[profileID] = previous
+		return false, err
+	}
+	return true, nil
 }
 
 func cloneApplicationProfile(profile StoredApplicationProfile) StoredApplicationProfile {
