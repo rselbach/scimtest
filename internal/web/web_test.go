@@ -64,6 +64,23 @@ func TestIndexRendersDashboard(t *testing.T) {
 	r.Contains(groupRec.Body.String(), "Greendale Study Group")
 }
 
+func TestIndexRendersFriendlyFirstRunGuide(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+	rec := httptest.NewRecorder()
+
+	(&webApp{}).routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	r.Equal(http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	r.Contains(body, "Set up your first identity test")
+	r.Contains(body, "Create a test environment")
+	r.Contains(body, "Add a test user")
+	r.Contains(body, "Use the public tunnel when your app requires trusted HTTPS or cannot reach localhost")
+	r.NotContains(body, "Connect the public tunnel")
+}
+
 func TestIndexRendersConciseSCIMActionsAndUsernameHint(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
@@ -87,9 +104,9 @@ func TestIndexRendersConciseSCIMActionsAndUsernameHint(t *testing.T) {
 
 	r.Equal(http.StatusOK, rec.Code)
 	body := rec.Body.String()
-	r.Contains(body, `data-sync-submit >Sync</button>`)
-	r.Contains(body, `type="submit">Preview import</button>`)
-	r.Contains(body, `type="submit">Reset</button>`)
+	r.Contains(body, `data-sync-submit >Sync pending changes</button>`)
+	r.Contains(body, `type="submit">Preview remote import</button>`)
+	r.Contains(body, `type="submit">Reset sync state</button>`)
 	r.Contains(body, `Uses email when left blank`)
 }
 
@@ -97,7 +114,7 @@ func TestDashboardDialogsAreLabelledAndFocusEditableFields(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{
-		Users: []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.edu", Active: true}},
+		Users:  []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.edu", Active: true}},
 		Groups: []group{{ID: "study-group", DisplayName: "Study Group", MemberIDs: []string{"troy"}}},
 		Apps: []app{{
 			ID:              "app-1",
@@ -926,13 +943,13 @@ func TestIndexRendersToolsModal(t *testing.T) {
 
 	r.Equal(http.StatusOK, rec.Code)
 	body := rec.Body.String()
-	r.Contains(body, "Tools")
+	r.Contains(body, "Bulk tools")
 	r.Contains(body, `/tools/create-users`)
 	r.Contains(body, `name="count"`)
 	r.Contains(body, `name="email_domain"`)
 	r.Contains(body, `/tools/delete-all`)
-	r.Contains(body, "Activate All")
-	r.Contains(body, "Deactivate All")
+	r.Contains(body, "Activate all")
+	r.Contains(body, "Deactivate all")
 }
 
 func TestToolsCreateUsers(t *testing.T) {
@@ -1597,6 +1614,7 @@ func TestDashboardRendersCriticalFlowAffordances(t *testing.T) {
 			Slug:             "greendale",
 			Protocol:         "both",
 			OIDCClientID:     "greendale-client",
+			OIDCClientSecret: "chang-secret",
 			OIDCRedirectURIs: []string{"http://localhost:3000/callback"},
 			SAMLACSURL:       "http://localhost:3000/saml/acs",
 			SAMLNameIDField:  "email",
@@ -1622,10 +1640,10 @@ func TestDashboardRendersCriticalFlowAffordances(t *testing.T) {
 	r.Contains(body, `class="row-actions environment-actions"`)
 	r.Contains(body, `class="environment-action-label">OIDC</span>`)
 	r.Contains(body, `class="environment-action-label">SAML</span>`)
-	r.Contains(body, ">Discovery</a>")
-	r.Contains(body, ">Metadata</a>")
-	r.Contains(body, ">Test</a>")
-	r.Contains(body, ">Inspect</a>")
+	r.Contains(body, ">Discovery JSON</a>")
+	r.Contains(body, ">Metadata XML</a>")
+	r.Contains(body, ">Test sign-in</a>")
+	r.Contains(body, ">Inspect flow</a>")
 	r.NotContains(body, ">Test OIDC</a>")
 	r.NotContains(body, ">Inspect SAML</a>")
 	r.NotContains(body, "Get ready to test")
@@ -1729,7 +1747,7 @@ func TestEnvironmentSelectorRendersInTopbar(t *testing.T) {
 		r.Contains(body, "Active environment")
 		r.Contains(body, "Greendale SCIM")
 		r.Contains(body, "Greendale OIDC")
-		r.Contains(body, "data-sync-submit >Sync</button>")
+		r.Contains(body, "data-sync-submit >Sync pending changes</button>")
 		r.NotContains(body, "Sync Greendale SCIM")
 		r.NotContains(body, "Sync target")
 	}
@@ -1879,7 +1897,7 @@ func TestAppSaveStoresSCIMSettingsAndInitializesSyncState(t *testing.T) {
 	r.False(state.Apps[0].SCIMFilterSupported)
 }
 
-func TestAppSaveChangesSAMLProtocolToBoth(t *testing.T) {
+func TestAppSaveInfersOIDCAndSAMLSetup(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{Apps: []app{{
@@ -1893,7 +1911,6 @@ func TestAppSaveChangesSAMLProtocolToBoth(t *testing.T) {
 		"id":                 {"app-prod"},
 		"name":               {"Greendale"},
 		"slug":               {"prod"},
-		"protocol":           {"both"},
 		"oidc_client_id":     {"greendale-client"},
 		"saml_entity_id":     {"https://greendale.test/saml"},
 		"saml_acs_url":       {"https://greendale.test/saml/acs"},
@@ -1909,27 +1926,21 @@ func TestAppSaveChangesSAMLProtocolToBoth(t *testing.T) {
 		return rec
 	}
 
-	invalidRec := postApp()
-	r.Equal(http.StatusSeeOther, invalidRec.Code)
+	incompleteRec := postApp()
+	r.Equal(http.StatusSeeOther, incompleteRec.Code)
 	state, err := loadState()
 	r.NoError(err)
-	r.Equal("saml", state.Apps[0].Protocol)
+	r.Equal("both", state.Apps[0].Protocol)
+	r.Equal(setupStatusIncomplete, oidcSetupStatus(state.Apps[0]))
+	r.Equal(setupStatusConfigured, samlSetupStatus(state.Apps[0]))
 
-	get := httptest.NewRequest(http.MethodGet, invalidRec.Header().Get("Location"), nil)
-	for _, cookie := range invalidRec.Result().Cookies() {
-		get.AddCookie(cookie)
-	}
+	get := httptest.NewRequest(http.MethodGet, incompleteRec.Header().Get("Location"), nil)
 	getRec := httptest.NewRecorder()
 	appService.routes().ServeHTTP(getRec, get)
 	r.Equal(http.StatusOK, getRec.Code)
 	body := getRec.Body.String()
-	formStart := strings.Index(body, `<form method="post" action="/apps/save"`)
-	r.NotEqual(-1, formStart)
-	formEnd := strings.Index(body[formStart:], "</form>")
-	r.NotEqual(-1, formEnd)
-	appForm := body[formStart : formStart+formEnd]
-	r.Contains(appForm, "at least one OIDC redirect URI is required")
-	r.Contains(appForm, `value="both" checked`)
+	r.Contains(body, `class="status pending">OIDC</span>`)
+	r.Contains(body, `class="status synced">SAML ✓</span>`)
 
 	form.Set("oidc_redirect_uris", "https://greendale.test/oidc/callback")
 	validRec := postApp()
@@ -1937,6 +1948,7 @@ func TestAppSaveChangesSAMLProtocolToBoth(t *testing.T) {
 	state, err = loadState()
 	r.NoError(err)
 	r.Equal("both", state.Apps[0].Protocol)
+	r.Equal(setupStatusConfigured, oidcSetupStatus(state.Apps[0]))
 	r.Equal("greendale-client", state.Apps[0].OIDCClientID)
 	r.Equal([]string{"https://greendale.test/oidc/callback"}, state.Apps[0].OIDCRedirectURIs)
 
@@ -2671,6 +2683,7 @@ func TestAppsTabRendersPKCETestLinkForPublicClients(t *testing.T) {
 	body := rec.Body.String()
 	r.Contains(body, "data-pkce-test")
 	r.Contains(body, "http://idp.test/oidc/public-spa/authorize?")
+	r.NotContains(body, `<div class="mono">public-spa</div>`)
 }
 
 func TestAppFormShowsOIDCSetupPanel(t *testing.T) {
@@ -2694,11 +2707,52 @@ func TestAppFormShowsOIDCSetupPanel(t *testing.T) {
 
 	r.Equal(http.StatusOK, rec.Code)
 	body := rec.Body.String()
+	r.Contains(body, `data-setup-tab="overview"`)
+	r.Contains(body, `data-setup-tab="oidc"`)
+	r.Contains(body, `data-setup-tab="saml"`)
+	r.Contains(body, `data-setup-tab="scim"`)
+	r.Contains(body, `data-setup-panel="oidc"`)
+	r.NotContains(body, `name="protocol"`)
+	r.NotContains(body, `name="scim_enabled"`)
+	r.NotContains(body, `>Both<`)
 	r.Contains(body, "http://idp.test/oidc/example/.well-known/openid-configuration")
 	r.Contains(body, "http://idp.test/oidc/example/token")
 	r.Contains(body, "http://idp.test/oidc/example/jwks")
 	r.Contains(body, "example-client")
 	r.Contains(body, "generated-secret")
+	r.Contains(body, "http://idp.test/saml/example/sso")
+	r.Contains(body, "-----BEGIN CERTIFICATE-----")
+}
+
+func TestAppSavePersistsIncompleteSCIMSetup(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+	appService := newTestIDPApp(t)
+	form := url.Values{
+		"tab":           {"apps"},
+		"name":          {"Greendale Portal"},
+		"slug":          {"greendale"},
+		"scim_base_url": {"https://greendale.test/scim/v2"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/apps/save", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	appService.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	state, err := loadState()
+	r.NoError(err)
+	r.Len(state.Apps, 1)
+	r.Equal("scim", state.Apps[0].Protocol)
+	r.False(state.Apps[0].SCIMEnabled)
+	r.Equal(setupStatusIncomplete, scimSetupStatus(state.Apps[0]))
+
+	listRec := httptest.NewRecorder()
+	appService.routes().ServeHTTP(listRec, httptest.NewRequest(http.MethodGet, rec.Header().Get("Location"), nil))
+	r.Equal(http.StatusOK, listRec.Code)
+	r.Contains(listRec.Body.String(), `class="status pending">SCIM</span>`)
 }
 
 func TestUserSaveRejectsDuplicateEmailAndUsername(t *testing.T) {
@@ -2806,9 +2860,10 @@ func TestFormDraftRedactsSecrets(t *testing.T) {
 	appService := newTestIDPApp(t)
 	form := url.Values{
 		"tab":                {"apps"},
+		"setup_section":      {"oidc"},
 		"name":               {"Greendale Portal"},
-		"protocol":           {"oidc"},
-		"scim_enabled":       {"on"},
+		"oidc_client_id":     {"greendale"},
+		"oidc_redirect_uris": {"/invalid"},
 		"scim_bearer_token":  {"chang-secret"},
 		"oidc_client_secret": {"winger-secret"},
 	}
@@ -2826,6 +2881,7 @@ func TestFormDraftRedactsSecrets(t *testing.T) {
 		r.Empty(draft.Values.Get("scim_bearer_token"))
 		r.Empty(draft.Values.Get("oidc_client_secret"))
 		r.Equal("Greendale Portal", draft.Values.Get("name"))
+		r.Equal("oidc", draft.Values.Get("setup_section"))
 	}
 }
 
@@ -3002,7 +3058,7 @@ func TestEnvironmentFormDefaultSubmitIsSave(t *testing.T) {
 	r.Less(defaultIndex, discoverIndex)
 }
 
-func TestDisablingSCIMKeepsStoredSettings(t *testing.T) {
+func TestRemovingSCIMClearsStoredSettings(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{Apps: []app{{
@@ -3023,15 +3079,14 @@ func TestDisablingSCIMKeepsStoredSettings(t *testing.T) {
 	}}}))
 	appService := newTestIDPApp(t)
 
-	// The SCIM section's controls are disabled while the toggle is off, so
-	// the browser omits every scim_* field from the submission.
 	form := url.Values{
 		"id":                      {"app-1"},
 		"tab":                     {"apps"},
 		"name":                    {"Greendale Portal"},
 		"slug":                    {"greendale"},
-		"protocol":                {"oidc"},
 		"allow_any_oidc_redirect": {"on"},
+		"oidc_client_id":          {"greendale"},
+		"remove_protocol":         {"scim"},
 	}
 	req := httptest.NewRequest(http.MethodPost, "/apps/save", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -3043,15 +3098,15 @@ func TestDisablingSCIMKeepsStoredSettings(t *testing.T) {
 	r.NoError(err)
 	saved := state.Apps[0]
 	r.False(saved.SCIMEnabled)
-	r.Equal("https://portal.test/scim/v2", saved.SCIMBaseURL)
-	r.Equal("chang-token", saved.SCIMBearerToken)
-	r.True(saved.SCIMAutoOpenTrace)
-	r.True(saved.SCIMCapabilitiesKnown)
-	r.True(saved.SCIMPatchSupported)
-	r.True(saved.SCIMFilterSupported)
+	r.Empty(saved.SCIMBaseURL)
+	r.Empty(saved.SCIMBearerToken)
+	r.False(saved.SCIMAutoOpenTrace)
+	r.False(saved.SCIMCapabilitiesKnown)
+	r.False(saved.SCIMPatchSupported)
+	r.False(saved.SCIMFilterSupported)
 }
 
-func TestReenablingSCIMResumesRememberedRemoteIDs(t *testing.T) {
+func TestCompletingSCIMSetupResumesRememberedRemoteIDs(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{
@@ -3060,7 +3115,7 @@ func TestReenablingSCIMResumesRememberedRemoteIDs(t *testing.T) {
 		Apps: []app{{
 			ID: "app-1", Name: "Greendale Portal", Slug: "greendale", Protocol: "oidc",
 			OIDCClientID: "greendale", OIDCClientSecret: "chang-secret", AllowAnyOIDCRedirect: true,
-			SCIMEnabled: false, SCIMBaseURL: "https://portal.test/scim/v2", SCIMBearerToken: "chang-token",
+			SCIMEnabled: false, SCIMBaseURL: "https://portal.test/scim/v2",
 		}},
 		UserSync: map[string]map[string]resourceSyncState{
 			"app-1": {"troy": {RemoteID: "remote-troy", Dirty: true, Deleted: true}},
@@ -3076,9 +3131,7 @@ func TestReenablingSCIMResumesRememberedRemoteIDs(t *testing.T) {
 		"tab":                     {"apps"},
 		"name":                    {"Greendale Portal"},
 		"slug":                    {"greendale"},
-		"protocol":                {"oidc"},
 		"allow_any_oidc_redirect": {"on"},
-		"scim_enabled":            {"on"},
 		"scim_base_url":           {"https://portal.test/scim/v2"},
 		"scim_bearer_token":       {"chang-token"},
 	}

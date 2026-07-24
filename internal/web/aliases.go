@@ -46,6 +46,10 @@ var (
 	validateApp                  = core.ValidateApp
 	supportsOIDC                 = core.SupportsOIDC
 	supportsSAML                 = core.SupportsSAML
+	oidcSetupStatus              = core.OIDCSetupStatus
+	samlSetupStatus              = core.SAMLSetupStatus
+	scimSetupStatus              = core.SCIMSetupStatus
+	inferAppProtocol             = core.InferAppProtocol
 	normalizeSAMLNameIDField     = core.NormalizeSAMLNameIDField
 	samlNameIDFormatForField     = core.SAMLNameIDFormatForField
 	samlNameIDValue              = core.SAMLNameIDValue
@@ -82,4 +86,7 @@ const (
 	defaultSAMLNameIDField        = core.DefaultSAMLNameIDField
 	chooserModeList               = core.ChooserModeList
 	chooserModeIdentifier         = core.ChooserModeIdentifier
+	setupStatusNotSetUp           = core.SetupStatusNotSetUp
+	setupStatusIncomplete         = core.SetupStatusIncomplete
+	setupStatusConfigured         = core.SetupStatusConfigured
 )

@@ -228,12 +228,9 @@ type appRowView struct {
 	ID               string
 	Name             string
 	Slug             string
-	Protocol         string
 	OIDCClientID     string
 	OIDCDiscovery    string
 	SAMLMetadata     string
-	SupportsOIDC     bool
-	SupportsSAML     bool
 	EditURL          string
 	OIDCTestURL      string
 	OIDCInspectorURL string
@@ -243,8 +240,19 @@ type appRowView struct {
 	OIDCPKCETestURL string
 	SAMLTestURL     string
 	SCIMEnabled     bool
+	OIDCStatus      setupStatusView
+	SAMLStatus      setupStatusView
+	SCIMStatus      setupStatusView
+	HasSetup        bool
 	Active          bool
 	OpenURL         string
+}
+
+type setupStatusView struct {
+	Label      string
+	Class      string
+	Started    bool
+	Configured bool
 }
 
 type historyEntryView struct {
@@ -332,6 +340,10 @@ type appFormView struct {
 	SAMLIDPSSO                   string
 	Close                        string
 	AllowAnyOIDCRedirectDisabled bool
+	Section                      string
+	OIDCStatus                   setupStatusView
+	SAMLStatus                   setupStatusView
+	SCIMStatus                   setupStatusView
 }
 
 type configFormView struct {
@@ -387,7 +399,6 @@ type pageData struct {
 	HasLocalUsers          bool
 	HasApps                bool
 	HasSCIMEnvironments    bool
-	HasPublicIDP           bool
 	FormError              string
 	Environments           []app
 	ActiveEnvironment      app
@@ -864,7 +875,6 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		HasLocalUsers:          len(state.Users) > 0,
 		HasApps:                len(state.Apps) > 0,
 		HasSCIMEnvironments:    scimEnabled(globalState),
-		HasPublicIDP:           a.tunnelPublicURL() != "" || strings.TrimSpace(state.Config.IDPBaseURL) != "",
 		Environments:           globalState.Apps,
 		ActiveEnvironment:      activeEnvironment,
 	}
@@ -1554,9 +1564,9 @@ func applyFormDraft(data *pageData, draft formDraft) {
 		data.AppForm.App.ID = values.Get("id")
 		data.AppForm.App.Name = values.Get("name")
 		data.AppForm.App.Slug = values.Get("slug")
-		data.AppForm.App.Protocol = values.Get("protocol")
 		data.AppForm.App.OIDCClientID = values.Get("oidc_client_id")
 		data.AppForm.OIDCRedirectURIs = values.Get("oidc_redirect_uris")
+		data.AppForm.App.OIDCRedirectURIs = lines(values.Get("oidc_redirect_uris"))
 		data.AppForm.App.OIDCPublicClient = values.Get("oidc_public_client") == "on"
 		data.AppForm.App.AllowAnyOIDCRedirect = values.Get("allow_any_oidc_redirect") == "on"
 		data.AppForm.App.SAMLEntityID = values.Get("saml_entity_id")
@@ -1575,9 +1585,10 @@ func applyFormDraft(data *pageData, draft formDraft) {
 		}
 		data.AppForm.App.IncludeGroupsClaim = values.Get("include_groups_claim") == "on"
 		data.AppForm.App.ChooserMode = normalizeChooserMode(values.Get("chooser_mode"))
-		data.AppForm.App.SCIMEnabled = values.Get("scim_enabled") == "on"
 		data.AppForm.App.SCIMBaseURL = values.Get("scim_base_url")
 		data.AppForm.App.SCIMAutoOpenTrace = values.Get("scim_auto_open_trace") == "on"
+		data.AppForm.Section = normalizeSetupSection(values.Get("setup_section"))
+		populateAppFormStatuses(data.AppForm)
 	case "config":
 		if data.ConfigForm == nil {
 			return
@@ -1839,20 +1850,24 @@ func sortGroupRows(rows []groupRowView, sortOrder string) {
 func buildAppRows(state appState, environmentID string, base string) []appRowView {
 	rows := make([]appRowView, 0, len(state.Apps))
 	for _, app := range state.Apps {
+		oidcStatus := newSetupStatusView(oidcSetupStatus(app))
+		samlStatus := newSetupStatusView(samlSetupStatus(app))
+		scimStatus := newSetupStatusView(scimSetupStatus(app))
 		row := appRowView{
 			ID:           app.ID,
 			Name:         app.Name,
 			Slug:         app.Slug,
-			Protocol:     strings.ToUpper(app.Protocol),
 			OIDCClientID: app.OIDCClientID,
-			SupportsOIDC: supportsOIDC(app),
-			SupportsSAML: supportsSAML(app),
 			EditURL:      dashboardURL("apps", map[string]string{"modal": "app", "id": app.ID}),
 			SCIMEnabled:  app.SCIMEnabled,
+			OIDCStatus:   oidcStatus,
+			SAMLStatus:   samlStatus,
+			SCIMStatus:   scimStatus,
+			HasSetup:     oidcStatus.Started || samlStatus.Started || scimStatus.Started,
 			Active:       app.ID == environmentID,
 			OpenURL:      addEnvironmentToURL(dashboardURL("users", nil), app.ID),
 		}
-		if row.SupportsOIDC {
+		if row.OIDCStatus.Configured {
 			row.OIDCDiscovery = base + "/oidc/" + app.Slug + "/.well-known/openid-configuration"
 			row.OIDCInspectorURL = "/inspect/oidc/" + url.PathEscape(app.Slug)
 			if len(app.OIDCRedirectURIs) > 0 {
@@ -1870,7 +1885,7 @@ func buildAppRows(state appState, environmentID string, base string) []appRowVie
 				}
 			}
 		}
-		if row.SupportsSAML {
+		if row.SAMLStatus.Configured {
 			row.SAMLMetadata = base + "/saml/" + app.Slug + "/metadata"
 			row.SAMLTestURL = base + "/saml/" + app.Slug + "/sso"
 			row.SAMLInspectorURL = "/inspect/saml/" + url.PathEscape(app.Slug)
@@ -2093,9 +2108,10 @@ func buildGroupFormView(state appState, tab string, page int, pageSize int, sear
 
 func buildAppFormView(state appState, tab string, id string, baseURL string, certPEM string) (*appFormView, error) {
 	form := &appFormView{
-		Title: "Add Environment",
+		Title:   "Add environment",
+		Section: "overview",
 		App: app{
-			Protocol:               "oidc",
+			Protocol:               "none",
 			SAMLNameIDField:        defaultSAMLNameIDField,
 			SAMLNameIDFormat:       samlNameIDFormatForField(defaultSAMLNameIDField),
 			SAMLEmailAttributeName: defaultSAMLEmailAttributeName,
@@ -2108,13 +2124,14 @@ func buildAppFormView(state appState, tab string, id string, baseURL string, cer
 		Close:              dashboardURL(tab, nil),
 	}
 	if strings.TrimSpace(id) == "" {
+		populateAppFormStatuses(form)
 		return form, nil
 	}
 	existing, ok := appByID(state.Apps, id)
 	if !ok {
 		return nil, fmt.Errorf("app %s not found", id)
 	}
-	form.Title = "Edit Environment"
+	form.Title = "Set up environment"
 	form.App = existing
 	form.App.OIDCClaimMappings = oidcClaimMappingsForApp(form.App)
 	form.App.SAMLAttributeMappings = samlAttributeMappingsForApp(form.App)
@@ -2130,7 +2147,35 @@ func buildAppFormView(state appState, tab string, id string, baseURL string, cer
 		form.OIDCTokenURL = form.OIDCIssuer + "/token"
 		form.OIDCJWKSURL = form.OIDCIssuer + "/jwks"
 	}
+	populateAppFormStatuses(form)
 	return form, nil
+}
+
+func populateAppFormStatuses(form *appFormView) {
+	form.OIDCStatus = newSetupStatusView(oidcSetupStatus(form.App))
+	form.SAMLStatus = newSetupStatusView(samlSetupStatus(form.App))
+	form.SCIMStatus = newSetupStatusView(scimSetupStatus(form.App))
+	form.Section = normalizeSetupSection(form.Section)
+}
+
+func newSetupStatusView(status string) setupStatusView {
+	switch status {
+	case setupStatusConfigured:
+		return setupStatusView{Label: "Configured", Class: "configured", Started: true, Configured: true}
+	case setupStatusIncomplete:
+		return setupStatusView{Label: "Incomplete", Class: "incomplete", Started: true}
+	default:
+		return setupStatusView{Label: "Not set up", Class: "not-set-up"}
+	}
+}
+
+func normalizeSetupSection(section string) string {
+	switch strings.TrimSpace(section) {
+	case "oidc", "saml", "scim":
+		return strings.TrimSpace(section)
+	default:
+		return "overview"
+	}
 }
 
 func toolUserCount(value string) (int, error) {

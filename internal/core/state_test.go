@@ -730,7 +730,7 @@ func TestMarkDirtyUpdatesPausedAppsThatRememberResources(t *testing.T) {
 func TestPurgeFullySyncedDeletionsWaitsForPausedAppRemotes(t *testing.T) {
 	r := require.New(t)
 	state := AppState{
-		Users: []User{{ID: "troy", Deleted: true}},
+		Users:  []User{{ID: "troy", Deleted: true}},
 		Groups: []Group{{ID: "study-group", Deleted: true}},
 		Apps: []App{
 			{ID: "app-a", SCIMEnabled: true},
@@ -915,14 +915,12 @@ func TestUserGroupsExcludesDeletedGroups(t *testing.T) {
 	r.Equal([]string{"Study Group"}, UserGroups(state, "troy"))
 }
 
-func TestValidateAppRequiresSafeSAMLACSURL(t *testing.T) {
+func TestValidateAppAllowsIncompleteSAMLAndRejectsUnsafeACSURL(t *testing.T) {
 	tests := map[string]struct {
 		acsURL  string
 		wantErr string
 	}{
-		"empty": {
-			wantErr: "SAML ACS URL is required",
-		},
+		"empty draft": {},
 		"relative": {
 			acsURL:  "/saml/acs",
 			wantErr: "absolute HTTP(S) URL",
@@ -992,13 +990,13 @@ func TestValidateHTTPBaseURL(t *testing.T) {
 	}
 }
 
-func TestValidateAppRequiresSafeOIDCRedirect(t *testing.T) {
+func TestValidateAppAllowsIncompleteOIDCAndRejectsUnsafeRedirect(t *testing.T) {
 	tests := map[string]struct {
 		redirects []string
 		allowAny  bool
 		wantErr   string
 	}{
-		"missing":       {wantErr: "at least one OIDC redirect URI is required"},
+		"missing draft": {},
 		"explicit any":  {allowAny: true},
 		"relative":      {redirects: []string{"/callback"}, wantErr: "absolute HTTP(S) URL"},
 		"custom scheme": {redirects: []string{"greendale://callback"}, wantErr: "absolute HTTP(S) URL"},
@@ -1025,6 +1023,101 @@ func TestValidateAppRequiresSafeOIDCRedirect(t *testing.T) {
 			r.ErrorContains(err, tc.wantErr)
 		})
 	}
+}
+
+func TestProtocolSetupStatus(t *testing.T) {
+	tests := map[string]struct {
+		app      App
+		status   func(App) string
+		want     string
+		protocol string
+	}{
+		"OIDC not set up": {
+			app:      App{Protocol: "none"},
+			status:   OIDCSetupStatus,
+			want:     SetupStatusNotSetUp,
+			protocol: "none",
+		},
+		"OIDC incomplete": {
+			app:      App{Protocol: "none", OIDCClientID: "greendale"},
+			status:   OIDCSetupStatus,
+			want:     SetupStatusIncomplete,
+			protocol: "oidc",
+		},
+		"OIDC configured": {
+			app: App{
+				Protocol:         "none",
+				OIDCClientID:     "greendale",
+				OIDCClientSecret: "chang-secret",
+				OIDCRedirectURIs: []string{"https://greendale.test/callback"},
+			},
+			status:   OIDCSetupStatus,
+			want:     SetupStatusConfigured,
+			protocol: "oidc",
+		},
+		"SAML incomplete": {
+			app:      App{Protocol: "none", SAMLEntityID: "urn:greendale:sp"},
+			status:   SAMLSetupStatus,
+			want:     SetupStatusIncomplete,
+			protocol: "saml",
+		},
+		"SAML configured": {
+			app:      App{Protocol: "none", SAMLACSURL: "https://greendale.test/saml/acs"},
+			status:   SAMLSetupStatus,
+			want:     SetupStatusConfigured,
+			protocol: "saml",
+		},
+		"SCIM incomplete": {
+			app:      App{Protocol: "none", SCIMBaseURL: "https://greendale.test/scim/v2"},
+			status:   SCIMSetupStatus,
+			want:     SetupStatusIncomplete,
+			protocol: "scim",
+		},
+		"SCIM configured": {
+			app:      App{Protocol: "none", SCIMBaseURL: "https://greendale.test/scim/v2", SCIMBearerToken: "chang-token"},
+			status:   SCIMSetupStatus,
+			want:     SetupStatusConfigured,
+			protocol: "scim",
+		},
+		"OIDC and SAML": {
+			app: App{
+				Protocol:         "none",
+				OIDCClientID:     "greendale",
+				OIDCClientSecret: "chang-secret",
+				OIDCRedirectURIs: []string{"https://greendale.test/callback"},
+				SAMLACSURL:       "https://greendale.test/saml/acs",
+			},
+			status:   OIDCSetupStatus,
+			want:     SetupStatusConfigured,
+			protocol: "both",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			r.Equal(tc.want, tc.status(tc.app))
+			r.Equal(tc.protocol, InferAppProtocol(tc.app))
+		})
+	}
+}
+
+func TestNormalizeStateDerivesSCIMEnabled(t *testing.T) {
+	r := require.New(t)
+	state := AppState{Apps: []App{{
+		ID:              "app-1",
+		Name:            "Greendale",
+		Slug:            "greendale",
+		Protocol:        "none",
+		SCIMBaseURL:     "https://greendale.test/scim/v2/",
+		SCIMBearerToken: "chang-token",
+	}}}
+
+	NormalizeState(&state)
+
+	r.True(state.Apps[0].SCIMEnabled)
+	r.Equal("scim", state.Apps[0].Protocol)
+	r.Equal("https://greendale.test/scim/v2", state.Apps[0].SCIMBaseURL)
 }
 
 func TestValidateAppRejectsUnsafeClaimMappings(t *testing.T) {

@@ -1330,6 +1330,10 @@ func NormalizeState(state *AppState) {
 		}
 		state.Apps[i].OIDCRedirectURIs = cleanLines(state.Apps[i].OIDCRedirectURIs)
 		state.Apps[i].SCIMBaseURL = strings.TrimRight(strings.TrimSpace(state.Apps[i].SCIMBaseURL), "/")
+		if !state.Apps[i].SCIMEnabled && SCIMSetupStatus(state.Apps[i]) == SetupStatusConfigured {
+			state.Apps[i].SCIMEnabled = true
+		}
+		state.Apps[i].Protocol = InferAppProtocol(state.Apps[i])
 	}
 }
 
@@ -1551,8 +1555,8 @@ func ValidateApp(app App, apps []App) error {
 	if strings.TrimSpace(app.Slug) == "" {
 		return fmt.Errorf("app slug is required")
 	}
-	if app.Protocol != "oidc" && app.Protocol != "saml" && app.Protocol != "both" && app.Protocol != "scim" {
-		return fmt.Errorf("protocol must be oidc, saml, both, or scim")
+	if app.Protocol != "none" && app.Protocol != "oidc" && app.Protocol != "saml" && app.Protocol != "both" && app.Protocol != "scim" {
+		return fmt.Errorf("protocol must be none, oidc, saml, both, or scim")
 	}
 	if NormalizeChooserMode(app.ChooserMode) != app.ChooserMode && strings.TrimSpace(app.ChooserMode) != "" {
 		return fmt.Errorf("chooser mode must be list or identifier")
@@ -1564,24 +1568,14 @@ func ValidateApp(app App, apps []App) error {
 			}
 			return fmt.Errorf("app slug %q is already in use", app.Slug)
 		}
-		if SupportsOIDC(app) && SupportsOIDC(existing) && existing.ID != app.ID && app.OIDCClientID != "" && app.OIDCClientID == existing.OIDCClientID {
+		if app.OIDCClientID != "" && existing.ID != app.ID && app.OIDCClientID == existing.OIDCClientID {
 			return fmt.Errorf("OIDC client ID %q is already in use", app.OIDCClientID)
 		}
 	}
-	if SupportsOIDC(app) {
-		if strings.TrimSpace(app.OIDCClientID) == "" {
-			return fmt.Errorf("OIDC client ID is required")
-		}
-		if len(app.OIDCRedirectURIs) == 0 && !app.AllowAnyOIDCRedirect {
-			return fmt.Errorf("at least one OIDC redirect URI is required unless arbitrary redirects are explicitly allowed")
-		}
+	if hasOIDCSetup(app) {
 		for _, rawURI := range app.OIDCRedirectURIs {
-			redirectURI, err := url.Parse(rawURI)
-			if err != nil {
-				return fmt.Errorf("OIDC redirect URI %q is invalid: %w", rawURI, err)
-			}
-			if !redirectURI.IsAbs() || redirectURI.Host == "" || (redirectURI.Scheme != "http" && redirectURI.Scheme != "https") || redirectURI.Fragment != "" {
-				return fmt.Errorf("OIDC redirect URI %q must be an absolute HTTP(S) URL without a fragment", rawURI)
+			if err := validateOIDCRedirectURI(rawURI); err != nil {
+				return err
 			}
 		}
 		mappings := OIDCClaimMappingsForApp(app)
@@ -1589,18 +1583,13 @@ func ValidateApp(app App, apps []App) error {
 			return err
 		}
 	}
-	if SupportsSAML(app) {
+	if hasSAMLSetup(app) && strings.TrimSpace(app.SAMLACSURL) != "" {
 		rawACSURL := strings.TrimSpace(app.SAMLACSURL)
-		if rawACSURL == "" {
-			return fmt.Errorf("SAML ACS URL is required")
+		if err := validateSAMLACSURL(rawACSURL); err != nil {
+			return err
 		}
-		acsURL, err := url.Parse(rawACSURL)
-		if err != nil {
-			return fmt.Errorf("SAML ACS URL %q is invalid: %w", app.SAMLACSURL, err)
-		}
-		if !acsURL.IsAbs() || acsURL.Host == "" || (acsURL.Scheme != "http" && acsURL.Scheme != "https") || acsURL.Fragment != "" {
-			return fmt.Errorf("SAML ACS URL must be an absolute HTTP(S) URL without a fragment")
-		}
+	}
+	if hasSAMLSetup(app) {
 		mappings := SAMLAttributeMappingsForApp(app)
 		if err := validateMappedNames("SAML attribute", []string{mappings.GivenName, mappings.FamilyName, mappings.Username, mappings.Email, mappings.Groups}); err != nil {
 			return err
@@ -1608,6 +1597,117 @@ func ValidateApp(app App, apps []App) error {
 	}
 	if SupportsSAML(app) && strings.TrimSpace(app.SAMLNameIDField) != "" && NormalizeSAMLNameIDField(app.SAMLNameIDField) != app.SAMLNameIDField {
 		return fmt.Errorf("SAML NameID field must be email, username, firstName, or lastName")
+	}
+	return nil
+}
+
+// OIDCSetupStatus reports whether an app's OIDC settings are absent, partial,
+// or ready to use.
+func OIDCSetupStatus(app App) string {
+	if !hasOIDCSetup(app) {
+		return SetupStatusNotSetUp
+	}
+	if strings.TrimSpace(app.OIDCClientID) == "" || len(app.OIDCRedirectURIs) == 0 && !app.AllowAnyOIDCRedirect {
+		return SetupStatusIncomplete
+	}
+	if !app.OIDCPublicClient && strings.TrimSpace(app.OIDCClientSecret) == "" {
+		return SetupStatusIncomplete
+	}
+	for _, rawURI := range app.OIDCRedirectURIs {
+		if validateOIDCRedirectURI(rawURI) != nil {
+			return SetupStatusIncomplete
+		}
+	}
+	mappings := OIDCClaimMappingsForApp(app)
+	if validateMappedNames("OIDC claim", []string{mappings.Name, mappings.GivenName, mappings.FamilyName, mappings.Username, mappings.Email, mappings.Groups}, "sub", "iss", "aud", "iat", "exp", "nonce", "email_verified") != nil {
+		return SetupStatusIncomplete
+	}
+	return SetupStatusConfigured
+}
+
+// SAMLSetupStatus reports whether an app's SAML settings are absent, partial,
+// or ready to use.
+func SAMLSetupStatus(app App) string {
+	if !hasSAMLSetup(app) {
+		return SetupStatusNotSetUp
+	}
+	if validateSAMLACSURL(strings.TrimSpace(app.SAMLACSURL)) != nil {
+		return SetupStatusIncomplete
+	}
+	mappings := SAMLAttributeMappingsForApp(app)
+	if validateMappedNames("SAML attribute", []string{mappings.GivenName, mappings.FamilyName, mappings.Username, mappings.Email, mappings.Groups}) != nil {
+		return SetupStatusIncomplete
+	}
+	if strings.TrimSpace(app.SAMLNameIDField) != "" && NormalizeSAMLNameIDField(app.SAMLNameIDField) != app.SAMLNameIDField {
+		return SetupStatusIncomplete
+	}
+	return SetupStatusConfigured
+}
+
+// SCIMSetupStatus reports whether an app's SCIM settings are absent, partial,
+// or ready to use.
+func SCIMSetupStatus(app App) string {
+	if !hasSCIMSetup(app) {
+		return SetupStatusNotSetUp
+	}
+	if ValidateHTTPBaseURL("SCIM base URL", app.SCIMBaseURL, true) != nil || strings.TrimSpace(app.SCIMBearerToken) == "" {
+		return SetupStatusIncomplete
+	}
+	return SetupStatusConfigured
+}
+
+// InferAppProtocol derives the legacy protocol summary from independently
+// configured OIDC and SAML settings.
+func InferAppProtocol(app App) string {
+	oidc := hasOIDCSetup(app)
+	saml := hasSAMLSetup(app)
+	switch {
+	case oidc && saml:
+		return "both"
+	case oidc:
+		return "oidc"
+	case saml:
+		return "saml"
+	case hasSCIMSetup(app):
+		return "scim"
+	default:
+		return "none"
+	}
+}
+
+func hasOIDCSetup(app App) bool {
+	return SupportsOIDC(app) || strings.TrimSpace(app.OIDCClientID) != "" || strings.TrimSpace(app.OIDCClientSecret) != "" || len(app.OIDCRedirectURIs) > 0 || app.OIDCPublicClient || app.AllowAnyOIDCRedirect
+}
+
+func hasSAMLSetup(app App) bool {
+	return SupportsSAML(app) || strings.TrimSpace(app.SAMLEntityID) != "" || strings.TrimSpace(app.SAMLACSURL) != "" || strings.TrimSpace(app.SAMLAudience) != ""
+}
+
+func hasSCIMSetup(app App) bool {
+	return app.SCIMEnabled || strings.TrimSpace(app.SCIMBaseURL) != "" || strings.TrimSpace(app.SCIMBearerToken) != ""
+}
+
+func validateOIDCRedirectURI(rawURI string) error {
+	redirectURI, err := url.Parse(rawURI)
+	if err != nil {
+		return fmt.Errorf("OIDC redirect URI %q is invalid: %w", rawURI, err)
+	}
+	if !redirectURI.IsAbs() || redirectURI.Host == "" || (redirectURI.Scheme != "http" && redirectURI.Scheme != "https") || redirectURI.Fragment != "" {
+		return fmt.Errorf("OIDC redirect URI %q must be an absolute HTTP(S) URL without a fragment", rawURI)
+	}
+	return nil
+}
+
+func validateSAMLACSURL(rawURL string) error {
+	if rawURL == "" {
+		return fmt.Errorf("SAML ACS URL is required")
+	}
+	acsURL, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("SAML ACS URL %q is invalid: %w", rawURL, err)
+	}
+	if !acsURL.IsAbs() || acsURL.Host == "" || (acsURL.Scheme != "http" && acsURL.Scheme != "https") || acsURL.Fragment != "" {
+		return fmt.Errorf("SAML ACS URL must be an absolute HTTP(S) URL without a fragment")
 	}
 	return nil
 }

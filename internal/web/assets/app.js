@@ -235,46 +235,34 @@
       closeActiveOverlay();
     });
 
-    const protocolControls = document.querySelectorAll('input[name="protocol"]');
-    const protocolSections = document.querySelectorAll('[data-protocol-section]');
-    function syncProtocolSections() {
-      const selectedControl = document.querySelector('input[name="protocol"]:checked');
-      if (!selectedControl) return;
-      const selected = selectedControl.value;
-      for (const section of protocolSections) {
-        const visible = selected === 'both' || section.dataset.protocolSection === selected;
-        section.classList.toggle('is-hidden', !visible);
-        for (const control of section.querySelectorAll('input, textarea, select')) {
-          control.disabled = !visible;
-        }
-      }
-    }
-    if (protocolControls.length) {
-      for (const control of protocolControls) {
-        control.addEventListener('change', syncProtocolSections);
-      }
-      syncProtocolSections();
-    }
-
-	const scimToggle = document.querySelector('[data-scim-toggle]');
-	const scimSection = document.querySelector('[data-scim-section]');
-	function syncSCIMSection() {
-	  if (!scimToggle || !scimSection) return;
-	  const selectedProtocol = document.querySelector('input[name="protocol"]:checked');
-	  if (selectedProtocol && selectedProtocol.value === 'scim') {
-		scimToggle.checked = true;
+	const setupTabs = document.querySelectorAll('[data-setup-tab]');
+	const setupPanels = document.querySelectorAll('[data-setup-panel]');
+	const setupSection = document.querySelector('[data-setup-section]');
+	function showSetupSection(section) {
+	  if (!setupTabs.length || !setupPanels.length) return;
+	  for (const tab of setupTabs) {
+		const active = tab.dataset.setupTab === section;
+		tab.classList.toggle('active', active);
+		tab.setAttribute('aria-selected', active ? 'true' : 'false');
 	  }
-	  scimSection.classList.toggle('is-hidden', !scimToggle.checked);
-	  for (const control of scimSection.querySelectorAll('input, textarea, select')) {
-		control.disabled = !scimToggle.checked;
+	  for (const panel of setupPanels) {
+		const active = panel.dataset.setupPanel === section;
+		panel.classList.toggle('active', active);
+		panel.setAttribute('aria-hidden', active ? 'false' : 'true');
 	  }
+	  if (setupSection) setupSection.value = section;
 	}
-	if (scimToggle) {
-	  scimToggle.addEventListener('change', syncSCIMSection);
-	  for (const control of protocolControls) {
-		control.addEventListener('change', syncSCIMSection);
-	  }
-	  syncSCIMSection();
+	for (const tab of setupTabs) {
+	  tab.addEventListener('click', function () {
+		showSetupSection(tab.dataset.setupTab);
+	  });
+	}
+	for (const button of document.querySelectorAll('[data-setup-open]')) {
+	  button.addEventListener('click', function () {
+		showSetupSection(button.dataset.setupOpen);
+		const activeTab = document.querySelector('[data-setup-tab].active');
+		if (activeTab) activeTab.focus();
+	  });
 	}
 
     const environmentForm = document.querySelector('[data-environment-form]');

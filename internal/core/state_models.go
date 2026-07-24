@@ -174,6 +174,15 @@ type App struct {
 	SCIMFilterSupported    bool                  `json:"scim_filter_supported,omitempty"`
 }
 
+const (
+	// SetupStatusNotSetUp means no meaningful protocol settings have been saved.
+	SetupStatusNotSetUp = "not-set-up"
+	// SetupStatusIncomplete means protocol settings exist but are not ready to use.
+	SetupStatusIncomplete = "incomplete"
+	// SetupStatusConfigured means all required protocol settings are valid.
+	SetupStatusConfigured = "configured"
+)
+
 // OIDCClaimMappings maps directory fields to OIDC claim names.
 type OIDCClaimMappings struct {
 	Name       string `json:"name"`

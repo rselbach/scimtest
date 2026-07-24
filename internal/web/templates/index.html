@@ -57,7 +57,7 @@
           <span class="icon" aria-hidden="true">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="M5.5 6h5M5.5 8.5h5"/></svg>
           </span>
-          Environment settings
+          Set up this environment
         </a>
         {{if .SCIMEnabled}}{{if .HasTrace}}<a class="side-item" href="{{.TraceURL}}">
           <span class="icon" aria-hidden="true">
@@ -85,13 +85,13 @@
           <span class="icon" aria-hidden="true">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8L3.4 3.4"/></svg>
           </span>
-          Global config
+          IDP &amp; tunnel
         </a>
         <a class="side-item" href="{{.ToolsURL}}">
           <span class="icon" aria-hidden="true">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13l4-4"/><path d="M9.5 3.5l3 3"/><path d="M8 5l3 3"/><path d="M10.5 2.5l3 3-6.5 6.5-3 1 1-3z"/></svg>
           </span>
-          Tools
+          Bulk tools
         </a>
       </nav>
     </aside>
@@ -114,12 +114,29 @@
 	  {{end}}
 	  {{if .ShowSetupGuide}}
 	  <section class="setup-guide" aria-label="Getting started">
-		<strong>Get ready to test</strong>
-		<ol>
-		  <li {{if .HasApps}}class="done"{{end}}><a href="{{.NewAppURL}}">Create an environment</a></li>
-		  <li {{if .HasLocalUsers}}class="done"{{end}}><a href="{{.NewUserURL}}">Create a user</a>{{if .SCIMEnabled}} or import from {{.ActiveEnvironment.Name}}{{end}}</li>
-		  <li {{if .HasPublicIDP}}class="done"{{end}}><a href="{{.ConfigURL}}">Connect the public tunnel</a> when your client requires TLS</li>
+		<div class="setup-guide-intro">
+		  <span class="eyebrow">Start here</span>
+		  <strong>Set up your first identity test</strong>
+		  <p>scimtest plays the identity provider or SCIM client. Your app keeps behaving like it does in production.</p>
+		</div>
+		<ol class="setup-steps">
+		  <li {{if .HasApps}}class="done"{{end}}>
+			<span class="sr-only">{{if .HasApps}}Completed: {{else}}Step 1: {{end}}</span>
+			<span class="setup-step-marker" aria-hidden="true">{{if .HasApps}}✓{{else}}1{{end}}</span>
+			<div><a href="{{.NewAppURL}}">Create a test environment</a><span>Configure OIDC, SAML, or SCIM independently for the app you want to test.</span></div>
+		  </li>
+		  <li {{if .HasLocalUsers}}class="done"{{end}}>
+			<span class="sr-only">{{if .HasLocalUsers}}Completed: {{else}}Step 2: {{end}}</span>
+			<span class="setup-step-marker" aria-hidden="true">{{if .HasLocalUsers}}✓{{else}}2{{end}}</span>
+			<div><a href="{{.NewUserURL}}">Add a test user</a><span>This person can sign in with OIDC or SAML and can be provisioned with SCIM.</span></div>
+		  </li>
+		  <li>
+			<span class="sr-only">Step 3: </span>
+			<span class="setup-step-marker" aria-hidden="true">3</span>
+			<div><span class="setup-step-title">Run the test</span><span>{{if .SCIMEnabled}}Open Users and choose Sync to send pending changes to {{.ActiveEnvironment.Name}}.{{else if .HasApps}}Open Environments and choose Test sign-in for the protocol you configured.{{else}}Once the first two steps are complete, scimtest will show the actions for your protocol.{{end}}</span></div>
+		  </li>
 		</ol>
+		<p class="setup-note">The admin UI and saved configuration stay on this computer. Use the public tunnel when your app requires trusted HTTPS or cannot reach localhost.</p>
 	  </section>
 	  {{end}}
 
@@ -135,7 +152,7 @@
         </div>
         <div class="page-header-text">
           <h1>{{if eq .Tab "groups"}}Groups{{else if eq .Tab "apps"}}Environments{{else}}Users{{end}}</h1>
-          <p class="lede">{{if eq .Tab "groups"}}Shared groups{{if .ActiveEnvironment.ID}}; sync status shown for {{.ActiveEnvironment.Name}}{{end}}.{{else if eq .Tab "apps"}}Configure and switch between test environments.{{else}}Shared users{{if .ActiveEnvironment.ID}}; sync status shown for {{.ActiveEnvironment.Name}}{{end}}.{{end}}</p>
+          <p class="lede">{{if eq .Tab "groups"}}Groups are shared by every environment{{if .ActiveEnvironment.ID}}; sync status is for {{.ActiveEnvironment.Name}}{{end}}.{{else if eq .Tab "apps"}}Each environment is one app you are testing. Use Test sign-in to run a flow, Inspect flow to debug it, or Set up to find connection values.{{else}}Users are shared by every environment{{if .ActiveEnvironment.ID}}; sync status is for {{.ActiveEnvironment.Name}}{{end}}.{{end}}</p>
         </div>
         <div class="actions">
           {{if eq .Tab "groups"}}
@@ -149,12 +166,24 @@
       </header>
 
       {{if and .SCIMEnabled (ne .Tab "apps")}}
+      <div class="actionbar-heading">
+        <div><strong>Provision to {{.ActiveEnvironment.Name}}</strong><span>Start with Sync. The other actions are useful when importing data, checking for drift, or starting over.</span></div>
+        <details class="action-help">
+          <summary>Which action should I use?</summary>
+          <dl>
+            <div><dt>Sync</dt><dd>Sends only local changes that are waiting to be provisioned.</dd></div>
+            <div><dt>Reconcile</dt><dd>Checks every user and group, then repairs differences on the SCIM server.</dd></div>
+            <div><dt>Preview import</dt><dd>Reads the remote directory and shows what would change locally before applying it.</dd></div>
+            <div><dt>Reset sync state</dt><dd>Forgets remote IDs and marks everything to be sent again. It does not delete local users.</dd></div>
+          </dl>
+        </details>
+      </div>
       <div class="actionbar">
         <form method="post" action="/sync" data-sync-form>
           <input type="hidden" name="tab" value="{{.Tab}}">
 		  <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
-          <button class="btn" type="submit" data-sync-submit {{if and .SyncJob .SyncJob.Running}}disabled{{end}}>Sync</button>
+          <button class="btn btn-primary" type="submit" data-sync-submit {{if and .SyncJob .SyncJob.Running}}disabled{{end}}>Sync pending changes</button>
         </form>
         <form method="post" action="/reconcile" data-sync-form data-sync-kind="reconcile" data-sync-confirm="Reconcile {{.ActiveEnvironment.Name}}? This creates, updates, and deletes resources on the remote SCIM server to match the local directory.">
           <input type="hidden" name="tab" value="{{.Tab}}">
@@ -170,14 +199,14 @@
 		  <input type="hidden" name="apply" value="on">
 		  <button class="btn btn-primary" type="submit">Apply import (+{{.ImportPreview.Added}} ~{{.ImportPreview.Updated}} -{{.ImportPreview.Removed}})</button>
 		  {{else}}
-		  <button class="btn" type="submit">Preview import</button>
+		  <button class="btn" type="submit">Preview remote import</button>
 		  {{end}}
         </form>
         <form method="post" action="/reset" onsubmit="return confirm('Reset sync state for {{.ActiveEnvironment.Name}}? This clears its remote IDs and marks its users and groups dirty.')">
           <input type="hidden" name="tab" value="{{.Tab}}">
 		  <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
-          <button class="btn btn-danger" type="submit">Reset</button>
+          <button class="btn btn-danger" type="submit">Reset sync state</button>
         </form>
         <span class="actionbar-meta">
           <b>{{.Stats.Users}}</b> users{{if .Stats.DirtyUsers}} <span class="sep">·</span> <span class="dirty">{{.Stats.DirtyUsers}} dirty</span>{{end}}
@@ -305,8 +334,8 @@
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="tools-dialog-title" tabindex="-1">
       <div class="modal-header">
         <div>
-          <div class="modal-title" id="tools-dialog-title">Tools</div>
-          <div class="modal-sub">Bulk user actions for test data wrangling.</div>
+          <div class="modal-title" id="tools-dialog-title">Bulk tools</div>
+          <div class="modal-sub">Create or update many test users at once.</div>
         </div>
         <a class="btn btn-sm btn-ghost" href="{{.ToolsForm.Close}}">Close</a>
       </div>
@@ -314,7 +343,7 @@
         <div class="tool-grid">
           <section class="tool-card">
             <h3>Create users</h3>
-            <p>Add active, dirty local users with generated names, usernames, and emails.</p>
+            <p>Generate active test users. They will be ready for the next SCIM sync.</p>
             <form method="post" action="/tools/create-users">
               <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
               <input type="hidden" name="tab" value="{{.Tab}}">
@@ -343,25 +372,25 @@
                 <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
                 <input type="hidden" name="tab" value="{{.Tab}}">
                 {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
-                <button class="btn" type="submit" onclick="return confirm('Activate all non-deleted users?')">Activate All</button>
+                <button class="btn" type="submit" onclick="return confirm('Activate all non-deleted users?')">Activate all</button>
               </form>
               <form method="post" action="/tools/deactivate-all">
                 <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
                 <input type="hidden" name="tab" value="{{.Tab}}">
                 {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
-                <button class="btn" type="submit" onclick="return confirm('Deactivate all non-deleted users?')">Deactivate All</button>
+                <button class="btn" type="submit" onclick="return confirm('Deactivate all non-deleted users?')">Deactivate all</button>
               </form>
 			  <form method="post" action="/tools/delete-all">
 				<input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
                 <input type="hidden" name="tab" value="{{.Tab}}">
                 {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
-                <button class="btn btn-danger" type="submit" onclick="return confirm('Delete all users? This is a big red button, my dude.')">Delete All</button>
+                <button class="btn btn-danger" type="submit" onclick="return confirm('{{if .HasSCIMEnvironments}}Delete every user from the shared directory? Each deletion will be queued in every SCIM environment for the next sync.{{else}}Permanently delete every user and clear all group memberships? This cannot be undone.{{end}}')">Delete all users</button>
 			  </form>
 			  <form method="post" action="/tools/clear-users-local">
 				<input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
 				<input type="hidden" name="tab" value="{{.Tab}}">
 				{{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
-				<button class="btn btn-danger" type="submit" onclick="return confirm('Immediately clear every local user? No SCIM server will be contacted. Group memberships and user history will also be cleared.')">Clear Users Locally</button>
+				<button class="btn btn-danger" type="submit" onclick="return confirm('Immediately clear every local user? No SCIM server will be contacted. Group memberships and user history will also be cleared.')">Clear local users</button>
 			  </form>
 			</div>
           </section>
@@ -491,7 +520,7 @@
 
   {{if .AppForm}}
   <div class="overlay" data-overlay>
-    <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="app-dialog-title" tabindex="-1">
+    <div class="modal wide environment-modal" role="dialog" aria-modal="true" aria-labelledby="app-dialog-title" tabindex="-1">
       <div class="modal-header">
         <div>
           <div class="modal-title" id="app-dialog-title">{{.AppForm.Title}}</div>
@@ -503,63 +532,71 @@
         <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
         <input type="hidden" name="tab" value="apps">
         <input type="hidden" name="id" value="{{.AppForm.App.ID}}">
+		<input type="hidden" name="setup_section" value="{{.AppForm.Section}}" data-setup-section>
         {{/* Default button for Enter: without it, the first submit button in
              tree order is "Discover capabilities" (a formaction submit that
              ignores every field), so pressing Enter would discard edits. */}}
         <button type="submit" class="is-hidden" tabindex="-1" aria-hidden="true" data-default-submit></button>
         <div class="modal-body">
-          <div class="form-grid">
-			{{if .FormError}}<div class="inline-error" role="alert" data-form-error>{{.FormError}}</div>{{end}}
-            <label class="field">
-              <span class="label">Environment name</span>
-              <input name="name" value="{{.AppForm.App.Name}}" autocomplete="off" data-environment-name data-autofocus>
-            </label>
-            <label class="field">
-              <span class="label">Slug</span>
-              <input name="slug" value="{{.AppForm.App.Slug}}" placeholder="my-app" autocomplete="off" data-environment-slug>
-            </label>
-            <div class="field full protocol-field">
-              <span class="label">Protocol</span>
-              <div class="segmented" role="radiogroup" aria-label="Protocol">
-                <label><input type="radio" name="protocol" value="oidc" {{if eq .AppForm.App.Protocol "oidc"}}checked{{end}}><span>OIDC</span></label>
-                <label><input type="radio" name="protocol" value="saml" {{if eq .AppForm.App.Protocol "saml"}}checked{{end}}><span>SAML</span></label>
-                <label><input type="radio" name="protocol" value="both" {{if eq .AppForm.App.Protocol "both"}}checked{{end}}><span>Both</span></label>
-				<label><input type="radio" name="protocol" value="scim" {{if eq .AppForm.App.Protocol "scim"}}checked{{end}}><span>SCIM only</span></label>
-              </div>
-            </div>
-            <label class="field full">
-              <span class="label">Groups</span>
-              <span class="checkbox-row">
-                <input type="checkbox" name="include_groups_claim" {{if .AppForm.App.IncludeGroupsClaim}}checked{{end}}>
-                Include groups claim or SAML attribute
-              </span>
-            </label>
-			<label class="field full">
-			  <span class="label">Sign-in chooser privacy</span>
-			  <select name="chooser_mode">
-				<option value="list" {{if eq .AppForm.App.ChooserMode "list"}}selected{{end}}>Show active users</option>
-				<option value="identifier" {{if eq .AppForm.App.ChooserMode "identifier"}}selected{{end}}>Ask for username or email</option>
-			  </select>
-			  <span class="hint">Identifier mode prevents the sign-in page from listing directory users.</span>
-			</label>
-			<label class="field full">
-			  <span class="label">Sync</span>
-			  <span class="checkbox-row">
-				<input type="checkbox" name="scim_enabled" data-scim-toggle {{if .AppForm.App.SCIMEnabled}}checked{{end}}>
-				Enable SCIM sync for this environment
-			  </span>
-			</label>
-			<div class="protocol-section {{if not .AppForm.App.SCIMEnabled}}is-hidden{{end}}" data-scim-section>
-			  <div class="section-label">SCIM</div>
+		  {{if .FormError}}<div class="inline-error" role="alert" data-form-error>{{.FormError}}</div>{{end}}
+		  <nav class="setup-tabs" role="tablist" aria-label="Environment setup">
+			<button class="setup-tab {{if eq .AppForm.Section "overview"}}active{{end}}" type="button" role="tab" aria-selected="{{if eq .AppForm.Section "overview"}}true{{else}}false{{end}}" data-setup-tab="overview">Overview</button>
+			<button class="setup-tab {{if eq .AppForm.Section "oidc"}}active{{end}}" type="button" role="tab" aria-selected="{{if eq .AppForm.Section "oidc"}}true{{else}}false{{end}}" data-setup-tab="oidc">OIDC{{if .AppForm.OIDCStatus.Configured}} <span class="setup-check" aria-label="Configured">✓</span>{{else if .AppForm.OIDCStatus.Started}} <span class="setup-warning" aria-label="Incomplete">!</span>{{end}}</button>
+			<button class="setup-tab {{if eq .AppForm.Section "saml"}}active{{end}}" type="button" role="tab" aria-selected="{{if eq .AppForm.Section "saml"}}true{{else}}false{{end}}" data-setup-tab="saml">SAML{{if .AppForm.SAMLStatus.Configured}} <span class="setup-check" aria-label="Configured">✓</span>{{else if .AppForm.SAMLStatus.Started}} <span class="setup-warning" aria-label="Incomplete">!</span>{{end}}</button>
+			<button class="setup-tab {{if eq .AppForm.Section "scim"}}active{{end}}" type="button" role="tab" aria-selected="{{if eq .AppForm.Section "scim"}}true{{else}}false{{end}}" data-setup-tab="scim">SCIM{{if .AppForm.SCIMStatus.Configured}} <span class="setup-check" aria-label="Configured">✓</span>{{else if .AppForm.SCIMStatus.Started}} <span class="setup-warning" aria-label="Incomplete">!</span>{{end}}</button>
+		  </nav>
+
+		  <section class="setup-panel {{if eq .AppForm.Section "overview"}}active{{end}}" role="tabpanel" data-setup-panel="overview">
+			<div class="setup-panel-header">
+			  <div><h3>Environment overview</h3><p>Set up any combination of OIDC, SAML, and SCIM. Each integration is saved independently.</p></div>
+			</div>
+			<div class="setup-overview-grid">
+			  <button class="setup-summary" type="button" data-setup-open="oidc"><span><strong>OIDC</strong><small>OpenID Connect sign-in</small></span><span class="setup-status {{.AppForm.OIDCStatus.Class}}">{{if .AppForm.OIDCStatus.Configured}}✓ {{end}}{{.AppForm.OIDCStatus.Label}}</span></button>
+			  <button class="setup-summary" type="button" data-setup-open="saml"><span><strong>SAML</strong><small>SAML sign-in</small></span><span class="setup-status {{.AppForm.SAMLStatus.Class}}">{{if .AppForm.SAMLStatus.Configured}}✓ {{end}}{{.AppForm.SAMLStatus.Label}}</span></button>
+			  <button class="setup-summary" type="button" data-setup-open="scim"><span><strong>SCIM</strong><small>User and group provisioning</small></span><span class="setup-status {{.AppForm.SCIMStatus.Class}}">{{if .AppForm.SCIMStatus.Configured}}✓ {{end}}{{.AppForm.SCIMStatus.Label}}</span></button>
+			</div>
+			<div class="form-grid">
+			  <label class="field">
+				<span class="label">Environment name</span>
+				<input name="name" value="{{.AppForm.App.Name}}" autocomplete="off" data-environment-name data-autofocus>
+				<span class="hint">Use the name of the app or integration you are testing.</span>
+			  </label>
+			  <label class="field">
+				<span class="label">Endpoint name</span>
+				<input name="slug" value="{{.AppForm.App.Slug}}" placeholder="my-app" autocomplete="off" data-environment-slug>
+				<span class="hint">Generated from the name and used in OIDC and SAML URLs.</span>
+			  </label>
 			  <label class="field full">
-				<span class="label">Base URL</span>
+				<span class="label">Sign-in chooser privacy</span>
+				<select name="chooser_mode">
+				  <option value="list" {{if eq .AppForm.App.ChooserMode "list"}}selected{{end}}>Show active users</option>
+				  <option value="identifier" {{if eq .AppForm.App.ChooserMode "identifier"}}selected{{end}}>Ask for username or email</option>
+				</select>
+				<span class="hint">Identifier mode prevents the sign-in page from listing directory users.</span>
+			  </label>
+			  <label class="field full">
+				<span class="label">Groups in sign-in responses</span>
+				<span class="checkbox-row"><input type="checkbox" name="include_groups_claim" {{if .AppForm.App.IncludeGroupsClaim}}checked{{end}}> Include groups in OIDC claims and SAML attributes</span>
+			  </label>
+			</div>
+		  </section>
+
+		  <section class="setup-panel {{if eq .AppForm.Section "scim"}}active{{end}}" role="tabpanel" data-setup-panel="scim">
+			<div class="setup-panel-header">
+			  <div><h3>SCIM</h3><p>Provision users and groups from the shared directory to your app.</p></div>
+			  <span class="setup-status {{.AppForm.SCIMStatus.Class}}">{{if .AppForm.SCIMStatus.Configured}}✓ {{end}}{{.AppForm.SCIMStatus.Label}}</span>
+			</div>
+			<div class="form-grid">
+			  <label class="field full">
+				<span class="label">SCIM base URL</span>
 				<input name="scim_base_url" value="{{.AppForm.App.SCIMBaseURL}}" placeholder="https://service.example/scim/v2" autocomplete="off">
+				<span class="hint">The SCIM endpoint provided by the app you are testing, usually ending in /scim/v2.</span>
 			  </label>
 			  <label class="field full">
 				<span class="label">Bearer token</span>
 				<input type="password" name="scim_bearer_token" placeholder="{{if .AppForm.App.SCIMBearerToken}}Leave blank to keep existing{{end}}" autocomplete="new-password" data-secret-input>
 				<button class="link-button" type="button" data-secret-toggle>Show</button>
-				{{if .AppForm.App.SCIMBearerToken}}<span class="hint">The saved token stays hidden; Show reveals only what you type here.</span>{{end}}
+				<span class="hint">{{if .AppForm.App.SCIMBearerToken}}The saved token stays hidden; Show reveals only what you type here.{{else}}The credential scimtest should use when calling the app's SCIM API.{{end}}</span>
 			  </label>
 			  <div class="field full">
 				<button class="btn" type="button" data-test-scim>Test connection</button>
@@ -569,19 +606,29 @@
 				<span class="label">Trace</span>
 				<span class="checkbox-row"><input type="checkbox" name="scim_auto_open_trace" {{if .AppForm.App.SCIMAutoOpenTrace}}checked{{end}}> Auto-open after sync and import</span>
 			  </label>
-			  {{if .AppForm.App.ID}}
+			  {{if and .AppForm.App.ID .AppForm.SCIMStatus.Configured}}
 			  <div class="field full">
 				<span class="label">Provider capabilities</span>
 				<span class="hint">{{if .AppForm.App.SCIMCapabilitiesKnown}}PATCH: {{if .AppForm.App.SCIMPatchSupported}}supported{{else}}not supported{{end}} · Filters: {{if .AppForm.App.SCIMFilterSupported}}supported{{else}}not supported{{end}}{{else}}Not discovered yet{{end}}</span>
 				<button class="btn" type="submit" formaction="/apps/{{.AppForm.App.ID}}/discover-scim" formnovalidate>Discover capabilities</button>
 			  </div>
 			  {{end}}
+			  {{if and .AppForm.App.ID .AppForm.SCIMStatus.Started}}
+			  <div class="setup-remove field full"><span><strong>Remove SCIM setup</strong><small>Stops provisioning and clears the saved endpoint and token.</small></span><button class="btn btn-danger" type="submit" name="remove_protocol" value="scim" formnovalidate onclick="return confirm('Remove the SCIM setup from this environment? Saved sync state will be kept.')">Remove SCIM</button></div>
+			  {{end}}
 			</div>
-            <div class="protocol-section" data-protocol-section="oidc">
-              <div class="section-label">OIDC</div>
+		  </section>
+
+		  <section class="setup-panel {{if eq .AppForm.Section "oidc"}}active{{end}}" role="tabpanel" data-setup-panel="oidc">
+			<div class="setup-panel-header">
+			  <div><h3>OIDC</h3><p>Sign users in to your app with OpenID Connect.</p></div>
+			  <span class="setup-status {{.AppForm.OIDCStatus.Class}}">{{if .AppForm.OIDCStatus.Configured}}✓ {{end}}{{.AppForm.OIDCStatus.Label}}</span>
+			</div>
+			<div class="form-grid">
               <label class="field">
                 <span class="label">Client ID</span>
                 <input name="oidc_client_id" value="{{.AppForm.App.OIDCClientID}}" autocomplete="off">
+				<span class="hint">Use this same value in your app's OIDC configuration.</span>
               </label>
 			  <label class="field">
 				<span class="label">Client secret</span>
@@ -596,7 +643,7 @@
               <label class="field full">
                 <span class="label">Redirect URIs</span>
 				<textarea name="oidc_redirect_uris" placeholder="http://localhost:3000/callback">{{.AppForm.OIDCRedirectURIs}}</textarea>
-				<span class="hint">One absolute HTTP(S) URI per line.</span>
+				<span class="hint">Where scimtest may send the browser after sign-in. Enter one absolute HTTP(S) URI per line.</span>
 			  </label>
 			  <label class="field full">
 				<span class="label">Unsafe redirect testing</span>
@@ -626,10 +673,10 @@
 			  <label class="field"><span class="label">Groups</span><input name="oidc_claim_groups" value="{{.AppForm.App.OIDCClaimMappings.Groups}}" autocomplete="off"></label>
 			  </div>
 			  </details>
-              {{if .AppForm.OIDCIssuer}}
+              {{if and .AppForm.OIDCIssuer .AppForm.OIDCStatus.Started}}
               <div class="field full">
                 <div class="saml-setup">
-                  <div class="saml-setup-title">Paste into the RP</div>
+                  <div class="saml-setup-title">Copy these values into your app</div>
                   <div class="copy-field">
                     <span class="k">Issuer</span>
                     <span class="v" title="{{.AppForm.OIDCIssuer}}">{{.AppForm.OIDCIssuer}}</span>
@@ -686,16 +733,27 @@
                 </div>
               </div>
               {{end}}
-            </div>
-            <div class="protocol-section" data-protocol-section="saml">
-              <div class="section-label">SAML</div>
+			  {{if and .AppForm.App.ID .AppForm.OIDCStatus.Started}}
+			  <div class="setup-remove field full"><span><strong>Remove OIDC setup</strong><small>Clears the saved client, secret, redirect URIs, and test actions.</small></span><button class="btn btn-danger" type="submit" name="remove_protocol" value="oidc" formnovalidate onclick="return confirm('Remove the OIDC setup from this environment?')">Remove OIDC</button></div>
+			  {{end}}
+			</div>
+		  </section>
+
+		  <section class="setup-panel {{if eq .AppForm.Section "saml"}}active{{end}}" role="tabpanel" data-setup-panel="saml">
+			<div class="setup-panel-header">
+			  <div><h3>SAML</h3><p>Configure scimtest as the identity provider for your service provider.</p></div>
+			  <span class="setup-status {{.AppForm.SAMLStatus.Class}}">{{if .AppForm.SAMLStatus.Configured}}✓ {{end}}{{.AppForm.SAMLStatus.Label}}</span>
+			</div>
+			<div class="form-grid">
               <label class="field">
                 <span class="label">SP entity ID</span>
                 <input name="saml_entity_id" value="{{.AppForm.App.SAMLEntityID}}" autocomplete="off">
+				<span class="hint">The unique SAML identifier configured by your app.</span>
               </label>
               <label class="field">
                 <span class="label">ACS URL</span>
                 <input name="saml_acs_url" value="{{.AppForm.App.SAMLACSURL}}" placeholder="http://localhost:3000/saml/acs" autocomplete="off">
+				<span class="hint">Where scimtest should post the signed SAML response after sign-in.</span>
               </label>
               <label class="field">
                 <span class="label">Audience</span>
@@ -728,9 +786,9 @@
               {{if .AppForm.SAMLIDPSSO}}
               <div class="field full">
                 <div class="saml-setup">
-                  <div class="saml-setup-title">Paste into the RP</div>
+                  <div class="saml-setup-title">Copy these values into your app</div>
                   <div class="copy-field">
-                    <span class="k">IDP SSO URL</span>
+                    <span class="k">Sign-on URL</span>
                     <span class="v" title="{{.AppForm.SAMLIDPSSO}}">{{.AppForm.SAMLIDPSSO}}</span>
                     <button class="copy-btn" type="button" data-copy-button aria-label="Copy IDP SSO URL" title="Copy IDP SSO URL">
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="7" height="8" rx="1.2"/><path d="M3 10.5V4a1 1 0 0 1 1-1h6.5"/></svg>
@@ -753,8 +811,11 @@
                 </div>
               </div>
               {{end}}
-            </div>
-          </div>
+			  {{if and .AppForm.App.ID .AppForm.SAMLStatus.Started}}
+			  <div class="setup-remove field full"><span><strong>Remove SAML setup</strong><small>Clears the saved service provider details and test actions.</small></span><button class="btn btn-danger" type="submit" name="remove_protocol" value="saml" formnovalidate onclick="return confirm('Remove the SAML setup from this environment?')">Remove SAML</button></div>
+			  {{end}}
+			</div>
+		  </section>
           <div class="form-actions">
             <a class="btn btn-ghost" href="{{.AppForm.Close}}">Cancel</a>
             <button class="btn btn-primary" type="submit">Save environment</button>

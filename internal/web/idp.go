@@ -80,32 +80,36 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.TrimSpace(r.FormValue("id"))
+	removedProtocol := strings.TrimSpace(r.FormValue("remove_protocol"))
 	oidcClientSecret := strings.TrimSpace(r.FormValue("oidc_client_secret"))
 	scimBearerToken := strings.TrimSpace(r.FormValue("scim_bearer_token"))
 	existingIndex, appExists := appIndexByID(state.Apps, id)
+	existingProtocol := "none"
 	wasSCIMEnabled := false
 	previousSCIMBaseURL := ""
 	scimCapabilitiesKnown := false
 	scimPatchSupported := false
 	scimFilterSupported := false
 	if appExists {
+		existingProtocol = state.Apps[existingIndex].Protocol
 		wasSCIMEnabled = state.Apps[existingIndex].SCIMEnabled
 		previousSCIMBaseURL = strings.TrimRight(strings.TrimSpace(state.Apps[existingIndex].SCIMBaseURL), "/")
 		scimCapabilitiesKnown = state.Apps[existingIndex].SCIMCapabilitiesKnown
 		scimPatchSupported = state.Apps[existingIndex].SCIMPatchSupported
 		scimFilterSupported = state.Apps[existingIndex].SCIMFilterSupported
-		if oidcClientSecret == "" && r.FormValue("regenerate_oidc_secret") != "on" {
+		if removedProtocol != "oidc" && oidcClientSecret == "" && r.FormValue("regenerate_oidc_secret") != "on" {
 			oidcClientSecret = state.Apps[existingIndex].OIDCClientSecret
 		}
-		if scimBearerToken == "" {
+		if removedProtocol != "scim" && scimBearerToken == "" {
 			scimBearerToken = state.Apps[existingIndex].SCIMBearerToken
 		}
 	}
+	existingProtocol = protocolWithout(existingProtocol, removedProtocol)
 	app := app{
 		ID:                     id,
 		Name:                   strings.TrimSpace(r.FormValue("name")),
 		Slug:                   slugify(r.FormValue("slug")),
-		Protocol:               strings.TrimSpace(r.FormValue("protocol")),
+		Protocol:               existingProtocol,
 		OIDCClientID:           strings.TrimSpace(r.FormValue("oidc_client_id")),
 		OIDCClientSecret:       oidcClientSecret,
 		OIDCPublicClient:       r.FormValue("oidc_public_client") == "on",
@@ -128,7 +132,6 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 			Username: strings.TrimSpace(r.FormValue("saml_attribute_username")), Email: strings.TrimSpace(r.FormValue("saml_email_attribute_name")),
 			Groups: strings.TrimSpace(r.FormValue("saml_attribute_groups")),
 		},
-		SCIMEnabled:           r.FormValue("scim_enabled") == "on",
 		SCIMBaseURL:           strings.TrimSpace(r.FormValue("scim_base_url")),
 		SCIMBearerToken:       scimBearerToken,
 		SCIMAutoOpenTrace:     r.FormValue("scim_auto_open_trace") == "on",
@@ -139,24 +142,29 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 	if app.Slug == "" {
 		app.Slug = slugify(app.Name)
 	}
-	if app.Protocol == "" {
-		app.Protocol = "oidc"
-	}
-	if app.Protocol == "scim" {
-		app.SCIMEnabled = true
-	}
-	// While the sync toggle is off the SCIM section's inputs are disabled
-	// and never submitted, so an empty value means "unchanged", not
-	// "cleared" — mirror the bearer-token fallback above. This also keeps
-	// discovered capabilities and remote IDs intact across a temporary
-	// disable, since the endpoint no longer looks changed.
-	if appExists && !app.SCIMEnabled {
-		app.SCIMBaseURL = state.Apps[existingIndex].SCIMBaseURL
-		app.SCIMAutoOpenTrace = state.Apps[existingIndex].SCIMAutoOpenTrace
+	switch removedProtocol {
+	case "oidc":
+		app.OIDCClientID = ""
+		app.OIDCClientSecret = ""
+		app.OIDCPublicClient = false
+		app.OIDCRedirectURIs = nil
+		app.AllowAnyOIDCRedirect = false
+	case "saml":
+		app.SAMLEntityID = ""
+		app.SAMLACSURL = ""
+		app.SAMLAudience = ""
+	case "scim":
+		app.SCIMBaseURL = ""
+		app.SCIMBearerToken = ""
+		app.SCIMAutoOpenTrace = false
+		app.SCIMCapabilitiesKnown = false
+		app.SCIMPatchSupported = false
+		app.SCIMFilterSupported = false
 	}
 	app.OIDCClaimMappings = oidcClaimMappingsForApp(app)
 	app.SAMLAttributeMappings = samlAttributeMappingsForApp(app)
 	app.SAMLEmailAttributeName = app.SAMLAttributeMappings.Email
+	app.Protocol = inferAppProtocol(app)
 	if supportsOIDC(app) {
 		if app.OIDCClientID == "" {
 			app.OIDCClientID = app.Slug
@@ -173,10 +181,6 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-	} else {
-		app.OIDCClientID = ""
-		app.OIDCClientSecret = ""
-		app.OIDCRedirectURIs = nil
 	}
 	if supportsSAML(app) {
 		if app.SAMLNameIDField == "" {
@@ -186,22 +190,12 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		if app.SAMLEmailAttributeName == "" {
 			app.SAMLEmailAttributeName = defaultSAMLEmailAttributeName
 		}
-	} else {
-		app.SAMLEntityID = ""
-		app.SAMLACSURL = ""
-		app.SAMLAudience = ""
-		app.SAMLNameIDField = ""
-		app.SAMLNameIDFormat = ""
-		app.SAMLEmailAttributeName = ""
 	}
-	if err := validateHTTPBaseURL("SCIM base URL", app.SCIMBaseURL, app.SCIMEnabled); err != nil {
+	if err := validateHTTPBaseURL("SCIM base URL", app.SCIMBaseURL, false); err != nil {
 		a.redirectFormError(w, r, tab, "app", err)
 		return
 	}
-	if app.SCIMEnabled && app.SCIMBearerToken == "" {
-		a.redirectFormError(w, r, tab, "app", fmt.Errorf("SCIM bearer token is required"))
-		return
-	}
+	app.SCIMEnabled = scimSetupStatus(app) == setupStatusConfigured
 	allApps, err := loadAllApps()
 	if err != nil {
 		a.redirectError(w, r, tab, err)
@@ -213,6 +207,9 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status := "environment updated"
+	if removedProtocol != "" {
+		status = strings.ToUpper(removedProtocol) + " setup removed"
+	}
 	created := id == ""
 	if id == "" {
 		app.ID, err = newAppID()
@@ -251,6 +248,30 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		location = addEnvironmentToURL(location, app.ID)
 	}
 	redirectWithFlash(w, r, location, flashMessage{Kind: "success", Message: status})
+}
+
+func protocolWithout(protocol string, removed string) string {
+	switch removed {
+	case "oidc":
+		if protocol == "both" {
+			return "saml"
+		}
+		if protocol == "oidc" {
+			return "none"
+		}
+	case "saml":
+		if protocol == "both" {
+			return "oidc"
+		}
+		if protocol == "saml" {
+			return "none"
+		}
+	case "scim":
+		if protocol == "scim" {
+			return "none"
+		}
+	}
+	return protocol
 }
 
 func (a *webApp) handleAppDiscoverSCIM(w http.ResponseWriter, r *http.Request) {

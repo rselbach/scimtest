@@ -13,6 +13,7 @@ coverage.*
 # Local environment and server state
 .env
 *.local
+/run.sh
 scimtest-server.json
 scimtest-server.json.tmp
 /deploy/caddy-cloudflare.env
