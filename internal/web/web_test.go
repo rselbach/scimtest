@@ -97,7 +97,7 @@ func TestDashboardDialogsAreLabelledAndFocusEditableFields(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{
-		Users:  []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.edu", Active: true}},
+		Users: []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.edu", Active: true}},
 		Groups: []group{{ID: "study-group", DisplayName: "Study Group", MemberIDs: []string{"troy"}}},
 		Apps: []app{{
 			ID:              "app-1",
@@ -473,7 +473,7 @@ func TestAdminRoutesRejectCrossOriginMutations(t *testing.T) {
 	r.Len(state.Users, 1)
 }
 
-func TestAdminRoutesAllowSameOriginMutations(t *testing.T) {
+func TestAdminRoutesRejectUnrecognizedSameOriginHost(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{
@@ -488,7 +488,7 @@ func TestAdminRoutesAllowSameOriginMutations(t *testing.T) {
 		}},
 	}))
 
-	app := &webApp{}
+	app := &webApp{adminHost: "127.0.0.1:8080"}
 	req := httptest.NewRequest(http.MethodPost, "/tools/delete-all", nil)
 	req.Host = "admin.greendale.test"
 	req.Header.Set("Origin", "http://admin.greendale.test")
@@ -496,10 +496,26 @@ func TestAdminRoutesAllowSameOriginMutations(t *testing.T) {
 	rec := httptest.NewRecorder()
 	app.routes().ServeHTTP(rec, req)
 
-	r.Equal(http.StatusSeeOther, rec.Code)
+	r.Equal(http.StatusMisdirectedRequest, rec.Code)
 	state, err := loadState()
 	r.NoError(err)
-	r.Empty(state.Users)
+	r.Len(state.Users, 1)
+}
+
+func TestAdminRoutesAllowRecognizedSameOriginHost(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{Config: config{SCIMDisabled: true}}))
+
+	app := &webApp{adminHost: "127.0.0.1:8080"}
+	req := httptest.NewRequest(http.MethodPost, "/tools/delete-all", nil)
+	req.Host = "127.0.0.1:8080"
+	req.Header.Set("Origin", "http://127.0.0.1:8080")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	rec := httptest.NewRecorder()
+	app.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
 }
 
 func TestIDPPostRoutesAllowCrossOriginRequests(t *testing.T) {
@@ -3039,7 +3055,7 @@ func TestReenablingSCIMResumesRememberedRemoteIDs(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{
-		Users: []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.edu", Active: true}},
+		Users:  []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.edu", Active: true}},
 		Groups: []group{{ID: "study-group", DisplayName: "Study Group"}},
 		Apps: []app{{
 			ID: "app-1", Name: "Greendale Portal", Slug: "greendale", Protocol: "oidc",

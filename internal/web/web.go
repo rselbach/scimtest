@@ -42,6 +42,7 @@ type webApp struct {
 	debugRP           bool
 	debugSecrets      bool
 	localPort         int
+	adminHost         string
 	instanceToken     string
 	tunnelStart       tunnelStarter
 	tunnelLifecycleMu sync.Mutex
@@ -524,6 +525,13 @@ func Run(options ...RunOptions) error {
 		idpCloseErr := idpListener.Close()
 		return fmt.Errorf("%w; close admin listener: %v; close tunneled IDP listener: %v", err, adminCloseErr, idpCloseErr)
 	}
+	parsedLocalURL, err := url.Parse(localURL)
+	if err != nil {
+		adminCloseErr := listener.Close()
+		idpCloseErr := idpListener.Close()
+		return fmt.Errorf("parse admin listener URL: %w; close admin listener: %v; close tunneled IDP listener: %v", err, adminCloseErr, idpCloseErr)
+	}
+	app.adminHost = parsedLocalURL.Host
 	if err := lease.Publish(instanceMetadata{URL: localURL, Token: app.instanceToken}); err != nil {
 		adminCloseErr := listener.Close()
 		idpCloseErr := idpListener.Close()
@@ -640,7 +648,17 @@ func rememberEnvironment(w http.ResponseWriter, environmentID string) {
 func (a *webApp) adminRoutes() http.Handler {
 	mux := http.NewServeMux()
 	a.registerAdminRoutes(mux)
-	return http.NewCrossOriginProtection().Handler(mux)
+	handler := http.NewCrossOriginProtection().Handler(mux)
+	if a.adminHost == "" {
+		return handler
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != a.adminHost {
+			http.Error(w, "unrecognized admin host", http.StatusMisdirectedRequest)
+			return
+		}
+		handler.ServeHTTP(w, r)
+	})
 }
 
 func (a *webApp) idpRoutes() http.Handler {
