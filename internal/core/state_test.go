@@ -1072,3 +1072,34 @@ func TestOpenStateDBAtSetsConcurrencyPragmas(t *testing.T) {
 	r.NoError(db.QueryRow("PRAGMA busy_timeout").Scan(&timeout))
 	r.Equal(5000, timeout)
 }
+
+func TestOpenStateDBAtPreservesSpecialFilenameCharacters(t *testing.T) {
+	tests := map[string]struct {
+		filename string
+		relative bool
+	}{
+		"fragment marker":       {filename: "greendale#prod.db"},
+		"percent sign":          {filename: "greendale%prod.db"},
+		"query marker":          {filename: "greendale?prod.db"},
+		"relative query marker": {filename: "greendale?relative.db", relative: true},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			dir := t.TempDir()
+			path := filepath.Join(dir, tc.filename)
+			if tc.relative {
+				t.Chdir(dir)
+				path = tc.filename
+			}
+			db, err := openStateDBAt(path)
+			r.NoError(err)
+			r.NoError(db.Close())
+
+			data, err := os.ReadFile(path)
+			r.NoError(err)
+			r.GreaterOrEqual(len(data), 16)
+			r.Equal("SQLite format 3\x00", string(data[:16]))
+		})
+	}
+}

@@ -297,7 +297,7 @@ func openStateDBAt(path string) (*sql.DB, error) {
 	// SQLITE_BUSY (which could discard a finished sync's state write while a
 	// status poll held a read lock); WAL lets readers and the writer proceed
 	// concurrently.
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+	db, err := sql.Open("sqlite", sqliteStateDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite state db %s: %w", path, err)
 	}
@@ -310,6 +310,15 @@ func openStateDBAt(path string) (*sql.DB, error) {
 	}
 
 	return db, nil
+}
+
+func sqliteStateDSN(path string) string {
+	stateURL := url.URL{
+		Scheme:   "file",
+		Path:     filepath.ToSlash(path),
+		OmitHost: true,
+	}
+	return stateURL.String() + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 }
 
 func initStateDB(db *sql.DB) error {
