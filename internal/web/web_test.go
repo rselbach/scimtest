@@ -1163,6 +1163,12 @@ func TestSyncPersistsRemoteStateAndTraceCookie(t *testing.T) {
 	setTestStateFile(t)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodGet && req.URL.Path == "/Users" {
+			w.Header().Set("Content-Type", "application/scim+json")
+			_, err := fmt.Fprint(w, `{"totalResults":0,"Resources":[]}`)
+			r.NoError(err)
+			return
+		}
 		r.Equal(http.MethodPost, req.Method)
 		r.Equal("/Users", req.URL.Path)
 		w.Header().Set("Content-Type", "application/scim+json")
@@ -1316,6 +1322,12 @@ func TestSyncStartsAsyncAndReportsStatus(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodGet && req.URL.Path == "/Users" {
+			w.Header().Set("Content-Type", "application/scim+json")
+			_, err := fmt.Fprint(w, `{"totalResults":0,"Resources":[]}`)
+			r.NoError(err)
+			return
+		}
 		r.Equal(http.MethodPost, req.Method)
 		r.Equal("/Users", req.URL.Path)
 		close(started)
@@ -2824,10 +2836,17 @@ func TestAdminUIRespondsDuringRunningSync(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var releaseOnce sync.Once
+	var startedOnce sync.Once
 	releaseSync := func() { releaseOnce.Do(func() { close(release) }) }
 	defer releaseSync()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		close(started)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodGet && req.URL.Path == "/Users" {
+			w.Header().Set("Content-Type", "application/scim+json")
+			_, err := fmt.Fprint(w, `{"totalResults":0,"Resources":[]}`)
+			r.NoError(err)
+			return
+		}
+		startedOnce.Do(func() { close(started) })
 		<-release
 		w.Header().Set("Content-Type", "application/scim+json")
 		_, err := fmt.Fprint(w, `{"id":"remote-troy"}`)

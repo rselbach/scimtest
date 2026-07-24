@@ -19,18 +19,16 @@ func isRateLimitError(err error) bool {
 }
 
 func (c *SCIMClient) createUser(u User) (string, bool, error) {
-	if c.filter {
-		remoteID, found, err := c.findUserByExternalID(u)
-		if err != nil {
+	remoteID, found, err := c.findUserByExternalID(u)
+	switch {
+	case err != nil && c.filter:
+		return "", false, err
+	case err == nil && found:
+		u.RemoteID = remoteID
+		if err := c.replaceUser(u); err != nil {
 			return "", false, err
 		}
-		if found {
-			u.RemoteID = remoteID
-			if err := c.replaceUser(u); err != nil {
-				return "", false, err
-			}
-			return remoteID, true, nil
-		}
+		return remoteID, true, nil
 	}
 
 	resource := newSCIMUserResource(u)
@@ -222,18 +220,16 @@ func (c *SCIMClient) deleteUser(u User, operation string) error {
 }
 
 func (c *SCIMClient) createGroup(g Group, users []User) (string, bool, error) {
-	if c.filter {
-		remoteID, found, err := c.findGroupByExternalID(g)
-		if err != nil {
+	remoteID, found, err := c.findGroupByExternalID(g)
+	switch {
+	case err != nil && c.filter:
+		return "", false, err
+	case err == nil && found:
+		g.RemoteID = remoteID
+		if err := c.replaceGroup(g, users); err != nil {
 			return "", false, err
 		}
-		if found {
-			g.RemoteID = remoteID
-			if err := c.replaceGroup(g, users); err != nil {
-				return "", false, err
-			}
-			return remoteID, true, nil
-		}
+		return remoteID, true, nil
 	}
 
 	resource, err := newSCIMGroupResource(g, users)

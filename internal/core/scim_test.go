@@ -55,6 +55,60 @@ func TestSyncDirtyStateWithContextCancelsInFlightRequest(t *testing.T) {
 	}
 }
 
+func TestSyncDirtyStateAdoptsAfterAmbiguousCreateWithoutFilterFlag(t *testing.T) {
+	r := require.New(t)
+	posts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/scim+json")
+		switch {
+		case isSCIMExternalIDProbe(req):
+			if posts == 0 {
+				writeEmptySCIMListResponse(w)
+				return
+			}
+			r.NoError(json.NewEncoder(w).Encode(SCIMListResponse[SCIMUserResource]{
+				TotalResults: 1,
+				Resources:    []SCIMUserResource{{ID: "remote-troy", ExternalID: "troy"}},
+			}))
+		case req.Method == http.MethodPost && req.URL.Path == "/Users":
+			posts++
+			// Simulate a committed create whose response never arrives.
+			hj, ok := w.(http.Hijacker)
+			r.True(ok)
+			conn, _, err := hj.Hijack()
+			r.NoError(err)
+			r.NoError(conn.Close())
+		case req.Method == http.MethodPut && req.URL.Path == "/Users/remote-troy":
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected request %s %s", req.Method, req.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	state := AppState{
+		Config: Config{BaseURL: server.URL, BearerToken: "chang-secret"},
+		Users: []User{{
+			ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy",
+			Email: "troy@greendale.edu", Active: true, Dirty: true,
+		}},
+	}
+
+	first := SyncDirtyState(state)
+	r.NoError(first.Fatal)
+	r.True(first.State.Users[0].Dirty)
+	r.Empty(first.State.Users[0].RemoteID)
+	r.Equal(1, posts)
+
+	second := SyncDirtyState(first.State)
+	r.NoError(second.Fatal)
+	r.NoError(second.Stopped)
+	r.Equal(1, posts)
+	r.Equal("remote-troy", second.State.Users[0].RemoteID)
+	r.False(second.State.Users[0].Dirty)
+	r.Contains(second.Status, "1 adopted")
+}
+
 func TestSyncDirtyStateAdoptsResourcesByExternalID(t *testing.T) {
 	r := require.New(t)
 	requests := make([]string, 0, 4)
@@ -201,6 +255,10 @@ func TestSyncDirtyState(t *testing.T) {
 		if req.Header.Get("Authorization") != "Bearer chang-secret" {
 			t.Fatalf("unexpected auth header: %q", req.Header.Get("Authorization"))
 		}
+		if isSCIMExternalIDProbe(req) {
+			writeEmptySCIMListResponse(w)
+			return
+		}
 
 		switch req.Method + " " + req.URL.Path {
 		case "POST /Users":
@@ -272,9 +330,11 @@ func TestSyncDirtyState(t *testing.T) {
 	)
 	r.Equal(
 		[]string{
+			"GET /Users",
 			"POST /Users",
 			"PUT /Users/remote-user-updated",
 			"DELETE /Users/remote-user-deleted",
+			"GET /Groups",
 			"POST /Groups",
 			"PUT /Groups/remote-group-updated",
 			"DELETE /Groups/remote-group-deleted",
@@ -296,6 +356,10 @@ func TestSyncDirtyStatePrunesDeletedUsersFromGroups(t *testing.T) {
 	requests := make([]string, 0, 3)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		requests = append(requests, req.Method+" "+req.URL.Path)
+		if isSCIMExternalIDProbe(req) {
+			writeEmptySCIMListResponse(w)
+			return
+		}
 		switch req.Method + " " + req.URL.Path {
 		case "DELETE /Users/remote-chang":
 			w.WriteHeader(http.StatusNoContent)
@@ -357,6 +421,7 @@ func TestSyncDirtyStatePrunesDeletedUsersFromGroups(t *testing.T) {
 	r.Equal([]string{
 		"DELETE /Users/remote-chang",
 		"PUT /Groups/remote-spanish",
+		"GET /Groups",
 		"POST /Groups",
 	}, requests)
 	r.NotEmpty(progressEvents)
@@ -395,7 +460,11 @@ func TestFailedSyncHistoryReportsFailure(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			r := require.New(t)
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if isSCIMExternalIDProbe(req) {
+					writeEmptySCIMListResponse(w)
+					return
+				}
 				w.Header().Set("Content-Type", "application/scim+json")
 				w.WriteHeader(tc.status)
 				_, err := w.Write([]byte(tc.body))
@@ -420,11 +489,11 @@ func TestFailedSyncHistoryReportsFailure(t *testing.T) {
 			})
 			r.NoError(result.Fatal)
 			r.True(result.Failed)
-			r.Len(result.Traces, 1)
-			r.ErrorContains(errors.New(result.Traces[0].Err), tc.wantError)
+			r.Len(result.Traces, 2)
+			r.ErrorContains(errors.New(result.Traces[1].Err), tc.wantError)
 
 			AppendOperationLogs(&result.State, "app-greendale", result.Traces)
-			r.Len(result.State.UserOperations["user-troy"], 1)
+			r.Len(result.State.UserOperations["user-troy"], 2)
 			r.Equal("Failed to create", result.State.UserOperations["user-troy"][0].Summary)
 			r.Contains(result.State.UserOperations["user-troy"][0].Err, tc.wantError)
 			r.Equal([]string{"running", "failed"}, progressPhasesFor(progressEvents, "user-troy"))
@@ -527,6 +596,10 @@ func TestSyncDirtyStateRetriesRateLimit(t *testing.T) {
 	attempts := map[string]int{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		r.Equal("Bearer chang-secret", req.Header.Get("Authorization"))
+		if isSCIMExternalIDProbe(req) {
+			writeEmptySCIMListResponse(w)
+			return
+		}
 		r.Equal(http.MethodPost, req.Method)
 		r.Equal("/Users", req.URL.Path)
 
@@ -572,9 +645,9 @@ func TestSyncDirtyStateRetriesRateLimit(t *testing.T) {
 	r.False(result.State.Users[0].Dirty)
 	r.False(result.State.Users[1].Dirty)
 	r.Empty(result.State.Users[1].LastError)
-	r.Len(result.Traces, 3)
-	r.Equal("429 Too Many Requests", result.Traces[1].Status)
-	r.Equal("201 Created", result.Traces[2].Status)
+	r.Len(result.Traces, 5)
+	r.Equal("429 Too Many Requests", result.Traces[3].Status)
+	r.Equal("201 Created", result.Traces[4].Status)
 	r.Contains(progressLabels(progressEvents), "Troy Barnes (troys)")
 	r.Contains(progressLabels(progressEvents), "Abed Nadir (abedn)")
 	r.Contains(progressStatuses(progressEvents), "Rate limited; waiting 2 seconds")
@@ -590,6 +663,10 @@ func TestSyncDirtyStateDoesNotWaitForLongRetryAfter(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		requests = append(requests, req.Method+" "+req.URL.Path)
 		r.Equal("Bearer chang-secret", req.Header.Get("Authorization"))
+		if isSCIMExternalIDProbe(req) {
+			writeEmptySCIMListResponse(w)
+			return
+		}
 
 		if req.Method != http.MethodPost || req.URL.Path != "/Users" {
 			t.Fatalf("unexpected request after rate limit: %s %s", req.Method, req.URL.Path)
@@ -635,7 +712,7 @@ func TestSyncDirtyStateDoesNotWaitForLongRetryAfter(t *testing.T) {
 	r.True(result.Changed)
 	r.Contains(result.Status, "sync stopped")
 	r.Contains(result.Status, "Try again in 45 seconds")
-	r.Equal([]string{"POST /Users", "POST /Users"}, requests)
+	r.Equal([]string{"GET /Users", "POST /Users", "GET /Users", "POST /Users"}, requests)
 	r.Empty(*sleeps)
 
 	var rateLimitErr *RateLimitError
@@ -656,10 +733,10 @@ func TestSyncDirtyStateDoesNotWaitForLongRetryAfter(t *testing.T) {
 	r.True(result.State.Groups[0].Dirty)
 	r.Empty(result.State.Groups[0].RemoteID)
 
-	r.Len(result.Traces, 2)
-	r.Equal("429 Too Many Requests", result.Traces[1].Status)
-	r.Equal("45", result.Traces[1].ResponseRetryAfter)
-	r.Contains(result.Traces[1].Err, "Try again in 45 seconds")
+	r.Len(result.Traces, 4)
+	r.Equal("429 Too Many Requests", result.Traces[3].Status)
+	r.Equal("45", result.Traces[3].ResponseRetryAfter)
+	r.Contains(result.Traces[3].Err, "Try again in 45 seconds")
 }
 
 func TestSyncDirtyStateFailsGroupWhenMemberNotSynced(t *testing.T) {
@@ -1024,6 +1101,17 @@ func boolPtr(v bool) *bool {
 	return &v
 }
 
+func writeEmptySCIMListResponse(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/scim+json")
+	_, _ = w.Write([]byte(`{"totalResults":0,"Resources":[]}`))
+}
+
+func isSCIMExternalIDProbe(req *http.Request) bool {
+	return req.Method == http.MethodGet &&
+		(req.URL.Path == "/Users" || req.URL.Path == "/Groups") &&
+		req.URL.Query().Get("filter") != ""
+}
+
 func TestReconcileState(t *testing.T) {
 	r := require.New(t)
 
@@ -1031,6 +1119,10 @@ func TestReconcileState(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		requests = append(requests, req.Method+" "+req.URL.Path)
 		w.Header().Set("Content-Type", "application/scim+json")
+		if isSCIMExternalIDProbe(req) {
+			writeEmptySCIMListResponse(w)
+			return
+		}
 
 		switch req.Method + " " + req.URL.Path {
 		case "POST /Users":
@@ -1129,16 +1221,19 @@ func TestReconcileState(t *testing.T) {
 		result.Status,
 	)
 	r.Equal([]string{
+		"GET /Users",
 		"POST /Users",
 		"GET /Users/remote-in-sync",
 		"GET /Users/remote-drifted",
 		"PUT /Users/remote-drifted",
 		"GET /Users/remote-missing",
+		"GET /Users",
 		"POST /Users",
 		"DELETE /Users/remote-user-deleted",
 		"GET /Groups/remote-group-in-sync",
 		"GET /Groups/remote-group-drifted",
 		"PUT /Groups/remote-group-drifted",
+		"GET /Groups",
 		"POST /Groups",
 	}, requests)
 
