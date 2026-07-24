@@ -64,12 +64,16 @@ func (a *webApp) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 		a.redirectError(w, r, "apps", err)
 		return
 	}
+	if current.Environment.ID != "" && current.Environment.ID != defaultEnvironmentID && restored.Environment.ID != current.Environment.ID {
+		a.redirectError(w, r, "apps", fmt.Errorf("backup belongs to a different environment"))
+		return
+	}
 	safetyPath, err := writeSafetyBackup(current)
 	if err != nil {
 		a.redirectError(w, r, "apps", err)
 		return
 	}
-	if err := saveState(restored); err != nil {
+	if err := saveRequestState(restored); err != nil {
 		a.redirectError(w, r, "apps", err)
 		return
 	}

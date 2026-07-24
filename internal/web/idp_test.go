@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestOIDCAuthorizationCodeFlowUsesSharedDirectory(t *testing.T) {
+func TestOIDCAuthorizationCodeFlowUsesEnvironmentDirectory(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	svc := newTestIDPApp(t)
@@ -361,21 +361,40 @@ func TestEffectiveIDPBaseURLOnlyTrustsForwardedProtoWhenConfigured(t *testing.T)
 	}
 }
 
-func TestOIDCAppUsesGlobalDirectory(t *testing.T) {
+func TestOIDCAppUsesItsEnvironmentDirectory(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{Users: []user{
 		{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true},
 		{ID: "abed", GivenName: "Abed", FamilyName: "Nadir", Email: "abed@greendale.edu", Username: "abed", Active: true},
-	}, Apps: []app{{
-		ID:               "staging-app",
-		Name:             "Portal",
-		Slug:             "portal",
-		Protocol:         "oidc",
-		OIDCClientID:     "client",
-		OIDCClientSecret: "secret",
-		OIDCRedirectURIs: []string{"http://client.test/callback"},
-	}}}))
+	}, Apps: []app{
+		{
+			ID:               "staging-app",
+			Name:             "Portal",
+			Slug:             "portal",
+			Protocol:         "oidc",
+			OIDCClientID:     "client",
+			OIDCClientSecret: "secret",
+			OIDCRedirectURIs: []string{"http://client.test/callback"},
+		},
+		{
+			ID:               "production-app",
+			Name:             "Production Portal",
+			Slug:             "production-portal",
+			Protocol:         "oidc",
+			OIDCClientID:     "production-client",
+			OIDCClientSecret: "secret",
+			OIDCRedirectURIs: []string{"http://client.test/production-callback"},
+		},
+	}}))
+	staging, err := loadStateForApp("staging-app")
+	r.NoError(err)
+	staging.Users = staging.Users[1:]
+	r.NoError(saveEnvironmentState(staging))
+	production, err := loadStateForApp("production-app")
+	r.NoError(err)
+	production.Users = production.Users[:1]
+	r.NoError(saveEnvironmentState(production))
 	svc := newTestIDPApp(t)
 	rec := httptest.NewRecorder()
 
@@ -383,7 +402,13 @@ func TestOIDCAppUsesGlobalDirectory(t *testing.T) {
 
 	r.Equal(http.StatusOK, rec.Code)
 	r.Contains(rec.Body.String(), "Abed Nadir")
-	r.Contains(rec.Body.String(), "Troy Barnes")
+	r.NotContains(rec.Body.String(), "Troy Barnes")
+
+	productionRec := httptest.NewRecorder()
+	svc.routes().ServeHTTP(productionRec, httptest.NewRequest(http.MethodGet, "/oidc/production-portal/authorize?response_type=code&client_id=production-client&redirect_uri=http%3A%2F%2Fclient.test%2Fproduction-callback&scope=openid", nil))
+	r.Equal(http.StatusOK, productionRec.Code)
+	r.Contains(productionRec.Body.String(), "Troy Barnes")
+	r.NotContains(productionRec.Body.String(), "Abed Nadir")
 }
 
 func TestOIDCTokenPrunesExpiredCredentials(t *testing.T) {
@@ -865,7 +890,7 @@ func TestParseSAMLRequestRejectsOversizedInflatedPayload(t *testing.T) {
 	r.ErrorContains(err, "inflated SAMLRequest exceeds 1048576 bytes")
 }
 
-func TestSignedSAMLResponseUsesSharedGroups(t *testing.T) {
+func TestSignedSAMLResponseUsesEnvironmentGroups(t *testing.T) {
 	r := require.New(t)
 	svc := newTestIDPApp(t)
 	state := appState{

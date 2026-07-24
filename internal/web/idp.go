@@ -74,12 +74,20 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	state, err := loadRequestState(r)
+	id := strings.TrimSpace(r.FormValue("id"))
+	globalState, err := loadState()
 	if err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
-	id := strings.TrimSpace(r.FormValue("id"))
+	state := appState{Config: globalState.Config}
+	if id != "" {
+		state, err = loadStateForApp(id)
+		if err != nil {
+			a.redirectError(w, r, tab, err)
+			return
+		}
+	}
 	removedProtocol := strings.TrimSpace(r.FormValue("remove_protocol"))
 	protocolSwitchesPresent := r.FormValue("protocol_switches_present") == "true"
 	protocolEnabled := map[string]bool{
@@ -195,12 +203,7 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	app.SCIMEnabled = scimSetupStatus(app) == setupStatusConfigured
-	allApps, err := loadAllApps()
-	if err != nil {
-		a.redirectError(w, r, tab, err)
-		return
-	}
-	if err := validateApp(app, allApps); err != nil {
+	if err := validateApp(app, globalState.Apps); err != nil {
 		a.redirectFormError(w, r, tab, "app", err)
 		return
 	}
@@ -216,6 +219,7 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 			a.redirectError(w, r, tab, err)
 			return
 		}
+		state.Environment = environment{ID: app.ID, Name: app.Name, Slug: app.Slug}
 		state.Apps = append(state.Apps, app)
 		status = "environment added"
 	} else if index, ok := appIndexByID(state.Apps, id); ok {
@@ -238,7 +242,7 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 	} else if app.SCIMEnabled && !wasSCIMEnabled && !appHasSyncState(state, app.ID) {
 		initializeAppSync(&state, app.ID)
 	}
-	if err := saveState(state); err != nil {
+	if err := saveEnvironmentState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
@@ -298,7 +302,7 @@ func protocolWithout(protocol string, removed string) string {
 func (a *webApp) handleAppDiscoverSCIM(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	state, err := loadRequestState(r)
+	state, err := loadStateForApp(r.PathValue("id"))
 	if err != nil {
 		a.redirectError(w, r, "apps", err)
 		return
@@ -322,7 +326,7 @@ func (a *webApp) handleAppDiscoverSCIM(w http.ResponseWriter, r *http.Request) {
 	state.Apps[index].SCIMCapabilitiesKnown = true
 	state.Apps[index].SCIMPatchSupported = capabilities.PatchSupported
 	state.Apps[index].SCIMFilterSupported = capabilities.FilterSupported
-	if err := saveState(state); err != nil {
+	if err := saveEnvironmentState(state); err != nil {
 		a.redirectError(w, r, "apps", err)
 		return
 	}
@@ -346,7 +350,7 @@ func (a *webApp) handleAppTestSCIM(w http.ResponseWriter, r *http.Request) {
 	}
 	token := strings.TrimSpace(r.FormValue("scim_bearer_token"))
 	if token == "" && strings.TrimSpace(r.FormValue("id")) != "" {
-		state, err := loadRequestState(r)
+		state, err := loadStateForApp(strings.TrimSpace(r.FormValue("id")))
 		if err != nil {
 			writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
@@ -374,7 +378,7 @@ func (a *webApp) handleAppDelete(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	state, err := loadRequestState(r)
+	state, err := loadState()
 	if err != nil {
 		a.redirectError(w, r, "apps", err)
 		return
@@ -386,10 +390,7 @@ func (a *webApp) handleAppDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	appID := state.Apps[index].ID
 	state.Apps = append(state.Apps[:index], state.Apps[index+1:]...)
-	delete(state.UserSync, appID)
-	delete(state.GroupSync, appID)
-	dropAppOperationLogs(&state, appID)
-	if err := saveState(state); err != nil {
+	if err := deleteEnvironment(appID); err != nil {
 		a.redirectError(w, r, "apps", err)
 		return
 	}
@@ -1673,7 +1674,7 @@ func loadOrCreateSigningMaterial() (*rsa.PrivateKey, []byte, error) {
 	}
 	state.Config.SigningPrivateKeyPEM = privateKeyPEM(key)
 	state.Config.SigningCertificatePEM = certificatePEM(certDER)
-	if err := saveState(state); err != nil {
+	if err := saveGlobalConfig(state.Config); err != nil {
 		return nil, nil, err
 	}
 	return key, certDER, nil

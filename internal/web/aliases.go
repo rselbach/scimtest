@@ -4,6 +4,7 @@ import "github.com/rselbach/scimtest/internal/core"
 
 type (
 	config                = core.Config
+	environment           = core.Environment
 	user                  = core.User
 	app                   = core.App
 	appState              = core.AppState
@@ -21,11 +22,14 @@ var errAppNotFound = core.ErrAppNotFound
 
 var (
 	loadState                    = core.LoadState
+	loadStateForApp              = core.LoadStateForApp
 	loadStateForAppSlug          = core.LoadStateForAppSlug
-	loadAllApps                  = core.LoadAllApps
 	stateFilePath                = core.StateFilePath
 	ensureTunnelInstanceID       = core.EnsureTunnelInstanceID
 	saveState                    = core.SaveState
+	saveGlobalConfig             = core.SaveGlobalConfig
+	saveEnvironmentState         = core.SaveEnvironmentState
+	deleteEnvironment            = core.DeleteEnvironment
 	appendOperationLogs          = core.AppendOperationLogs
 	appendLocalOperationLog      = core.AppendLocalOperationLog
 	groupByID                    = core.GroupByID
@@ -62,7 +66,6 @@ var (
 	mergeAppSyncState            = core.MergeAppSyncState
 	mergeAppImportState          = core.MergeAppImportState
 	purgeFullySyncedDeletions    = core.PurgeFullySyncedDeletions
-	dropAppOperationLogs         = core.DropAppOperationLogs
 	userGroups                   = core.UserGroups
 	syncStatus                   = core.SyncStatus
 	groupSyncStatus              = core.GroupSyncStatus
@@ -82,6 +85,7 @@ var (
 )
 
 const (
+	defaultEnvironmentID          = core.DefaultEnvironmentID
 	defaultSAMLEmailAttributeName = core.DefaultSAMLEmailAttributeName
 	defaultSAMLNameIDField        = core.DefaultSAMLNameIDField
 	chooserModeList               = core.ChooserModeList

@@ -230,31 +230,54 @@ func createTestEnvironment(t *testing.T, name string) Environment {
 	return env
 }
 
-func TestLoadStateFlattensExistingEnvironmentDirectories(t *testing.T) {
+func TestMigrateSharedDirectoryCopiesResourcesIntoEveryEnvironment(t *testing.T) {
 	r := require.New(t)
 	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
 
-	defaultState := AppState{Users: []User{{ID: "default-user", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}}}
-	r.NoError(SaveState(defaultState))
-	staging := createTestEnvironment(t, "Staging Campus")
-	stagingState := AppState{
-		Environment: staging,
-		Users:       []User{{ID: "staging-user", GivenName: "Abed", FamilyName: "Nadir", Email: "abed@greendale.edu", Username: "abed", Active: true}},
-	}
+	_, err := LoadState()
+	r.NoError(err)
 	db, err := openStateDB()
 	r.NoError(err)
-	r.NoError(saveStateToDB(db, stagingState, false))
+	_, err = db.Exec(`DELETE FROM config WHERE key = 'directory_per_environment_migrated'`)
+	r.NoError(err)
+	_, err = db.Exec(`INSERT INTO apps(id, environment_id, name, slug, protocol, scim_enabled) VALUES
+		('study-app', ?, 'Study App', 'study-app', 'oidc', 1),
+		('library-app', ?, 'Library App', 'library-app', 'saml', 1)`, DefaultEnvironmentID, DefaultEnvironmentID)
+	r.NoError(err)
+	_, err = db.Exec(`INSERT INTO users(id, environment_id, given_name, family_name, email, username, active, dirty, deleted)
+		VALUES('troy', ?, 'Troy', 'Barnes', 'troy@greendale.edu', 'troy', 1, 0, 0)`, DefaultEnvironmentID)
+	r.NoError(err)
+	_, err = db.Exec(`INSERT INTO groups(id, environment_id, display_name, dirty, deleted)
+		VALUES('study-group', ?, 'Study Group', 0, 0)`, DefaultEnvironmentID)
+	r.NoError(err)
+	_, err = db.Exec(`INSERT INTO group_members(group_id, environment_id, user_id, position)
+		VALUES('study-group', ?, 'troy', 0)`, DefaultEnvironmentID)
+	r.NoError(err)
+	_, err = db.Exec(`INSERT INTO app_user_sync(app_id, user_id, remote_id, dirty, deleted) VALUES
+		('study-app', 'troy', 'remote-study-troy', 0, 0),
+		('library-app', 'troy', 'remote-library-troy', 0, 0)`)
+	r.NoError(err)
 
-	global, err := LoadState()
+	r.NoError(migrateDirectoryOwnershipToApps(db))
+
+	study, err := LoadStateForApp("study-app")
 	r.NoError(err)
-	r.Len(global.Users, 2)
-	r.NoError(SaveState(global))
-	environments, err := loadEnvironmentsFromDB(db)
+	r.Equal(Environment{ID: "study-app", Name: "Study App", Slug: "study-app"}, study.Environment)
+	r.Len(study.Apps, 1)
+	r.Len(study.Users, 1)
+	r.Equal("remote-study-troy", study.UserSync["study-app"]["troy"].RemoteID)
+	r.Equal([]string{"troy"}, study.Groups[0].MemberIDs)
+
+	library, err := LoadStateForApp("library-app")
 	r.NoError(err)
-	r.Len(environments, 1)
-	reloaded, err := LoadState()
+	r.Len(library.Users, 1)
+	r.Equal("remote-library-troy", library.UserSync["library-app"]["troy"].RemoteID)
+
+	study.Users[0].Email = "troy.barnes@greendale.edu"
+	r.NoError(SaveEnvironmentState(study))
+	library, err = LoadStateForApp("library-app")
 	r.NoError(err)
-	r.Len(reloaded.Users, 2)
+	r.Equal("troy@greendale.edu", library.Users[0].Email)
 }
 
 func TestDefaultStateDirectoryUsesPrivatePermissions(t *testing.T) {

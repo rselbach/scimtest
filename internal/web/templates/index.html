@@ -33,8 +33,8 @@
 
   <div class="app">
     <aside class="sidebar">
-      <nav class="side-section" aria-label="Shared directory">
-        <div class="side-label">Shared directory</div>
+      {{if .ActiveEnvironment.ID}}<nav class="side-section" aria-label="Active environment">
+        <div class="side-label">{{.ActiveEnvironment.Name}}</div>
         <a class="side-item {{if eq .Tab "users"}}active{{end}}" href="{{.UsersURL}}">
           <span class="icon" aria-hidden="true">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="6" r="2.6"/><path d="M3 14c0-2.4 2.2-4 5-4s5 1.6 5 4"/></svg>
@@ -49,10 +49,6 @@
           Groups
           <span class="badge {{if and .SCIMEnabled .Stats.DirtyGroups}}dirty{{end}}">{{.Stats.Groups}}{{if and .SCIMEnabled .Stats.DirtyGroups}}·{{.Stats.DirtyGroups}}{{end}}</span>
         </a>
-      </nav>
-
-      {{if .ActiveEnvironment.ID}}<nav class="side-section" aria-label="Active environment">
-        <div class="side-label">{{.ActiveEnvironment.Name}}</div>
         <a class="side-item" href="{{.EnvironmentSettingsURL}}">
           <span class="icon" aria-hidden="true">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="M5.5 6h5M5.5 8.5h5"/></svg>
@@ -70,6 +66,12 @@
           </span>
           Sync trace
         </span>{{end}}{{end}}
+        <a class="side-item" href="{{.ToolsURL}}">
+          <span class="icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13l4-4"/><path d="M9.5 3.5l3 3"/><path d="M8 5l3 3"/><path d="M10.5 2.5l3 3-6.5 6.5-3 1 1-3z"/></svg>
+          </span>
+          Bulk tools
+        </a>
       </nav>{{end}}
 
       <nav class="side-section" aria-label="Global settings">
@@ -86,12 +88,6 @@
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8L3.4 3.4"/></svg>
           </span>
           IDP &amp; tunnel
-        </a>
-        <a class="side-item" href="{{.ToolsURL}}">
-          <span class="icon" aria-hidden="true">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13l4-4"/><path d="M9.5 3.5l3 3"/><path d="M8 5l3 3"/><path d="M10.5 2.5l3 3-6.5 6.5-3 1 1-3z"/></svg>
-          </span>
-          Bulk tools
         </a>
       </nav>
     </aside>
@@ -128,7 +124,7 @@
 		  <li {{if .HasLocalUsers}}class="done"{{end}}>
 			<span class="sr-only">{{if .HasLocalUsers}}Completed: {{else}}Step 2: {{end}}</span>
 			<span class="setup-step-marker" aria-hidden="true">{{if .HasLocalUsers}}✓{{else}}2{{end}}</span>
-			<div><a href="{{.NewUserURL}}">Add a test user</a><span>This person can sign in with OIDC or SAML and can be provisioned with SCIM.</span></div>
+			<div>{{if .HasApps}}<a href="{{.NewUserURL}}">Add a test user</a>{{else}}<span class="setup-step-title">Add a test user</span>{{end}}<span>This person belongs to the active environment and can sign in with OIDC or SAML or be provisioned with SCIM.</span></div>
 		  </li>
 		  <li>
 			<span class="sr-only">Step 3: </span>
@@ -152,14 +148,14 @@
         </div>
         <div class="page-header-text">
           <h1>{{if eq .Tab "groups"}}Groups{{else if eq .Tab "apps"}}Environments{{else}}Users{{end}}</h1>
-          <p class="lede">{{if eq .Tab "groups"}}Groups are shared by every environment{{if .ActiveEnvironment.ID}}; sync status is for {{.ActiveEnvironment.Name}}{{end}}.{{else if eq .Tab "apps"}}Each environment is one app you are testing. Use Test sign-in to run a flow, Inspect flow to debug it, or Set up to find connection values.{{else}}Users are shared by every environment{{if .ActiveEnvironment.ID}}; sync status is for {{.ActiveEnvironment.Name}}{{end}}.{{end}}</p>
+          <p class="lede">{{if eq .Tab "groups"}}{{if .ActiveEnvironment.ID}}Groups in {{.ActiveEnvironment.Name}}.{{else}}Create an environment before adding groups.{{end}}{{else if eq .Tab "apps"}}Each environment is one app you are testing. Use Test sign-in to run a flow, Inspect flow to debug it, or Set up to find connection values.{{else}}{{if .ActiveEnvironment.ID}}Users in {{.ActiveEnvironment.Name}}.{{else}}Create an environment before adding users.{{end}}{{end}}</p>
         </div>
         <div class="actions">
-          {{if eq .Tab "groups"}}
+          {{if and (eq .Tab "groups") .ActiveEnvironment.ID}}
           <a class="btn btn-primary" href="{{.NewGroupURL}}"><span class="plus">+</span> Add group</a>
           {{else if eq .Tab "apps"}}
           <a class="btn btn-primary" href="{{.NewAppURL}}"><span class="plus">+</span> Add environment</a>
-          {{else}}
+          {{else if .ActiveEnvironment.ID}}
           <a class="btn btn-primary" href="{{.NewUserURL}}"><span class="plus">+</span> Add user</a>
           {{end}}
         </div>
@@ -191,7 +187,7 @@
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
           <button class="btn" type="submit" data-sync-submit {{if and .SyncJob .SyncJob.Running}}disabled{{end}} title="Check every user and group on {{.ActiveEnvironment.Name}} and repair any drift">Reconcile</button>
         </form>
-        <form method="post" action="/import" {{if .ImportPreview}}onsubmit="return confirm('Apply this cached import preview? This replaces the shared directory and marks every other SCIM environment dirty.')"{{end}}>
+        <form method="post" action="/import" {{if .ImportPreview}}onsubmit="return confirm('Apply this cached import preview? This replaces the directory in {{.ActiveEnvironment.Name}}.')"{{end}}>
           <input type="hidden" name="tab" value="{{.Tab}}">
 		  <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
@@ -384,7 +380,7 @@
 				<input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
                 <input type="hidden" name="tab" value="{{.Tab}}">
                 {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
-                <button class="btn btn-danger" type="submit" onclick="return confirm('{{if .HasSCIMEnvironments}}Delete every user from the shared directory? Each deletion will be queued in every SCIM environment for the next sync.{{else}}Permanently delete every user and clear all group memberships? This cannot be undone.{{end}}')">Delete all users</button>
+                <button class="btn btn-danger" type="submit" onclick="return confirm('{{if .HasSCIMEnvironments}}Delete every user from {{.ActiveEnvironment.Name}}? Each deletion will be queued for its next SCIM sync.{{else}}Permanently delete every user from {{.ActiveEnvironment.Name}} and clear all group memberships? This cannot be undone.{{end}}')">Delete all users</button>
 			  </form>
 			  <form method="post" action="/tools/clear-users-local">
 				<input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
@@ -398,8 +394,9 @@
 			<h3>Backup and restore</h3>
 			<p>Backups contain client secrets, SCIM bearer tokens, signing keys, users, and operation history. Store them securely.</p>
 			<div class="tool-actions">
-			  <a class="btn" href="/backup">Download backup</a>
-			  <form method="post" action="/restore" enctype="multipart/form-data" onsubmit="return confirm('Replace all scimtest state from this backup? A private pre-restore copy will be saved automatically.')">
+			  <a class="btn" href="/backup?environment={{.ActiveEnvironment.ID}}">Download backup</a>
+			  <form method="post" action="/restore" enctype="multipart/form-data" onsubmit="return confirm('Replace {{.ActiveEnvironment.Name}} from this backup? A private pre-restore copy will be saved automatically.')">
+				<input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
 				<label class="field">
 				  <span class="label">Backup JSON</span>
 				  <input type="file" name="backup" accept="application/json,.json" required>
@@ -420,7 +417,7 @@
       <div class="modal-header">
         <div>
           <div class="modal-title" id="user-dialog-title">{{.UserForm.Title}}</div>
-          <div class="modal-sub">Shared across all environments</div>
+          <div class="modal-sub">{{.ActiveEnvironment.Name}}</div>
         </div>
         <a class="btn btn-sm btn-ghost" href="{{.UserForm.Close}}">Close</a>
       </div>
@@ -465,7 +462,7 @@
       <div class="modal-header">
         <div>
           <div class="modal-title" id="group-dialog-title">{{.GroupForm.Title}}</div>
-          <div class="modal-sub">Shared across all environments</div>
+          <div class="modal-sub">{{.ActiveEnvironment.Name}}</div>
         </div>
         <a class="btn btn-sm btn-ghost" href="{{.GroupForm.Close}}">Close</a>
       </div>
@@ -582,7 +579,7 @@
 
 		  <section class="setup-panel {{if eq .AppForm.Section "scim"}}active{{end}}" role="tabpanel" data-setup-panel="scim">
 			<div class="setup-panel-header">
-			  <div><h3>SCIM</h3><p>Provision users and groups from the shared directory to your app.</p></div>
+			  <div><h3>SCIM</h3><p>Provision this environment's users and groups to your app.</p></div>
 			  <div class="protocol-controls">
 				<span class="setup-status {{.AppForm.SCIMStatus.Class}} {{if not .AppForm.SCIMStatus.Started}}is-hidden{{end}}" data-setup-panel-status="scim">{{if .AppForm.SCIMStatus.Configured}}✓ {{end}}{{.AppForm.SCIMStatus.Label}}</span>
 				<label class="protocol-switch">

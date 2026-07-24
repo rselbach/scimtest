@@ -87,31 +87,6 @@ func operationLogsForApp(logs map[string][]OperationLog, appID string) map[strin
 	return filtered
 }
 
-// DropAppOperationLogs removes the sync log entries recorded for one app.
-// Local entries carry no app ID and are kept.
-func DropAppOperationLogs(state *AppState, appID string) {
-	if appID == "" {
-		return
-	}
-	dropFrom := func(logs map[string][]OperationLog) {
-		for resourceID, entries := range logs {
-			kept := entries[:0]
-			for _, entry := range entries {
-				if entry.AppID != appID {
-					kept = append(kept, entry)
-				}
-			}
-			if len(kept) == 0 {
-				delete(logs, resourceID)
-				continue
-			}
-			logs[resourceID] = kept
-		}
-	}
-	dropFrom(state.UserOperations)
-	dropFrom(state.GroupOperations)
-}
-
 // MarkUserDirtyForApps schedules a user change for every sync-enabled app,
 // and for SCIM-paused apps that already remember this user so a later
 // re-enable still pushes the edit or delete.

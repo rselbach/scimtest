@@ -141,7 +141,7 @@ func (a *webApp) startSyncJob(appID string, environmentName string, kind string)
 
 func (a *webApp) runSyncJob(ctx context.Context, id string, appID string, kind string) {
 	a.mu.Lock()
-	state, err := loadState()
+	state, err := loadStateForApp(appID)
 	a.mu.Unlock()
 	if err != nil {
 		a.finishSyncJob(appID, id, false, err.Error(), false)
@@ -173,7 +173,7 @@ func (a *webApp) runSyncJob(ctx context.Context, id string, appID string, kind s
 	defer a.mu.Unlock()
 	// Reload before merging: edits that slipped in while the walk ran
 	// must not be clobbered by the snapshot taken at sync start.
-	fresh, err := loadState()
+	fresh, err := loadStateForApp(appID)
 	if err != nil {
 		a.finishSyncJob(appID, id, false, err.Error(), len(result.Traces) > 0)
 		return
@@ -185,7 +185,7 @@ func (a *webApp) runSyncJob(ctx context.Context, id string, appID string, kind s
 	restoreMidSyncEdits(fresh.GroupSync[appID], state.GroupSync[appID], groupSyncBeforeMerge)
 	appendOperationLogs(&fresh, appID, result.Traces)
 	purgeFullySyncedDeletions(&fresh)
-	if err := saveState(fresh); err != nil {
+	if err := saveRequestState(fresh); err != nil {
 		a.finishSyncJob(appID, id, false, err.Error(), len(result.Traces) > 0)
 		return
 	}
@@ -390,7 +390,7 @@ func (a *webApp) applyImport(w http.ResponseWriter, r *http.Request, tab string)
 	mergeAppImportState(&state, appID, preview.State)
 	appendOperationLogs(&state, appID, preview.Traces)
 	purgeFullySyncedDeletions(&state)
-	if err := saveState(state); err != nil {
+	if err := saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
@@ -500,7 +500,7 @@ func (a *webApp) handleReset(w http.ResponseWriter, r *http.Request) {
 	resetGroups := len(state.Groups)
 	initializeAppSync(&state, appID)
 
-	if err := saveState(state); err != nil {
+	if err := saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}

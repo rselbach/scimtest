@@ -75,7 +75,7 @@
                       <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
                       <input type="hidden" name="tab" value="groups">
                       {{if $.Pagination}}<input type="hidden" name="page" value="{{$.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{$.Pagination.PageSize}}">{{if $.Pagination.SearchQuery}}<input type="hidden" name="q" value="{{$.Pagination.SearchQuery}}">{{end}}{{end}}
-					  <button class="icon-btn danger" type="submit" title="Delete group from shared directory" aria-label="Delete group from shared directory" onclick="return confirm('{{if $.HasSCIMEnvironments}}Delete this group from the shared directory? The deletion will be scheduled in every SCIM environment.{{else}}Permanently delete this group from the shared directory?{{end}}')">
+					  <button class="icon-btn danger" type="submit" title="Delete group" aria-label="Delete group" onclick="return confirm('{{if $.HasSCIMEnvironments}}Delete this group from {{$.ActiveEnvironment.Name}}? The deletion will be scheduled for its next SCIM sync.{{else}}Permanently delete this group from {{$.ActiveEnvironment.Name}}?{{end}}')">
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10"/><path d="M5.5 4.5V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.5"/><path d="M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>
                       </button>
                     </form>
@@ -87,7 +87,7 @@
               <tr><td colspan="{{if $.SCIMEnabled}}6{{else}}4{{end}}">
                 <div class="card-empty">
                   <div class="h">{{if and $.Pagination $.Pagination.ActiveFilters}}No groups match the filters{{else}}No groups yet{{end}}</div>
-                  <div>{{if and $.Pagination $.Pagination.ActiveFilters}}Try different search or status filters.{{else if $.SCIMEnabled}}Add one with the button above, or import from {{$.ActiveEnvironment.Name}}.{{else}}Add one with the button above.{{end}}</div>
+                  <div>{{if and $.Pagination $.Pagination.ActiveFilters}}Try different search or status filters.{{else if not $.ActiveEnvironment.ID}}Create an environment first.{{else if $.SCIMEnabled}}Add one with the button above, or import from {{$.ActiveEnvironment.Name}}.{{else}}Add one with the button above.{{end}}</div>
                 </div>
               </td></tr>
               {{end}}
@@ -129,7 +129,7 @@
 					</a>
 					<form method="post" action="/apps/{{.ID}}/delete">
 					  <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
-					  <button class="icon-btn danger" type="submit" title="Delete environment" aria-label="Delete environment" onclick="return confirm('Delete this environment and all of its protocol and sync configuration?')">
+					  <button class="icon-btn danger" type="submit" title="Delete environment" aria-label="Delete environment" onclick="return confirm('Delete this environment, its users and groups, and all of its protocol and sync configuration?')">
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10"/><path d="M5.5 4.5V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.5"/><path d="M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>
                       </button>
                     </form>
@@ -229,7 +229,7 @@
                       <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
                       <input type="hidden" name="tab" value="users">
                       {{if $.Pagination}}<input type="hidden" name="page" value="{{$.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{$.Pagination.PageSize}}">{{if $.Pagination.SearchQuery}}<input type="hidden" name="q" value="{{$.Pagination.SearchQuery}}">{{end}}{{end}}
-					  <button class="icon-btn danger" type="submit" title="Delete user from shared directory" aria-label="Delete user from shared directory" onclick="return confirm('{{if $.HasSCIMEnvironments}}Delete this user from the shared directory? The deletion will be scheduled in every SCIM environment.{{else}}Permanently delete this user from the shared directory?{{end}}')">
+					  <button class="icon-btn danger" type="submit" title="Delete user" aria-label="Delete user" onclick="return confirm('{{if $.HasSCIMEnvironments}}Delete this user from {{$.ActiveEnvironment.Name}}? The deletion will be scheduled for its next SCIM sync.{{else}}Permanently delete this user from {{$.ActiveEnvironment.Name}}?{{end}}')">
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10"/><path d="M5.5 4.5V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.5"/><path d="M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>
                       </button>
                     </form>
@@ -241,7 +241,7 @@
               <tr><td colspan="{{if $.SCIMEnabled}}8{{else}}6{{end}}">
                 <div class="card-empty">
                   <div class="h">{{if and $.Pagination $.Pagination.ActiveFilters}}No users match the filters{{else}}No users yet{{end}}</div>
-                  <div>{{if and $.Pagination $.Pagination.ActiveFilters}}Try different search or status filters.{{else if $.SCIMEnabled}}Add one with the button above, or import from {{$.ActiveEnvironment.Name}}.{{else}}Add one with the button above.{{end}}</div>
+                  <div>{{if and $.Pagination $.Pagination.ActiveFilters}}Try different search or status filters.{{else if not $.ActiveEnvironment.ID}}Create an environment first.{{else if $.SCIMEnabled}}Add one with the button above, or import from {{$.ActiveEnvironment.Name}}.{{else}}Add one with the button above.{{end}}</div>
                 </div>
               </td></tr>
               {{end}}

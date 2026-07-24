@@ -186,28 +186,40 @@ func LoadState() (AppState, error) {
 	if err := saveStateToDB(db, legacyState, true); err != nil {
 		return AppState{}, err
 	}
+	if err := distributeDirectoryRowsToApps(db, false); err != nil {
+		return AppState{}, err
+	}
 	return loadGlobalStateFromDB(db)
 }
 
 func LoadStateForAppSlug(slug string) (AppState, error) {
-	state, err := LoadState()
+	db, err := openStateDB()
 	if err != nil {
 		return AppState{}, err
 	}
-	for _, app := range state.Apps {
-		if app.Slug == slug {
-			return state, nil
+	var appID string
+	if err := db.QueryRow(`SELECT id FROM apps WHERE slug = ?`, slug).Scan(&appID); err != nil {
+		if err == sql.ErrNoRows {
+			return AppState{}, fmt.Errorf("app slug %q: %w", slug, ErrAppNotFound)
 		}
+		return AppState{}, fmt.Errorf("load app slug %q: %w", slug, err)
 	}
-	return AppState{}, fmt.Errorf("app slug %q: %w", slug, ErrAppNotFound)
+	return LoadStateForApp(appID)
 }
 
-func LoadAllApps() ([]App, error) {
-	state, err := LoadState()
+// LoadStateForApp loads the directory and configuration owned by one app
+// environment.
+func LoadStateForApp(appID string) (AppState, error) {
+	db, err := openStateDB()
 	if err != nil {
-		return nil, err
+		return AppState{}, err
 	}
-	return state.Apps, nil
+	state, err := loadStateFromDB(db, appID)
+	if err != nil {
+		return AppState{}, err
+	}
+	NormalizeState(&state)
+	return state, nil
 }
 
 func SaveState(state AppState) error {
@@ -217,7 +229,116 @@ func SaveState(state AppState) error {
 	if err != nil {
 		return err
 	}
-	return saveStateToDB(db, state, true)
+	if err := saveStateToDB(db, state, true); err != nil {
+		return err
+	}
+	return distributeDirectoryRowsToApps(db, false)
+}
+
+// SaveGlobalConfig updates settings shared by every environment without
+// rewriting any environment directory.
+func SaveGlobalConfig(config Config) error {
+	config.IDPBaseURL = strings.TrimRight(strings.TrimSpace(config.IDPBaseURL), "/")
+	config.TunnelInstanceID = strings.TrimSpace(config.TunnelInstanceID)
+	db, err := openStateDB()
+	if err != nil {
+		return err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin global config transaction: %w", err)
+	}
+	committed := false
+	defer rollbackTx(tx, &committed)
+	entries := map[string]string{
+		"idp_base_url":            config.IDPBaseURL,
+		"trust_forwarded_headers": BoolString(config.TrustForwardedHeaders),
+		"tunnel_instance_id":      config.TunnelInstanceID,
+		"signing_private_key_pem": config.SigningPrivateKeyPEM,
+		"signing_certificate_pem": config.SigningCertificatePEM,
+	}
+	for key, value := range entries {
+		if _, err := tx.Exec(`INSERT INTO config(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value); err != nil {
+			return fmt.Errorf("save global config %s: %w", key, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit global config transaction: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+// SaveEnvironmentState saves one environment without modifying any other
+// environment's directory.
+func SaveEnvironmentState(state AppState) error {
+	NormalizeState(&state)
+	if state.Environment.ID == "" {
+		return fmt.Errorf("environment ID is required")
+	}
+	if len(state.Apps) != 1 || state.Apps[0].ID != state.Environment.ID {
+		return fmt.Errorf("environment must contain its matching app")
+	}
+	state.Environment.Name = state.Apps[0].Name
+	state.Environment.Slug = state.Apps[0].Slug
+	for i := range state.Users {
+		state.Users[i].RemoteID = ""
+		state.Users[i].Dirty = false
+		state.Users[i].LastError = ""
+	}
+	for i := range state.Groups {
+		state.Groups[i].RemoteID = ""
+		state.Groups[i].Dirty = false
+		state.Groups[i].LastError = ""
+	}
+	db, err := openStateDB()
+	if err != nil {
+		return err
+	}
+	return saveStateToDB(db, state, false)
+}
+
+// DeleteEnvironment removes an app environment and all directory data it
+// owns.
+func DeleteEnvironment(appID string) error {
+	db, err := openStateDB()
+	if err != nil {
+		return err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin delete environment: %w", err)
+	}
+	committed := false
+	defer rollbackTx(tx, &committed)
+	statements := []struct {
+		query string
+		arg   string
+	}{
+		{`DELETE FROM app_user_sync WHERE app_id = ?`, appID},
+		{`DELETE FROM app_group_sync WHERE app_id = ?`, appID},
+		{`DELETE FROM group_members WHERE environment_id = ?`, appID},
+		{`DELETE FROM operation_logs WHERE environment_id = ?`, appID},
+		{`DELETE FROM users WHERE environment_id = ?`, appID},
+		{`DELETE FROM groups WHERE environment_id = ?`, appID},
+		{`DELETE FROM environment_config WHERE environment_id = ?`, appID},
+		{`DELETE FROM apps WHERE id = ?`, appID},
+	}
+	for _, statement := range statements {
+		if _, err := tx.Exec(statement.query, statement.arg); err != nil {
+			return fmt.Errorf("delete environment data: %w", err)
+		}
+	}
+	if appID != DefaultEnvironmentID {
+		if _, err := tx.Exec(`DELETE FROM environments WHERE id = ?`, appID); err != nil {
+			return fmt.Errorf("delete environment record: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete environment: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 var stateDBMu sync.Mutex
@@ -339,7 +460,7 @@ func initStateDB(db *sql.DB) error {
 			value TEXT NOT NULL
 		)`,
 		`CREATE TABLE IF NOT EXISTS users (
-			id TEXT PRIMARY KEY,
+			id TEXT NOT NULL,
 			environment_id TEXT NOT NULL DEFAULT 'env_default',
 			given_name TEXT NOT NULL,
 			family_name TEXT NOT NULL,
@@ -349,16 +470,18 @@ func initStateDB(db *sql.DB) error {
 			remote_id TEXT NOT NULL DEFAULT '',
 			dirty INTEGER NOT NULL,
 			deleted INTEGER NOT NULL,
-			last_error TEXT NOT NULL DEFAULT ''
+			last_error TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (environment_id, id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS groups (
-			id TEXT PRIMARY KEY,
+			id TEXT NOT NULL,
 			environment_id TEXT NOT NULL DEFAULT 'env_default',
 			display_name TEXT NOT NULL,
 			remote_id TEXT NOT NULL DEFAULT '',
 			dirty INTEGER NOT NULL,
 			deleted INTEGER NOT NULL,
-			last_error TEXT NOT NULL DEFAULT ''
+			last_error TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (environment_id, id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS apps (
 			id TEXT PRIMARY KEY,
@@ -412,7 +535,7 @@ func initStateDB(db *sql.DB) error {
 			environment_id TEXT NOT NULL DEFAULT 'env_default',
 			user_id TEXT NOT NULL,
 			position INTEGER NOT NULL,
-			PRIMARY KEY (group_id, user_id)
+			PRIMARY KEY (environment_id, group_id, user_id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS operation_logs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -470,6 +593,9 @@ func initStateDB(db *sql.DB) error {
 			return fmt.Errorf("migrate sqlite schema: %w", err)
 		}
 	}
+	if err := migrateEnvironmentScopedDirectoryKeys(db); err != nil {
+		return err
+	}
 	indexes := []string{
 		`CREATE INDEX IF NOT EXISTS users_environment_id ON users(environment_id)`,
 		`CREATE INDEX IF NOT EXISTS groups_environment_id ON groups(environment_id)`,
@@ -489,7 +615,84 @@ func initStateDB(db *sql.DB) error {
 	if err := migrateEnvironmentSCIMToApps(db); err != nil {
 		return err
 	}
+	if err := migrateDirectoryOwnershipToApps(db); err != nil {
+		return err
+	}
 
+	return nil
+}
+
+func migrateEnvironmentScopedDirectoryKeys(db *sql.DB) error {
+	var primaryKeyColumns int
+	rows, err := db.Query(`PRAGMA table_info(users)`)
+	if err != nil {
+		return fmt.Errorf("inspect users schema: %w", err)
+	}
+	for rows.Next() {
+		var position int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue any
+		var primaryKeyPosition int
+		if err := rows.Scan(&position, &name, &columnType, &notNull, &defaultValue, &primaryKeyPosition); err != nil {
+			closeRows(rows)
+			return fmt.Errorf("scan users schema: %w", err)
+		}
+		if primaryKeyPosition > 0 {
+			primaryKeyColumns++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		closeRows(rows)
+		return fmt.Errorf("iterate users schema: %w", err)
+	}
+	closeRows(rows)
+	if primaryKeyColumns == 2 {
+		return nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin environment-scoped directory key migration: %w", err)
+	}
+	committed := false
+	defer rollbackTx(tx, &committed)
+	statements := []string{
+		`CREATE TABLE users_scoped (
+			id TEXT NOT NULL, environment_id TEXT NOT NULL DEFAULT 'env_default',
+			given_name TEXT NOT NULL, family_name TEXT NOT NULL, email TEXT NOT NULL,
+			username TEXT NOT NULL, active INTEGER NOT NULL, remote_id TEXT NOT NULL DEFAULT '',
+			dirty INTEGER NOT NULL, deleted INTEGER NOT NULL, last_error TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (environment_id, id))`,
+		`INSERT INTO users_scoped SELECT id, environment_id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error FROM users`,
+		`DROP TABLE users`,
+		`ALTER TABLE users_scoped RENAME TO users`,
+		`CREATE TABLE groups_scoped (
+			id TEXT NOT NULL, environment_id TEXT NOT NULL DEFAULT 'env_default',
+			display_name TEXT NOT NULL, remote_id TEXT NOT NULL DEFAULT '', dirty INTEGER NOT NULL,
+			deleted INTEGER NOT NULL, last_error TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (environment_id, id))`,
+		`INSERT INTO groups_scoped SELECT id, environment_id, display_name, remote_id, dirty, deleted, last_error FROM groups`,
+		`DROP TABLE groups`,
+		`ALTER TABLE groups_scoped RENAME TO groups`,
+		`CREATE TABLE group_members_scoped (
+			group_id TEXT NOT NULL, environment_id TEXT NOT NULL DEFAULT 'env_default',
+			user_id TEXT NOT NULL, position INTEGER NOT NULL,
+			PRIMARY KEY (environment_id, group_id, user_id))`,
+		`INSERT INTO group_members_scoped SELECT group_id, environment_id, user_id, position FROM group_members`,
+		`DROP TABLE group_members`,
+		`ALTER TABLE group_members_scoped RENAME TO group_members`,
+	}
+	for _, statement := range statements {
+		if _, err := tx.Exec(statement); err != nil {
+			return fmt.Errorf("migrate environment-scoped directory keys: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit environment-scoped directory key migration: %w", err)
+	}
+	committed = true
 	return nil
 }
 
@@ -591,6 +794,150 @@ func migrateEnvironmentSCIMToApps(db *sql.DB) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit app SCIM migration: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+func migrateDirectoryOwnershipToApps(db *sql.DB) error {
+	var migrated string
+	err := db.QueryRow(`SELECT value FROM config WHERE key = 'directory_per_environment_migrated'`).Scan(&migrated)
+	if err == nil && migrated == "1" {
+		return nil
+	}
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("check per-environment directory migration: %w", err)
+	}
+	return distributeDirectoryRowsToApps(db, true)
+}
+
+func distributeDirectoryRowsToApps(db *sql.DB, markMigrated bool) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin per-environment directory migration: %w", err)
+	}
+	committed := false
+	defer rollbackTx(tx, &committed)
+
+	var appCount int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM apps`).Scan(&appCount); err != nil {
+		return fmt.Errorf("count apps for directory migration: %w", err)
+	}
+	if markMigrated && appCount == 0 {
+		var resourceCount int
+		if err := tx.QueryRow(`SELECT (SELECT COUNT(*) FROM users) + (SELECT COUNT(*) FROM groups)`).Scan(&resourceCount); err != nil {
+			return fmt.Errorf("count directory resources for migration: %w", err)
+		}
+		if resourceCount > 0 {
+			if _, err := tx.Exec(`INSERT INTO apps(id, environment_id, name, slug, protocol) VALUES(?, ?, 'Default', 'default', 'none')`, DefaultEnvironmentID, DefaultEnvironmentID); err != nil {
+				return fmt.Errorf("create default environment for directory migration: %w", err)
+			}
+		}
+	}
+
+	rows, err := tx.Query(`SELECT id, environment_id, name, slug FROM apps ORDER BY rowid`)
+	if err != nil {
+		return fmt.Errorf("load apps for directory migration: %w", err)
+	}
+	type appEnvironment struct {
+		id       string
+		sourceID string
+		name     string
+		slug     string
+	}
+	var apps []appEnvironment
+	for rows.Next() {
+		var app appEnvironment
+		if err := rows.Scan(&app.id, &app.sourceID, &app.name, &app.slug); err != nil {
+			closeRows(rows)
+			return fmt.Errorf("scan app for directory migration: %w", err)
+		}
+		apps = append(apps, app)
+	}
+	if err := rows.Err(); err != nil {
+		closeRows(rows)
+		return fmt.Errorf("iterate apps for directory migration: %w", err)
+	}
+	closeRows(rows)
+	if len(apps) == 0 {
+		if markMigrated {
+			if _, err := tx.Exec(`INSERT OR REPLACE INTO config(key, value) VALUES('directory_per_environment_migrated', '1')`); err != nil {
+				return fmt.Errorf("mark empty per-environment directory migration complete: %w", err)
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit empty per-environment directory migration: %w", err)
+		}
+		committed = true
+		return nil
+	}
+
+	for _, app := range apps {
+		if _, err := tx.Exec(`UPDATE environments SET slug = '__directory__' WHERE id = ? AND slug = ? AND ? != ?`, DefaultEnvironmentID, app.slug, app.id, DefaultEnvironmentID); err != nil {
+			return fmt.Errorf("reserve environment slug for %s: %w", app.id, err)
+		}
+		if _, err := tx.Exec(`DELETE FROM environments WHERE slug = ? AND id != ? AND id NOT IN (SELECT id FROM apps)`, app.slug, app.id); err != nil {
+			return fmt.Errorf("remove obsolete environment slug for %s: %w", app.id, err)
+		}
+		if _, err := tx.Exec(`INSERT INTO environments(id, name, slug) VALUES(?, ?, ?)
+			ON CONFLICT(id) DO UPDATE SET name = excluded.name, slug = excluded.slug`, app.id, app.name, app.slug); err != nil {
+			return fmt.Errorf("create environment %s for directory migration: %w", app.id, err)
+		}
+		if app.sourceID != app.id {
+			if _, err := tx.Exec(`INSERT OR IGNORE INTO users(id, environment_id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error)
+				SELECT id, ?, given_name, family_name, email, username, active, '', 0, deleted, '' FROM users WHERE environment_id = ?`, app.id, app.sourceID); err != nil {
+				return fmt.Errorf("copy users into environment %s: %w", app.id, err)
+			}
+			if _, err := tx.Exec(`INSERT OR IGNORE INTO groups(id, environment_id, display_name, remote_id, dirty, deleted, last_error)
+				SELECT id, ?, display_name, '', 0, deleted, '' FROM groups WHERE environment_id = ?`, app.id, app.sourceID); err != nil {
+				return fmt.Errorf("copy groups into environment %s: %w", app.id, err)
+			}
+			if _, err := tx.Exec(`INSERT OR IGNORE INTO group_members(group_id, environment_id, user_id, position)
+				SELECT group_id, ?, user_id, position FROM group_members WHERE environment_id = ?`, app.id, app.sourceID); err != nil {
+				return fmt.Errorf("copy group members into environment %s: %w", app.id, err)
+			}
+			if _, err := tx.Exec(`INSERT INTO operation_logs(environment_id, app_id, resource_type, resource_id, label, kind, summary, operation, method, path, request_body, status, response_retry_after, response_body, error_text, created_at)
+				SELECT ?, app_id, resource_type, resource_id, label, kind, summary, operation, method, path, request_body, status, response_retry_after, response_body, error_text, created_at
+				FROM operation_logs WHERE environment_id = ? AND (app_id = '' OR app_id = ?)`, app.id, app.sourceID, app.id); err != nil {
+				return fmt.Errorf("copy operation logs into environment %s: %w", app.id, err)
+			}
+		}
+		if _, err := tx.Exec(`UPDATE apps SET environment_id = ? WHERE id = ?`, app.id, app.id); err != nil {
+			return fmt.Errorf("assign app %s to its environment: %w", app.id, err)
+		}
+	}
+
+	for _, table := range []string{"group_members", "operation_logs", "groups", "users"} {
+		if _, err := tx.Exec(`DELETE FROM ` + table + ` WHERE environment_id NOT IN (SELECT id FROM apps)`); err != nil {
+			return fmt.Errorf("remove shared directory rows from %s: %w", table, err)
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM app_user_sync
+		WHERE NOT EXISTS (
+			SELECT 1 FROM users
+			WHERE users.environment_id = app_user_sync.app_id
+			AND users.id = app_user_sync.user_id
+		)`); err != nil {
+		return fmt.Errorf("remove obsolete user sync rows: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM app_group_sync
+		WHERE NOT EXISTS (
+			SELECT 1 FROM groups
+			WHERE groups.environment_id = app_group_sync.app_id
+			AND groups.id = app_group_sync.group_id
+		)`); err != nil {
+		return fmt.Errorf("remove obsolete group sync rows: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM environments WHERE id != ? AND id NOT IN (SELECT id FROM apps)`, DefaultEnvironmentID); err != nil {
+		return fmt.Errorf("remove obsolete directory environments: %w", err)
+	}
+	if markMigrated {
+		if _, err := tx.Exec(`INSERT OR REPLACE INTO config(key, value) VALUES('directory_per_environment_migrated', '1')`); err != nil {
+			return fmt.Errorf("mark per-environment directory migration complete: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit per-environment directory migration: %w", err)
 	}
 	committed = true
 	return nil
@@ -914,20 +1261,25 @@ func loadGlobalStateFromDB(db *sql.DB) (AppState, error) {
 		UserSync:        make(map[string]map[string]ResourceSyncState),
 		GroupSync:       make(map[string]map[string]ResourceSyncState),
 	}
+	directoryLoaded := false
 	for _, environment := range environments {
 		environmentState, err := loadStateFromDB(db, environment.ID)
 		if err != nil {
 			return AppState{}, err
 		}
 		state.Config = environmentState.Config
-		state.Users = append(state.Users, environmentState.Users...)
-		state.Groups = append(state.Groups, environmentState.Groups...)
 		state.Apps = append(state.Apps, environmentState.Apps...)
-		for resourceID, entries := range environmentState.UserOperations {
-			state.UserOperations[resourceID] = append(state.UserOperations[resourceID], entries...)
-		}
-		for resourceID, entries := range environmentState.GroupOperations {
-			state.GroupOperations[resourceID] = append(state.GroupOperations[resourceID], entries...)
+		if !directoryLoaded && len(environmentState.Apps) > 0 {
+			state.Users = environmentState.Users
+			state.Groups = environmentState.Groups
+			state.UserOperations = environmentState.UserOperations
+			state.GroupOperations = environmentState.GroupOperations
+			directoryLoaded = true
+		} else if !directoryLoaded && environment.ID == DefaultEnvironmentID {
+			state.Users = environmentState.Users
+			state.Groups = environmentState.Groups
+			state.UserOperations = environmentState.UserOperations
+			state.GroupOperations = environmentState.GroupOperations
 		}
 		for appID, syncStates := range environmentState.UserSync {
 			state.UserSync[appID] = syncStates
@@ -940,16 +1292,6 @@ func loadGlobalStateFromDB(db *sql.DB) (AppState, error) {
 	state.Config.BearerToken = ""
 	state.Config.AutoOpenSyncTrace = false
 	state.Config.SCIMDisabled = false
-	for i := range state.Users {
-		state.Users[i].RemoteID = ""
-		state.Users[i].Dirty = false
-		state.Users[i].LastError = ""
-	}
-	for i := range state.Groups {
-		state.Groups[i].RemoteID = ""
-		state.Groups[i].Dirty = false
-		state.Groups[i].LastError = ""
-	}
 	if len(state.UserSync) == 0 {
 		state.UserSync = nil
 	}
@@ -970,6 +1312,12 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 	}
 	committed := false
 	defer rollbackTx(tx, &committed)
+	if !global {
+		if _, err := tx.Exec(`INSERT INTO environments(id, name, slug) VALUES(?, ?, ?)
+			ON CONFLICT(id) DO UPDATE SET name = excluded.name, slug = excluded.slug`, environmentID, state.Environment.Name, state.Environment.Slug); err != nil {
+			return fmt.Errorf("save environment record: %w", err)
+		}
+	}
 
 	if global {
 		for _, table := range []string{"environment_config", "app_user_sync", "app_group_sync", "group_members", "operation_logs"} {
@@ -1061,7 +1409,7 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 		}
 	}
 
-	userStmt, err := tx.Prepare(`INSERT INTO users(id, environment_id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET environment_id = excluded.environment_id, given_name = excluded.given_name, family_name = excluded.family_name, email = excluded.email, username = excluded.username, active = excluded.active, remote_id = excluded.remote_id, dirty = excluded.dirty, deleted = excluded.deleted, last_error = excluded.last_error`)
+	userStmt, err := tx.Prepare(`INSERT INTO users(id, environment_id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(environment_id, id) DO UPDATE SET given_name = excluded.given_name, family_name = excluded.family_name, email = excluded.email, username = excluded.username, active = excluded.active, remote_id = excluded.remote_id, dirty = excluded.dirty, deleted = excluded.deleted, last_error = excluded.last_error`)
 	if err != nil {
 		return fmt.Errorf("prepare sqlite user insert: %w", err)
 	}
@@ -1078,7 +1426,7 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 		}
 	}
 
-	groupStmt, err := tx.Prepare(`INSERT INTO groups(id, environment_id, display_name, remote_id, dirty, deleted, last_error) VALUES(?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET environment_id = excluded.environment_id, display_name = excluded.display_name, remote_id = excluded.remote_id, dirty = excluded.dirty, deleted = excluded.deleted, last_error = excluded.last_error`)
+	groupStmt, err := tx.Prepare(`INSERT INTO groups(id, environment_id, display_name, remote_id, dirty, deleted, last_error) VALUES(?, ?, ?, ?, ?, ?, ?) ON CONFLICT(environment_id, id) DO UPDATE SET display_name = excluded.display_name, remote_id = excluded.remote_id, dirty = excluded.dirty, deleted = excluded.deleted, last_error = excluded.last_error`)
 	if err != nil {
 		return fmt.Errorf("prepare sqlite group insert: %w", err)
 	}

@@ -646,7 +646,25 @@ func requestSyncAppID(r *http.Request, state appState) string {
 }
 
 func loadRequestState(r *http.Request) (appState, error) {
-	return loadState()
+	globalState, err := loadState()
+	if err != nil {
+		return appState{}, err
+	}
+	environmentID := requestEnvironmentID(r, globalState)
+	if environmentID == "" {
+		return globalState, nil
+	}
+	return loadStateForApp(environmentID)
+}
+
+func saveRequestState(state appState) error {
+	if state.Environment.ID != "" && state.Environment.ID != defaultEnvironmentID {
+		return saveEnvironmentState(state)
+	}
+	if len(state.Apps) == 1 && state.Apps[0].ID == defaultEnvironmentID {
+		return saveEnvironmentState(state)
+	}
+	return saveState(state)
 }
 
 func rememberEnvironment(w http.ResponseWriter, environmentID string) {
@@ -788,17 +806,20 @@ func (a *webApp) registerIDPRoutes(mux *http.ServeMux) {
 }
 
 func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
-	state, err := loadRequestState(r)
+	globalState, err := loadState()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	globalState := state
 	environmentID := requestEnvironmentID(r, globalState)
+	state := globalState
 	var activeEnvironment app
 	if environmentID != "" {
 		activeEnvironment, _ = appByID(globalState.Apps, environmentID)
-		state, err = stateForApp(globalState, environmentID)
+		state, err = loadStateForApp(environmentID)
+		if err == nil {
+			state, err = stateForApp(state, environmentID)
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -849,7 +870,7 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		Stats:                  buildStats(state),
 		Users:                  users,
 		Groups:                 groups,
-		Apps:                   buildAppRows(state, environmentID, a.effectiveIDPBaseURL(r, state)),
+		Apps:                   buildAppRows(globalState, environmentID, a.effectiveIDPBaseURL(r, state)),
 		Pagination:             pagination,
 		Errors:                 buildErrorList(state, tab, page, pageSize, search, statusFilter, sortOrder),
 		BaseURL:                configuredBaseURL(state.Config.BaseURL),
@@ -871,10 +892,10 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		TraceContent:           a.traceContent(environmentID),
 		SyncJob:                a.currentSyncJob(environmentID),
 		ImportPreview:          a.importPreviewView(environmentID),
-		ShowSetupGuide:         len(state.Users) == 0 || len(state.Apps) == 0,
+		ShowSetupGuide:         len(state.Users) == 0 || len(globalState.Apps) == 0,
 		HasLocalUsers:          len(state.Users) > 0,
-		HasApps:                len(state.Apps) > 0,
-		HasSCIMEnvironments:    scimEnabled(globalState),
+		HasApps:                len(globalState.Apps) > 0,
+		HasSCIMEnvironments:    activeEnvironment.SCIMEnabled,
 		Environments:           globalState.Apps,
 		ActiveEnvironment:      activeEnvironment,
 	}
@@ -907,7 +928,13 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 			data.GroupForm = form
 		}
 	case "app":
-		if form, formErr := buildAppFormView(state, tab, r.URL.Query().Get("id"), data.IDPBaseURL, certificatePEM(a.certDER)); formErr == nil {
+		formState := globalState
+		if appID := r.URL.Query().Get("id"); appID != "" {
+			if selectedState, loadErr := loadStateForApp(appID); loadErr == nil {
+				formState = selectedState
+			}
+		}
+		if form, formErr := buildAppFormView(formState, tab, r.URL.Query().Get("id"), data.IDPBaseURL, certificatePEM(a.certDER)); formErr == nil {
 			form.AllowAnyOIDCRedirectDisabled = a.tunnelPublicURL() != ""
 			data.AppForm = form
 		}
@@ -954,7 +981,7 @@ func (a *webApp) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 		state.Config.IDPBaseURL = publicURL
 	}
 
-	if err := saveState(state); err != nil {
+	if err := saveGlobalConfig(state.Config); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
@@ -1347,7 +1374,7 @@ func (a *webApp) handleToolsDeleteAll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if changed > 0 {
-		if err := saveState(state); err != nil {
+		if err := saveRequestState(state); err != nil {
 			a.redirectError(w, r, tab, err)
 			return
 		}
@@ -1381,7 +1408,7 @@ func (a *webApp) handleToolsClearUsersLocal(w http.ResponseWriter, r *http.Reque
 		markGroupDirtyForApps(&state, state.Groups[i].ID, false)
 		affectedGroups++
 	}
-	if err := saveState(state); err != nil {
+	if err := saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
@@ -1423,7 +1450,7 @@ func (a *webApp) handleToolsSetAllActive(w http.ResponseWriter, r *http.Request,
 	}
 
 	if changed > 0 {
-		if err := saveState(state); err != nil {
+		if err := saveRequestState(state); err != nil {
 			a.redirectError(w, r, tab, err)
 			return
 		}
@@ -1471,7 +1498,7 @@ func (a *webApp) handleToolsCreateUsers(w http.ResponseWriter, r *http.Request) 
 	for _, createdUser := range state.Users[firstNewUser:] {
 		markUserDirtyForApps(&state, createdUser.ID, false)
 	}
-	if err := saveState(state); err != nil {
+	if err := saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}

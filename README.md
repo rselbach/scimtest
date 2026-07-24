@@ -9,12 +9,11 @@
 The repository also contains `scimtest-server`, the companion public tunnel
 server used by `scimtest` release builds.
 
-Users and groups form one shared directory stored in SQLite. Every environment
-uses that directory for OIDC claims, SAML attributes, and optional SCIM
-provisioning. Each environment has independent SCIM credentials, remote IDs,
-sync state, operation history, and errors.
-Existing environment-based databases are flattened automatically; their apps and
-directory entries are preserved, and environment SCIM settings move onto apps.
+Each environment owns its users and groups in SQLite. That directory supplies
+the environment's OIDC claims, SAML attributes, and optional SCIM provisioning,
+along with independent credentials, remote IDs, sync state, operation history,
+and errors. When upgrading from the shared-directory model, scimtest copies the
+existing users and groups into every configured environment automatically.
 
 ## Run
 
@@ -52,10 +51,9 @@ required. A random tunnel path is assigned and reused for the local installation
 when available.
 
 The environment selector in the top bar sets the context for the whole admin UI.
-Sync, import, reset, remote IDs, status, traces, and errors always refer to that
-environment. Environments without Sync enabled still use the shared directory
-for OIDC and SAML. Editing a shared user or group marks it dirty in every
-SCIM-enabled environment.
+Users, groups, sync, import, reset, remote IDs, status, traces, and errors always
+refer to that environment. Changes in one environment do not modify another
+environment's directory.
 
 Starting a sync opens a live details view with one row per SCIM operation. The
 view can be closed without stopping the sync and reopened from the inline

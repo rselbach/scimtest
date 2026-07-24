@@ -715,11 +715,12 @@
       if (!form) return;
       const noun = form.dataset.bulkNoun || 'item';
       const selected = document.querySelectorAll('[data-bulk-selection]:checked').length;
+      const environment = document.body.dataset.environmentName || 'this environment';
       const message = selected === 1
-        ? 'Delete this ' + noun + ' from the shared directory?'
-        : 'Delete ' + String(selected) + ' ' + noun + 's from the shared directory?';
+        ? 'Delete this ' + noun + ' from ' + environment + '?'
+        : 'Delete ' + String(selected) + ' ' + noun + 's from ' + environment + '?';
       const scope = document.body.dataset.hasScimEnvironments === 'true'
-        ? ' The deletion will be scheduled in every SCIM environment.'
+        ? ' The deletion will be scheduled for its next SCIM sync.'
         : ' This permanently deletes the selected ' + noun + 's.';
       if (!window.confirm(message + scope)) event.preventDefault();
     });

@@ -808,7 +808,7 @@ func TestBulkDeleteUsers(t *testing.T) {
 			userIDs:      []string{"u1", "u3"},
 			wantUsers:    []string{"u1", "u2", "u3"},
 			wantDeleted:  []string{"u1", "u3"},
-			wantSCIMApps: []string{"app-1", "app-2"},
+			wantSCIMApps: []string{"app-1"},
 		},
 		"SCIM disabled removes selected users and memberships": {
 			state: appState{
@@ -863,6 +863,12 @@ func TestBulkDeleteUsers(t *testing.T) {
 					r.True(updated.UserSync[appID][userID].Deleted)
 				}
 				r.False(updated.UserSync[appID]["u2"].Dirty)
+			}
+			if len(tc.state.Apps) > 1 {
+				otherEnvironment, err := loadStateForApp("app-2")
+				r.NoError(err)
+				r.False(otherEnvironment.Users[0].Deleted)
+				r.False(otherEnvironment.Users[2].Deleted)
 			}
 			r.NotContains(updated.UserSync, "app-3")
 		})
@@ -1706,23 +1712,34 @@ func TestNewEnvironmentFormGeneratesSlugLocally(t *testing.T) {
 	r.Contains(assetJS, `updateSAMLSetupURLs()`)
 }
 
-func TestDashboardUsesOneGlobalDirectory(t *testing.T) {
+func TestDashboardUsesActiveEnvironmentDirectory(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
-	r.NoError(saveState(appState{Users: []user{
-		{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true},
-		{ID: "abed", GivenName: "Abed", FamilyName: "Nadir", Email: "abed@greendale.edu", Username: "abed", Active: true},
-	}}))
+	r.NoError(saveState(appState{
+		Users: []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}},
+		Apps: []app{
+			{ID: "study-app", Name: "Study App", Slug: "study-app", Protocol: "oidc"},
+			{ID: "library-app", Name: "Library App", Slug: "library-app", Protocol: "saml"},
+		},
+	}))
+	library, err := loadStateForApp("library-app")
+	r.NoError(err)
+	library.Users = []user{{ID: "abed", GivenName: "Abed", FamilyName: "Nadir", Email: "abed@greendale.edu", Username: "abed", Active: true}}
+	r.NoError(saveEnvironmentState(library))
 	app := newTestIDPApp(t)
 
-	rec := httptest.NewRecorder()
-	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=users&environment=obsolete", nil))
+	studyRec := httptest.NewRecorder()
+	app.routes().ServeHTTP(studyRec, httptest.NewRequest(http.MethodGet, "/?tab=users&environment=study-app", nil))
+	r.Equal(http.StatusOK, studyRec.Code)
+	r.Contains(studyRec.Body.String(), "Troy Barnes")
+	r.NotContains(studyRec.Body.String(), "Abed Nadir")
+	r.NotContains(studyRec.Body.String(), "Shared directory")
 
-	r.Equal(http.StatusOK, rec.Code)
-	body := rec.Body.String()
-	r.Contains(body, "Abed Nadir")
-	r.Contains(body, "Troy Barnes")
-	r.NotContains(body, "Edit environment")
+	libraryRec := httptest.NewRecorder()
+	app.routes().ServeHTTP(libraryRec, httptest.NewRequest(http.MethodGet, "/?tab=users&environment=library-app", nil))
+	r.Equal(http.StatusOK, libraryRec.Code)
+	r.Contains(libraryRec.Body.String(), "Abed Nadir")
+	r.NotContains(libraryRec.Body.String(), "Troy Barnes")
 }
 
 func TestEnvironmentSelectorRendersInTopbar(t *testing.T) {
@@ -1812,10 +1829,7 @@ func TestAuthenticationOnlyEnvironmentHidesSCIMActions(t *testing.T) {
 func TestAppSaveStoresSCIMSettingsAndInitializesSyncState(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
-	r.NoError(saveState(appState{
-		Users:  []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}},
-		Groups: []group{{ID: "study-group", DisplayName: "Study Group", MemberIDs: []string{"troy"}}},
-	}))
+	r.NoError(saveState(appState{}))
 	appService := newTestIDPApp(t)
 	form := url.Values{
 		"tab":                        {"apps"},
@@ -1861,14 +1875,19 @@ func TestAppSaveStoresSCIMSettingsAndInitializesSyncState(t *testing.T) {
 	r.Equal("mail", savedApp.SAMLAttributeMappings.Email)
 	r.Equal("roles", savedApp.SAMLAttributeMappings.Groups)
 	r.Equal("identifier", savedApp.ChooserMode)
-	r.True(state.UserSync[savedApp.ID]["troy"].Dirty)
-	r.True(state.GroupSync[savedApp.ID]["study-group"].Dirty)
+	r.Empty(state.Users)
+	r.Empty(state.Groups)
+	state, err = loadStateForApp(savedApp.ID)
+	r.NoError(err)
+	state.Users = []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}}
+	state.Groups = []group{{ID: "study-group", DisplayName: "Study Group", MemberIDs: []string{"troy"}}}
+	initializeAppSync(&state, savedApp.ID)
 	state.UserSync[savedApp.ID]["troy"] = resourceSyncState{RemoteID: "remote-troy", LastError: "old user error"}
 	state.GroupSync[savedApp.ID]["study-group"] = resourceSyncState{RemoteID: "remote-study-group", LastError: "old group error"}
 	state.Apps[0].SCIMCapabilitiesKnown = true
 	state.Apps[0].SCIMPatchSupported = true
 	state.Apps[0].SCIMFilterSupported = true
-	r.NoError(saveState(state))
+	r.NoError(saveEnvironmentState(state))
 
 	form.Set("id", savedApp.ID)
 	form.Set("name", "Greendale Portal Updated")
@@ -1964,10 +1983,13 @@ func TestAppSaveInfersOIDCAndSAMLSetup(t *testing.T) {
 func TestDeletingActiveEnvironmentSelectsNextEnvironment(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
-	r.NoError(saveState(appState{Apps: []app{
-		{ID: "app-local", Name: "dev-local", Slug: "dev-local", Protocol: "oidc"},
-		{ID: "app-staging", Name: "staging", Slug: "staging", Protocol: "oidc"},
-	}}))
+	r.NoError(saveState(appState{
+		Users: []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}},
+		Apps: []app{
+			{ID: "app-local", Name: "dev-local", Slug: "dev-local", Protocol: "oidc"},
+			{ID: "app-staging", Name: "staging", Slug: "staging", Protocol: "oidc"},
+		},
+	}))
 	appService := newTestIDPApp(t)
 	form := url.Values{"environment": {"app-local"}}
 	req := httptest.NewRequest(http.MethodPost, "/apps/app-local/delete", strings.NewReader(form.Encode()))
@@ -1982,6 +2004,11 @@ func TestDeletingActiveEnvironmentSelectsNextEnvironment(t *testing.T) {
 	r.NoError(err)
 	r.Len(state.Apps, 1)
 	r.Equal("app-staging", state.Apps[0].ID)
+	_, err = loadStateForApp("app-local")
+	r.Error(err)
+	staging, err := loadStateForApp("app-staging")
+	r.NoError(err)
+	r.Len(staging.Users, 1)
 }
 
 func TestEnvironmentRoutesAreRemoved(t *testing.T) {

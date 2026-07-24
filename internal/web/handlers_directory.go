@@ -75,7 +75,7 @@ func (a *webApp) handleUserSave(w http.ResponseWriter, r *http.Request) {
 	}
 	markUserDirtyForApps(&state, id, false)
 
-	if err := saveState(state); err != nil {
+	if err := saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
@@ -111,7 +111,7 @@ func (a *webApp) handleUserToggleActive(w http.ResponseWriter, r *http.Request) 
 	markUserDirtyForApps(&state, id, false)
 	appendLocalOperationLog(&state, "user", state.Users[index].ID, summarizeActiveToggle(state.Users[index].Active))
 
-	if err := saveState(state); err != nil {
+	if err := saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
@@ -181,7 +181,7 @@ func (a *webApp) handleUsersDelete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := saveState(state); err != nil {
+	if err := saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
@@ -223,7 +223,7 @@ func (a *webApp) handleUserDeletedState(w http.ResponseWriter, r *http.Request, 
 		for i := range state.Groups {
 			state.Groups[i].MemberIDs = removeString(state.Groups[i].MemberIDs, id)
 		}
-		if err := saveState(state); err != nil {
+		if err := saveRequestState(state); err != nil {
 			a.redirectError(w, r, tab, err)
 			return
 		}
@@ -237,7 +237,7 @@ func (a *webApp) handleUserDeletedState(w http.ResponseWriter, r *http.Request, 
 	markUserDirtyForApps(&state, id, deleted)
 	appendLocalOperationLog(&state, "user", state.Users[index].ID, localDeleteSummary(deleted))
 
-	if err := saveState(state); err != nil {
+	if err := saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
@@ -304,7 +304,7 @@ func (a *webApp) handleGroupSave(w http.ResponseWriter, r *http.Request) {
 	}
 	markGroupDirtyForApps(&state, id, false)
 
-	if err := saveState(state); err != nil {
+	if err := saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
@@ -365,7 +365,7 @@ func (a *webApp) handleGroupsDelete(w http.ResponseWriter, r *http.Request) {
 		state.Groups = keptGroups
 	}
 
-	if err := saveState(state); err != nil {
+	if err := saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
@@ -404,7 +404,7 @@ func (a *webApp) handleGroupDeletedState(w http.ResponseWriter, r *http.Request,
 			return
 		}
 		state.Groups = append(state.Groups[:index], state.Groups[index+1:]...)
-		if err := saveState(state); err != nil {
+		if err := saveRequestState(state); err != nil {
 			a.redirectError(w, r, tab, err)
 			return
 		}
@@ -418,7 +418,7 @@ func (a *webApp) handleGroupDeletedState(w http.ResponseWriter, r *http.Request,
 	markGroupDirtyForApps(&state, id, deleted)
 	appendLocalOperationLog(&state, "group", state.Groups[index].ID, localDeleteSummary(deleted))
 
-	if err := saveState(state); err != nil {
+	if err := saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
