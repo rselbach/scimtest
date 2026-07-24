@@ -235,7 +235,11 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		app.SCIMFilterSupported = false
 		state.Apps[existingIndex] = app
 	}
-	if app.SCIMEnabled && (!wasSCIMEnabled || scimEndpointChanged) {
+	// First enable or SCIM base URL change rebuilds sync rows. Re-enabling
+	// after a pause resumes remembered remote IDs instead of recreating.
+	if app.SCIMEnabled && scimEndpointChanged {
+		initializeAppSync(&state, app.ID)
+	} else if app.SCIMEnabled && !wasSCIMEnabled && !appHasSyncState(state, app.ID) {
 		initializeAppSync(&state, app.ID)
 	}
 	if err := saveState(state); err != nil {

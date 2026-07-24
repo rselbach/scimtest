@@ -703,6 +703,76 @@ func TestMarkDirtyUpdatesEverySyncApp(t *testing.T) {
 	r.NotContains(state.GroupSync, "app-c")
 }
 
+func TestMarkDirtyUpdatesPausedAppsThatRememberResources(t *testing.T) {
+	r := require.New(t)
+	state := AppState{
+		Apps: []App{
+			{ID: "app-a", SCIMEnabled: true},
+			{ID: "app-b", SCIMEnabled: false},
+		},
+		UserSync: map[string]map[string]ResourceSyncState{
+			"app-b": {"troy": {RemoteID: "remote-b"}},
+		},
+		GroupSync: map[string]map[string]ResourceSyncState{
+			"app-b": {"study-group": {RemoteID: "remote-group-b"}},
+		},
+	}
+
+	MarkUserDirtyForApps(&state, "troy", true)
+	MarkGroupDirtyForApps(&state, "study-group", true)
+
+	r.Equal(ResourceSyncState{RemoteID: "remote-b", Dirty: true, Deleted: true}, state.UserSync["app-b"]["troy"])
+	r.Equal(ResourceSyncState{RemoteID: "remote-group-b", Dirty: true, Deleted: true}, state.GroupSync["app-b"]["study-group"])
+	r.True(state.UserSync["app-a"]["troy"].Dirty)
+	r.True(state.UserSync["app-a"]["troy"].Deleted)
+}
+
+func TestPurgeFullySyncedDeletionsWaitsForPausedAppRemotes(t *testing.T) {
+	r := require.New(t)
+	state := AppState{
+		Users: []User{{ID: "troy", Deleted: true}},
+		Groups: []Group{{ID: "study-group", Deleted: true}},
+		Apps: []App{
+			{ID: "app-a", SCIMEnabled: true},
+			{ID: "app-b", SCIMEnabled: false},
+		},
+		UserSync: map[string]map[string]ResourceSyncState{
+			"app-a": {"troy": {Deleted: true}},
+			"app-b": {"troy": {RemoteID: "remote-b", Dirty: true, Deleted: true}},
+		},
+		GroupSync: map[string]map[string]ResourceSyncState{
+			"app-a": {"study-group": {Deleted: true}},
+			"app-b": {"study-group": {RemoteID: "remote-group-b"}},
+		},
+	}
+
+	PurgeFullySyncedDeletions(&state)
+
+	r.Len(state.Users, 1)
+	r.Equal("troy", state.Users[0].ID)
+	r.Equal("remote-b", state.UserSync["app-b"]["troy"].RemoteID)
+	r.Len(state.Groups, 1)
+	r.Equal("remote-group-b", state.GroupSync["app-b"]["study-group"].RemoteID)
+
+	state.UserSync["app-b"]["troy"] = ResourceSyncState{Deleted: true}
+	state.GroupSync["app-b"]["study-group"] = ResourceSyncState{Deleted: true}
+	PurgeFullySyncedDeletions(&state)
+	r.Empty(state.Users)
+	r.Empty(state.Groups)
+	_, userOK := state.UserSync["app-b"]["troy"]
+	_, groupOK := state.GroupSync["app-b"]["study-group"]
+	r.False(userOK)
+	r.False(groupOK)
+}
+
+func TestAppHasSyncState(t *testing.T) {
+	r := require.New(t)
+	r.False(AppHasSyncState(AppState{}, "app-a"))
+	r.True(AppHasSyncState(AppState{
+		UserSync: map[string]map[string]ResourceSyncState{"app-a": {"troy": {RemoteID: "r"}}},
+	}, "app-a"))
+}
+
 func TestMergeAppImportPreservesOtherAppRemoteIDs(t *testing.T) {
 	r := require.New(t)
 	state := AppState{

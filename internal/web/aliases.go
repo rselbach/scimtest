@@ -54,6 +54,7 @@ var (
 	markUserDirtyForApps         = core.MarkUserDirtyForApps
 	markGroupDirtyForApps        = core.MarkGroupDirtyForApps
 	initializeAppSync            = core.InitializeAppSync
+	appHasSyncState              = core.AppHasSyncState
 	mergeAppSyncState            = core.MergeAppSyncState
 	mergeAppImportState          = core.MergeAppImportState
 	purgeFullySyncedDeletions    = core.PurgeFullySyncedDeletions

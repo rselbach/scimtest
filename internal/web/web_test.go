@@ -3016,6 +3016,50 @@ func TestDisablingSCIMKeepsStoredSettings(t *testing.T) {
 	r.True(saved.SCIMFilterSupported)
 }
 
+func TestReenablingSCIMResumesRememberedRemoteIDs(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Users: []user{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.edu", Active: true}},
+		Groups: []group{{ID: "study-group", DisplayName: "Study Group"}},
+		Apps: []app{{
+			ID: "app-1", Name: "Greendale Portal", Slug: "greendale", Protocol: "oidc",
+			OIDCClientID: "greendale", OIDCClientSecret: "chang-secret", AllowAnyOIDCRedirect: true,
+			SCIMEnabled: false, SCIMBaseURL: "https://portal.test/scim/v2", SCIMBearerToken: "chang-token",
+		}},
+		UserSync: map[string]map[string]resourceSyncState{
+			"app-1": {"troy": {RemoteID: "remote-troy", Dirty: true, Deleted: true}},
+		},
+		GroupSync: map[string]map[string]resourceSyncState{
+			"app-1": {"study-group": {RemoteID: "remote-study-group"}},
+		},
+	}))
+	appService := newTestIDPApp(t)
+
+	form := url.Values{
+		"id":                      {"app-1"},
+		"tab":                     {"apps"},
+		"name":                    {"Greendale Portal"},
+		"slug":                    {"greendale"},
+		"protocol":                {"oidc"},
+		"allow_any_oidc_redirect": {"on"},
+		"scim_enabled":            {"on"},
+		"scim_base_url":           {"https://portal.test/scim/v2"},
+		"scim_bearer_token":       {"chang-token"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/apps/save", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	appService.routes().ServeHTTP(rec, req)
+	r.Equal(http.StatusSeeOther, rec.Code)
+
+	state, err := loadState()
+	r.NoError(err)
+	r.True(state.Apps[0].SCIMEnabled)
+	r.Equal(resourceSyncState{RemoteID: "remote-troy", Dirty: true, Deleted: true}, state.UserSync["app-1"]["troy"])
+	r.Equal(resourceSyncState{RemoteID: "remote-study-group"}, state.GroupSync["app-1"]["study-group"])
+}
+
 func TestSyncStatusPollingRetriesTransientFailures(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
