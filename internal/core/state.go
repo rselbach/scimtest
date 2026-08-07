@@ -222,6 +222,9 @@ func LoadStateForApp(appID string) (AppState, error) {
 	return state, nil
 }
 
+// SaveState rewrites the entire database from one legacy-shaped snapshot. It
+// is reserved for the legacy-state migration and test seeding; request
+// handlers save one environment at a time through SaveEnvironmentState.
 func SaveState(state AppState) error {
 	NormalizeState(&state)
 
@@ -276,11 +279,15 @@ func SaveEnvironmentState(state AppState) error {
 	if state.Environment.ID == "" {
 		return fmt.Errorf("environment ID is required")
 	}
-	if len(state.Apps) != 1 || state.Apps[0].ID != state.Environment.ID {
-		return fmt.Errorf("environment must contain its matching app")
+	switch {
+	case len(state.Apps) == 0 && state.Environment.ID == DefaultEnvironmentID:
+		// the pre-environment default directory has no app record
+	case len(state.Apps) == 1 && state.Apps[0].ID == state.Environment.ID:
+		state.Environment.Name = state.Apps[0].Name
+		state.Environment.Slug = state.Apps[0].Slug
+	default:
+		return fmt.Errorf("environment %q state must contain exactly its own app", state.Environment.ID)
 	}
-	state.Environment.Name = state.Apps[0].Name
-	state.Environment.Slug = state.Apps[0].Slug
 	for i := range state.Users {
 		state.Users[i].RemoteID = ""
 		state.Users[i].Dirty = false

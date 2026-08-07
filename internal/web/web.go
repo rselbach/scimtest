@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"embed"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"html/template"
 	"log"
@@ -608,16 +609,21 @@ func (a *webApp) routes() http.Handler {
 const environmentCookieName = "scimtest_environment"
 const legacySyncAppCookieName = "scimtest_sync_app"
 
-func requestEnvironmentID(r *http.Request, state appState) string {
+// requestEnvironmentID resolves the environment addressed by the request. An
+// explicitly requested environment that no longer exists is an error so a
+// stale reference can never fall through to another environment's data.
+func requestEnvironmentID(r *http.Request, state appState) (string, error) {
 	requested := strings.TrimSpace(r.FormValue("environment"))
 	if requested == "" {
 		requested = strings.TrimSpace(r.FormValue("app"))
 	}
 	if requested != "" {
 		if selected, ok := appByID(state.Apps, requested); ok {
-			return selected.ID
+			return selected.ID, nil
 		}
-		return ""
+		if requested != defaultEnvironmentID {
+			return "", fmt.Errorf("environment %q does not exist; it may have been deleted", requested)
+		}
 	}
 
 	for _, cookieName := range []string{environmentCookieName, legacySyncAppCookieName} {
@@ -626,18 +632,21 @@ func requestEnvironmentID(r *http.Request, state appState) string {
 			continue
 		}
 		if selected, ok := appByID(state.Apps, strings.TrimSpace(cookie.Value)); ok {
-			return selected.ID
+			return selected.ID, nil
 		}
 	}
 
 	if len(state.Apps) > 0 {
-		return state.Apps[0].ID
+		return state.Apps[0].ID, nil
 	}
-	return ""
+	return "", nil
 }
 
 func requestSyncAppID(r *http.Request, state appState) string {
-	environmentID := requestEnvironmentID(r, state)
+	environmentID, err := requestEnvironmentID(r, state)
+	if err != nil {
+		return ""
+	}
 	selected, ok := appByID(state.Apps, environmentID)
 	if ok && selected.SCIMEnabled {
 		return selected.ID
@@ -650,21 +659,24 @@ func loadRequestState(r *http.Request) (appState, error) {
 	if err != nil {
 		return appState{}, err
 	}
-	environmentID := requestEnvironmentID(r, globalState)
+	environmentID, err := requestEnvironmentID(r, globalState)
+	if err != nil {
+		return appState{}, err
+	}
 	if environmentID == "" {
 		return globalState, nil
 	}
 	return loadStateForApp(environmentID)
 }
 
+// saveRequestState persists a single environment's state. Whole-database
+// writes are reserved for the legacy-state migration: refusing them here
+// keeps a mis-scoped request from rewriting every environment.
 func saveRequestState(state appState) error {
-	if state.Environment.ID != "" && state.Environment.ID != defaultEnvironmentID {
-		return saveEnvironmentState(state)
+	if state.Environment.ID == "" {
+		return errors.New("no environment selected")
 	}
-	if len(state.Apps) == 1 && state.Apps[0].ID == defaultEnvironmentID {
-		return saveEnvironmentState(state)
-	}
-	return saveState(state)
+	return saveEnvironmentState(state)
 }
 
 func rememberEnvironment(w http.ResponseWriter, environmentID string) {
@@ -811,7 +823,14 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	environmentID := requestEnvironmentID(r, globalState)
+	environmentID, err := requestEnvironmentID(r, globalState)
+	if err != nil {
+		// redirect without redirectWithFlash: it would re-append the stale
+		// environment parameter and loop
+		setFlashCookie(w, flashMessage{Kind: "error", Message: err.Error()})
+		http.Redirect(w, r, dashboardURL(normalizedTab(r.URL.Query().Get("tab")), nil), http.StatusSeeOther)
+		return
+	}
 	state := globalState
 	var activeEnvironment app
 	if environmentID != "" {
