@@ -101,6 +101,23 @@ type tunnelCloser interface {
 	Close() error
 }
 
+type tunnelWaiter interface {
+	Wait() error
+}
+
+// waitableTunnel unwraps closer decorators until it finds a tunnel whose run
+// loop can be waited on. Not every tunnelCloser can report its own death;
+// those tunnels simply go unwatched.
+func waitableTunnel(tunnel tunnelCloser) (tunnelWaiter, bool) {
+	switch v := tunnel.(type) {
+	case cancelingTunnelCloser:
+		return waitableTunnel(v.tunnel)
+	case tunnelWaiter:
+		return v, true
+	}
+	return nil, false
+}
+
 type cancelingTunnelCloser struct {
 	tunnel tunnelCloser
 	cancel context.CancelFunc
@@ -1130,16 +1147,45 @@ func (a *webApp) startAutomaticTunnelLocked(identity tunnelApplicationIdentity) 
 		return
 	}
 
-	a.tunnelMu.Lock()
-	a.tunnel = &activeTunnel{
+	entry := &activeTunnel{
 		PathPrefix: pathPrefix,
 		PublicURL:  publicURL,
 		ClientIP:   strings.TrimSpace(started.ClientIP),
 		Tunnel:     started.Tunnel,
 	}
+	a.tunnelMu.Lock()
+	a.tunnel = entry
 	a.tunnelLastError = ""
 	a.tunnelMu.Unlock()
+	go a.watchAutomaticTunnel(entry)
 	log.Printf("tunnel established at %s (chooser restricted to %s)", publicURL, strings.TrimSpace(started.ClientIP))
+}
+
+// watchAutomaticTunnel clears the stored tunnel when its run loop exits so
+// the UI stops advertising a dead public URL, falls back to the configured
+// IDP base URL, and offers a retry.
+func (a *webApp) watchAutomaticTunnel(entry *activeTunnel) {
+	waiter, ok := waitableTunnel(entry.Tunnel)
+	if !ok {
+		return
+	}
+	err := waiter.Wait()
+
+	a.tunnelMu.Lock()
+	if a.tunnel != entry {
+		// closed deliberately or already replaced
+		a.tunnelMu.Unlock()
+		return
+	}
+	a.tunnel = nil
+	a.tunnelMu.Unlock()
+
+	message := "tunnel connection closed"
+	if err != nil {
+		message = fmt.Sprintf("tunnel connection closed: %v", err)
+	}
+	a.setTunnelError(message)
+	log.Printf("automatic tunnel closed: err=%v", err)
 }
 
 func (a *webApp) updateAutomaticTunnelRegistration(registration scimtestclient.Registration) {
