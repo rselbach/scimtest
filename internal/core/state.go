@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -1563,13 +1564,13 @@ func deleteMissingRows(tx *sql.Tx, table string, key string, environmentID strin
 
 func closeRows(rows *sql.Rows) {
 	if err := rows.Close(); err != nil {
-		panic(fmt.Sprintf("close sqlite rows: %v", err))
+		log.Printf("close sqlite rows: %v", err)
 	}
 }
 
 func closeStmt(stmt *sql.Stmt) {
 	if err := stmt.Close(); err != nil {
-		panic(fmt.Sprintf("close sqlite statement: %v", err))
+		log.Printf("close sqlite statement: %v", err)
 	}
 }
 
@@ -1578,7 +1579,7 @@ func rollbackTx(tx *sql.Tx, committed *bool) {
 		return
 	}
 	if err := tx.Rollback(); err != nil && err != sql.ErrTxDone {
-		panic(fmt.Sprintf("rollback sqlite transaction: %v", err))
+		log.Printf("rollback sqlite transaction: %v", err)
 	}
 }
 

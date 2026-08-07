@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -649,7 +650,27 @@ func (a *webApp) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/", a.adminRoutes())
 	a.registerIDPRoutes(mux)
-	return mux
+	return recoverPanics(mux)
+}
+
+// recoverPanics keeps a handler panic from tearing down the connection with
+// no explanation: the request gets a 500 and the panic is logged with its
+// stack. http.ErrAbortHandler keeps its meaning.
+func recoverPanics(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			recovered := recover()
+			if recovered == nil {
+				return
+			}
+			if err, ok := recovered.(error); ok && errors.Is(err, http.ErrAbortHandler) {
+				panic(recovered)
+			}
+			log.Printf("panic serving %s %s: %v\n%s", r.Method, r.URL.Path, recovered, debug.Stack())
+			http.Error(w, fmt.Sprintf("internal error: %v", recovered), http.StatusInternalServerError)
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 const environmentCookieName = "scimtest_environment"
@@ -758,7 +779,7 @@ type publicRequestURIContextKey struct{}
 
 func (a *webApp) tunneledIDPRoutes() http.Handler {
 	routes := a.idpRoutes()
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return recoverPanics(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		prefix := a.tunnelPathPrefix()
 		if prefix == "" || !strings.HasPrefix(r.URL.Path, prefix+"/") {
 			http.NotFound(w, r)
@@ -766,7 +787,7 @@ func (a *webApp) tunneledIDPRoutes() http.Handler {
 		}
 		ctx := context.WithValue(r.Context(), publicRequestURIContextKey{}, r.URL.RequestURI())
 		http.StripPrefix(prefix, routes).ServeHTTP(w, r.WithContext(ctx))
-	})
+	}))
 }
 
 func publicRequestURI(r *http.Request) string {
