@@ -59,7 +59,8 @@ func (a *webApp) handleOIDCInspector(w http.ResponseWriter, r *http.Request) {
 		App        app
 		Inspection oidcInspection
 		Found      bool
-	}{App: foundApp, Inspection: inspection, Found: found}
+		Events     []flowEvent
+	}{App: foundApp, Inspection: inspection, Found: found, Events: a.flowEvents(foundApp.Slug)}
 	if err := pageTemplate.ExecuteTemplate(w, "oidc-inspector.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}

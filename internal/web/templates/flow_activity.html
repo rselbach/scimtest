@@ -1,0 +1,22 @@
+{{define "flow-activity"}}
+{{if .}}
+<section class="card inspector-card" aria-labelledby="flow-activity-heading">
+  <h2 id="flow-activity-heading">Recent activity</h2>
+  <p class="hint">Every flow hop for this environment, including failures. Newest first; the last {{len .}} entries are kept.</p>
+  <table class="flow-activity">
+    <thead><tr><th>Time</th><th>Step</th><th>Outcome</th><th>User</th><th>Detail</th></tr></thead>
+    <tbody>
+      {{range .}}
+      <tr class="{{if .Failed}}flow-failed{{else}}flow-ok{{end}}">
+        <td class="mono">{{.Time}}</td>
+        <td class="mono">{{.Protocol}} {{.Stage}}</td>
+        <td>{{if .Failed}}Failed{{else}}OK{{end}}</td>
+        <td>{{.User}}</td>
+        <td>{{.Detail}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</section>
+{{end}}
+{{end}}

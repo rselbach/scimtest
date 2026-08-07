@@ -43,7 +43,8 @@ func (a *webApp) handleSAMLInspector(w http.ResponseWriter, r *http.Request) {
 		App        app
 		Inspection samlInspection
 		Found      bool
-	}{App: foundApp, Inspection: inspection, Found: found}
+		Events     []flowEvent
+	}{App: foundApp, Inspection: inspection, Found: found, Events: a.flowEvents(foundApp.Slug)}
 	if err := pageTemplate.ExecuteTemplate(w, "saml-inspector.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}

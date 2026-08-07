@@ -179,6 +179,12 @@
     .inspector-details dt { color: var(--muted); font-weight: 600; }
     .inspector-details dd { margin: 0; overflow-wrap: anywhere; }
     .inspector-payload { margin: 0; padding: 14px; overflow: auto; border-radius: var(--radius); background: var(--bg-soft); font: 12px/1.55 var(--mono); }
+    .flow-activity { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .flow-activity th, .flow-activity td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+    .flow-activity th { color: var(--muted); font-weight: 600; }
+    .flow-activity tr.flow-failed td { background: var(--danger-soft); }
+    .flow-activity tr.flow-failed td:nth-child(3) { color: var(--danger); font-weight: 600; }
+    .flow-activity tr.flow-ok td:nth-child(3) { color: var(--success); }
 
     /* Flash toast: pulled out of document flow so it never reflows the page */
     .flash {

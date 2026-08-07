@@ -65,6 +65,8 @@ type webApp struct {
 	oidcInspections  map[string]oidcInspection
 	samlInspectorMu  sync.Mutex
 	samlInspections  map[string]samlInspection
+	flowLogMu        sync.Mutex
+	flowLog          map[string][]flowEvent
 	traceMu          sync.Mutex
 	lastTraces       map[string][]syncTraceEntry
 	lastTraceContent map[string]string

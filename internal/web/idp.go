@@ -460,11 +460,11 @@ func (a *webApp) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validateAuthorizeClient(app, r.URL.Query(), isTunneledRequest(r)); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		a.failFlow(w, app, "oidc", "authorize", http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := validateAuthorizeRequest(app, r.URL.Query()); err != nil {
-		redirectAuthorizeError(w, r, r.URL.Query(), err)
+		a.failAuthorize(w, r, app, r.URL.Query(), err)
 		return
 	}
 	loginHint := loginHintFromRequest(r)
@@ -483,25 +483,25 @@ func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		a.failFlow(w, app, "oidc", "authorize", http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := validateAuthorizeClient(app, r.Form, isTunneledRequest(r)); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		a.failFlow(w, app, "oidc", "authorize", http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := validateAuthorizeRequest(app, r.Form); err != nil {
-		redirectAuthorizeError(w, r, r.Form, err)
+		a.failAuthorize(w, r, app, r.Form, err)
 		return
 	}
 	redirectURI, err := parseOIDCRedirectURI(r.FormValue("redirect_uri"))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		a.failFlow(w, app, "oidc", "authorize", http.StatusBadRequest, err.Error())
 		return
 	}
 	user, ok := chooserUser(state.Users, app, r.Form)
 	if !ok || !user.Active || user.Deleted {
-		http.Error(w, "active user is required", http.StatusBadRequest)
+		a.failFlow(w, app, "oidc", "authorize", http.StatusBadRequest, "active user is required")
 		return
 	}
 	now := time.Now()
@@ -509,7 +509,7 @@ func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request)
 
 	code, err := randomSecret(24)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		a.failFlow(w, app, "oidc", "authorize", http.StatusInternalServerError, err.Error())
 		return
 	}
 	authCode := authCode{
@@ -524,9 +524,10 @@ func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request)
 	}
 	a.authCodes[code] = authCode
 	if err := a.rememberOIDCInspection(app, user, authCode, "Authorization code issued", nil, now); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		a.failFlow(w, app, "oidc", "authorize", http.StatusInternalServerError, err.Error())
 		return
 	}
+	a.recordFlowEvent(app.Slug, "oidc", "authorize", "ok", userLabel(user), "Authorization code issued to "+authCode.ClientID)
 
 	query := redirectURI.Query()
 	query.Set("code", code)
@@ -548,11 +549,11 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		writeOAuthError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
 	if r.FormValue("grant_type") != "authorization_code" {
-		writeOAuthError(w, http.StatusBadRequest, "unsupported_grant_type", "only authorization_code is supported")
+		a.failOAuth(w, app, "token", http.StatusBadRequest, "unsupported_grant_type", "only authorization_code is supported")
 		return
 	}
 	if !clientAuthenticated(r, app) {
@@ -561,7 +562,7 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		if _, _, usedBasic := r.BasicAuth(); usedBasic {
 			w.Header().Set("WWW-Authenticate", `Basic realm="scimtest", charset="UTF-8"`)
 		}
-		writeOAuthError(w, http.StatusUnauthorized, "invalid_client", "client authentication failed")
+		a.failOAuth(w, app, "token", http.StatusUnauthorized, "invalid_client", "client authentication failed")
 		return
 	}
 	now := time.Now()
@@ -570,28 +571,28 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 	codeValue := r.FormValue("code")
 	code, ok := a.authCodes[codeValue]
 	if !ok {
-		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "authorization code is invalid or expired")
+		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "authorization code is invalid or expired")
 		return
 	}
 	delete(a.authCodes, codeValue)
 
 	if code.AppSlug != app.Slug || code.ClientID != app.OIDCClientID || code.RedirectURI != r.FormValue("redirect_uri") {
-		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "authorization code does not match this request")
+		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "authorization code does not match this request")
 		return
 	}
 	if code.CodeChallenge != "" && !validPKCEVerifier(code.CodeChallenge, r.FormValue("code_verifier")) {
-		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "PKCE code verifier is invalid")
+		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "PKCE code verifier is invalid")
 		return
 	}
 	// OAuth 2.0 Security BCP: a verifier for a code issued without a
 	// challenge signals a confused or attacked client - reject it.
 	if code.CodeChallenge == "" && r.FormValue("code_verifier") != "" {
-		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "code_verifier provided but the authorization request used no code_challenge")
+		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "code_verifier provided but the authorization request used no code_challenge")
 		return
 	}
 	user, ok := userByID(state.Users, code.UserID)
 	if !ok || !user.Active || user.Deleted {
-		writeOAuthError(w, http.StatusBadRequest, "invalid_grant", "user is inactive or missing")
+		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "user is inactive or missing")
 		return
 	}
 
@@ -605,16 +606,16 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 	}
 	idToken, err := a.signJWT(claims)
 	if err != nil {
-		writeOAuthError(w, http.StatusInternalServerError, "server_error", err.Error())
+		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
 		return
 	}
 	access, err := randomSecret(32)
 	if err != nil {
-		writeOAuthError(w, http.StatusInternalServerError, "server_error", err.Error())
+		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
 		return
 	}
 	if err := a.rememberOIDCInspection(app, user, code, "Tokens issued", claims, now); err != nil {
-		writeOAuthError(w, http.StatusInternalServerError, "server_error", err.Error())
+		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
 		return
 	}
 	a.accessTokens[access] = accessToken{
@@ -623,6 +624,7 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		Scope:     code.Scope,
 		ExpiresAt: now.Add(time.Hour),
 	}
+	a.recordFlowEvent(app.Slug, "oidc", "token", "ok", userLabel(user), "ID and access tokens issued to "+app.OIDCClientID)
 	writeJSON(w, map[string]any{
 		"access_token": access,
 		"token_type":   "Bearer",
@@ -644,14 +646,15 @@ func (a *webApp) handleOIDCUserinfo(w http.ResponseWriter, r *http.Request) {
 	tokenValue := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	token, ok := a.accessTokens[tokenValue]
 	if !ok || token.AppSlug != app.Slug {
-		writeOAuthError(w, http.StatusUnauthorized, "invalid_token", "access token is invalid or expired")
+		a.failOAuth(w, app, "userinfo", http.StatusUnauthorized, "invalid_token", "access token is invalid or expired")
 		return
 	}
 	user, ok := userByID(state.Users, token.UserID)
 	if !ok || !user.Active || user.Deleted {
-		writeOAuthError(w, http.StatusUnauthorized, "invalid_token", "user is inactive or missing")
+		a.failOAuth(w, app, "userinfo", http.StatusUnauthorized, "invalid_token", "user is inactive or missing")
 		return
 	}
+	a.recordFlowEvent(app.Slug, "oidc", "userinfo", "ok", userLabel(user), "Userinfo claims served")
 	writeJSON(w, userClaims(state, app, user, token.Scope))
 }
 
@@ -705,7 +708,7 @@ func (a *webApp) handleSAMLSSO(w http.ResponseWriter, r *http.Request) {
 	}
 	baseURL := a.effectiveIDPBaseURL(r, state)
 	if _, err := resolveSAMLResponseContext(r.URL.Query(), app, baseURL); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
 		return
 	}
 	loginHint := loginHintFromRequest(r)
@@ -721,13 +724,13 @@ func (a *webApp) handleSAMLSSOPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
 		return
 	}
 	baseURL := a.effectiveIDPBaseURL(r, state)
 	responseContext, err := resolveSAMLResponseContext(r.Form, app, baseURL)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
 		return
 	}
 	if !chooserSelectionProvided(app, r.Form) && (r.FormValue("SAMLRequest") != "" || r.FormValue("login_hint") != "" || r.FormValue("RelayState") != "") {
@@ -737,15 +740,16 @@ func (a *webApp) handleSAMLSSOPost(w http.ResponseWriter, r *http.Request) {
 	}
 	user, ok := chooserUser(state.Users, app, r.Form)
 	if !ok || !user.Active || user.Deleted {
-		http.Error(w, "active user is required", http.StatusBadRequest)
+		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, "active user is required")
 		return
 	}
 	response, err := a.buildSignedSAMLResponse(state, baseURL, app, user, responseContext)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
 		return
 	}
 	a.rememberSAMLInspection(app, user, responseContext, response, time.Now())
+	a.recordFlowEvent(app.Slug, "saml", "sso", "ok", userLabel(user), "Signed response posted to "+responseContext.ACSURL)
 	renderPostBack(w, responseContext.ACSURL, map[string]string{
 		"SAMLResponse": base64.StdEncoding.EncodeToString([]byte(response)),
 		"RelayState":   r.FormValue("RelayState"),
