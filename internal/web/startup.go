@@ -1,7 +1,6 @@
 package web
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -9,7 +8,6 @@ import (
 	"os/exec"
 	"runtime"
 	"strconv"
-	"syscall"
 )
 
 const (
@@ -39,7 +37,7 @@ func listenForAdmin(host, port string, fallback bool) (net.Listener, error) {
 		if listenErr == nil {
 			return listener, nil
 		}
-		if !errors.Is(listenErr, syscall.EADDRINUSE) {
+		if !isAddrInUse(listenErr) {
 			return nil, fmt.Errorf("listen on %s: %w", address, listenErr)
 		}
 	}
