@@ -423,7 +423,7 @@ func TestTunneledAuthorizeIgnoresAllowAnyOIDCRedirect(t *testing.T) {
 	rec := httptest.NewRecorder()
 	tunneled.ServeHTTP(rec, req)
 	r.Equal(http.StatusBadRequest, rec.Code)
-	r.Contains(rec.Body.String(), "redirect_uri is not registered for this app")
+	r.Contains(rec.Body.String(), "is not registered for this app")
 
 	local := app.idpRoutes()
 	localRec := httptest.NewRecorder()

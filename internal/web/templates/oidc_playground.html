@@ -1,0 +1,61 @@
+{{define "oidc-playground.html"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OIDC playground · {{.App.Name}} · scimtest</title>
+  <link rel="stylesheet" href="/assets/app.css?v=wizard">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/?tab=apps">scimtest</a>
+  </header>
+  <main class="content inspector-page">
+    <div class="page-heading">
+      <div>
+        <h1>OIDC playground</h1>
+        <p>{{.App.Name}} — built-in relying party</p>
+      </div>
+      <div>
+        <a class="btn" href="{{.InspectorURL}}/playground">Run again</a>
+        <a class="btn" href="{{.InspectorURL}}">Flow inspector</a>
+      </div>
+    </div>
+    {{if .Error}}
+    <section class="card card-empty">
+      <div class="h">Flow did not complete</div>
+      <p>{{.Error}}</p>
+    </section>
+    {{else}}
+    <section class="card inspector-card">
+      <h2>Authorization response</h2>
+      <dl class="inspector-details">
+        <div><dt>Code</dt><dd class="mono">{{.AuthorizeCode}}</dd></div>
+        <div><dt>State echoed</dt><dd>{{if .State}}Yes{{else}}No{{end}}</dd></div>
+      </dl>
+    </section>
+    <section class="card inspector-card">
+      <h2>Token response <span class="hint">{{.TokenStatus}}</span></h2>
+      <pre class="inspector-payload">{{.TokenBody}}</pre>
+    </section>
+    {{if .IDTokenClaims}}
+    <section class="card inspector-card">
+      <h2>Decoded ID token</h2>
+      <h3>Header</h3>
+      <pre class="inspector-payload">{{.IDTokenHeader}}</pre>
+      <h3>Claims</h3>
+      <pre class="inspector-payload">{{.IDTokenClaims}}</pre>
+    </section>
+    {{end}}
+    {{if .UserinfoBody}}
+    <section class="card inspector-card">
+      <h2>Userinfo</h2>
+      <pre class="inspector-payload">{{.UserinfoBody}}</pre>
+    </section>
+    {{end}}
+    {{end}}
+  </main>
+</body>
+</html>
+{{end}}

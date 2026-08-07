@@ -460,7 +460,8 @@ func (a *webApp) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := validateAuthorizeClient(app, r.URL.Query(), isTunneledRequest(r)); err != nil {
+	tunneled := isTunneledRequest(r)
+	if err := validateAuthorizeClient(app, r.URL.Query(), tunneled, a.playgroundAllowedRedirect(tunneled, app.Slug)); err != nil {
 		a.failFlow(w, app, "oidc", "authorize", http.StatusBadRequest, err.Error())
 		return
 	}
@@ -487,7 +488,8 @@ func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request)
 		a.failFlow(w, app, "oidc", "authorize", http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := validateAuthorizeClient(app, r.Form, isTunneledRequest(r)); err != nil {
+	tunneled := isTunneledRequest(r)
+	if err := validateAuthorizeClient(app, r.Form, tunneled, a.playgroundAllowedRedirect(tunneled, app.Slug)); err != nil {
 		a.failFlow(w, app, "oidc", "authorize", http.StatusBadRequest, err.Error())
 		return
 	}
@@ -893,7 +895,7 @@ func childElementTextByLocalName(parent *etree.Element, localName string) string
 // must never redirect: an unverified redirect_uri is not a safe target
 // (RFC 6749 section 4.1.2.1). When tunneled is true, AllowAnyOIDCRedirect is
 // ignored so a public tunnel cannot mint codes to an attacker-chosen URI.
-func validateAuthorizeClient(app app, values url.Values, tunneled bool) error {
+func validateAuthorizeClient(app app, values url.Values, tunneled bool, extraAllowed ...string) error {
 	if values.Get("client_id") != app.OIDCClientID {
 		return fmt.Errorf("client_id is invalid")
 	}
@@ -905,10 +907,20 @@ func validateAuthorizeClient(app app, values url.Values, tunneled bool) error {
 		return err
 	}
 	allowAny := app.AllowAnyOIDCRedirect && !tunneled
-	if !allowAny && !stringIn(app.OIDCRedirectURIs, redirectURI) {
-		return fmt.Errorf("redirect_uri is not registered for this app")
+	if !allowAny && !stringIn(app.OIDCRedirectURIs, redirectURI) && !stringIn(extraAllowed, redirectURI) {
+		return fmt.Errorf("redirect_uri %q is not registered for this app; registered: %v", redirectURI, app.OIDCRedirectURIs)
 	}
 	return nil
+}
+
+// playgroundAllowedRedirect returns the built-in RP callback URI that authorize
+// should accept in addition to the registered set, but only for loopback
+// requests: a tunneled flow must never mint codes to a loopback URI.
+func (a *webApp) playgroundAllowedRedirect(tunneled bool, slug string) string {
+	if tunneled {
+		return ""
+	}
+	return a.playgroundCallbackURI(slug)
 }
 
 type authorizeError struct {

@@ -248,16 +248,17 @@ type groupRowView struct {
 }
 
 type appRowView struct {
-	ID               string
-	Name             string
-	Slug             string
-	OIDCClientID     string
-	OIDCDiscovery    string
-	SAMLMetadata     string
-	EditURL          string
-	OIDCTestURL      string
-	OIDCInspectorURL string
-	SAMLInspectorURL string
+	ID                string
+	Name              string
+	Slug              string
+	OIDCClientID      string
+	OIDCDiscovery     string
+	SAMLMetadata      string
+	EditURL           string
+	OIDCTestURL       string
+	OIDCPlaygroundURL string
+	OIDCInspectorURL  string
+	SAMLInspectorURL  string
 	// OIDCPKCETestURL is an authorize URL missing its code_challenge; the
 	// page script generates a PKCE pair on click and appends the challenge.
 	OIDCPKCETestURL string
@@ -838,6 +839,8 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /tools/create-users", a.rejectWhileSyncing(a.handleToolsCreateUsers))
 	mux.HandleFunc("GET /backup", a.handleBackupDownload)
 	mux.HandleFunc("GET /inspect/oidc/{slug}", a.handleOIDCInspector)
+	mux.HandleFunc("GET /inspect/oidc/{slug}/playground", a.handleOIDCPlayground)
+	mux.HandleFunc("GET /inspect/oidc/{slug}/playground/callback", a.handleOIDCPlaygroundCallback)
 	mux.HandleFunc("GET /inspect/saml/{slug}", a.handleSAMLInspector)
 	mux.HandleFunc("POST /restore", a.rejectWhileSyncing(a.handleBackupRestore))
 	mux.HandleFunc("GET /sync/status", a.handleSyncStatus)
@@ -2014,12 +2017,22 @@ func buildAppRows(state appState, environmentID string, base string) []appRowVie
 		if row.OIDCStatus.Configured {
 			row.OIDCDiscovery = base + "/oidc/" + app.Slug + "/.well-known/openid-configuration"
 			row.OIDCInspectorURL = "/inspect/oidc/" + url.PathEscape(app.Slug)
+			row.OIDCPlaygroundURL = "/inspect/oidc/" + url.PathEscape(app.Slug) + "/playground"
 			if len(app.OIDCRedirectURIs) > 0 {
 				query := url.Values{
 					"response_type": {"code"},
 					"client_id":     {app.OIDCClientID},
 					"redirect_uri":  {app.OIDCRedirectURIs[0]},
 					"scope":         {"openid profile email groups"},
+				}
+				// Include state and nonce so the two checks RPs most often
+				// get wrong are exercised; ignore generation errors and omit
+				// rather than fail the whole page.
+				if stateValue, err := randomSecret(12); err == nil {
+					query.Set("state", stateValue)
+				}
+				if nonce, err := randomSecret(12); err == nil {
+					query.Set("nonce", nonce)
 				}
 				testURL := base + "/oidc/" + app.Slug + "/authorize?" + query.Encode()
 				if app.OIDCPublicClient {

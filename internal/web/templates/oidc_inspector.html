@@ -17,7 +17,10 @@
         <h1>OIDC flow inspector</h1>
         <p>{{.App.Name}}</p>
       </div>
-      <a class="btn" href="/?tab=apps">Back to environments</a>
+      <div>
+        <a class="btn" href="/inspect/oidc/{{.App.Slug}}/playground">Test with built-in RP</a>
+        <a class="btn" href="/?tab=apps">Back to environments</a>
+      </div>
     </div>
     {{if .Found}}
     <section class="card inspector-card" aria-labelledby="flow-stage">

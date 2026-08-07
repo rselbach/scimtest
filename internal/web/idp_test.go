@@ -302,7 +302,7 @@ func TestValidateAuthorizeClientIgnoresAllowAnyWhenTunneled(t *testing.T) {
 		"redirect_uri": {"https://evil.example/callback"},
 	}
 	r.NoError(validateAuthorizeClient(configured, values, false))
-	r.ErrorContains(validateAuthorizeClient(configured, values, true), "redirect_uri is not registered for this app")
+	r.ErrorContains(validateAuthorizeClient(configured, values, true), "is not registered for this app")
 	r.NoError(validateAuthorizeClient(configured, url.Values{
 		"client_id":    {"greendale-client"},
 		"redirect_uri": {"https://rp.greendale.test/callback"},

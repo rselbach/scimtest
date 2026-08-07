@@ -1,0 +1,84 @@
+package web
+
+import (
+	"io"
+	"net/http"
+	"net/http/cookiejar"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func newTestCookieJar(t *testing.T) *cookiejar.Jar {
+	t.Helper()
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	return jar
+}
+
+func readAll(t *testing.T, r io.Reader) string {
+	t.Helper()
+	data, err := io.ReadAll(r)
+	require.NoError(t, err)
+	return string(data)
+}
+
+func TestPlaygroundCompletesFullExchange(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Users: []user{{ID: "usr-1", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}},
+		Apps: []app{{
+			ID:               "app-1",
+			Name:             "Example",
+			Slug:             "example",
+			Protocol:         "oidc",
+			OIDCClientID:     "example-client",
+			OIDCClientSecret: "secret",
+			OIDCRedirectURIs: []string{"http://client.test/callback"},
+		}},
+	}))
+	svc := newTestIDPApp(t)
+
+	// A real listener is required: the playground callback exchanges the code
+	// by calling the token endpoint over HTTP against the admin host.
+	server := httptest.NewServer(svc.routes())
+	defer server.Close()
+	svc.adminHost = strings.TrimPrefix(server.URL, "http://")
+
+	client := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Jar:           newTestCookieJar(t),
+	}
+
+	// Start the playground; it redirects to the authorize chooser.
+	startResp, err := client.Get(server.URL + "/inspect/oidc/example/playground")
+	r.NoError(err)
+	r.NoError(startResp.Body.Close())
+	r.Equal(http.StatusFound, startResp.StatusCode)
+	authorizeURL, err := url.Parse(startResp.Header.Get("Location"))
+	r.NoError(err)
+	r.NotEmpty(authorizeURL.Query().Get("state"))
+	r.NotEmpty(authorizeURL.Query().Get("nonce"))
+
+	// Post the chooser selection to get the code, preserving the flow params.
+	form := authorizeURL.Query()
+	form.Set("user_id", "usr-1")
+	authorizeResp, err := client.PostForm(server.URL+authorizeURL.Path, form)
+	r.NoError(err)
+	r.NoError(authorizeResp.Body.Close())
+	r.Equal(http.StatusFound, authorizeResp.StatusCode)
+
+	// Follow the redirect to the playground callback, which exchanges the code.
+	callbackResp, err := client.Get(authorizeResp.Header.Get("Location"))
+	r.NoError(err)
+	body := readAll(t, callbackResp.Body)
+	r.NoError(callbackResp.Body.Close())
+	r.Equal(http.StatusOK, callbackResp.StatusCode)
+	r.Contains(body, "Token response")
+	r.Contains(body, "Decoded ID token")
+	r.Contains(body, "troy@greendale.edu")
+}

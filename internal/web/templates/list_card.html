@@ -115,6 +115,7 @@
 					  <a class="environment-action-link" href="{{.OIDCDiscovery}}" target="_blank" rel="noreferrer" title="Open the OIDC discovery document">Discovery JSON</a>
 					  {{if .OIDCTestURL}}<a class="environment-action-link" href="{{.OIDCTestURL}}" target="_blank" rel="noreferrer">Test sign-in</a>{{end}}
 					  {{if .OIDCPKCETestURL}}<a class="environment-action-link" href="{{.OIDCPKCETestURL}}" data-pkce-test target="_blank" rel="noreferrer" title="Run sign-in with a generated PKCE challenge">Test sign-in</a>{{end}}
+					  {{if .OIDCPlaygroundURL}}<a class="environment-action-link" href="{{.OIDCPlaygroundURL}}" title="Complete a full sign-in against scimtest's built-in relying party and see the tokens">Test with built-in RP</a>{{end}}
 					  {{if .OIDCInspectorURL}}<a class="environment-action-link" href="{{.OIDCInspectorURL}}">Inspect flow</a>{{end}}
 					</span>{{end}}
 					{{if .SAMLStatus.Configured}}<span class="environment-action-group">
