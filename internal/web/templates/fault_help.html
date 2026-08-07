@@ -1,0 +1,19 @@
+{{define "fault-help"}}
+<section class="card inspector-card">
+  <details>
+    <summary><strong>Simulate a failure</strong></summary>
+    <p class="hint">Append these one-shot parameters to a Test sign-in URL to make this IDP misbehave for a single flow. They are not stored.</p>
+    <table class="flow-activity">
+      <thead><tr><th>Parameter</th><th>Effect</th><th>Example</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">fault_id_token_ttl</td><td>Override the ID token lifetime (negative issues an already-expired token)</td><td class="mono">-1m</td></tr>
+        <tr><td class="mono">fault_clock_skew</td><td>Offset every issued timestamp (iat/exp and SAML instants)</td><td class="mono">10m</td></tr>
+        <tr><td class="mono">fault_break_signature</td><td>Corrupt the ID token or assertion signature</td><td class="mono">1</td></tr>
+        <tr><td class="mono">fault_drop_claims</td><td>Omit claims from the ID token</td><td class="mono">email,groups</td></tr>
+        <tr><td class="mono">fault_token_error</td><td>Return this OAuth error from the token endpoint</td><td class="mono">invalid_grant</td></tr>
+        <tr><td class="mono">fault_saml_status</td><td>Return a non-success SAML status</td><td class="mono">AuthnFailed</td></tr>
+      </tbody>
+    </table>
+  </details>
+</section>
+{{end}}

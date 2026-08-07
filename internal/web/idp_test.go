@@ -920,7 +920,7 @@ func TestSignedSAMLResponseUsesEnvironmentGroups(t *testing.T) {
 		}},
 	}
 
-	response, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], state.Users[0], samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL})
+	response, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], state.Users[0], samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL}, faultOptions{})
 	r.NoError(err)
 	r.Contains(response, "<ds:Signature")
 	r.Contains(response, `Name="groups"`)
@@ -974,7 +974,7 @@ func TestSignedSAMLResponseUsesConfiguredNameIDField(t *testing.T) {
 		}},
 	}
 
-	response, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], state.Users[0], samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL})
+	response, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], state.Users[0], samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL}, faultOptions{})
 	r.NoError(err)
 	r.Contains(response, `<saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">tbarnes</saml:NameID>`)
 	r.Contains(response, `<saml:Attribute Name="mail"><saml:AttributeValue>troy@example.test</saml:AttributeValue></saml:Attribute>`)

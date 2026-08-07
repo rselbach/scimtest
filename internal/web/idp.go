@@ -40,6 +40,7 @@ type authCode struct {
 	Scope         string
 	CodeChallenge string
 	ExpiresAt     time.Time
+	Faults        faultOptions
 }
 
 type accessToken struct {
@@ -521,6 +522,7 @@ func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request)
 		Scope:         r.FormValue("scope"),
 		CodeChallenge: r.FormValue("code_challenge"),
 		ExpiresAt:     now.Add(5 * time.Minute),
+		Faults:        parseFaultOptions(r.Form),
 	}
 	a.authCodes[code] = authCode
 	if err := a.rememberOIDCInspection(app, user, authCode, "Authorization code issued", nil, now); err != nil {
@@ -590,6 +592,11 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "code_verifier provided but the authorization request used no code_challenge")
 		return
 	}
+	// Fault injection: fail the exchange on demand before doing any work.
+	if code.Faults.TokenError != "" {
+		a.failOAuth(w, app, "token", http.StatusBadRequest, code.Faults.TokenError, "injected token error")
+		return
+	}
 	user, ok := userByID(state.Users, code.UserID)
 	if !ok || !user.Active || user.Deleted {
 		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "user is inactive or missing")
@@ -604,10 +611,14 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 	if code.Nonce != "" {
 		claims["nonce"] = code.Nonce
 	}
+	code.Faults.applyToClaims(claims, now)
 	idToken, err := a.signJWT(claims)
 	if err != nil {
 		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
 		return
+	}
+	if code.Faults.BreakSignature {
+		idToken = corruptJWTSignature(idToken)
 	}
 	access, err := randomSecret(32)
 	if err != nil {
@@ -624,7 +635,11 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		Scope:     code.Scope,
 		ExpiresAt: now.Add(time.Hour),
 	}
-	a.recordFlowEvent(app.Slug, "oidc", "token", "ok", userLabel(user), "ID and access tokens issued to "+app.OIDCClientID)
+	tokenDetail := "ID and access tokens issued to " + app.OIDCClientID
+	if code.Faults.active() {
+		tokenDetail += " (faults injected)"
+	}
+	a.recordFlowEvent(app.Slug, "oidc", "token", "ok", userLabel(user), tokenDetail)
 	writeJSON(w, map[string]any{
 		"access_token": access,
 		"token_type":   "Bearer",
@@ -743,13 +758,18 @@ func (a *webApp) handleSAMLSSOPost(w http.ResponseWriter, r *http.Request) {
 		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, "active user is required")
 		return
 	}
-	response, err := a.buildSignedSAMLResponse(state, baseURL, app, user, responseContext)
+	faults := parseFaultOptions(r.Form)
+	response, err := a.buildSignedSAMLResponse(state, baseURL, app, user, responseContext, faults)
 	if err != nil {
 		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
 		return
 	}
 	a.rememberSAMLInspection(app, user, responseContext, response, time.Now())
-	a.recordFlowEvent(app.Slug, "saml", "sso", "ok", userLabel(user), "Signed response posted to "+responseContext.ACSURL)
+	ssoDetail := "Signed response posted to " + responseContext.ACSURL
+	if faults.active() {
+		ssoDetail = "Response posted to " + responseContext.ACSURL + " (faults injected)"
+	}
+	a.recordFlowEvent(app.Slug, "saml", "sso", "ok", userLabel(user), ssoDetail)
 	renderPostBack(w, responseContext.ACSURL, map[string]string{
 		"SAMLResponse": base64.StdEncoding.EncodeToString([]byte(response)),
 		"RelayState":   r.FormValue("RelayState"),
@@ -1440,8 +1460,12 @@ var chooserTemplate = template.Must(template.New("chooser").Funcs(template.FuncM
 </body>
 </html>`))
 
-func (a *webApp) buildSignedSAMLResponse(state appState, baseURL string, app app, user user, responseContext samlResponseContext) (string, error) {
-	response, err := buildSAMLResponse(state, baseURL, app, user, responseContext)
+func (a *webApp) buildSignedSAMLResponse(state appState, baseURL string, app app, user user, responseContext samlResponseContext, faults faultOptions) (string, error) {
+	// A non-success status carries no assertion, so there is nothing to sign.
+	if faults.SAMLStatus != "" {
+		return buildSAMLStatusResponse(baseURL, app, responseContext, faults)
+	}
+	response, err := buildSAMLResponse(state, baseURL, app, user, responseContext, faults)
 	if err != nil {
 		return "", err
 	}
@@ -1476,7 +1500,56 @@ func (a *webApp) buildSignedSAMLResponse(state appState, baseURL string, app app
 	if err != nil {
 		return "", fmt.Errorf("serialize signed SAML response: %w", err)
 	}
+	if faults.BreakSignature {
+		signed = corruptSAMLSignature(signed)
+	}
 	return signed, nil
+}
+
+// buildSAMLStatusResponse produces an unsigned non-success SAML Response so an
+// SP's failure handling can be tested.
+func buildSAMLStatusResponse(baseURL string, app app, responseContext samlResponseContext, faults faultOptions) (string, error) {
+	responseID, err := newID("saml-response")
+	if err != nil {
+		return "", fmt.Errorf("generate SAML response ID: %w", err)
+	}
+	now := time.Now().UTC().Add(faults.ClockSkew)
+	issuer := baseURL + "/saml/" + app.Slug + "/metadata"
+	inResponseTo := ""
+	if responseContext.InResponseTo != "" {
+		inResponseTo = ` InResponseTo="` + xmlEscape(responseContext.InResponseTo) + `"`
+	}
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="%s" Version="2.0" IssueInstant="%s" Destination="%s"%s>
+  <saml:Issuer>%s</saml:Issuer>
+  <samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Requester"><samlp:StatusCode Value="%s"/></samlp:StatusCode></samlp:Status>
+</samlp:Response>`,
+		xmlEscape(responseID), now.Format(time.RFC3339), xmlEscape(responseContext.ACSURL), inResponseTo,
+		xmlEscape(issuer), xmlEscape(faults.SAMLStatus)), nil
+}
+
+// corruptSAMLSignature flips the first character of the assertion's
+// SignatureValue so the SP sees a tampered signature.
+func corruptSAMLSignature(response string) string {
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(response); err != nil {
+		return response
+	}
+	value := findElementByLocalName(doc.Root(), "SignatureValue")
+	if value == nil || value.Text() == "" {
+		return response
+	}
+	text := value.Text()
+	replacement := "A"
+	if text[0] == 'A' {
+		replacement = "B"
+	}
+	value.SetText(replacement + text[1:])
+	corrupted, err := doc.WriteToString()
+	if err != nil {
+		return response
+	}
+	return corrupted
 }
 
 func placeSAMLAssertionSignature(assertion *etree.Element, signature *etree.Element) error {
@@ -1522,8 +1595,8 @@ func elementLocalName(el *etree.Element) string {
 	return el.Tag
 }
 
-func buildSAMLResponse(state appState, baseURL string, app app, user user, responseContext samlResponseContext) (string, error) {
-	now := time.Now().UTC()
+func buildSAMLResponse(state appState, baseURL string, app app, user user, responseContext samlResponseContext, faults faultOptions) (string, error) {
+	now := time.Now().UTC().Add(faults.ClockSkew)
 	responseID, err := newID("saml-response")
 	if err != nil {
 		return "", fmt.Errorf("generate SAML response ID: %w", err)
