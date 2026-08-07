@@ -1,7 +1,7 @@
 {{define "list-card.html"}}
       <section class="card" data-list-card>
         {{if and (eq .Tab "users") .Users}}
-        <form id="bulk-delete-users" class="bulk-actions" method="post" action="/users/delete" data-bulk-delete-form data-bulk-noun="user">
+        <form id="bulk-delete-users" class="bulk-actions" data-sync-disable method="post" action="/users/delete" data-bulk-delete-form data-bulk-noun="user">
           <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
           <input type="hidden" name="tab" value="users">
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
@@ -10,7 +10,7 @@
         </form>
         {{end}}
         {{if and (eq .Tab "groups") .Groups}}
-        <form id="bulk-delete-groups" class="bulk-actions" method="post" action="/groups/delete" data-bulk-delete-form data-bulk-noun="group">
+        <form id="bulk-delete-groups" class="bulk-actions" data-sync-disable method="post" action="/groups/delete" data-bulk-delete-form data-bulk-noun="group">
           <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
           <input type="hidden" name="tab" value="groups">
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
@@ -61,7 +61,7 @@
                     {{end}}
                     {{if .Deleted}}
                     {{if $.HasSCIMEnvironments}}
-                    <form method="post" action="/groups/{{.ID}}/restore">
+                    <form data-sync-disable method="post" action="/groups/{{.ID}}/restore">
                       <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
                       <input type="hidden" name="tab" value="groups">
                       {{if $.Pagination}}<input type="hidden" name="page" value="{{$.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{$.Pagination.PageSize}}">{{if $.Pagination.SearchQuery}}<input type="hidden" name="q" value="{{$.Pagination.SearchQuery}}">{{end}}{{end}}
@@ -71,7 +71,7 @@
                     </form>
                     {{end}}
                     {{else}}
-                    <form method="post" action="/groups/{{.ID}}/delete">
+                    <form data-sync-disable method="post" action="/groups/{{.ID}}/delete">
                       <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
                       <input type="hidden" name="tab" value="groups">
                       {{if $.Pagination}}<input type="hidden" name="page" value="{{$.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{$.Pagination.PageSize}}">{{if $.Pagination.SearchQuery}}<input type="hidden" name="q" value="{{$.Pagination.SearchQuery}}">{{end}}{{end}}
@@ -127,7 +127,7 @@
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M10 4l2 2"/></svg>
 					  Set up
 					</a>
-					<form method="post" action="/apps/{{.ID}}/delete">
+					<form data-sync-disable method="post" action="/apps/{{.ID}}/delete">
 					  <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
 					  <button class="icon-btn danger" type="submit" title="Delete environment" aria-label="Delete environment" onclick="return confirm('Delete this environment, its users and groups, and all of its protocol and sync configuration?')">
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10"/><path d="M5.5 4.5V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.5"/><path d="M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>
@@ -187,7 +187,7 @@
                   {{if .Deleted}}
                   <span class="active-toggle is-readonly {{if eq .Active "active"}}is-active{{end}}">{{.Active}}</span>
                   {{else}}
-                  <form method="post" action="/users/{{.ID}}/toggle-active" style="display:inline;margin:0">
+                  <form data-sync-disable method="post" action="/users/{{.ID}}/toggle-active" style="display:inline;margin:0">
                     <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
                     <input type="hidden" name="tab" value="users">
                     {{if $.Pagination}}<input type="hidden" name="page" value="{{$.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{$.Pagination.PageSize}}">{{if $.Pagination.SearchQuery}}<input type="hidden" name="q" value="{{$.Pagination.SearchQuery}}">{{end}}{{end}}
@@ -215,7 +215,7 @@
                     {{end}}
                     {{if .Deleted}}
                     {{if $.HasSCIMEnvironments}}
-                    <form method="post" action="/users/{{.ID}}/restore">
+                    <form data-sync-disable method="post" action="/users/{{.ID}}/restore">
                       <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
                       <input type="hidden" name="tab" value="users">
                       {{if $.Pagination}}<input type="hidden" name="page" value="{{$.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{$.Pagination.PageSize}}">{{if $.Pagination.SearchQuery}}<input type="hidden" name="q" value="{{$.Pagination.SearchQuery}}">{{end}}{{end}}
@@ -225,7 +225,7 @@
                     </form>
                     {{end}}
                     {{else}}
-                    <form method="post" action="/users/{{.ID}}/delete">
+                    <form data-sync-disable method="post" action="/users/{{.ID}}/delete">
                       <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
                       <input type="hidden" name="tab" value="users">
                       {{if $.Pagination}}<input type="hidden" name="page" value="{{$.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{$.Pagination.PageSize}}">{{if $.Pagination.SearchQuery}}<input type="hidden" name="q" value="{{$.Pagination.SearchQuery}}">{{end}}{{end}}

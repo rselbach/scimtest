@@ -794,11 +794,30 @@
 		button.classList.toggle('is-hidden', !job.running);
 		button.disabled = false;
 	  }
-		for (const button of syncSubmits) button.disabled = Boolean(job.running);
-		for (const button of document.querySelectorAll('form[method="post"] button[type="submit"]')) {
-		  if (!syncSubmits.includes(button)) button.disabled = Boolean(job.running);
-		}
+		setSyncLock(Boolean(job.running));
       syncJobDone = Boolean(job.done);
+    }
+
+    // setSyncLock pauses only the controls whose forms the server rejects
+    // while a sync runs (marked data-sync-disable), remembering which
+    // buttons it disabled so deliberately disabled controls stay that way
+    // when the sync ends. Queried live so swapped-in list cards are covered.
+    function setSyncLock(running) {
+      for (const button of syncSubmits) button.disabled = running;
+      for (const button of document.querySelectorAll('form[data-sync-disable] button[type="submit"]')) {
+        if (running) {
+          if (button.disabled && button.dataset.syncLocked !== 'true') continue;
+          button.dataset.syncLocked = 'true';
+          button.disabled = true;
+          continue;
+        }
+        if (button.dataset.syncLocked === 'true') {
+          delete button.dataset.syncLocked;
+          button.disabled = false;
+        }
+      }
+      const banner = document.querySelector('[data-sync-lock-banner]');
+      if (banner) banner.classList.toggle('is-hidden', !running);
     }
 
     function syncOperationTitle(event) {

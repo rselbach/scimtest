@@ -187,7 +187,7 @@
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
           <button class="btn" type="submit" data-sync-submit {{if and .SyncJob .SyncJob.Running}}disabled{{end}} title="Check every user and group on {{.ActiveEnvironment.Name}} and repair any drift">Reconcile</button>
         </form>
-        <form method="post" action="/import" {{if .ImportPreview}}onsubmit="return confirm('Apply this cached import preview? This replaces the directory in {{.ActiveEnvironment.Name}}.')"{{end}}>
+        <form data-sync-disable method="post" action="/import" {{if .ImportPreview}}onsubmit="return confirm('Apply this cached import preview? This replaces the directory in {{.ActiveEnvironment.Name}}.')"{{end}}>
           <input type="hidden" name="tab" value="{{.Tab}}">
 		  <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
@@ -198,7 +198,7 @@
 		  <button class="btn" type="submit">Preview remote import</button>
 		  {{end}}
         </form>
-        <form method="post" action="/reset" onsubmit="return confirm('Reset sync state for {{.ActiveEnvironment.Name}}? This clears its remote IDs and marks its users and groups dirty.')">
+        <form data-sync-disable method="post" action="/reset" onsubmit="return confirm('Reset sync state for {{.ActiveEnvironment.Name}}? This clears its remote IDs and marks its users and groups dirty.')">
           <input type="hidden" name="tab" value="{{.Tab}}">
 		  <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
@@ -210,6 +210,7 @@
           <b>{{.Stats.Groups}}</b> groups{{if .Stats.DirtyGroups}} <span class="sep">·</span> <span class="dirty">{{.Stats.DirtyGroups}} dirty</span>{{end}}
         </span>
       </div>
+      <p class="hint {{if not (and .SyncJob .SyncJob.Running)}}is-hidden{{end}}" data-sync-lock-banner>Directory edits are paused while a sync is running.</p>
 	  <div class="sync-progress {{if not .SyncJob}}is-hidden{{else if .SyncJob.Error}}is-error{{else if .SyncJob.RateLimited}}is-rate-limited{{else if .SyncJob.Done}}is-success{{end}}" role="status" aria-live="polite" data-sync-progress data-sync-active="{{if and .SyncJob .SyncJob.Running}}true{{else}}false{{end}}">
         <div class="sync-progress-head">
           <span class="sync-progress-title" data-sync-message>{{if .SyncJob}}{{.SyncJob.Message}}{{else}}Starting sync{{end}}</span>
@@ -340,7 +341,7 @@
           <section class="tool-card">
             <h3>Create users</h3>
             <p>Generate active test users. They will be ready for the next SCIM sync.</p>
-            <form method="post" action="/tools/create-users">
+            <form data-sync-disable method="post" action="/tools/create-users">
               <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
               <input type="hidden" name="tab" value="{{.Tab}}">
               {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
@@ -364,25 +365,25 @@
             <h3>Bulk user actions</h3>
             <p>Apply the same state change to every non-deleted user.</p>
             <div class="tool-actions">
-              <form method="post" action="/tools/activate-all">
+              <form data-sync-disable method="post" action="/tools/activate-all">
                 <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
                 <input type="hidden" name="tab" value="{{.Tab}}">
                 {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
                 <button class="btn" type="submit" onclick="return confirm('Activate all non-deleted users?')">Activate all</button>
               </form>
-              <form method="post" action="/tools/deactivate-all">
+              <form data-sync-disable method="post" action="/tools/deactivate-all">
                 <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
                 <input type="hidden" name="tab" value="{{.Tab}}">
                 {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
                 <button class="btn" type="submit" onclick="return confirm('Deactivate all non-deleted users?')">Deactivate all</button>
               </form>
-			  <form method="post" action="/tools/delete-all">
+			  <form data-sync-disable method="post" action="/tools/delete-all">
 				<input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
                 <input type="hidden" name="tab" value="{{.Tab}}">
                 {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
                 <button class="btn btn-danger" type="submit" onclick="return confirm('{{if .HasSCIMEnvironments}}Delete every user from {{.ActiveEnvironment.Name}}? Each deletion will be queued for its next SCIM sync.{{else}}Permanently delete every user from {{.ActiveEnvironment.Name}} and clear all group memberships? This cannot be undone.{{end}}')">Delete all users</button>
 			  </form>
-			  <form method="post" action="/tools/clear-users-local">
+			  <form data-sync-disable method="post" action="/tools/clear-users-local">
 				<input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
 				<input type="hidden" name="tab" value="{{.Tab}}">
 				{{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
@@ -395,7 +396,7 @@
 			<p>Backups contain client secrets, SCIM bearer tokens, signing keys, users, and operation history. Store them securely.</p>
 			<div class="tool-actions">
 			  <a class="btn" href="/backup?environment={{.ActiveEnvironment.ID}}">Download backup</a>
-			  <form method="post" action="/restore" enctype="multipart/form-data" onsubmit="return confirm('Replace {{.ActiveEnvironment.Name}} from this backup? A private pre-restore copy will be saved automatically.')">
+			  <form data-sync-disable method="post" action="/restore" enctype="multipart/form-data" onsubmit="return confirm('Replace {{.ActiveEnvironment.Name}} from this backup? A private pre-restore copy will be saved automatically.')">
 				<input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
 				<label class="field">
 				  <span class="label">Backup JSON</span>
@@ -421,7 +422,7 @@
         </div>
         <a class="btn btn-sm btn-ghost" href="{{.UserForm.Close}}">Close</a>
       </div>
-      <form method="post" action="/users/save">
+      <form data-sync-disable method="post" action="/users/save">
         <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
         <input type="hidden" name="tab" value="users">
         {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
@@ -466,7 +467,7 @@
         </div>
         <a class="btn btn-sm btn-ghost" href="{{.GroupForm.Close}}">Close</a>
       </div>
-      <form method="post" action="/groups/save">
+      <form data-sync-disable method="post" action="/groups/save">
         <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
         <input type="hidden" name="tab" value="groups">
         {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
@@ -525,7 +526,7 @@
         </div>
         <a class="btn btn-sm btn-ghost" href="{{.AppForm.Close}}">Close</a>
       </div>
-      <form method="post" action="/apps/save" data-environment-form>
+      <form data-sync-disable method="post" action="/apps/save" data-environment-form>
         <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
         <input type="hidden" name="tab" value="apps">
         <input type="hidden" name="id" value="{{.AppForm.App.ID}}">
@@ -863,7 +864,7 @@
 		  <div class="modal-title" id="config-dialog-title">IDP and tunnel settings</div>
 		<a class="btn btn-sm btn-ghost" href="{{.ConfigForm.Close}}">Close</a>
       </div>
-      <form method="post" action="/config/save">
+      <form data-sync-disable method="post" action="/config/save">
         <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
         <input type="hidden" name="tab" value="{{.Tab}}">
         {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
