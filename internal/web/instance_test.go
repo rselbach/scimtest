@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -241,4 +242,30 @@ func waitForHelperInstance(t *testing.T, statePath string, output *bytes.Buffer)
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
+}
+
+func TestSigtermShutsDownGracefully(t *testing.T) {
+	r := require.New(t)
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	command := instanceHelperCommand(statePath)
+	var output bytes.Buffer
+	command.Stdout = &output
+	command.Stderr = &output
+	r.NoError(command.Start())
+	stopped := false
+	t.Cleanup(func() {
+		if stopped {
+			return
+		}
+		if err := command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			t.Errorf("kill helper process: %v", err)
+		}
+		_ = command.Wait()
+	})
+
+	waitForHelperInstance(t, statePath, &output)
+	r.NoError(command.Process.Signal(syscall.SIGTERM))
+	r.NoError(command.Wait(), output.String())
+	stopped = true
+	r.Contains(output.String(), "shutting down")
 }

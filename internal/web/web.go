@@ -16,11 +16,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	scimtestclient "github.com/rselbach/scimtest/client"
@@ -566,12 +568,17 @@ func Run(options ...RunOptions) error {
 		}
 	}
 
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+
+	adminServer := &http.Server{Handler: app.routes(), ReadHeaderTimeout: 10 * time.Second}
+	idpServer := &http.Server{Handler: app.tunneledIDPRoutes(), ReadHeaderTimeout: 10 * time.Second}
 	serveErrors := make(chan serverError, 2)
 	go func() {
-		serveErrors <- serverError{name: "admin", err: http.Serve(listener, app.routes())}
+		serveErrors <- serverError{name: "admin", err: adminServer.Serve(listener)}
 	}()
 	go func() {
-		serveErrors <- serverError{name: "tunneled IDP", err: http.Serve(idpListener, app.tunneledIDPRoutes())}
+		serveErrors <- serverError{name: "tunneled IDP", err: idpServer.Serve(idpListener)}
 	}()
 	if identity != nil {
 		go app.startAutomaticTunnel(*identity)
@@ -581,18 +588,40 @@ func Run(options ...RunOptions) error {
 	}
 	maybeOpenBrowser(localURL, opts.NoOpen, opts.browserOpen)
 
-	result := <-serveErrors
-	other := idpListener
-	if result.name == "tunneled IDP" {
-		other = listener
+	var result serverError
+	select {
+	case <-signalCtx.Done():
+		stopSignals()
+		log.Printf("shutting down")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var problems []error
+		if err := adminServer.Shutdown(shutdownCtx); err != nil {
+			problems = append(problems, fmt.Errorf("shut down admin server: %w", err))
+		}
+		if err := idpServer.Shutdown(shutdownCtx); err != nil {
+			problems = append(problems, fmt.Errorf("shut down tunneled IDP server: %w", err))
+		}
+		if err := app.closeAutomaticTunnel(); err != nil {
+			problems = append(problems, fmt.Errorf("close tunnel: %w", err))
+		}
+		<-serveErrors
+		<-serveErrors
+		return errors.Join(problems...)
+	case result = <-serveErrors:
 	}
-	listenerCloseErr := other.Close()
+
+	otherServer := idpServer
+	if result.name == "tunneled IDP" {
+		otherServer = adminServer
+	}
+	otherCloseErr := otherServer.Close()
 	tunnelCloseErr := app.closeAutomaticTunnel()
 	switch {
-	case listenerCloseErr != nil && tunnelCloseErr != nil:
-		return fmt.Errorf("serve %s: %w; close other listener: %v; close tunnel: %v", result.name, result.err, listenerCloseErr, tunnelCloseErr)
-	case listenerCloseErr != nil:
-		return fmt.Errorf("serve %s: %w; close other listener: %v", result.name, result.err, listenerCloseErr)
+	case otherCloseErr != nil && tunnelCloseErr != nil:
+		return fmt.Errorf("serve %s: %w; close other server: %v; close tunnel: %v", result.name, result.err, otherCloseErr, tunnelCloseErr)
+	case otherCloseErr != nil:
+		return fmt.Errorf("serve %s: %w; close other server: %v", result.name, result.err, otherCloseErr)
 	case tunnelCloseErr != nil:
 		return fmt.Errorf("serve %s: %w; close tunnel: %v", result.name, result.err, tunnelCloseErr)
 	}
