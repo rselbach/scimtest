@@ -37,7 +37,28 @@
       <h3>Decoded ID token claims</h3>
       <pre class="inspector-payload">{{.Inspection.Claims}}</pre>
       {{end}}
+      {{if .Inspection.IDToken}}
+      <h3>Raw ID token</h3>
+      <pre class="inspector-payload">{{.Inspection.IDToken}}</pre>
+      {{end}}
     </section>
+    {{if .History}}
+    <section class="card inspector-card">
+      <h2>Previous flows</h2>
+      {{range .History}}
+      <details>
+        <summary>{{.UpdatedAt}} — {{.Stage}} — {{.User}}</summary>
+        <dl class="inspector-details">
+          <div><dt>Client ID</dt><dd class="mono">{{.ClientID}}</dd></div>
+          <div><dt>Redirect URI</dt><dd class="mono">{{.RedirectURI}}</dd></div>
+          <div><dt>Scope</dt><dd class="mono">{{.Scope}}</dd></div>
+          <div><dt>PKCE</dt><dd>{{if .PKCE}}Used{{else}}Not used{{end}}</dd></div>
+        </dl>
+        {{if .Claims}}<pre class="inspector-payload">{{.Claims}}</pre>{{end}}
+      </details>
+      {{end}}
+    </section>
+    {{end}}
     {{else}}
     <section class="card card-empty">
       <div class="h">No OIDC flow recorded</div>

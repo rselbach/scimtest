@@ -30,7 +30,22 @@
       </dl>
       <h3>Decoded SAML response</h3>
       <pre class="inspector-payload">{{.Inspection.ResponseXML}}</pre>
+      {{if .Inspection.EncodedResponse}}
+      <h3>Encoded SAMLResponse (base64, as posted)</h3>
+      <pre class="inspector-payload">{{.Inspection.EncodedResponse}}</pre>
+      {{end}}
     </section>
+    {{if .History}}
+    <section class="card inspector-card">
+      <h2>Previous responses</h2>
+      {{range .History}}
+      <details>
+        <summary>{{.UpdatedAt}} — {{.User}} — {{.ACSURL}}</summary>
+        <pre class="inspector-payload">{{.ResponseXML}}</pre>
+      </details>
+      {{end}}
+    </section>
+    {{end}}
     {{else}}
     <section class="card card-empty">
       <div class="h">No SAML response recorded</div>

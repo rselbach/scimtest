@@ -6,28 +6,34 @@ import (
 )
 
 type samlInspection struct {
-	User         string
-	ACSURL       string
-	InResponseTo string
-	ResponseXML  string
-	UpdatedAt    string
+	User            string
+	ACSURL          string
+	InResponseTo    string
+	ResponseXML     string
+	EncodedResponse string
+	UpdatedAt       string
 }
 
-func (a *webApp) rememberSAMLInspection(app app, user user, context samlResponseContext, response string, now time.Time) {
+func (a *webApp) rememberSAMLInspection(app app, user user, context samlResponseContext, response string, encoded string, now time.Time) {
 	inspection := samlInspection{
-		User:         userLabel(user),
-		ACSURL:       context.ACSURL,
-		InResponseTo: context.InResponseTo,
-		ResponseXML:  response,
-		UpdatedAt:    now.Format(time.RFC3339),
+		User:            userLabel(user),
+		ACSURL:          context.ACSURL,
+		InResponseTo:    context.InResponseTo,
+		ResponseXML:     response,
+		EncodedResponse: encoded,
+		UpdatedAt:       now.Format(time.RFC3339),
 	}
 
 	a.samlInspectorMu.Lock()
 	defer a.samlInspectorMu.Unlock()
 	if a.samlInspections == nil {
-		a.samlInspections = make(map[string]samlInspection)
+		a.samlInspections = make(map[string][]samlInspection)
 	}
-	a.samlInspections[app.Slug] = inspection
+	entries := append([]samlInspection{inspection}, a.samlInspections[app.Slug]...)
+	if len(entries) > maxInspections {
+		entries = entries[:maxInspections]
+	}
+	a.samlInspections[app.Slug] = entries
 }
 
 func (a *webApp) handleSAMLInspector(w http.ResponseWriter, r *http.Request) {
@@ -37,14 +43,20 @@ func (a *webApp) handleSAMLInspector(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.samlInspectorMu.Lock()
-	inspection, found := a.samlInspections[foundApp.Slug]
+	entries := append([]samlInspection(nil), a.samlInspections[foundApp.Slug]...)
 	a.samlInspectorMu.Unlock()
 	data := struct {
 		App        app
 		Inspection samlInspection
 		Found      bool
+		History    []samlInspection
 		Events     []flowEvent
-	}{App: foundApp, Inspection: inspection, Found: found, Events: a.flowEvents(foundApp.Slug)}
+	}{App: foundApp, Events: a.flowEvents(foundApp.Slug)}
+	if len(entries) > 0 {
+		data.Inspection = entries[0]
+		data.Found = true
+		data.History = entries[1:]
+	}
 	if err := pageTemplate.ExecuteTemplate(w, "saml-inspector.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}

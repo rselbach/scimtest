@@ -46,6 +46,10 @@
       <pre class="inspector-payload">{{.IDTokenHeader}}</pre>
       <h3>Claims</h3>
       <pre class="inspector-payload">{{.IDTokenClaims}}</pre>
+      {{if .IDToken}}
+      <h3>Raw (compact)</h3>
+      <pre class="inspector-payload">{{.IDToken}}</pre>
+      {{end}}
     </section>
     {{end}}
     {{if .UserinfoBody}}

@@ -112,8 +112,11 @@ func TestOIDCAuthorizationCodeFlowUsesEnvironmentDirectory(t *testing.T) {
 	r.Contains(body, "openid profile email groups")
 	r.Contains(body, "Decoded ID token claims")
 	r.Contains(body, "riley@example.test")
+	// The raw ID token renders for replay debugging; the access token and
+	// client secret never do.
+	r.Contains(body, "Raw ID token")
+	r.Contains(body, tokenBody["id_token"])
 	r.NotContains(body, tokenBody["access_token"])
-	r.NotContains(body, tokenBody["id_token"])
 	r.NotContains(body, "secret")
 }
 
@@ -1159,4 +1162,32 @@ func TestSAMLSSOWithoutConfiguredACSFailsBeforeChooser(t *testing.T) {
 
 	r.Equal(http.StatusBadRequest, rec.Code)
 	r.Contains(rec.Body.String(), "SAML ACS URL must be configured")
+}
+
+func TestRememberOIDCInspectionKeepsHistory(t *testing.T) {
+	r := require.New(t)
+	svc := &webApp{}
+	troy := user{ID: "usr-1", GivenName: "Troy", FamilyName: "Barnes"}
+	code := authCode{ClientID: "client", RedirectURI: "http://client.test/cb", Scope: "openid"}
+	now := time.Now()
+
+	// authorize then token updates the same flow entry
+	r.NoError(svc.rememberOIDCInspection(app{Slug: "example"}, troy, code, "Authorization code issued", nil, "", now))
+	r.NoError(svc.rememberOIDCInspection(app{Slug: "example"}, troy, code, "Tokens issued", map[string]any{"sub": "usr-1"}, "jwt-1", now))
+	r.Len(svc.oidcInspections["example"], 1)
+	r.Equal("Tokens issued", svc.oidcInspections["example"][0].Stage)
+	r.Equal("jwt-1", svc.oidcInspections["example"][0].IDToken)
+
+	// a second flow becomes a new entry ahead of the first
+	r.NoError(svc.rememberOIDCInspection(app{Slug: "example"}, troy, code, "Authorization code issued", nil, "", now))
+	r.NoError(svc.rememberOIDCInspection(app{Slug: "example"}, troy, code, "Tokens issued", map[string]any{"sub": "usr-1"}, "jwt-2", now))
+	r.Len(svc.oidcInspections["example"], 2)
+	r.Equal("jwt-2", svc.oidcInspections["example"][0].IDToken)
+	r.Equal("jwt-1", svc.oidcInspections["example"][1].IDToken)
+
+	// the ring stays bounded
+	for i := 0; i < 3*maxInspections; i++ {
+		r.NoError(svc.rememberOIDCInspection(app{Slug: "example"}, troy, code, "Authorization code issued", nil, "", now))
+	}
+	r.Len(svc.oidcInspections["example"], maxInspections)
 }

@@ -553,7 +553,7 @@ func (a *webApp) issueOIDCCode(w http.ResponseWriter, r *http.Request, state app
 		Faults:        parseFaultOptions(values),
 	}
 	a.authCodes[code] = authCode
-	if err := a.rememberOIDCInspection(app, user, authCode, "Authorization code issued", nil, now); err != nil {
+	if err := a.rememberOIDCInspection(app, user, authCode, "Authorization code issued", nil, "", now); err != nil {
 		a.failFlow(w, app, "oidc", "authorize", http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -654,7 +654,7 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
 		return
 	}
-	if err := a.rememberOIDCInspection(app, user, code, "Tokens issued", claims, now); err != nil {
+	if err := a.rememberOIDCInspection(app, user, code, "Tokens issued", claims, idToken, now); err != nil {
 		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
 		return
 	}
@@ -820,7 +820,8 @@ func (a *webApp) completeSAMLSSO(w http.ResponseWriter, r *http.Request, state a
 		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
 		return
 	}
-	a.rememberSAMLInspection(app, user, responseContext, response, time.Now())
+	encodedResponse := base64.StdEncoding.EncodeToString([]byte(response))
+	a.rememberSAMLInspection(app, user, responseContext, response, encodedResponse, time.Now())
 	ssoDetail := "Signed response posted to " + responseContext.ACSURL
 	if faults.active() {
 		ssoDetail = "Response posted to " + responseContext.ACSURL + " (faults injected)"
@@ -828,7 +829,7 @@ func (a *webApp) completeSAMLSSO(w http.ResponseWriter, r *http.Request, state a
 	a.recordFlowEvent(app.Slug, "saml", "sso", "ok", userLabel(user), ssoDetail)
 	rememberChooserUser(w, app.Slug, user.ID)
 	renderPostBack(w, responseContext.ACSURL, map[string]string{
-		"SAMLResponse": base64.StdEncoding.EncodeToString([]byte(response)),
+		"SAMLResponse": encodedResponse,
 		"RelayState":   values.Get("RelayState"),
 	})
 }

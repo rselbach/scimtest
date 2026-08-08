@@ -66,9 +66,9 @@ type webApp struct {
 	authCodes        map[string]authCode
 	accessTokens     map[string]accessToken
 	oidcInspectorMu  sync.Mutex
-	oidcInspections  map[string]oidcInspection
+	oidcInspections  map[string][]oidcInspection
 	samlInspectorMu  sync.Mutex
-	samlInspections  map[string]samlInspection
+	samlInspections  map[string][]samlInspection
 	flowLogMu        sync.Mutex
 	flowLog          map[string][]flowEvent
 	traceMu          sync.Mutex
