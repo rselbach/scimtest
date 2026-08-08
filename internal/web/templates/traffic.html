@@ -1,0 +1,50 @@
+{{define "traffic.html"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {{if .DebugOn}}<meta http-equiv="refresh" content="5">{{end}}
+  <title>Traffic · scimtest</title>
+  <link rel="stylesheet" href="/assets/app.css?v=wizard">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/?tab=apps">scimtest</a>
+  </header>
+  <main class="content inspector-page">
+    <div class="page-heading">
+      <div>
+        <h1>Traffic</h1>
+        <p>Live OIDC and SAML request/response transcripts. {{if .DebugOn}}Recording — this page refreshes every 5s.{{else}}Recording is off.{{end}}</p>
+      </div>
+      <a class="btn" href="/?tab=apps">Back to environments</a>
+    </div>
+    <section class="card inspector-card">
+      <form method="post" action="/traffic/settings" class="traffic-controls">
+        <label><input type="checkbox" name="debug" value="on" {{if .DebugOn}}checked{{end}} onchange="this.form.submit()"> Record traffic</label>
+        <label><input type="checkbox" name="debug_secrets" value="on" {{if .SecretsOn}}checked{{end}} onchange="this.form.submit()"> Include raw credentials, tokens, and assertions</label>
+        <noscript><button type="submit">Apply</button></noscript>
+      </form>
+      {{if .SecretsOn}}<p class="hint" style="color:var(--danger)">Raw secrets are being recorded. Turn this off when you are done.</p>{{end}}
+    </section>
+    {{if .Entries}}
+    <div class="page-heading" style="border:0;padding-bottom:0">
+      <div></div>
+      <form method="post" action="/traffic/clear"><button class="btn btn-sm" type="submit">Clear</button></form>
+    </div>
+    {{range .Entries}}
+    <section class="card inspector-card">
+      <pre class="inspector-payload">{{.}}</pre>
+    </section>
+    {{end}}
+    {{else}}
+    <section class="card card-empty">
+      <div class="h">No traffic recorded yet</div>
+      <p>{{if .DebugOn}}Run a sign-in flow and the exchange will appear here.{{else}}Turn on recording, then run a sign-in flow.{{end}}</p>
+    </section>
+    {{end}}
+  </main>
+</body>
+</html>
+{{end}}

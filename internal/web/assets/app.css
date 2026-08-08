@@ -185,6 +185,8 @@
     .flow-activity tr.flow-failed td { background: var(--danger-soft); }
     .flow-activity tr.flow-failed td:nth-child(3) { color: var(--danger); font-weight: 600; }
     .flow-activity tr.flow-ok td:nth-child(3) { color: var(--success); }
+    .traffic-controls { display: grid; gap: 8px; }
+    .traffic-controls label { display: flex; align-items: center; gap: 8px; color: var(--text); }
 
     /* Flash toast: pulled out of document flow so it never reflows the page */
     .flash {

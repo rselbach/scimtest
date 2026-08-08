@@ -38,7 +38,7 @@ func TestDebugSAMLResponseRequiresExplicitSecrets(t *testing.T) {
 			response.body.WriteString(body)
 			var output bytes.Buffer
 
-			(&webApp{debugSecrets: tc.includeSecrets}).writeDebugHTTPResponse(&output, response)
+			debugApp(false, tc.includeSecrets).writeDebugHTTPResponse(&output, response)
 
 			r.Equal(tc.wantAssertion, bytes.Contains(output.Bytes(), []byte(assertion)))
 			if !tc.includeSecrets {
@@ -51,7 +51,7 @@ func TestDebugSAMLResponseRequiresExplicitSecrets(t *testing.T) {
 
 func TestDebugHandlerRejectsOversizedRequestBody(t *testing.T) {
 	r := require.New(t)
-	app := &webApp{debugRP: true}
+	app := debugApp(true, false)
 	handler := app.debugRPHandler(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -83,7 +83,7 @@ func TestDebugOIDCTokenPayload(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			r := require.New(t)
 			var output bytes.Buffer
-			app := &webApp{debugRP: tc.debug}
+			app := debugApp(tc.debug, false)
 
 			app.writeDebugOIDCTokenPayload(&output, []byte(`{"aud":"greendale-client","sub":"troy"}`))
 
@@ -165,6 +165,13 @@ func TestDebugRedactsAuthorizationCodeInLocationHeader(t *testing.T) {
 	r.Contains(output.String(), "state=xyz")
 
 	var secretsOutput bytes.Buffer
-	(&webApp{debugSecrets: true}).writeDebugHTTPResponse(&secretsOutput, response)
+	debugApp(false, true).writeDebugHTTPResponse(&secretsOutput, response)
 	r.Contains(secretsOutput.String(), "code=paintball")
+}
+
+func debugApp(debugRP, debugSecrets bool) *webApp {
+	app := &webApp{}
+	app.debugRP.Store(debugRP)
+	app.debugSecrets.Store(debugSecrets)
+	return app
 }

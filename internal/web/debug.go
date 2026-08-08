@@ -48,11 +48,17 @@ func (w *debugResponseWriter) Flush() {
 	}
 }
 
+func (a *webApp) debugRPEnabled() bool      { return a.debugRP.Load() }
+func (a *webApp) debugSecretsEnabled() bool { return a.debugSecrets.Load() }
+
+// debugRPHandler always wraps its route so tracing can be toggled at runtime.
+// When tracing is off it forwards to next with no overhead beyond the check.
 func (a *webApp) debugRPHandler(next http.HandlerFunc) http.HandlerFunc {
-	if !a.debugRP {
-		return next
-	}
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !a.debugRPEnabled() {
+			next(w, r)
+			return
+		}
 		requestBody, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRPDebugBodyBytes))
 		if err != nil {
 			var maxBytesErr *http.MaxBytesError
@@ -76,11 +82,16 @@ func (a *webApp) debugRPHandler(next http.HandlerFunc) http.HandlerFunc {
 
 		rpDebugLogMu.Lock()
 		defer rpDebugLogMu.Unlock()
+		// Render once into a buffer, then send the same transcript to stdout
+		// and the in-app Traffic view.
+		var transcript bytes.Buffer
+		writeDebugf(&transcript, "===== RP interaction %s =====\n", time.Now().Format(time.RFC3339))
+		a.writeDebugHTTPRequest(&transcript, r, requestBody)
+		a.writeDebugHTTPResponse(&transcript, capture)
+		writeDebugln(&transcript, "===== end RP interaction =====")
 		writeDebugln(os.Stdout)
-		writeDebugf(os.Stdout, "===== RP interaction %s =====\n", time.Now().Format(time.RFC3339))
-		a.writeDebugHTTPRequest(os.Stdout, r, requestBody)
-		a.writeDebugHTTPResponse(os.Stdout, capture)
-		writeDebugln(os.Stdout, "===== end RP interaction =====")
+		writeDebugln(os.Stdout, transcript.String())
+		a.traffic.add(transcript.String())
 	}
 }
 
@@ -97,7 +108,7 @@ func writeDebugf(w io.Writer, format string, args ...any) {
 }
 
 func (a *webApp) writeDebugOIDCTokenPayload(w io.Writer, payload []byte) {
-	if !a.debugRP {
+	if !a.debugRPEnabled() {
 		return
 	}
 	rpDebugLogMu.Lock()
@@ -113,10 +124,10 @@ func (a *webApp) writeDebugHTTPRequest(w io.Writer, r *http.Request, body []byte
 	writeDebugln(w, "----- request from RP -----")
 	writeDebugf(w, "%s %s %s\n", r.Method, r.URL.RequestURI(), r.Proto)
 	writeDebugf(w, "Host: %s\n", r.Host)
-	writeDebugHeaders(w, r.Header, a.debugSecrets)
+	writeDebugHeaders(w, r.Header, a.debugSecretsEnabled())
 	if len(body) > 0 {
 		writeDebugln(w)
-		writeDebugln(w, debugBody(r.Header.Get("Content-Type"), body, a.debugSecrets))
+		writeDebugln(w, debugBody(r.Header.Get("Content-Type"), body, a.debugSecretsEnabled()))
 	}
 	writeDebugSAMLRequest(w, "query", r.URL.Query().Get("SAMLRequest"))
 	if isFormEncoded(r.Header.Get("Content-Type")) && len(body) > 0 {
@@ -134,12 +145,12 @@ func (a *webApp) writeDebugHTTPResponse(w io.Writer, response *debugResponseWrit
 	body := response.body.String()
 	writeDebugln(w, "----- response to RP -----")
 	writeDebugf(w, "HTTP %d %s\n", status, http.StatusText(status))
-	writeDebugHeaders(w, response.Header(), a.debugSecrets)
+	writeDebugHeaders(w, response.Header(), a.debugSecretsEnabled())
 	if body != "" {
 		writeDebugln(w)
-		writeDebugln(w, debugResponseBody(response.Header().Get("Content-Type"), body, a.debugSecrets))
+		writeDebugln(w, debugResponseBody(response.Header().Get("Content-Type"), body, a.debugSecretsEnabled()))
 	}
-	if a.debugSecrets {
+	if a.debugSecretsEnabled() {
 		writeDebugSAMLResponse(w, body)
 	}
 }

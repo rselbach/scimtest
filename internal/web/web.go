@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -43,8 +44,9 @@ type webApp struct {
 	mu                sync.Mutex
 	signingKey        *rsa.PrivateKey
 	certDER           []byte
-	debugRP           bool
-	debugSecrets      bool
+	debugRP           atomic.Bool
+	debugSecrets      atomic.Bool
+	traffic           trafficLog
 	localPort         int
 	adminHost         string
 	instanceToken     string
@@ -533,13 +535,13 @@ func Run(options ...RunOptions) error {
 	app := &webApp{
 		signingKey:   key,
 		certDER:      certDER,
-		debugRP:      opts.Debug,
-		debugSecrets: opts.DebugSecrets,
 		localPort:    idpAddress.Port,
 		tunnelStart:  startTunnel,
 		authCodes:    make(map[string]authCode),
 		accessTokens: make(map[string]accessToken),
 	}
+	app.debugRP.Store(opts.Debug)
+	app.debugSecrets.Store(opts.DebugSecrets)
 	app.instanceToken, err = newInstanceToken()
 	if err != nil {
 		if closeErr := idpListener.Close(); closeErr != nil {
@@ -838,6 +840,9 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /tools/activate-all", a.rejectWhileSyncing(a.handleToolsActivateAll))
 	mux.HandleFunc("POST /tools/create-users", a.rejectWhileSyncing(a.handleToolsCreateUsers))
 	mux.HandleFunc("GET /backup", a.handleBackupDownload)
+	mux.HandleFunc("GET /traffic", a.handleTraffic)
+	mux.HandleFunc("POST /traffic/settings", a.handleTrafficSettings)
+	mux.HandleFunc("POST /traffic/clear", a.handleTrafficClear)
 	mux.HandleFunc("GET /inspect/oidc/{slug}", a.handleOIDCInspector)
 	mux.HandleFunc("GET /inspect/oidc/{slug}/playground", a.handleOIDCPlayground)
 	mux.HandleFunc("GET /inspect/oidc/{slug}/playground/callback", a.handleOIDCPlaygroundCallback)
