@@ -132,3 +132,60 @@ func TestFaultBreakSignatureChangesToken(t *testing.T) {
 
 	r.NotEqual(cleanSig[0], brokenSig[0], "broken signature must differ")
 }
+
+func TestArmedFaultsApplyOnceWithoutURLParams(t *testing.T) {
+	r := require.New(t)
+	svc := oidcFaultTestApp(t)
+
+	// Arm a token error from the inspector form.
+	armRec := httptest.NewRecorder()
+	armReq := httptest.NewRequest(http.MethodPost, "/inspect/faults/example/arm", strings.NewReader(url.Values{"fault_token_error": {"invalid_grant"}}.Encode()))
+	armReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	svc.routes().ServeHTTP(armRec, armReq)
+	r.Equal(http.StatusSeeOther, armRec.Code)
+	r.Equal("/inspect/oidc/example", armRec.Header().Get("Location"))
+	r.True(svc.peekArmedFaults("example").active())
+
+	// The inspector shows the armed banner.
+	pageRec := httptest.NewRecorder()
+	svc.routes().ServeHTTP(pageRec, httptest.NewRequest(http.MethodGet, "/inspect/oidc/example", nil))
+	r.Contains(pageRec.Body.String(), "Faults armed for the next flow")
+
+	// A flow with no fault_* parameters consumes the armed fault.
+	code := authorizeForCode(t, svc, nil)
+	r.False(svc.peekArmedFaults("example").active(), "armed faults must disarm after one flow")
+	rec := redeemToken(t, svc, code)
+	r.Equal(http.StatusBadRequest, rec.Code)
+	r.Contains(rec.Body.String(), "invalid_grant")
+
+	// The next flow is healthy again.
+	code = authorizeForCode(t, svc, nil)
+	rec = redeemToken(t, svc, code)
+	r.Equal(http.StatusOK, rec.Code)
+}
+
+func TestFaultDisarmEndpoint(t *testing.T) {
+	r := require.New(t)
+	svc := oidcFaultTestApp(t)
+	svc.armFaults("example", faultOptions{BreakSignature: true})
+
+	rec := httptest.NewRecorder()
+	svc.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/inspect/faults/example/disarm", nil))
+	r.Equal(http.StatusSeeOther, rec.Code)
+	r.False(svc.peekArmedFaults("example").active())
+}
+
+func TestInvalidFaultValuesAreReported(t *testing.T) {
+	r := require.New(t)
+	svc := oidcFaultTestApp(t)
+
+	armRec := httptest.NewRecorder()
+	armReq := httptest.NewRequest(http.MethodPost, "/inspect/faults/example/arm", strings.NewReader(url.Values{"fault_id_token_ttl": {"-1min"}}.Encode()))
+	armReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	svc.routes().ServeHTTP(armRec, armReq)
+
+	r.False(svc.peekArmedFaults("example").active(), "invalid value must not arm anything")
+	events := svc.flowEvents("example")
+	r.NotEmpty(events)
+	r.Contains(events[0].Detail, "ignored invalid fault_id_token_ttl")
+}

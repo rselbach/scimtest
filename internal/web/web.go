@@ -57,6 +57,8 @@ type webApp struct {
 	tunnelMu          sync.Mutex
 	tunnel            *activeTunnel
 	tunnelLastError   string
+	faultMu           sync.Mutex
+	armedFaults       map[string]faultOptions
 	syncJobMu         sync.Mutex
 	syncJobs          map[string]*syncJobSnapshot
 	syncCancels       map[string]context.CancelFunc
@@ -886,6 +888,8 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /inspect/oidc/{slug}/playground", a.handleOIDCPlayground)
 	mux.HandleFunc("GET /inspect/oidc/{slug}/playground/callback", a.handleOIDCPlaygroundCallback)
 	mux.HandleFunc("GET /inspect/saml/{slug}", a.handleSAMLInspector)
+	mux.HandleFunc("POST /inspect/faults/{slug}/arm", a.handleFaultArm)
+	mux.HandleFunc("POST /inspect/faults/{slug}/disarm", a.handleFaultDisarm)
 	mux.HandleFunc("POST /restore", a.rejectWhileSyncing(a.handleBackupRestore))
 	mux.HandleFunc("GET /sync/status", a.handleSyncStatus)
 	mux.HandleFunc("POST /sync", a.handleSync)

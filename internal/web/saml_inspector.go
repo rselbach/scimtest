@@ -11,16 +11,18 @@ type samlInspection struct {
 	InResponseTo    string
 	ResponseXML     string
 	EncodedResponse string
+	Faults          string
 	UpdatedAt       string
 }
 
-func (a *webApp) rememberSAMLInspection(app app, user user, context samlResponseContext, response string, encoded string, now time.Time) {
+func (a *webApp) rememberSAMLInspection(app app, user user, context samlResponseContext, response string, encoded string, faults faultOptions, now time.Time) {
 	inspection := samlInspection{
 		User:            userLabel(user),
 		ACSURL:          context.ACSURL,
 		InResponseTo:    context.InResponseTo,
 		ResponseXML:     response,
 		EncodedResponse: encoded,
+		Faults:          faults.describe(),
 		UpdatedAt:       now.Format(time.RFC3339),
 	}
 
@@ -46,12 +48,13 @@ func (a *webApp) handleSAMLInspector(w http.ResponseWriter, r *http.Request) {
 	entries := append([]samlInspection(nil), a.samlInspections[foundApp.Slug]...)
 	a.samlInspectorMu.Unlock()
 	data := struct {
-		App        app
-		Inspection samlInspection
-		Found      bool
-		History    []samlInspection
-		Events     []flowEvent
-	}{App: foundApp, Events: a.flowEvents(foundApp.Slug)}
+		App         app
+		Inspection  samlInspection
+		Found       bool
+		History     []samlInspection
+		Events      []flowEvent
+		ArmedFaults string
+	}{App: foundApp, Events: a.flowEvents(foundApp.Slug), ArmedFaults: a.peekArmedFaults(foundApp.Slug).describe()}
 	if len(entries) > 0 {
 		data.Inspection = entries[0]
 		data.Found = true

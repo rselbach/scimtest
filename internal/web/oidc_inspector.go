@@ -19,6 +19,7 @@ type oidcInspection struct {
 	PKCE        bool
 	Claims      string
 	IDToken     string
+	Faults      string
 	UpdatedAt   string
 }
 
@@ -40,6 +41,7 @@ func (a *webApp) rememberOIDCInspection(app app, user user, code authCode, stage
 		PKCE:        code.CodeChallenge != "",
 		Claims:      claimsJSON,
 		IDToken:     idToken,
+		Faults:      code.Faults.describe(),
 		UpdatedAt:   now.Format(time.RFC3339),
 	}
 
@@ -73,12 +75,13 @@ func (a *webApp) handleOIDCInspector(w http.ResponseWriter, r *http.Request) {
 	entries := append([]oidcInspection(nil), a.oidcInspections[foundApp.Slug]...)
 	a.oidcInspectorMu.Unlock()
 	data := struct {
-		App        app
-		Inspection oidcInspection
-		Found      bool
-		History    []oidcInspection
-		Events     []flowEvent
-	}{App: foundApp, Events: a.flowEvents(foundApp.Slug)}
+		App         app
+		Inspection  oidcInspection
+		Found       bool
+		History     []oidcInspection
+		Events      []flowEvent
+		ArmedFaults string
+	}{App: foundApp, Events: a.flowEvents(foundApp.Slug), ArmedFaults: a.peekArmedFaults(foundApp.Slug).describe()}
 	if len(entries) > 0 {
 		data.Inspection = entries[0]
 		data.Found = true

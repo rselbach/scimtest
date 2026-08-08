@@ -1,19 +1,32 @@
 {{define "fault-help"}}
 <section class="card inspector-card">
-  <details>
+  {{if .ArmedFaults}}
+  <div class="inline-error" role="alert">
+    Faults armed for the next flow: {{.ArmedFaults}}
+    <form method="post" action="/inspect/faults/{{.App.Slug}}/disarm" style="display:inline">
+      <button class="btn btn-sm" type="submit">Disarm</button>
+    </form>
+  </div>
+  {{end}}
+  <details {{if .ArmedFaults}}open{{end}}>
     <summary><strong>Simulate a failure</strong></summary>
-    <p class="hint">Append these one-shot parameters to a Test sign-in URL to make this IDP misbehave for a single flow. They are not stored.</p>
-    <table class="flow-activity">
-      <thead><tr><th>Parameter</th><th>Effect</th><th>Example</th></tr></thead>
-      <tbody>
-        <tr><td class="mono">fault_id_token_ttl</td><td>Override the ID token lifetime (negative issues an already-expired token)</td><td class="mono">-1m</td></tr>
-        <tr><td class="mono">fault_clock_skew</td><td>Offset every issued timestamp (iat/exp and SAML instants)</td><td class="mono">10m</td></tr>
-        <tr><td class="mono">fault_break_signature</td><td>Corrupt the ID token or assertion signature</td><td class="mono">1</td></tr>
-        <tr><td class="mono">fault_drop_claims</td><td>Omit claims from the ID token</td><td class="mono">email,groups</td></tr>
-        <tr><td class="mono">fault_token_error</td><td>Return this OAuth error from the token endpoint</td><td class="mono">invalid_grant</td></tr>
-        <tr><td class="mono">fault_saml_status</td><td>Return a non-success SAML status</td><td class="mono">AuthnFailed</td></tr>
-      </tbody>
-    </table>
+    <p class="hint">Arm faults for the next sign-in, wherever it starts — including SP-initiated flows. They apply to one flow and disarm automatically. Explicit fault_* URL parameters still override them.</p>
+    <form method="post" action="/inspect/faults/{{.App.Slug}}/arm" class="form-grid">
+      <label class="field"><span class="label">ID token TTL</span><input name="fault_id_token_ttl" placeholder="-1m" autocomplete="off"><span class="hint">Negative issues an already-expired token</span></label>
+      <label class="field"><span class="label">Clock skew</span><input name="fault_clock_skew" placeholder="10m" autocomplete="off"><span class="hint">Offsets iat/exp and SAML instants</span></label>
+      <label class="field"><span class="label">Drop claims</span><input name="fault_drop_claims" placeholder="email,groups" autocomplete="off"></label>
+      <label class="field"><span class="label">Token endpoint error</span><input name="fault_token_error" placeholder="invalid_grant" autocomplete="off"></label>
+      <label class="field"><span class="label">SAML status</span>
+        <select name="fault_saml_status">
+          <option value="">Success</option>
+          <option value="responder">Responder</option>
+          <option value="authnfailed">AuthnFailed</option>
+        </select>
+      </label>
+      <label class="field"><span class="label">Signature</span><span class="checkbox-row"><input type="checkbox" name="fault_break_signature" value="1"> Corrupt the token or assertion signature</span></label>
+      <div class="form-actions"><button class="btn btn-primary" type="submit">Arm for next flow</button></div>
+    </form>
+    <p class="hint">The same effects are available as one-shot fault_* URL parameters on a Test sign-in URL, e.g. <span class="mono">fault_break_signature=1</span>. Invalid values are reported in Recent activity instead of being silently ignored.</p>
   </details>
 </section>
 {{end}}

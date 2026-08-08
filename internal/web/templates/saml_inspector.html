@@ -27,6 +27,7 @@
         <div><dt>User</dt><dd>{{.Inspection.User}}</dd></div>
         <div><dt>ACS URL</dt><dd class="mono">{{.Inspection.ACSURL}}</dd></div>
         <div><dt>InResponseTo</dt><dd class="mono">{{if .Inspection.InResponseTo}}{{.Inspection.InResponseTo}}{{else}}Unsolicited{{end}}</dd></div>
+        {{if .Inspection.Faults}}<div><dt>Faults applied</dt><dd>{{.Inspection.Faults}}</dd></div>{{end}}
       </dl>
       <h3>Decoded SAML response</h3>
       <pre class="inspector-payload">{{.Inspection.ResponseXML}}</pre>

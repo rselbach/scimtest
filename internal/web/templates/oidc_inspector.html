@@ -32,6 +32,7 @@
         <div><dt>Redirect URI</dt><dd class="mono">{{.Inspection.RedirectURI}}</dd></div>
         <div><dt>Scope</dt><dd class="mono">{{.Inspection.Scope}}</dd></div>
         <div><dt>PKCE</dt><dd>{{if .Inspection.PKCE}}Used{{else}}Not used{{end}}</dd></div>
+        {{if .Inspection.Faults}}<div><dt>Faults applied</dt><dd>{{.Inspection.Faults}}</dd></div>{{end}}
       </dl>
       {{if .Inspection.Claims}}
       <h3>Decoded ID token claims</h3>

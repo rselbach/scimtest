@@ -550,7 +550,7 @@ func (a *webApp) issueOIDCCode(w http.ResponseWriter, r *http.Request, state app
 		Scope:         values.Get("scope"),
 		CodeChallenge: values.Get("code_challenge"),
 		ExpiresAt:     now.Add(5 * time.Minute),
-		Faults:        parseFaultOptions(values),
+		Faults:        a.flowFaults(app.Slug, values),
 	}
 	a.authCodes[code] = authCode
 	if err := a.rememberOIDCInspection(app, user, authCode, "Authorization code issued", nil, "", now); err != nil {
@@ -814,14 +814,14 @@ func (a *webApp) completeSAMLSSO(w http.ResponseWriter, r *http.Request, state a
 		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, "active user is required")
 		return
 	}
-	faults := parseFaultOptions(values)
+	faults := a.flowFaults(app.Slug, values)
 	response, err := a.buildSignedSAMLResponse(state, baseURL, app, user, responseContext, faults)
 	if err != nil {
 		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
 		return
 	}
 	encodedResponse := base64.StdEncoding.EncodeToString([]byte(response))
-	a.rememberSAMLInspection(app, user, responseContext, response, encodedResponse, time.Now())
+	a.rememberSAMLInspection(app, user, responseContext, response, encodedResponse, faults, time.Now())
 	ssoDetail := "Signed response posted to " + responseContext.ACSURL
 	if faults.active() {
 		ssoDetail = "Response posted to " + responseContext.ACSURL + " (faults injected)"
