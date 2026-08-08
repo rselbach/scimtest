@@ -443,6 +443,22 @@ type RunOptions struct {
 	browserOpen  browserOpener
 }
 
+// ignoredHandoffFlags lists the flags a second launch cannot apply because
+// it hands off to an already-running instance instead of starting one.
+func ignoredHandoffFlags(opts RunOptions) []string {
+	var ignored []string
+	if strings.TrimSpace(opts.Port) != "" {
+		ignored = append(ignored, "--port")
+	}
+	if opts.Debug {
+		ignored = append(ignored, "--debug")
+	}
+	if opts.DebugSecrets {
+		ignored = append(ignored, "--debug-secrets")
+	}
+	return ignored
+}
+
 type serverError struct {
 	name string
 	err  error
@@ -501,6 +517,9 @@ func Run(options ...RunOptions) error {
 				return err
 			}
 			log.Printf("scimtest is already running at %s", metadata.URL)
+			if ignored := ignoredHandoffFlags(opts); len(ignored) > 0 {
+				log.Printf("warning: %s only apply to a new instance and were ignored; stop the running instance first, or set SCIMTEST_STATE_FILE to run a second one", strings.Join(ignored, ", "))
+			}
 			maybeOpenBrowser(metadata.URL, opts.NoOpen, opts.browserOpen)
 			return nil
 		}

@@ -77,6 +77,22 @@ func TestResolveAdminPort(t *testing.T) {
 	}
 }
 
+func TestIgnoredHandoffFlags(t *testing.T) {
+	tests := map[string]struct {
+		opts RunOptions
+		want []string
+	}{
+		"none":      {opts: RunOptions{NoOpen: true}, want: nil},
+		"port only": {opts: RunOptions{Port: "9000"}, want: []string{"--port"}},
+		"all":       {opts: RunOptions{Port: "9000", Debug: true, DebugSecrets: true}, want: []string{"--port", "--debug", "--debug-secrets"}},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, tc.want, ignoredHandoffFlags(tc.opts))
+		})
+	}
+}
+
 func TestListenForAdminReturnsNonAddressInUseError(t *testing.T) {
 	r := require.New(t)
 	listener, err := listenForAdmin("192.0.2.1", "8080", true)
