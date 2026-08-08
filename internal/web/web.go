@@ -853,6 +853,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /groups/{id}/delete", a.rejectWhileSyncing(a.handleGroupDelete))
 	mux.HandleFunc("POST /groups/{id}/restore", a.rejectWhileSyncing(a.handleGroupRestore))
 	mux.HandleFunc("POST /apps/save", a.rejectWhileSyncing(a.handleAppSave))
+	mux.HandleFunc("GET /apps/{id}/config.json", a.handleAppConfigJSON)
 	mux.HandleFunc("POST /apps/{id}/delete", a.rejectWhileSyncing(a.handleAppDelete))
 	mux.HandleFunc("POST /apps/{id}/discover-scim", a.rejectWhileSyncing(a.handleAppDiscoverSCIM))
 	mux.HandleFunc("POST /apps/test-scim", a.rejectWhileSyncing(a.handleAppTestSCIM))
@@ -912,6 +913,10 @@ func (a *webApp) anySyncRunning() bool {
 
 func (a *webApp) registerIDPRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /oidc/{slug}/.well-known/openid-configuration", a.debugRPHandler(a.handleOIDCDiscovery))
+	// RFC 8414 path-insertion form: clients that derive the metadata URL by
+	// inserting /.well-known/openid-configuration before the issuer path
+	// request this shape instead of the appended one.
+	mux.HandleFunc("GET /.well-known/openid-configuration/oidc/{slug}", a.debugRPHandler(a.handleOIDCDiscovery))
 	mux.HandleFunc("GET /oidc/{slug}/jwks", a.debugRPHandler(a.handleOIDCJWKS))
 	mux.HandleFunc("GET /oidc/{slug}/authorize", a.debugRPHandler(a.handleOIDCAuthorize))
 	mux.HandleFunc("POST /oidc/{slug}/authorize", a.debugRPHandler(a.handleOIDCAuthorizePost))
@@ -919,6 +924,7 @@ func (a *webApp) registerIDPRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /oidc/{slug}/userinfo", a.debugRPHandler(a.handleOIDCUserinfo))
 	mux.HandleFunc("POST /oidc/{slug}/userinfo", a.debugRPHandler(a.handleOIDCUserinfo))
 	mux.HandleFunc("GET /saml/{slug}/metadata", a.debugRPHandler(a.handleSAMLMetadata))
+	mux.HandleFunc("GET /saml/{slug}/certificate.pem", a.debugRPHandler(a.handleSAMLCertificate))
 	mux.HandleFunc("GET /saml/{slug}/sso", a.debugRPHandler(a.handleSAMLSSO))
 	mux.HandleFunc("POST /saml/{slug}/sso", a.debugRPHandler(a.handleSAMLSSOPost))
 }

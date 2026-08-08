@@ -418,6 +418,10 @@ func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 	if app.OIDCPublicClient {
 		authMethods = []string{"none"}
 	}
+	scopes := []string{"openid", "profile", "email"}
+	if app.IncludeGroupsClaim {
+		scopes = append(scopes, "groups")
+	}
 	writeJSON(w, map[string]any{
 		"issuer":                                issuer,
 		"authorization_endpoint":                issuer + "/authorize",
@@ -428,7 +432,7 @@ func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 		"grant_types_supported":                 []string{"authorization_code"},
 		"subject_types_supported":               []string{"public"},
 		"id_token_signing_alg_values_supported": []string{"RS256"},
-		"scopes_supported":                      []string{"openid", "profile", "email", "groups"},
+		"scopes_supported":                      scopes,
 		"claims_supported":                      oidcClaimsSupported(app),
 		"code_challenge_methods_supported":      []string{"S256"},
 		"token_endpoint_auth_methods_supported": authMethods,
@@ -732,6 +736,9 @@ func (a *webApp) handleSAMLMetadata(w http.ResponseWriter, r *http.Request) {
     <SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="%s/saml/%s/sso"/>
   </IDPSSODescriptor>
 </EntityDescriptor>`, xmlEscape(entityID), cert, xmlEscape(nameIDFormat), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(baseURL), xmlEscape(app.Slug))
+	if r.URL.Query().Get("download") == "1" {
+		w.Header().Set("Content-Disposition", `attachment; filename="scimtest-`+app.Slug+`-idp-metadata.xml"`)
+	}
 	w.Header().Set("Content-Type", "application/samlmetadata+xml; charset=utf-8")
 	if _, err := w.Write([]byte(metadata)); err != nil {
 		log.Printf("write SAML metadata response: %v", err)
