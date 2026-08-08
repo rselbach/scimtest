@@ -469,17 +469,26 @@ func (a *webApp) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
 		a.failAuthorize(w, r, app, r.URL.Query(), err)
 		return
 	}
+	if isTruthy(r.URL.Query().Get("deny")) {
+		a.failAuthorize(w, r, app, r.URL.Query(), &authorizeError{code: "access_denied", description: "the user denied the request"})
+		return
+	}
+	// A user_id on the GET completes the flow without a chooser click, so a
+	// bookmarked authorize URL can iterate hands-free.
+	if chooserSelectionProvided(app, r.URL.Query()) {
+		a.issueOIDCCode(w, r, state, app, r.URL.Query())
+		return
+	}
 	loginHint := loginHintFromRequest(r)
-	renderChooser(w, newChooserData("OIDC sign-in", app, publicRequestURI(r), state.Users, loginHint, hiddenValues(r.URL.Query()), "Create an active user before starting an OIDC flow."))
+	data := newChooserData("OIDC sign-in", app, publicRequestURI(r), state.Users, loginHint, hiddenValues(r.URL.Query()), "Create an active user before starting an OIDC flow.")
+	a.applyRememberedChooserUser(&data, r, state, app)
+	renderChooser(w, data)
 }
 
 func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request) {
 	if !a.allowTunneledChooser(w, r) {
 		return
 	}
-	a.oidcMu.Lock()
-	defer a.oidcMu.Unlock()
-
 	state, app, ok := appForProtocol(w, r, supportsOIDC)
 	if !ok {
 		return
@@ -497,16 +506,29 @@ func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request)
 		a.failAuthorize(w, r, app, r.Form, err)
 		return
 	}
-	redirectURI, err := parseOIDCRedirectURI(r.FormValue("redirect_uri"))
+	if isTruthy(r.FormValue("deny")) {
+		a.failAuthorize(w, r, app, r.Form, &authorizeError{code: "access_denied", description: "the user denied the request"})
+		return
+	}
+	a.issueOIDCCode(w, r, state, app, r.Form)
+}
+
+// issueOIDCCode mints an authorization code for the selected user and redirects
+// to the RP. It is shared by the chooser POST and the user_id GET shortcut.
+func (a *webApp) issueOIDCCode(w http.ResponseWriter, r *http.Request, state appState, app app, values url.Values) {
+	redirectURI, err := parseOIDCRedirectURI(values.Get("redirect_uri"))
 	if err != nil {
 		a.failFlow(w, app, "oidc", "authorize", http.StatusBadRequest, err.Error())
 		return
 	}
-	user, ok := chooserUser(state.Users, app, r.Form)
+	user, ok := chooserUser(state.Users, app, values)
 	if !ok || !user.Active || user.Deleted {
 		a.failFlow(w, app, "oidc", "authorize", http.StatusBadRequest, "active user is required")
 		return
 	}
+
+	a.oidcMu.Lock()
+	defer a.oidcMu.Unlock()
 	now := time.Now()
 	a.pruneExpiredOIDCCredentials(now)
 
@@ -517,14 +539,14 @@ func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request)
 	}
 	authCode := authCode{
 		AppSlug:       app.Slug,
-		ClientID:      r.FormValue("client_id"),
+		ClientID:      values.Get("client_id"),
 		UserID:        user.ID,
-		RedirectURI:   r.FormValue("redirect_uri"),
-		Nonce:         r.FormValue("nonce"),
-		Scope:         r.FormValue("scope"),
-		CodeChallenge: r.FormValue("code_challenge"),
+		RedirectURI:   values.Get("redirect_uri"),
+		Nonce:         values.Get("nonce"),
+		Scope:         values.Get("scope"),
+		CodeChallenge: values.Get("code_challenge"),
 		ExpiresAt:     now.Add(5 * time.Minute),
-		Faults:        parseFaultOptions(r.Form),
+		Faults:        parseFaultOptions(values),
 	}
 	a.authCodes[code] = authCode
 	if err := a.rememberOIDCInspection(app, user, authCode, "Authorization code issued", nil, now); err != nil {
@@ -532,10 +554,11 @@ func (a *webApp) handleOIDCAuthorizePost(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	a.recordFlowEvent(app.Slug, "oidc", "authorize", "ok", userLabel(user), "Authorization code issued to "+authCode.ClientID)
+	rememberChooserUser(w, app.Slug, user.ID)
 
 	query := redirectURI.Query()
 	query.Set("code", code)
-	if stateValue := r.FormValue("state"); stateValue != "" {
+	if stateValue := values.Get("state"); stateValue != "" {
 		query.Set("state", stateValue)
 	}
 	redirectURI.RawQuery = query.Encode()
@@ -724,12 +747,24 @@ func (a *webApp) handleSAMLSSO(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	baseURL := a.effectiveIDPBaseURL(r, state)
-	if _, err := resolveSAMLResponseContext(r.URL.Query(), app, baseURL); err != nil {
+	responseContext, err := resolveSAMLResponseContext(r.URL.Query(), app, baseURL)
+	if err != nil {
 		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
 		return
 	}
+	if isTruthy(r.URL.Query().Get("deny")) {
+		a.denySAML(w, r, app, baseURL, responseContext, r.URL.Query())
+		return
+	}
+	// A user_id on the GET completes the flow without a chooser click.
+	if chooserSelectionProvided(app, r.URL.Query()) {
+		a.completeSAMLSSO(w, r, state, app, baseURL, responseContext, r.URL.Query())
+		return
+	}
 	loginHint := loginHintFromRequest(r)
-	renderChooser(w, newChooserData("SAML sign-in", app, publicRequestURI(r), state.Users, loginHint, hiddenValues(r.URL.Query()), "Create an active user before starting a SAML flow."))
+	data := newChooserData("SAML sign-in", app, publicRequestURI(r), state.Users, loginHint, hiddenValues(r.URL.Query()), "Create an active user before starting a SAML flow.")
+	a.applyRememberedChooserUser(&data, r, state, app)
+	renderChooser(w, data)
 }
 
 func (a *webApp) handleSAMLSSOPost(w http.ResponseWriter, r *http.Request) {
@@ -750,17 +785,29 @@ func (a *webApp) handleSAMLSSOPost(w http.ResponseWriter, r *http.Request) {
 		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
 		return
 	}
-	if !chooserSelectionProvided(app, r.Form) && (r.FormValue("SAMLRequest") != "" || r.FormValue("login_hint") != "" || r.FormValue("RelayState") != "") {
-		loginHint := loginHintFromValues(r.Form)
-		renderChooser(w, newChooserData("SAML sign-in", app, publicRequestURI(r), state.Users, loginHint, hiddenValues(r.Form), "Create an active user before starting a SAML flow."))
+	if isTruthy(r.FormValue("deny")) {
+		a.denySAML(w, r, app, baseURL, responseContext, r.Form)
 		return
 	}
-	user, ok := chooserUser(state.Users, app, r.Form)
+	if !chooserSelectionProvided(app, r.Form) && (r.FormValue("SAMLRequest") != "" || r.FormValue("login_hint") != "" || r.FormValue("RelayState") != "") {
+		loginHint := loginHintFromValues(r.Form)
+		data := newChooserData("SAML sign-in", app, publicRequestURI(r), state.Users, loginHint, hiddenValues(r.Form), "Create an active user before starting a SAML flow.")
+		a.applyRememberedChooserUser(&data, r, state, app)
+		renderChooser(w, data)
+		return
+	}
+	a.completeSAMLSSO(w, r, state, app, baseURL, responseContext, r.Form)
+}
+
+// completeSAMLSSO signs and posts back a SAML response for the selected user.
+// It is shared by the chooser POST and the user_id GET shortcut.
+func (a *webApp) completeSAMLSSO(w http.ResponseWriter, r *http.Request, state appState, app app, baseURL string, responseContext samlResponseContext, values url.Values) {
+	user, ok := chooserUser(state.Users, app, values)
 	if !ok || !user.Active || user.Deleted {
 		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, "active user is required")
 		return
 	}
-	faults := parseFaultOptions(r.Form)
+	faults := parseFaultOptions(values)
 	response, err := a.buildSignedSAMLResponse(state, baseURL, app, user, responseContext, faults)
 	if err != nil {
 		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
@@ -772,9 +819,25 @@ func (a *webApp) handleSAMLSSOPost(w http.ResponseWriter, r *http.Request) {
 		ssoDetail = "Response posted to " + responseContext.ACSURL + " (faults injected)"
 	}
 	a.recordFlowEvent(app.Slug, "saml", "sso", "ok", userLabel(user), ssoDetail)
+	rememberChooserUser(w, app.Slug, user.ID)
 	renderPostBack(w, responseContext.ACSURL, map[string]string{
 		"SAMLResponse": base64.StdEncoding.EncodeToString([]byte(response)),
-		"RelayState":   r.FormValue("RelayState"),
+		"RelayState":   values.Get("RelayState"),
+	})
+}
+
+// denySAML posts an AuthnFailed status response so an SP's failure handling can
+// be tested from the chooser's Deny button.
+func (a *webApp) denySAML(w http.ResponseWriter, r *http.Request, app app, baseURL string, responseContext samlResponseContext, values url.Values) {
+	response, err := buildSAMLStatusResponse(baseURL, app, responseContext, faultOptions{SAMLStatus: "urn:oasis:names:tc:SAML:2.0:status:AuthnFailed"})
+	if err != nil {
+		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
+		return
+	}
+	a.recordFlowEvent(app.Slug, "saml", "sso", "failed", "", "user denied the request (AuthnFailed)")
+	renderPostBack(w, responseContext.ACSURL, map[string]string{
+		"SAMLResponse": base64.StdEncoding.EncodeToString([]byte(response)),
+		"RelayState":   values.Get("RelayState"),
 	})
 }
 
@@ -1137,6 +1200,36 @@ func newChooserData(title string, app app, action string, users []user, loginHin
 	return data
 }
 
+func chooserCookieName(slug string) string { return "scimtest_chooser_" + slug }
+
+// rememberChooserUser records the last user signed in for an environment so the
+// chooser can pre-select them on the next flow.
+func rememberChooserUser(w http.ResponseWriter, slug, userID string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     chooserCookieName(slug),
+		Value:    userID,
+		Path:     "/",
+		MaxAge:   30 * 24 * 60 * 60,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// applyRememberedChooserUser pre-selects the last-used user when nothing else
+// already selected one.
+func (a *webApp) applyRememberedChooserUser(data *chooserData, r *http.Request, state appState, app app) {
+	if data.SelectedUserID != "" || data.IdentifierOnly {
+		return
+	}
+	cookie, err := r.Cookie(chooserCookieName(app.Slug))
+	if err != nil {
+		return
+	}
+	if user, ok := userByID(state.Users, cookie.Value); ok && user.Active && !user.Deleted {
+		data.SelectedUserID = user.ID
+	}
+}
+
 func chooserSelectionProvided(app app, values url.Values) bool {
 	if normalizeChooserMode(app.ChooserMode) == chooserModeIdentifier {
 		return strings.TrimSpace(values.Get("login_identifier")) != ""
@@ -1397,6 +1490,9 @@ var chooserTemplate = template.Must(template.New("chooser").Funcs(template.FuncM
     button { height:34px; border:1px solid var(--accent); background:var(--accent); color:#fff; border-radius:6px; font-weight:600; cursor:pointer; }
     button:hover { background:var(--accent-strong); border-color:var(--accent-strong); }
     button:disabled { opacity:.5; cursor:not-allowed; }
+    .chooser-actions { display:grid; grid-template-columns:auto 1fr; gap:10px; }
+    button.secondary { background:#fff; color:var(--muted); border-color:var(--line); }
+    button.secondary:hover { background:#f9fafb; border-color:var(--muted); color:var(--text); }
     .empty { color:var(--muted); padding:18px 20px 20px; }
 	.identifier-form { grid-template-rows:auto auto; }
 	.identifier-field { display:grid; gap:6px; color:var(--muted); }
@@ -1415,7 +1511,10 @@ var chooserTemplate = template.Must(template.New("chooser").Funcs(template.FuncM
 	  <label class="identifier-field">Username or email
 		<input name="login_identifier" value="{{.LoginIdentifier}}" autocomplete="username" required autofocus>
 	  </label>
-	  <button type="submit">Continue</button>
+	  <div class="chooser-actions">
+	    <button type="submit" formnovalidate name="deny" value="1" class="secondary">Deny</button>
+	    <button type="submit">Continue</button>
+	  </div>
 	</form>
 	{{else if .Users}}
     <form method="post" action="{{.Action}}">
@@ -1433,7 +1532,10 @@ var chooserTemplate = template.Must(template.New("chooser").Funcs(template.FuncM
         {{end}}
         <div class="no-matches" hidden data-no-matches>No users match your search.</div>
       </div>
-      <button type="submit" data-continue>Continue</button>
+      <div class="chooser-actions">
+        <button type="submit" formnovalidate name="deny" value="1" class="secondary" data-deny>Deny</button>
+        <button type="submit" data-continue>Continue</button>
+      </div>
     </form>
     {{else}}
     <div class="empty">{{.NoUsersHint}}</div>
