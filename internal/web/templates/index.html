@@ -889,14 +889,22 @@
 			<span class="hint">Sign-in chooser is limited to the network where scimtest is running.</span>
 			{{end}}
 			<span class="hint">Only OIDC and SAML endpoints are exposed through the tunnel.</span>
+			{{else if eq .ConfigForm.TunnelState "unavailable"}}
+			<div class="tunnel-row">
+			  <strong>Automatic tunnel:</strong> unavailable in this build
+			</div>
+			<span class="hint">Public tunnels require a release build with an embedded application identity. Source builds serve OIDC and SAML on this machine only.</span>
+			{{else if eq .ConfigForm.TunnelState "failed"}}
+			<div class="tunnel-row">
+			  <strong>Automatic tunnel:</strong> connection failed
+			</div>
+			<div class="inline-error" role="alert">{{.ConfigForm.TunnelError}}</div>
+			{{if .ConfigForm.TunnelErrorDetail}}<details class="hint"><summary>Error detail</summary><span class="mono">{{.ConfigForm.TunnelErrorDetail}}</span></details>{{end}}
+			<button class="btn btn-sm btn-ghost" type="submit" formaction="/config/tunnel/retry">Retry</button>
 			{{else}}
 			<div class="tunnel-row">
 			  <strong>Automatic tunnel:</strong> waiting for connection
 			</div>
-			{{if .ConfigForm.TunnelError}}
-			<div class="inline-error" role="alert">Tunnel connection failed: {{.ConfigForm.TunnelError}}</div>
-			<button class="btn btn-sm btn-ghost" type="submit" formaction="/config/tunnel/retry">Retry</button>
-			{{end}}
               {{end}}
             </div>
             <label class="field full">

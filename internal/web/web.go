@@ -51,6 +51,7 @@ type webApp struct {
 	adminHost         string
 	instanceToken     string
 	tunnelStart       tunnelStarter
+	tunnelSupported   bool
 	tunnelLifecycleMu sync.Mutex
 	tunnelMu          sync.Mutex
 	tunnel            *activeTunnel
@@ -378,7 +379,11 @@ type configFormView struct {
 	IDPBaseURLValue    string
 	IDPBaseURLDisabled bool
 	Tunnel             *tunnelView
-	TunnelError        string
+	// TunnelState is one of "connected", "failed", "connecting", or
+	// "unavailable" (build has no embedded application identity).
+	TunnelState       string
+	TunnelError       string
+	TunnelErrorDetail string
 }
 
 type toolsFormView struct {
@@ -533,12 +538,13 @@ func Run(options ...RunOptions) error {
 	}
 
 	app := &webApp{
-		signingKey:   key,
-		certDER:      certDER,
-		localPort:    idpAddress.Port,
-		tunnelStart:  startTunnel,
-		authCodes:    make(map[string]authCode),
-		accessTokens: make(map[string]accessToken),
+		signingKey:      key,
+		certDER:         certDER,
+		localPort:       idpAddress.Port,
+		tunnelStart:     startTunnel,
+		tunnelSupported: identity != nil,
+		authCodes:       make(map[string]authCode),
+		accessTokens:    make(map[string]accessToken),
 	}
 	app.debugRP.Store(opts.Debug)
 	app.debugSecrets.Store(opts.DebugSecrets)
@@ -1350,7 +1356,13 @@ func (a *webApp) buildConfigFormView(cfg config, tab string, page int, pageSize 
 		Config:          cfg,
 		Close:           closeURL,
 		IDPBaseURLValue: cfg.IDPBaseURL,
-		TunnelError:     a.tunnelError(),
+		TunnelState:     a.tunnelState(),
+	}
+	if raw := a.tunnelError(); raw != "" {
+		form.TunnelError = humanTunnelError(raw)
+		if form.TunnelError != raw {
+			form.TunnelErrorDetail = raw
+		}
 	}
 	if tunnel := a.tunnelView(); tunnel != nil {
 		form.Tunnel = tunnel
@@ -1358,6 +1370,40 @@ func (a *webApp) buildConfigFormView(cfg config, tab string, page int, pageSize 
 		form.IDPBaseURLDisabled = true
 	}
 	return form
+}
+
+// tunnelState reports the automatic tunnel lifecycle for display:
+// "connected", "failed", "connecting", or "unavailable" when the build
+// carries no embedded application identity and a tunnel can never start.
+func (a *webApp) tunnelState() string {
+	a.tunnelMu.Lock()
+	defer a.tunnelMu.Unlock()
+	switch {
+	case a.tunnel != nil:
+		return "connected"
+	case a.tunnelLastError != "":
+		return "failed"
+	case a.tunnelSupported:
+		return "connecting"
+	default:
+		return "unavailable"
+	}
+}
+
+// humanTunnelError maps raw tunnel client errors to actionable messages.
+// Unrecognized errors pass through unchanged.
+func humanTunnelError(raw string) string {
+	lower := strings.ToLower(raw)
+	switch {
+	case strings.Contains(lower, "bad handshake") || strings.Contains(lower, "403"):
+		return "the tunnel server rejected this build's identity; upgrading scimtest usually fixes this"
+	case strings.Contains(lower, "context deadline exceeded") || strings.Contains(lower, "timeout"):
+		return "the tunnel server did not respond in time; scimtest keeps working locally"
+	case strings.Contains(lower, "no such host") || strings.Contains(lower, "connection refused") || strings.Contains(lower, "dial tcp"):
+		return "could not reach the tunnel server; check your network connection"
+	default:
+		return raw
+	}
 }
 
 func (a *webApp) effectiveIDPBaseURL(r *http.Request, state appState) string {

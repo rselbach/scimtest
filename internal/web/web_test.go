@@ -2272,6 +2272,35 @@ func TestSCIMDisabledRejectsSync(t *testing.T) {
 	r.Contains(rec.Header().Get("Set-Cookie"), "SCIM+is+not+enabled+for+the+active+environment")
 }
 
+func TestHumanTunnelError(t *testing.T) {
+	tests := map[string]struct {
+		raw  string
+		want string
+	}{
+		"rejected identity": {
+			raw:  "connect to tunnel server wss://scimtest.rselbach.com/api/connect: HTTP 403 Forbidden: websocket: bad handshake",
+			want: "the tunnel server rejected this build's identity; upgrading scimtest usually fixes this",
+		},
+		"timeout": {
+			raw:  "start automatic tunnel: context deadline exceeded",
+			want: "the tunnel server did not respond in time; scimtest keeps working locally",
+		},
+		"unreachable": {
+			raw:  "dial tcp: lookup scimtest.rselbach.com: no such host",
+			want: "could not reach the tunnel server; check your network connection",
+		},
+		"unrecognized passes through": {
+			raw:  "tunnel did not return a public URL",
+			want: "tunnel did not return a public URL",
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, tc.want, humanTunnelError(tc.raw))
+		})
+	}
+}
+
 func TestConfigRendersAutomaticTunnelStatus(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
@@ -2281,8 +2310,17 @@ func TestConfigRendersAutomaticTunnelStatus(t *testing.T) {
 	rec := httptest.NewRecorder()
 	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=users&modal=config", nil))
 
+	// A test app has no embedded identity, so the tunnel is unavailable.
 	r.Equal(http.StatusOK, rec.Code)
-	r.Contains(rec.Body.String(), "Automatic tunnel:")
+	r.Contains(rec.Body.String(), "unavailable in this build")
+	r.NotContains(rec.Body.String(), `formaction="/config/tunnel/retry"`)
+
+	app.tunnelSupported = true
+	rec = httptest.NewRecorder()
+	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=users&modal=config", nil))
+
+	r.Equal(http.StatusOK, rec.Code)
+	r.Contains(rec.Body.String(), "waiting for connection")
 	r.NotContains(rec.Body.String(), `formaction="/config/tunnel/retry"`)
 
 	app.setTunnelError("application profile rejected")
@@ -2290,6 +2328,8 @@ func TestConfigRendersAutomaticTunnelStatus(t *testing.T) {
 	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=users&modal=config", nil))
 
 	r.Equal(http.StatusOK, rec.Code)
+	r.Contains(rec.Body.String(), "connection failed")
+	r.Contains(rec.Body.String(), "application profile rejected")
 	r.Contains(rec.Body.String(), `formaction="/config/tunnel/retry"`)
 
 	app.tunnelMu.Lock()
