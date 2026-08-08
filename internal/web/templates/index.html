@@ -639,7 +639,7 @@
 			</fieldset>
 		  </section>
 
-		  <section class="setup-panel {{if eq .AppForm.Section "oidc"}}active{{end}}" role="tabpanel" data-setup-panel="oidc">
+		  <section class="setup-panel {{if eq .AppForm.Section "oidc"}}active{{end}}" role="tabpanel" data-setup-panel="oidc" data-oidc-base-url="{{.IDPBaseURL}}">
 			<div class="setup-panel-header">
 			  <div><h3>OIDC</h3><p>Sign users in to your app with OpenID Connect.</p></div>
 			  <div class="protocol-controls">
@@ -701,42 +701,41 @@
 			  <label class="field"><span class="label">Groups</span><input name="oidc_claim_groups" value="{{.AppForm.App.OIDCClaimMappings.Groups}}" autocomplete="off"></label>
 			  </div>
 			  </details>
-              {{if and .AppForm.OIDCIssuer .AppForm.OIDCStatus.Started}}
               <div class="field full">
                 <div class="saml-setup">
                   <div class="saml-setup-title">Copy these values into your app</div>
                   <div class="copy-field">
                     <span class="k">Issuer</span>
-                    <span class="v" title="{{.AppForm.OIDCIssuer}}">{{.AppForm.OIDCIssuer}}</span>
-                    <button class="copy-btn" type="button" data-copy-button aria-label="Copy issuer" title="Copy issuer">
+                    <span class="v" title="{{.AppForm.OIDCIssuer}}" data-oidc-setup-url="issuer">{{if .AppForm.OIDCIssuer}}{{.AppForm.OIDCIssuer}}{{else}}Enter an endpoint name to generate this URL{{end}}</span>
+                    <button class="copy-btn" type="button" data-copy-button data-oidc-copy-url="issuer" aria-label="Copy issuer" title="Copy issuer" {{if not .AppForm.OIDCIssuer}}disabled{{end}}>
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="7" height="8" rx="1.2"/><path d="M3 10.5V4a1 1 0 0 1 1-1h6.5"/></svg>
                     </button>
                   </div>
                   <div class="copy-field">
                     <span class="k">Discovery</span>
-                    <span class="v" title="{{.AppForm.OIDCDiscoveryURL}}">{{.AppForm.OIDCDiscoveryURL}}</span>
-                    <button class="copy-btn" type="button" data-copy-button aria-label="Copy discovery URL" title="Copy discovery URL">
+                    <span class="v" title="{{.AppForm.OIDCDiscoveryURL}}" data-oidc-setup-url="discovery">{{if .AppForm.OIDCDiscoveryURL}}{{.AppForm.OIDCDiscoveryURL}}{{else}}Enter an endpoint name to generate this URL{{end}}</span>
+                    <button class="copy-btn" type="button" data-copy-button data-oidc-copy-url="discovery" aria-label="Copy discovery URL" title="Copy discovery URL" {{if not .AppForm.OIDCDiscoveryURL}}disabled{{end}}>
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="7" height="8" rx="1.2"/><path d="M3 10.5V4a1 1 0 0 1 1-1h6.5"/></svg>
                     </button>
                   </div>
                   <div class="copy-field">
                     <span class="k">Authorize URL</span>
-                    <span class="v" title="{{.AppForm.OIDCAuthorizeURL}}">{{.AppForm.OIDCAuthorizeURL}}</span>
-                    <button class="copy-btn" type="button" data-copy-button aria-label="Copy authorize URL" title="Copy authorize URL">
+                    <span class="v" title="{{.AppForm.OIDCAuthorizeURL}}" data-oidc-setup-url="authorize">{{if .AppForm.OIDCAuthorizeURL}}{{.AppForm.OIDCAuthorizeURL}}{{else}}Enter an endpoint name to generate this URL{{end}}</span>
+                    <button class="copy-btn" type="button" data-copy-button data-oidc-copy-url="authorize" aria-label="Copy authorize URL" title="Copy authorize URL" {{if not .AppForm.OIDCAuthorizeURL}}disabled{{end}}>
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="7" height="8" rx="1.2"/><path d="M3 10.5V4a1 1 0 0 1 1-1h6.5"/></svg>
                     </button>
                   </div>
                   <div class="copy-field">
                     <span class="k">Token URL</span>
-                    <span class="v" title="{{.AppForm.OIDCTokenURL}}">{{.AppForm.OIDCTokenURL}}</span>
-                    <button class="copy-btn" type="button" data-copy-button aria-label="Copy token URL" title="Copy token URL">
+                    <span class="v" title="{{.AppForm.OIDCTokenURL}}" data-oidc-setup-url="token">{{if .AppForm.OIDCTokenURL}}{{.AppForm.OIDCTokenURL}}{{else}}Enter an endpoint name to generate this URL{{end}}</span>
+                    <button class="copy-btn" type="button" data-copy-button data-oidc-copy-url="token" aria-label="Copy token URL" title="Copy token URL" {{if not .AppForm.OIDCTokenURL}}disabled{{end}}>
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="7" height="8" rx="1.2"/><path d="M3 10.5V4a1 1 0 0 1 1-1h6.5"/></svg>
                     </button>
                   </div>
                   <div class="copy-field">
                     <span class="k">JWKS URL</span>
-                    <span class="v" title="{{.AppForm.OIDCJWKSURL}}">{{.AppForm.OIDCJWKSURL}}</span>
-                    <button class="copy-btn" type="button" data-copy-button aria-label="Copy JWKS URL" title="Copy JWKS URL">
+                    <span class="v" title="{{.AppForm.OIDCJWKSURL}}" data-oidc-setup-url="jwks">{{if .AppForm.OIDCJWKSURL}}{{.AppForm.OIDCJWKSURL}}{{else}}Enter an endpoint name to generate this URL{{end}}</span>
+                    <button class="copy-btn" type="button" data-copy-button data-oidc-copy-url="jwks" aria-label="Copy JWKS URL" title="Copy JWKS URL" {{if not .AppForm.OIDCJWKSURL}}disabled{{end}}>
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="7" height="8" rx="1.2"/><path d="M3 10.5V4a1 1 0 0 1 1-1h6.5"/></svg>
                     </button>
                   </div>
@@ -760,7 +759,6 @@
                   {{end}}
                 </div>
               </div>
-              {{end}}
 			</fieldset>
 		  </section>
 

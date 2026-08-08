@@ -402,6 +402,33 @@
 	  return states;
 	}
 
+	function updateOIDCSetupURLs() {
+	  const oidcPanel = document.querySelector('[data-setup-panel="oidc"]');
+	  if (!oidcPanel) return;
+	  const baseURL = String(oidcPanel.dataset.oidcBaseUrl || '').replace(/\/+$/, '');
+	  const slug = setupFieldValue('slug');
+	  const issuer = baseURL && slug ? baseURL + '/oidc/' + encodeURIComponent(slug) : '';
+	  const paths = {
+		issuer: '',
+		discovery: '/.well-known/openid-configuration',
+		authorize: '/authorize',
+		token: '/token',
+		jwks: '/jwks'
+	  };
+	  for (const value of oidcPanel.querySelectorAll('[data-oidc-setup-url]')) {
+		const kind = value.dataset.oidcSetupUrl;
+		const url = issuer && kind in paths ? issuer + paths[kind] : '';
+		value.textContent = url || 'Enter an endpoint name to generate this URL';
+		value.title = url;
+		const copyButton = oidcPanel.querySelector('[data-oidc-copy-url="' + kind + '"]');
+		if (copyButton) copyButton.disabled = !url;
+	  }
+	  // The server defaults an empty client ID to the slug on save; show
+	  // that default where the value will appear.
+	  const clientID = environmentForm ? environmentForm.querySelector('[name="oidc_client_id"]') : null;
+	  if (clientID) clientID.placeholder = slug || '';
+	}
+
 	function updateSAMLSetupURLs() {
 	  const samlPanel = document.querySelector('[data-setup-panel="saml"]');
 	  if (!samlPanel) return;
@@ -564,6 +591,7 @@
 	  }
 	  environmentForm.addEventListener('input', function () {
 		updateSAMLSetupURLs();
+		updateOIDCSetupURLs();
 		refreshSetupValidation();
 	  });
 	  environmentForm.addEventListener('change', function () {
@@ -584,6 +612,7 @@
 	  });
 	  updateSetupState();
 	  updateSAMLSetupURLs();
+	  updateOIDCSetupURLs();
 	  updateSetupActions(setupSection ? setupSection.value : 'overview');
 	}
 
