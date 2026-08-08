@@ -1283,3 +1283,30 @@ func TestSchemaMigrationWritesPreMigrationCopy(t *testing.T) {
 	r.Len(entries, 1)
 	r.Contains(entries[0].Name(), "pre-migrate-v000-")
 }
+
+func TestPlanSync(t *testing.T) {
+	state := AppState{
+		Users: []User{
+			{ID: "u1", GivenName: "Troy", FamilyName: "Barnes", Dirty: true},
+			{ID: "u2", GivenName: "Abed", FamilyName: "Nadir", Dirty: true, RemoteID: "r2"},
+			{ID: "u3", GivenName: "Annie", FamilyName: "Edison", Dirty: true, RemoteID: "r3", Deleted: true},
+			{ID: "u4", GivenName: "Jeff", FamilyName: "Winger", Dirty: true, Deleted: true},
+			{ID: "u5", GivenName: "Britta", FamilyName: "Perry"},
+		},
+		Groups: []Group{
+			{ID: "g1", DisplayName: "Study Group", Dirty: true},
+			{ID: "g2", DisplayName: "Faculty"},
+		},
+	}
+
+	plan := PlanSync(state)
+
+	want := []SyncPlanEntry{
+		{ResourceType: "user", ResourceID: "u1", Label: "Troy Barnes", Operation: "create"},
+		{ResourceType: "user", ResourceID: "u2", Label: "Abed Nadir", Operation: "update"},
+		{ResourceType: "user", ResourceID: "u3", Label: "Annie Edison", Operation: "delete"},
+		{ResourceType: "user", ResourceID: "u4", Label: "Jeff Winger", Operation: "forget"},
+		{ResourceType: "group", ResourceID: "g1", Label: "Study Group", Operation: "create"},
+	}
+	require.Equal(t, want, plan)
+}

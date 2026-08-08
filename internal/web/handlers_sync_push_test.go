@@ -86,3 +86,23 @@ func TestPushUnknownResource(t *testing.T) {
 	r.Equal(http.StatusSeeOther, rec.Code)
 	r.Contains(rec.Header().Get("Set-Cookie"), "user+not+found")
 }
+
+func TestSyncPlanEndpoint(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Users: []user{{ID: "u1", GivenName: "Troy", FamilyName: "Barnes", Username: "tbarnes", Email: "troy@greendale.edu", Active: true, Dirty: true}},
+		Apps: []app{{
+			ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "scim",
+			SCIMEnabled: true, SCIMBaseURL: "http://scim.test", SCIMBearerToken: "token",
+		}},
+	}))
+
+	svc := &webApp{}
+	rec := httptest.NewRecorder()
+	svc.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sync/plan?environment=app-1", nil))
+
+	r.Equal(http.StatusOK, rec.Code)
+	r.Contains(rec.Body.String(), `"operation":"create"`)
+	r.Contains(rec.Body.String(), "Troy Barnes")
+}

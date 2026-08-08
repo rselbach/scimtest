@@ -428,6 +428,8 @@ type pageData struct {
 	ConfigForm             *configFormView
 	ToolsForm              *toolsFormView
 	SyncJob                *syncJobSnapshot
+	SyncPlanCount          int
+	SyncPlanTitle          string
 	ImportPreview          *importPreviewView
 	ShowSetupGuide         bool
 	HasLocalUsers          bool
@@ -893,6 +895,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /restore", a.rejectWhileSyncing(a.handleBackupRestore))
 	mux.HandleFunc("GET /sync/status", a.handleSyncStatus)
 	mux.HandleFunc("POST /sync", a.handleSync)
+	mux.HandleFunc("GET /sync/plan", a.handleSyncPlan)
 	mux.HandleFunc("POST /sync/cancel", a.handleSyncCancel)
 	mux.HandleFunc("POST /users/{id}/sync", a.handleUserPush)
 	mux.HandleFunc("POST /groups/{id}/sync", a.handleGroupPush)
@@ -1059,6 +1062,11 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		data.Errors = nil
 		data.ShowTrace = false
 		data.HasTrace = false
+	}
+	if data.SCIMEnabled {
+		plan := planSync(state)
+		data.SyncPlanCount = len(plan)
+		data.SyncPlanTitle = syncPlanTitle(plan)
 	}
 
 	if r.URL.Query().Get("partial") == "list" {

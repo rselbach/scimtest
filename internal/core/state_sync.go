@@ -324,6 +324,58 @@ func removeValue(values []string, value string) []string {
 	return kept
 }
 
+// SyncPlanEntry describes one operation the next sync will perform.
+type SyncPlanEntry struct {
+	ResourceType string `json:"resource_type"`
+	ResourceID   string `json:"resource_id"`
+	Label        string `json:"label"`
+	// Operation is create, update, delete, or forget (deleted locally,
+	// never created remotely).
+	Operation string `json:"operation"`
+}
+
+// PlanSync reports what a sync of the projected state would do, computed
+// purely from dirty flags and remote IDs: no network calls are made.
+func PlanSync(state AppState) []SyncPlanEntry {
+	plan := make([]SyncPlanEntry, 0, len(state.Users)+len(state.Groups))
+	for _, u := range state.Users {
+		if !u.Dirty {
+			continue
+		}
+		plan = append(plan, SyncPlanEntry{
+			ResourceType: "user",
+			ResourceID:   u.ID,
+			Label:        UserLabel(u),
+			Operation:    planOperation(u.Deleted, u.RemoteID),
+		})
+	}
+	for _, g := range state.Groups {
+		if !g.Dirty {
+			continue
+		}
+		plan = append(plan, SyncPlanEntry{
+			ResourceType: "group",
+			ResourceID:   g.ID,
+			Label:        g.DisplayName,
+			Operation:    planOperation(g.Deleted, g.RemoteID),
+		})
+	}
+	return plan
+}
+
+func planOperation(deleted bool, remoteID string) string {
+	switch {
+	case deleted && remoteID == "":
+		return "forget"
+	case deleted:
+		return "delete"
+	case remoteID == "":
+		return "create"
+	default:
+		return "update"
+	}
+}
+
 func AppendOperationLogs(state *AppState, appID string, traces []SyncTraceEntry) {
 	if state.UserOperations == nil {
 		state.UserOperations = make(map[string][]OperationLog)

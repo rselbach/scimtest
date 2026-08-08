@@ -14,6 +14,7 @@ type (
 	syncProgress          = core.SyncProgress
 	resourceSyncState     = core.ResourceSyncState
 	stateBackup           = core.StateBackup
+	syncPlanEntry         = core.SyncPlanEntry
 	oidcClaimMappings     = core.OIDCClaimMappings
 	samlAttributeMappings = core.SAMLAttributeMappings
 )
@@ -67,6 +68,7 @@ var (
 	mergeAppSyncState            = core.MergeAppSyncState
 	mergeAppImportState          = core.MergeAppImportState
 	purgeFullySyncedDeletions    = core.PurgeFullySyncedDeletions
+	planSync                     = core.PlanSync
 	userGroups                   = core.UserGroups
 	syncStatus                   = core.SyncStatus
 	groupSyncStatus              = core.GroupSyncStatus

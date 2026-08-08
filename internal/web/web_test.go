@@ -127,7 +127,7 @@ func TestIndexRendersConciseSCIMActionsAndUsernameHint(t *testing.T) {
 
 	r.Equal(http.StatusOK, rec.Code)
 	body := rec.Body.String()
-	r.Contains(body, `data-sync-submit >Sync pending changes</button>`)
+	r.Contains(body, `>Sync pending changes`)
 	r.Contains(body, `type="submit">Preview remote import</button>`)
 	r.Contains(body, `type="submit">Reset sync state</button>`)
 	r.Contains(body, `Uses email when left blank`)
@@ -1791,7 +1791,7 @@ func TestEnvironmentSelectorRendersInTopbar(t *testing.T) {
 		r.Contains(body, "Active environment")
 		r.Contains(body, "Greendale SCIM")
 		r.Contains(body, "Greendale OIDC")
-		r.Contains(body, "data-sync-submit >Sync pending changes</button>")
+		r.Contains(body, ">Sync pending changes")
 		r.NotContains(body, "Sync Greendale SCIM")
 		r.NotContains(body, "Sync target")
 	}

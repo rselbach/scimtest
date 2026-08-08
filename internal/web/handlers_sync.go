@@ -106,6 +106,47 @@ func (a *webApp) startSyncRequest(w http.ResponseWriter, r *http.Request, kind s
 	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: kind + " started"})
 }
 
+// handleSyncPlan reports what the next sync would do without touching the
+// remote, for scripting and the pending-changes hint.
+func (a *webApp) handleSyncPlan(w http.ResponseWriter, r *http.Request) {
+	state, err := loadRequestState(r)
+	if err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	appID := requestSyncAppID(r, state)
+	if appID == "" {
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": "SCIM is not enabled for the active environment"})
+		return
+	}
+	// PlanSync reads dirty flags, which live on the projection.
+	projected, err := stateForApp(state, appID)
+	if err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	plan := planSync(projected)
+	writeJSON(w, map[string]any{"entries": plan, "summary": syncPlanTitle(plan)})
+}
+
+// syncPlanTitle renders a short human summary of a sync plan, capped so it
+// stays usable as a tooltip.
+func syncPlanTitle(plan []syncPlanEntry) string {
+	if len(plan) == 0 {
+		return "Nothing is pending; sync will verify credentials and stop"
+	}
+	const maxLines = 12
+	lines := make([]string, 0, min(len(plan), maxLines)+1)
+	for i, entry := range plan {
+		if i == maxLines {
+			lines = append(lines, fmt.Sprintf("… and %d more", len(plan)-maxLines))
+			break
+		}
+		lines = append(lines, entry.Operation+" "+entry.ResourceType+" "+entry.Label)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (a *webApp) handleSyncStatus(w http.ResponseWriter, r *http.Request) {
 	state, err := loadRequestState(r)
 	if err != nil {
