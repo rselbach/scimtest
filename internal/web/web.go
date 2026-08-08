@@ -929,6 +929,16 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// A first run has nothing to show on the directory tabs; land on the
+	// environment wizard instead of an empty users table. A directory
+	// without environments (the legacy default) keeps the normal tabs.
+	if len(globalState.Apps) == 0 && len(globalState.Users) == 0 && len(globalState.Groups) == 0 {
+		query := r.URL.Query()
+		if normalizedTab(query.Get("tab")) != "apps" && query.Get("modal") == "" && query.Get("partial") == "" {
+			http.Redirect(w, r, dashboardURL("apps", map[string]string{"modal": "app"}), http.StatusSeeOther)
+			return
+		}
+	}
 	environmentID, err := requestEnvironmentID(r, globalState)
 	if err != nil {
 		// redirect without redirectWithFlash: it would re-append the stale

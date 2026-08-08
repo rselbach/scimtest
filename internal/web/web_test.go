@@ -64,13 +64,35 @@ func TestIndexRendersDashboard(t *testing.T) {
 	r.Contains(groupRec.Body.String(), "Greendale Study Group")
 }
 
+func TestIndexRedirectsFirstRunToEnvironmentWizard(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+	svc := &webApp{}
+
+	rec := httptest.NewRecorder()
+	svc.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	location := rec.Header().Get("Location")
+	r.Contains(location, "tab=apps")
+	r.Contains(location, "modal=app")
+
+	rec = httptest.NewRecorder()
+	svc.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, location, nil))
+	r.Equal(http.StatusOK, rec.Code)
+	r.Contains(rec.Body.String(), "Add environment")
+	r.Contains(rec.Body.String(), "data-environment-form")
+}
+
 func TestIndexRendersFriendlyFirstRunGuide(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{}))
 	rec := httptest.NewRecorder()
 
-	(&webApp{}).routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	// The apps tab stays reachable without being bounced to the wizard.
+	(&webApp{}).routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=apps", nil))
 
 	r.Equal(http.StatusOK, rec.Code)
 	body := rec.Body.String()
