@@ -9,43 +9,172 @@
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/?tab=apps">scimtest</a>
+    <a class="brand" href="{{.UsersURL}}">
+      <span class="brand-glyph" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3.5 10a8 8 0 0 1 13.6-5.5L19 7"/>
+          <polyline points="19 3 19 7 15 7"/>
+          <path d="M20.5 14a8 8 0 0 1-13.6 5.5L5 17"/>
+          <polyline points="5 21 5 17 9 17"/>
+        </svg>
+      </span>
+      scimtest
+      <span class="sr-only">SCIM Control Surface</span>
+    </a>
+    <form class="environment-context" method="get" action="/traffic">
+      <label for="environment-selector">Active environment</label>
+      <select id="environment-selector" name="environment" onchange="this.form.submit()" {{if not .Environments}}disabled{{end}}>
+        {{range .Environments}}<option value="{{.ID}}" {{if eq .ID $.ActiveEnvironment.ID}}selected{{end}}>{{.Name}}</option>{{else}}<option>No environments</option>{{end}}
+      </select>
+      <a class="environment-manage" href="{{.AppsURL}}">Manage</a>
+    </form>
   </header>
-  <main class="content inspector-page">
-    <div class="page-heading">
-      <div>
-        <h1>Traffic</h1>
-        <p>Live OIDC and SAML request/response transcripts.{{if not .RecordOn}} Recording is off.{{end}}</p>
-      </div>
-      <a class="btn" href="/?tab=apps">Back to environments</a>
-    </div>
-    <section class="card inspector-card">
-      <form method="post" action="/traffic/settings" class="traffic-controls">
-        <label><input type="checkbox" name="record" value="on" {{if .RecordOn}}checked{{end}} onchange="this.form.submit()"> Record traffic</label>
-        <label><input type="checkbox" name="record_secrets" value="on" {{if .SecretsOn}}checked{{end}} onchange="this.form.submit()"> Include raw credentials, tokens, and assertions</label>
-        <noscript><button type="submit">Apply</button></noscript>
-      </form>
-      <label class="traffic-controls"><input type="checkbox" data-traffic-pause> Pause auto-refresh</label>
-      {{if .SecretsOn}}<p class="hint" style="color:var(--danger)">Raw secrets are being recorded. Turn this off when you are done.</p>{{end}}
-    </section>
-    <div data-traffic-list>
-    {{if .Entries}}
-    <div class="page-heading" style="border:0;padding-bottom:0">
-      <div></div>
-      <form method="post" action="/traffic/clear"><button class="btn btn-sm" type="submit">Clear</button></form>
-    </div>
-    {{range .Entries}}
-    <section class="card inspector-card">
-      <pre class="inspector-payload">{{.}}</pre>
-    </section>
-    {{end}}
-    {{else}}
-    <section class="card card-empty">
-      <div class="h">No traffic recorded yet</div>
-      <p>{{if .RecordOn}}Run a sign-in flow and the exchange will appear here.{{else}}Turn on recording, then run a sign-in flow.{{end}}</p>
-    </section>
-    {{end}}
-    </div>
+
+  <div class="app">
+    <aside class="sidebar">
+      {{if .ActiveEnvironment.ID}}<nav class="side-section" aria-label="Active environment">
+        <div class="side-label">{{.ActiveEnvironment.Name}}</div>
+        <a class="side-item" href="{{.UsersURL}}">
+          <span class="icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="6" r="2.6"/><path d="M3 14c0-2.4 2.2-4 5-4s5 1.6 5 4"/></svg>
+          </span>
+          Users
+          <span class="badge {{if and .SCIMEnabled .Stats.DirtyUsers}}dirty{{end}}">{{.Stats.Users}}{{if and .SCIMEnabled .Stats.DirtyUsers}}·{{.Stats.DirtyUsers}}{{end}}</span>
+        </a>
+        <a class="side-item" href="{{.GroupsURL}}">
+          <span class="icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2.2"/><circle cx="11" cy="6" r="1.9"/><path d="M1.5 13c0-2 1.6-3.2 3.5-3.2s3.5 1.2 3.5 3.2"/><path d="M9 13c0-1.4 1-2.4 2.5-2.4s2.5 1 2.5 2.4"/></svg>
+          </span>
+          Groups
+          <span class="badge {{if and .SCIMEnabled .Stats.DirtyGroups}}dirty{{end}}">{{.Stats.Groups}}{{if and .SCIMEnabled .Stats.DirtyGroups}}·{{.Stats.DirtyGroups}}{{end}}</span>
+        </a>
+        <a class="side-item" href="{{.EnvironmentSettingsURL}}">
+          <span class="icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="M5.5 6h5M5.5 8.5h5"/></svg>
+          </span>
+          Set up this environment
+        </a>
+        {{if .SCIMEnabled}}{{if .HasTrace}}<a class="side-item" href="{{.TraceURL}}">
+          <span class="icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h7l3 3v7H3z"/><path d="M9.5 3v3.5h3.5"/><path d="M5.5 9h5M5.5 11h3.5"/></svg>
+          </span>
+          Sync trace
+        </a>{{else}}<span class="side-item is-unavailable" title="Traces cover the most recent sync or import and reset when scimtest restarts">
+          <span class="icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h7l3 3v7H3z"/><path d="M9.5 3v3.5h3.5"/><path d="M5.5 9h5M5.5 11h3.5"/></svg>
+          </span>
+          Sync trace
+        </span>{{end}}{{end}}
+        <a class="side-item" href="{{.ToolsURL}}">
+          <span class="icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13l4-4"/><path d="M9.5 3.5l3 3"/><path d="M8 5l3 3"/><path d="M10.5 2.5l3 3-6.5 6.5-3 1 1-3z"/></svg>
+          </span>
+          Bulk tools
+        </a>
+      </nav>{{end}}
+
+      <nav class="side-section" aria-label="Global settings">
+        <div class="side-label">Global</div>
+        <a class="side-item" href="{{.AppsURL}}">
+          <span class="icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="M5.5 6h5M5.5 8.5h5"/></svg>
+          </span>
+          Environments
+          <span class="badge">{{.Stats.Apps}}</span>
+        </a>
+        <a class="side-item" href="{{.ConfigURL}}">
+          <span class="icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8L3.4 3.4"/></svg>
+          </span>
+          IDP &amp; tunnel
+        </a>
+        <a class="side-item active" href="/traffic" aria-current="page">
+          <span class="icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8h3l2-4 2 8 2-4h3"/></svg>
+          </span>
+          Traffic
+        </a>
+      </nav>
+    </aside>
+
+    <main class="content traffic-page">
+      <header class="page-header">
+        <div class="page-icon" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 10h3.3l2.3-5 3.2 10 2.2-5h4"/></svg>
+        </div>
+        <div class="page-header-text">
+          <h1>Traffic</h1>
+          <p class="lede">Live OIDC and SAML request and response transcripts for debugging sign-in flows.</p>
+        </div>
+        <div class="actions">
+          <span class="status {{if .RecordOn}}synced{{end}}">{{if .RecordOn}}Recording{{else}}Recording off{{end}}</span>
+        </div>
+      </header>
+
+      <section class="card traffic-settings" aria-labelledby="traffic-settings-title">
+        <div class="traffic-settings-header">
+          <div>
+            <h2 id="traffic-settings-title">Capture settings</h2>
+            <p>Choose what is retained in this process. Captured entries are cleared when scimtest restarts.</p>
+          </div>
+        </div>
+        <div class="traffic-settings-body">
+          <form method="post" action="/traffic/settings" class="traffic-options">
+            <label class="traffic-option">
+              <input type="checkbox" name="record" value="on" {{if .RecordOn}}checked{{end}} onchange="this.form.submit()">
+              <span><strong>Record traffic</strong><small>Capture OIDC and SAML exchanges as they happen.</small></span>
+            </label>
+            <label class="traffic-option {{if not .RecordOn}}is-disabled{{end}}">
+              <input type="checkbox" name="record_secrets" value="on" {{if .SecretsOn}}checked{{end}} {{if not .RecordOn}}disabled{{end}} onchange="this.form.submit()">
+              <span><strong>Include raw secrets</strong><small>Credentials, tokens, and assertions may contain sensitive data.</small></span>
+            </label>
+            <noscript><button class="btn btn-sm" type="submit">Apply</button></noscript>
+          </form>
+          <div class="traffic-refresh-option">
+            <label class="traffic-option">
+              <input type="checkbox" data-traffic-pause>
+              <span><strong>Pause auto-refresh</strong><small>Keep the current transcript and reading position in place.</small></span>
+            </label>
+          </div>
+        </div>
+        {{if .SecretsOn}}<div class="traffic-warning" role="status">Raw secrets are being recorded. Turn this off when you are done debugging.</div>{{end}}
+      </section>
+
+      <section class="traffic-stream" aria-labelledby="traffic-stream-title">
+        <div class="traffic-stream-header">
+          <div>
+            <h2 id="traffic-stream-title">Recent exchanges</h2>
+            <p>Newest first · refreshes every 5 seconds</p>
+          </div>
+          {{if .Entries}}<form method="post" action="/traffic/clear"><button class="btn btn-sm" type="submit">Clear traffic</button></form>{{end}}
+        </div>
+        <div class="traffic-list" data-traffic-list>
+          {{if .Entries}}
+          {{range .Entries}}
+          <article class="card traffic-entry">
+            <pre class="inspector-payload">{{.}}</pre>
+          </article>
+          {{end}}
+          {{else}}
+          <div class="card card-empty">
+            <div class="traffic-empty-icon" aria-hidden="true">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7.5h16M4 12h10M4 16.5h7"/></svg>
+            </div>
+            <div class="h">No traffic recorded yet</div>
+            <p>{{if .RecordOn}}Run a sign-in flow and the exchange will appear here.{{else}}Turn on recording, then run a sign-in flow.{{end}}</p>
+          </div>
+          {{end}}
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="footer">
+    <span class="ok">scimtest</span>
+    <span class="copy">{{if .ActiveEnvironment.ID}}{{.ActiveEnvironment.Name}} SCIM: {{if .SCIMEnabled}}{{if .BaseURL}}{{.BaseURL}}{{else}}enabled, not configured{{end}}{{else}}disabled{{end}}{{else}}No active environment{{end}}</span>
+    <span>IDP base: {{.IDPBaseURL}}</span>
+  </footer>
+
   <script>
   // Refresh only the transcript list in place so reading position and
   // text selection survive, unlike a whole-page refresh.
@@ -56,7 +185,7 @@
     async function refresh() {
       if (document.hidden || (pause && pause.checked)) return;
       try {
-        const response = await fetch(window.location.pathname);
+        const response = await fetch('/traffic');
         if (!response.ok) return;
         const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
         const next = doc.querySelector('[data-traffic-list]');
@@ -68,7 +197,6 @@
     setInterval(refresh, 5000);
   })();
   </script>
-  </main>
 </body>
 </html>
 {{end}}

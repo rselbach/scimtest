@@ -56,7 +56,12 @@ func TestTrafficRecordingTogglesAtRuntime(t *testing.T) {
 	pageRec := httptest.NewRecorder()
 	svc.routes().ServeHTTP(pageRec, httptest.NewRequest(http.MethodGet, "/traffic", nil))
 	r.Equal(http.StatusOK, pageRec.Code)
-	r.Contains(pageRec.Body.String(), "openid-configuration")
+	body := pageRec.Body.String()
+	r.Contains(body, "openid-configuration")
+	r.Contains(body, `class="app"`)
+	r.Contains(body, `class="side-item active" href="/traffic" aria-current="page"`)
+	r.Contains(body, "SCIM Control Surface")
+	r.Contains(body, "Recent exchanges")
 }
 
 func TestTrafficSecretsRequireRecording(t *testing.T) {

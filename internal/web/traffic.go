@@ -41,18 +41,79 @@ func (t *trafficLog) clear() {
 }
 
 func (a *webApp) handleTraffic(w http.ResponseWriter, r *http.Request) {
-	data := struct {
-		Entries   []string
-		RecordOn  bool
-		SecretsOn bool
-	}{
-		Entries:   a.traffic.snapshot(),
-		RecordOn:  a.trafficRecordEnabled(),
-		SecretsOn: a.debugSecretsEnabled(),
+	globalState, err := loadState()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
+	environmentID, err := requestEnvironmentID(r, globalState)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	state := globalState
+	var activeEnvironment app
+	if environmentID != "" {
+		activeEnvironment, _ = appByID(globalState.Apps, environmentID)
+		state, err = loadStateForApp(environmentID)
+		if err == nil {
+			state, err = stateForApp(state, environmentID)
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		rememberEnvironment(w, environmentID)
+	} else {
+		state.Config.SCIMDisabled = true
+	}
+
+	stats := buildStats(state)
+	stats.Apps = len(globalState.Apps)
+	data := trafficPageData{
+		Entries:                a.traffic.snapshot(),
+		RecordOn:               a.trafficRecordEnabled(),
+		SecretsOn:              a.debugSecretsEnabled(),
+		Stats:                  stats,
+		BaseURL:                configuredBaseURL(state.Config.BaseURL),
+		IDPBaseURL:             a.effectiveIDPBaseURL(r, state),
+		SCIMEnabled:            activeEnvironment.SCIMEnabled,
+		UsersURL:               addEnvironmentToURL(dashboardURL("users", nil), environmentID),
+		GroupsURL:              addEnvironmentToURL(dashboardURL("groups", nil), environmentID),
+		AppsURL:                addEnvironmentToURL(dashboardURL("apps", nil), environmentID),
+		EnvironmentSettingsURL: addEnvironmentToURL(dashboardURL("apps", map[string]string{"modal": "app", "id": environmentID}), environmentID),
+		ConfigURL:              addEnvironmentToURL(dashboardURL("apps", map[string]string{"modal": "config"}), environmentID),
+		ToolsURL:               addEnvironmentToURL(dashboardURL("apps", map[string]string{"modal": "tools"}), environmentID),
+		TraceURL:               addEnvironmentToURL(dashboardURL("users", map[string]string{"showTrace": "1"}), environmentID),
+		HasTrace:               a.hasTrace(environmentID),
+		Environments:           globalState.Apps,
+		ActiveEnvironment:      activeEnvironment,
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplate.ExecuteTemplate(w, "traffic.html", data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+type trafficPageData struct {
+	Entries                []string
+	RecordOn               bool
+	SecretsOn              bool
+	Stats                  statsView
+	BaseURL                string
+	IDPBaseURL             string
+	SCIMEnabled            bool
+	UsersURL               string
+	GroupsURL              string
+	AppsURL                string
+	EnvironmentSettingsURL string
+	ConfigURL              string
+	ToolsURL               string
+	TraceURL               string
+	HasTrace               bool
+	Environments           []app
+	ActiveEnvironment      app
 }
 
 func (a *webApp) handleTrafficSettings(w http.ResponseWriter, r *http.Request) {
