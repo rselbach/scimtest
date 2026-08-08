@@ -1,260 +1,160 @@
 # scimtest
 
-`scimtest` is a local web-only auth testing service. It combines:
+`scimtest` is a local auth testing service: it plays the identity provider
+(and SCIM client) so you can test your app's SAML, OIDC, and SCIM
+implementations without touching a real IDP. It combines:
 
-- a SCIM sync control surface for local users and groups
 - an OIDC authorization-code test IDP
 - a SAML HTTP-POST test IDP
+- a SCIM sync control surface for local users and groups
 
-The repository also contains `scimtest-server`, the companion public tunnel
-server used by `scimtest` release builds.
+Everything runs in a local web UI. Each environment owns its users and
+groups in SQLite and supplies that environment's OIDC claims, SAML
+attributes, and optional SCIM provisioning, along with independent
+credentials, remote IDs, sync state, operation history, and errors.
 
-Each environment owns its users and groups in SQLite. That directory supplies
-the environment's OIDC claims, SAML attributes, and optional SCIM provisioning,
-along with independent credentials, remote IDs, sync state, operation history,
-and errors. When upgrading from the shared-directory model, scimtest copies the
-existing users and groups into every configured environment automatically.
+## Install
 
-## Run
+Homebrew (recommended — release builds include the automatic public tunnel):
+
+```sh
+brew install rselbach/tap/scimtest
+```
+
+Or download an archive from the
+[releases page](https://github.com/rselbach/scimtest/releases).
+
+Running from source also works, but source builds have no embedded tunnel
+identity, so the public tunnel is unavailable and OIDC/SAML are served on
+this machine only:
 
 ```sh
 go run ./cmd/scimtest
 ```
 
-The admin server opens in your browser at `http://127.0.0.1:8080` by default. If
-that port is occupied, it tries successively higher ports. Use `--port` (or the
-`PORT` environment variable) to require a specific port from 1 through 65535
-(startup fails if that port cannot be bound):
+## Quick start
 
-```sh
-go run ./cmd/scimtest --port 8090
-```
+1. Run `scimtest`. The admin UI opens at `http://127.0.0.1:8080` and a
+   first run lands directly on the environment wizard.
+2. Name the environment, enable the protocols you need, and save — the
+   OIDC and SAML connection values (issuer, discovery, metadata, and
+   certificate) appear as you type and can be copied or downloaded.
+3. Load the Greendale sample (from the empty users list or Bulk tools) to
+   get ten named users and three overlapping groups instantly.
+4. Test: use **Test sign-in** for a real flow against your app, the
+   built-in **playground** for an instant OIDC round trip with no relying
+   party required, or **Sync** to push the directory to your app's SCIM
+   endpoint.
 
-Use `--no-open` to start the server without opening the admin UI in a browser.
+## Features
 
-Only one process runs for each state file. Launching `scimtest` again opens the
-existing admin UI and exits; use a different `SCIMTEST_STATE_FILE` for an
-independent instance.
+- **Environments.** Each environment is one app you are testing, with its
+  own directory, credentials, and protocol configuration. The environment
+  selector in the top bar sets the context for the whole admin UI.
+- **OIDC playground.** A built-in relying party that runs the full
+  authorization-code exchange and shows the token response, decoded and
+  raw ID token, and userinfo on one page.
+- **Flow inspectors.** Per-environment OIDC and SAML inspectors keep the
+  last ten flows, including decoded claims, the raw ID token, and the
+  base64 `SAMLResponse` exactly as posted, plus a per-hop activity log
+  that records failures too.
+- **Traffic view.** Request/response transcripts of every OIDC and SAML
+  exchange, recorded by default into a bounded in-memory ring, with
+  optional raw-secret capture. `--debug` additionally prints transcripts
+  to stdout.
+- **Fault injection.** Arm faults for the next flow from the inspector —
+  expired tokens, clock skew, broken signatures, dropped claims, token
+  endpoint errors, SAML failure statuses — and they apply once even to
+  SP-initiated flows. The same effects exist as one-shot `fault_*` URL
+  parameters.
+- **SCIM sync.** Push the directory to your app's SCIM endpoint, reconcile
+  drift, import an existing remote directory with a preview, and inspect
+  every request in the sync trace and per-resource history.
+- **Config export.** Download SAML IDP metadata and the signing
+  certificate as files, or fetch `GET /apps/{id}/config.json` for a
+  machine-readable connection bundle to use in CI.
+- **Backups.** Download and restore per-environment state snapshots.
+  Backups contain credentials and signing keys; store them securely.
 
-State is stored at the OS user config path under `scimtest/state.db`. Set `SCIMTEST_STATE_FILE` to use an isolated SQLite state file.
+## IDP endpoints
 
-Use `--debug` to log redacted OIDC and SAML interactions. Use
-`--debug-secrets` only when raw credentials, tokens, and assertions are required;
-its output is sensitive.
+Each environment can expose OIDC, SAML, or both, under its endpoint name
+(slug):
 
-## Config
+- OIDC discovery: `/oidc/{slug}/.well-known/openid-configuration`
+  (the RFC 8414 path-insertion form
+  `/.well-known/openid-configuration/oidc/{slug}` also resolves)
+- OIDC authorize: `/oidc/{slug}/authorize`
+- OIDC token: `/oidc/{slug}/token`
+- OIDC userinfo: `/oidc/{slug}/userinfo`
+- OIDC JWKS: `/oidc/{slug}/jwks`
+- SAML metadata: `/saml/{slug}/metadata` (`?download=1` for a file)
+- SAML certificate: `/saml/{slug}/certificate.pem`
+- SAML SSO: `/saml/{slug}/sso`
 
-The global settings modal configures the IDP base URL published in OIDC/SAML
-metadata. Release builds automatically establish an application-authenticated
-tunnel through `https://scimtest.rselbach.com`; no user token or tunnel name is
-required. A random tunnel path is assigned and reused for the local installation
-when available.
+The OIDC flow signs RS256 ID tokens. SAML responses include a signed
+assertion. Signing material is generated on first run and stored in the
+SQLite state database.
 
-The environment selector in the top bar sets the context for the whole admin UI.
-Users, groups, sync, import, reset, remote IDs, status, traces, and errors always
-refer to that environment. Changes in one environment do not modify another
-environment's directory.
+## Configuration
 
-Starting a sync opens a live details view with one row per SCIM operation. The
-view can be closed without stopping the sync and reopened from the inline
-progress bar. Raw requests and responses remain available in the sync trace.
+**Ports.** scimtest binds `127.0.0.1` and prefers, in order: `--port`,
+`SCIMTEST_PORT`, the deprecated `PORT`, the port bound on the previous run
+(so issuer URLs stay stable across restarts), and 8080 with fallback to a
+nearby free port. `--port` and the environment variables pin the exact
+port; startup fails if it cannot be bound.
 
-Leave IDP base URL empty when clients can reach the current request host. Set it when clients need a public tunnel or another externally reachable URL.
+**State.** State lives at the OS user config path under
+`scimtest/state.db`. Use `--state-file` (or `SCIMTEST_STATE_FILE`) for an
+isolated state file — also how you run a second instance next to a running
+one, since only one process runs per state file; launching `scimtest`
+again just opens the existing admin UI. Before schema migrations, a copy
+of the database is written to a `backups/` directory next to it.
 
-The built-in tunnel exposes only the OIDC and SAML endpoints. The admin UI and
-its SCIM credentials remain available only on the loopback listener.
+**Flags.** `scimtest --help` lists everything; `scimtest --version` prints
+the version. Use `--no-open` to start without opening a browser and
+`--debug` to print redacted OIDC and SAML interactions to stdout
+(`--debug-secrets` includes raw credentials; its output is sensitive).
 
-Release builds require the `SCIMTEST_APPLICATION_PROFILE_ID` GitHub Actions
-variable and `SCIMTEST_APPLICATION_PRIVATE_SEED_BASE64` secret. The latter is
-the standard base64 encoding of the raw 32-byte Ed25519 seed. Local source
-builds omit the tunnel when no application identity is injected; tests generate
-their own keys and do not read local key files.
+**IDP base URL and tunnel.** Leave the IDP base URL empty when clients can
+reach the current request host; set it when clients need another
+externally reachable URL. Release builds automatically establish an
+application-authenticated tunnel through `https://scimtest.rselbach.com`:
+no token or tunnel name is needed, a random tunnel path is assigned and
+reused, and only the OIDC and SAML endpoints are exposed through it — the
+admin UI and SCIM credentials stay on the loopback listener. The config
+modal shows the tunnel state (connected, connecting, failed with a retry
+button, or unavailable in source builds).
 
-The server application profile for release builds must allow these routes:
+## Release builds
+
+Release builds require the `SCIMTEST_APPLICATION_PROFILE_ID` GitHub
+Actions variable and `SCIMTEST_APPLICATION_PRIVATE_SEED_BASE64` secret
+(standard base64 of the raw 32-byte Ed25519 seed). Convert an unencrypted
+OpenSSH Ed25519 key with `just application-seed /path/to/id_ed25519`
+(requires [just](https://github.com/casey/just)).
+
+The tunnel server's application profile must allow these routes:
 
 ```text
 GET /oidc/{slug}/.well-known/openid-configuration
+GET /.well-known/openid-configuration/oidc/{slug}
 GET /oidc/{slug}/jwks
 GET,POST /oidc/{slug}/authorize
 POST /oidc/{slug}/token
 GET,POST /oidc/{slug}/userinfo
 GET /saml/{slug}/metadata
+GET /saml/{slug}/certificate.pem
 GET,POST /saml/{slug}/sso
 ```
 
-Convert an unencrypted OpenSSH Ed25519 private key to the required secret value
-from the repository root:
+Tunnel startup diagnostics are written to the application log; private
+keys and seeds are never logged. `automatic tunnel disabled: build has no
+embedded application identity` means the binary was built without the
+release identity linker values.
 
-```sh
-just application-seed /path/to/id_ed25519
-```
+## Tunnel server
 
-Tunnel startup diagnostics are written to the application log. They include
-the server URL, profile and instance IDs, WebSocket handshake status,
-registration stage, and retry delay. Private keys and seeds are never logged.
-`automatic tunnel disabled: build has no embedded application identity` means
-the binary was built without the release identity linker values.
-
-## IDP Endpoints
-
-Each environment can expose OIDC, SAML, or both:
-
-- OIDC discovery: `/oidc/{slug}/.well-known/openid-configuration`
-- OIDC authorize: `/oidc/{slug}/authorize`
-- OIDC token: `/oidc/{slug}/token`
-- OIDC userinfo: `/oidc/{slug}/userinfo`
-- OIDC JWKS: `/oidc/{slug}/jwks`
-- SAML metadata: `/saml/{slug}/metadata`
-- SAML SSO: `/saml/{slug}/sso`
-
-The OIDC flow signs RS256 ID tokens. SAML responses include a signed assertion. Signing material is generated on first run and stored in the SQLite state database.
-
-## Tunnel Server
-
-`scimtest-server` exposes selected routes from local applications through
-public HTTP tunnels:
-
-- a GitHub-authenticated management dashboard restricted to an authorized
-  administrator
-- no user API tokens
-- no user-selected tunnel names
-- no standalone generic tunnel client
-- Ed25519-authenticated application instances with random, reusable names
-
-Each application profile defines an OpenSSH Ed25519 public key, the HTTP
-method/path combinations it may expose, and its request limits. A connecting
-application proves possession of the matching private key. Its stable instance
-ID lets the server reuse the same random public name after reconnecting.
-
-### Run Locally
-
-```sh
-SCIMTEST_GITHUB_CLIENT_ID=... \
-SCIMTEST_GITHUB_CLIENT_SECRET=... \
-go run ./cmd/scimtest-server \
-  --addr :7000 \
-  --domain localhost:7000 \
-  --dashboard-domain admin.localhost:7000 \
-  --logs
-```
-
-Configure the GitHub OAuth app callback URL as
-`http://admin.localhost:7000/auth/github/callback`. Open
-`http://admin.localhost:7000/dashboard`, sign in with the authorized GitHub
-account, and create an application profile. The dashboard must use a different
-origin from public tunnels so tunnel applications cannot access its session
-cookie.
-
-Generate a key pair for an application if it does not already have one:
-
-```sh
-ssh-keygen -t ed25519 -f scimtest_application -N ''
-```
-
-Paste the contents of `scimtest_application.pub` into the profile. Routes use
-one `METHOD[,METHOD] PATH` entry per line. Full path segments can be parameters:
-
-```text
-GET /scim/v2/ServiceProviderConfig
-GET,POST /scim/v2/Users
-GET,PUT,PATCH,DELETE /scim/v2/Users/{id}
-```
-
-### Embed the Tunnel Client
-
-Applications use the public client package to connect. Loading an encrypted or
-unencrypted OpenSSH private-key file as an `ed25519.PrivateKey` is the embedding
-application's responsibility.
-
-```go
-import scimtestclient "github.com/rselbach/scimtest/client"
-
-tunnel, err := scimtestclient.Start(ctx, scimtestclient.Config{
-	ServerBaseURL:         "https://tunnels.example.com",
-	ApplicationProfileID: "0123456789abcdef0123456789abcdef",
-	InstanceID:            installationID,
-	ApplicationPrivateKey: privateKey,
-	LocalPort:             3000,
-})
-if err != nil {
-	return err
-}
-defer tunnel.Close()
-
-publicBaseURL := tunnel.PublicURL
-```
-
-Each tunnel uses its stable ID as a root path. For example, a tunnel with the
-public URL `https://tunnels.example.com/human-timeline-club` exposes the
-allowed route `/scim/v2/Users` at
-`/human-timeline-club/scim/v2/Users`. The full public path, including the
-tunnel root, is forwarded to the client application unchanged.
-
-The client reconnects transient failures automatically. Invalid profile IDs,
-instance IDs, or signatures are terminal errors.
-
-### Production
-
-Configure a reverse proxy to forward both the public tunnel host and the
-separate dashboard host to the server:
-
-```caddyfile
-tunnels.example.com, admin.example.com {
-	reverse_proxy 127.0.0.1:8000
-}
-```
-
-```sh
-scimtest-server \
-  --addr 127.0.0.1:8000 \
-  --domain tunnels.example.com \
-  --dashboard-domain admin.example.com \
-  --scheme https \
-  --behind-proxy \
-  --data /var/lib/scimtest-server/scimtest-server.json \
-  --logs
-```
-
-Set `SCIMTEST_GITHUB_CLIENT_ID` and `SCIMTEST_GITHUB_CLIENT_SECRET` in the
-service environment. The production OAuth callback URL is
-`https://admin.example.com/auth/github/callback`.
-
-`--behind-proxy` trusts `X-Forwarded-*` only from configured proxy networks.
-The default trusted networks are loopback; use `--trusted-proxy-cidrs` when the
-proxy runs elsewhere.
-
-The JSON data file contains the dashboard whitelist and sessions, application
-profiles, and remembered instance names. GitHub access tokens are not stored.
-
-#### Deploy to exe.dev
-
-The production server runs on the `scimtest` exe.dev VM. exe.dev terminates TLS
-for `scimtest.rselbach.com` and `admin.scimtest.rselbach.com`, then forwards
-both hosts to `127.0.0.1:8000`; the VM does not need Caddy.
-
-The one-time VM setup requires the root-owned environment file at
-`/etc/scimtest-server/scimtest-server.env`. Start from
-`deploy/scimtest-server.env.example`, add the GitHub OAuth credentials, and
-keep the file mode at `0600`. The OAuth application callback URL is
-`https://admin.scimtest.rselbach.com/auth/github/callback`.
-
-Deploy from a local checkout with:
-
-```sh
-just deploy-server
-```
-
-The recipe runs the tests, builds a static Linux/amd64 server, copies it and
-the systemd unit over SSH, restarts the service, and checks the local port on
-the VM. A failed restart or health check restores the previous binary and
-unit. exe.dev must remain configured with a public proxy on port 8000 and both
-custom domains registered.
-
-The systemd unit, environment example, and deployment script live in
-`deploy/`. Persistent application data remains in `/var/lib/scimtest-server`.
-
-### Current Limits
-
-One complete HTTP request and response is carried in each tunnel message.
-Streaming and raw TCP forwarding are not supported, and request or response
-bodies are capped by `--max-body` (32 MiB by default).
+The companion `scimtest-server` (the public tunnel server) is documented
+in [docs/server.md](docs/server.md). Regular scimtest users never need to
+run it.
