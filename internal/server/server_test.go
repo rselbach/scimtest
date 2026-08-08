@@ -2,6 +2,7 @@ package server
 
 import (
 	"crypto/tls"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -383,12 +384,14 @@ func TestParseTrustedProxyCIDRsRejectsInvalidValue(t *testing.T) {
 
 func TestNewRejectsConflictingConnectPath(t *testing.T) {
 	tests := map[string]string{
-		"dashboard": "/dashboard",
-		"escaped":   "/d%61shboard",
-		"malformed": "/api/%zz",
-		"OAuth":     "/login/github",
-		"root":      "/",
-		"parameter": "/api/{connect}",
+		"dashboard":         "/dashboard",
+		"enrollment":        "/enroll",
+		"enrollment status": "/api/enroll/status",
+		"escaped":           "/d%61shboard",
+		"malformed":         "/api/%zz",
+		"OAuth":             "/login/github",
+		"root":              "/",
+		"parameter":         "/api/{connect}",
 	}
 	for name, connectPath := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -432,6 +435,25 @@ func TestNewRequiresSeparateDashboardOriginForOAuth(t *testing.T) {
 		DataPath:        t.TempDir() + "/test.json",
 	})
 	require.ErrorContains(t, err, "both GitHub client ID and secret")
+}
+
+func TestTunnelRegistrationConcurrencyIsBounded(t *testing.T) {
+	s := &Server{}
+	for i := range registrationLimit {
+		require.True(t, s.acquireRegistrationSlot(fmt.Sprintf("192.0.2.%d", i)))
+	}
+	require.False(t, s.acquireRegistrationSlot("198.51.100.1"))
+	s.releaseRegistrationSlot("192.0.2.0")
+	require.True(t, s.acquireRegistrationSlot("198.51.100.1"))
+
+	s = &Server{}
+	for range registrationsPerIP {
+		require.True(t, s.acquireRegistrationSlot("203.0.113.1"))
+	}
+	require.False(t, s.acquireRegistrationSlot("203.0.113.1"))
+	require.True(t, s.acquireRegistrationSlot("203.0.113.2"))
+	s.releaseRegistrationSlot("203.0.113.1")
+	require.True(t, s.acquireRegistrationSlot("203.0.113.1"))
 }
 
 func TestSecurityHeaders(t *testing.T) {

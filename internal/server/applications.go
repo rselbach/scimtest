@@ -42,11 +42,18 @@ type StoredApplicationRoute struct {
 }
 
 type StoredApplicationInstance struct {
-	TunnelID   string    `json:"tunnel_id"`
-	PublicKey  string    `json:"public_key,omitempty"`
-	Revoked    bool      `json:"revoked,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	LastUsedAt time.Time `json:"last_used_at"`
+	TunnelID     string    `json:"tunnel_id"`
+	PublicKey    string    `json:"public_key,omitempty"`
+	GitHubUserID int64     `json:"github_user_id,omitempty"`
+	GitHubLogin  string    `json:"github_login,omitempty"`
+	Revoked      bool      `json:"revoked,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	LastUsedAt   time.Time `json:"last_used_at"`
+}
+
+type enrollmentActor struct {
+	GitHubUserID int64
+	GitHubLogin  string
 }
 
 // Enrolled reports whether the instance authenticated with its own key; a

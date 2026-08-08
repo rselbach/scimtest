@@ -1,9 +1,13 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -77,6 +81,147 @@ func TestStartReturnsApplicationTunnel(t *testing.T) {
 	r.Equal("203.0.113.10", tunnel.Registration().ClientIP)
 	r.NoError(tunnel.Close())
 	r.NoError(tunnel.Close())
+}
+
+func TestStartCompletesFirstRunEnrollmentWithInstanceKey(t *testing.T) {
+	r := require.New(t)
+	instancePublicKey, instanceKey, err := ed25519.GenerateKey(rand.Reader)
+	r.NoError(err)
+	wantPublicKey := base64.StdEncoding.EncodeToString(instancePublicKey)
+	const deviceCode = "greendale-device-secret"
+
+	var connections atomic.Int32
+	upgrader := websocket.Upgrader{}
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/enrollment/status" {
+			r.Equal(http.MethodPost, req.Method)
+			r.Empty(req.URL.RawQuery)
+			r.Zero(req.ContentLength)
+			r.Equal("Bearer "+deviceCode, req.Header.Get("Authorization"))
+			r.NoError(json.NewEncoder(w).Encode(protocol.EnrollmentStatus{Status: "approved"}))
+			return
+		}
+
+		conn, err := upgrader.Upgrade(w, req, nil)
+		r.NoError(err)
+		defer func() { r.NoError(conn.Close()) }()
+		var register protocol.Message
+		r.NoError(conn.ReadJSON(&register))
+		r.Equal(wantPublicKey, register.InstancePublicKey)
+		r.NoError(conn.WriteJSON(protocol.Message{
+			Type:                protocol.TypeApplicationChallenge,
+			Challenge:           "challenge-1",
+			EnrollmentSupported: true,
+		}))
+		var signed protocol.Message
+		r.NoError(conn.ReadJSON(&signed))
+		payload := protocol.InstanceChallengePayload(register.ApplicationProfileID, wantPublicKey, register.InstanceID, "challenge-1")
+		r.True(ed25519.Verify(instancePublicKey, payload, signed.Signature))
+
+		if connections.Add(1) == 1 {
+			r.Empty(signed.EnrollmentGrant)
+			r.NoError(conn.WriteJSON(protocol.Message{
+				Type:                       protocol.TypeEnrollmentRequired,
+				EnrollmentURL:              srv.URL + "/enrollment/start",
+				EnrollmentStatusURL:        srv.URL + "/enrollment/status",
+				EnrollmentDeviceCode:       deviceCode,
+				EnrollmentVerificationCode: "study-group",
+				EnrollmentPollSeconds:      1,
+			}))
+			return
+		}
+
+		r.Equal(deviceCode, signed.EnrollmentGrant)
+		r.NoError(conn.WriteJSON(protocol.Message{
+			Type:      protocol.TypeTunnelRegistered,
+			TunnelID:  "human-timeline-club",
+			PublicURL: srv.URL + "/human-timeline-club",
+		}))
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	enrollments := make(chan Enrollment, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	tunnel, err := Start(ctx, Config{
+		ServerURL:            "ws" + strings.TrimPrefix(srv.URL, "http"),
+		ApplicationProfileID: "0123456789abcdef0123456789abcdef",
+		InstanceID:           "installation-1",
+		InstancePrivateKey:   instanceKey,
+		LocalPort:            3000,
+		OnEnrollmentRequired: func(enrollment Enrollment) {
+			enrollments <- enrollment
+		},
+	})
+	r.NoError(err)
+	r.Equal(Enrollment{URL: srv.URL + "/enrollment/start", VerificationCode: "study-group"}, <-enrollments)
+	r.Equal("human-timeline-club", tunnel.ID)
+	r.Equal(int32(2), connections.Load())
+	r.NoError(tunnel.Close())
+}
+
+func TestStartWithoutEnrollmentCallbackLogsAuthorizationDetails(t *testing.T) {
+	r := require.New(t)
+	_, instanceKey, err := ed25519.GenerateKey(rand.Reader)
+	r.NoError(err)
+	const deviceCode = "greendale-device-secret"
+
+	upgrader := websocket.Upgrader{}
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/enrollment/status" {
+			r.NoError(json.NewEncoder(w).Encode(protocol.EnrollmentStatus{
+				Status: "rejected",
+				Error:  "test authorization rejected",
+			}))
+			return
+		}
+
+		conn, err := upgrader.Upgrade(w, req, nil)
+		r.NoError(err)
+		defer func() { r.NoError(conn.Close()) }()
+		var register protocol.Message
+		r.NoError(conn.ReadJSON(&register))
+		r.NoError(conn.WriteJSON(protocol.Message{
+			Type:                protocol.TypeApplicationChallenge,
+			Challenge:           "greendale-challenge",
+			EnrollmentSupported: true,
+		}))
+		var signed protocol.Message
+		r.NoError(conn.ReadJSON(&signed))
+		r.NoError(conn.WriteJSON(protocol.Message{
+			Type:                       protocol.TypeEnrollmentRequired,
+			EnrollmentURL:              srv.URL + "/enrollment/start",
+			EnrollmentStatusURL:        srv.URL + "/enrollment/status",
+			EnrollmentDeviceCode:       deviceCode,
+			EnrollmentVerificationCode: "study-group",
+		}))
+	}))
+	defer srv.Close()
+
+	var logs bytes.Buffer
+	testLogger := slog.New(slog.NewTextHandler(&logs, nil))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err = Start(ctx, Config{
+		ServerURL:            "ws" + strings.TrimPrefix(srv.URL, "http"),
+		ApplicationProfileID: "0123456789abcdef0123456789abcdef",
+		InstanceID:           "installation-1",
+		InstancePrivateKey:   instanceKey,
+		LocalPort:            3000,
+		Logger:               testLogger,
+	})
+	r.ErrorContains(err, "test authorization rejected")
+	r.Contains(logs.String(), srv.URL+"/enrollment/start")
+	r.Contains(logs.String(), "verification_code=study-group")
+	r.NotContains(logs.String(), deviceCode)
 }
 
 func TestTunnelCloseCancelsForwardedRequests(t *testing.T) {

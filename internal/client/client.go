@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,11 +27,17 @@ import (
 )
 
 const (
-	maxBodyBytesDefault          = 32 << 20
-	writeTimeout                 = 10 * time.Second
-	httpClientTimeout            = 2 * time.Minute
-	sendChannelSize              = 64
-	maxConcurrentRequestsDefault = 32
+	maxBodyBytesDefault                 = 32 << 20
+	writeTimeout                        = 10 * time.Second
+	httpClientTimeout                   = 2 * time.Minute
+	enrollmentRequestTimeout            = 15 * time.Second
+	defaultEnrollmentPoll               = 2 * time.Second
+	maxEnrollmentPoll                   = 60 * time.Second
+	maxEnrollmentURLLength              = 2048
+	maxEnrollmentDeviceCodeLength       = 256
+	maxEnrollmentVerificationCodeLength = 64
+	sendChannelSize                     = 64
+	maxConcurrentRequestsDefault        = 32
 )
 
 type Config struct {
@@ -48,6 +55,7 @@ type Config struct {
 	MaxConcurrentRequests int
 	Output                io.Writer
 	OnRegistered          func(Registration)
+	OnEnrollmentRequired  func(Enrollment)
 }
 
 type Registration struct {
@@ -56,9 +64,31 @@ type Registration struct {
 	ClientIP  string
 }
 
+// Enrollment identifies the browser page where the user can authorize this
+// installation. Show VerificationCode independently so the user can compare
+// it with the page. The device secret used to poll enrollment status is never
+// exposed to callbacks.
+type Enrollment struct {
+	URL              string
+	VerificationCode string
+}
+
 type Client struct {
-	cfg        Config
-	httpClient *http.Client
+	cfg             Config
+	httpClient      *http.Client
+	enrollmentGrant string
+}
+
+type enrollmentRequiredError struct {
+	url              string
+	verificationCode string
+	statusURL        string
+	deviceCode       string
+	pollInterval     time.Duration
+}
+
+func (e *enrollmentRequiredError) Error() string {
+	return "tunnel enrollment required"
 }
 
 func New(cfg Config) *Client {
@@ -139,6 +169,19 @@ func (c *Client) RunContext(ctx context.Context) error {
 		err := c.runOnce(ctx)
 		if err == nil {
 			return nil
+		}
+		var enrollmentRequired *enrollmentRequiredError
+		if errors.As(err, &enrollmentRequired) {
+			c.enrollmentGrant = ""
+			if c.cfg.OnEnrollmentRequired != nil {
+				c.cfg.OnEnrollmentRequired(Enrollment{URL: enrollmentRequired.url, VerificationCode: enrollmentRequired.verificationCode})
+			}
+			if pollErr := c.pollEnrollment(ctx, enrollmentRequired); pollErr != nil {
+				err = pollErr
+			} else {
+				backoff = 0
+				continue
+			}
 		}
 
 		select {
@@ -251,9 +294,18 @@ func (c *Client) runOnce(ctx context.Context) error {
 	if err := conn.ReadJSON(&registered); err != nil {
 		return fmt.Errorf("read tunnel registration: %w", err)
 	}
-	if registered.Type != protocol.TypeTunnelRegistered {
+	switch registered.Type {
+	case protocol.TypeEnrollmentRequired:
+		enrollment, err := c.enrollmentRequired(registered)
+		if err != nil {
+			return fmt.Errorf("%w: invalid enrollment request: %v", errTerminal, err)
+		}
+		return enrollment
+	case protocol.TypeTunnelRegistered:
+	default:
 		return fmt.Errorf("%w: expected tunnel_registered, got %q", errTerminal, registered.Type)
 	}
+	c.enrollmentGrant = ""
 
 	registration := Registration{
 		TunnelID:  registered.TunnelID,
@@ -327,9 +379,8 @@ func (c *Client) runOnce(ctx context.Context) error {
 	}
 }
 
-// signChallenge answers the server's challenge. A server that supports
-// enrollment gets the per-install key signature plus the release key's
-// enrollment authorization; older servers get the legacy shared-key
+// signChallenge answers modern servers with the per-install key and an
+// optional one-use enrollment grant. Older servers get the legacy shared-key
 // signature over the client-chosen instance ID.
 func (c *Client) signChallenge(challenge protocol.Message) (protocol.Message, error) {
 	if !challenge.EnrollmentSupported {
@@ -358,19 +409,194 @@ func (c *Client) signChallenge(challenge protocol.Message) (protocol.Message, er
 		challenge.Challenge,
 	)
 	signed := protocol.Message{
-		Type:      protocol.TypeApplicationSignature,
-		Signature: ed25519.Sign(c.cfg.InstancePrivateKey, payload),
-	}
-	if len(c.cfg.ApplicationPrivateKey) == ed25519.PrivateKeySize {
-		enrollPayload := protocol.EnrollmentAuthorizationPayload(
-			c.cfg.ApplicationProfileID,
-			instancePublicKey,
-			c.cfg.InstanceID,
-			challenge.Challenge,
-		)
-		signed.EnrollmentSignature = ed25519.Sign(c.cfg.ApplicationPrivateKey, enrollPayload)
+		Type:            protocol.TypeApplicationSignature,
+		Signature:       ed25519.Sign(c.cfg.InstancePrivateKey, payload),
+		EnrollmentGrant: c.enrollmentGrant,
 	}
 	return signed, nil
+}
+
+func (c *Client) enrollmentRequired(msg protocol.Message) (*enrollmentRequiredError, error) {
+	if len(msg.EnrollmentURL) > maxEnrollmentURLLength || len(msg.EnrollmentStatusURL) > maxEnrollmentURLLength {
+		return nil, errors.New("enrollment URL is too long")
+	}
+	enrollmentURL, err := url.Parse(msg.EnrollmentURL)
+	if err != nil || enrollmentURL.Scheme == "" || enrollmentURL.Host == "" {
+		return nil, errors.New("enrollment URL must be absolute")
+	}
+	if enrollmentURL.Scheme != "http" && enrollmentURL.Scheme != "https" {
+		return nil, errors.New("enrollment URL must use HTTP or HTTPS")
+	}
+	if enrollmentURL.User != nil {
+		return nil, errors.New("enrollment URL must not contain user information")
+	}
+	serverURL, err := url.Parse(c.cfg.ServerURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse tunnel server URL: %w", err)
+	}
+	if serverURL.Scheme == "wss" && enrollmentURL.Scheme != "https" {
+		return nil, errors.New("enrollment URL must use HTTPS with a secure tunnel server")
+	}
+	if err := validateEnrollmentStatusURL(c.cfg.ServerURL, msg.EnrollmentStatusURL); err != nil {
+		return nil, err
+	}
+	deviceCode := msg.EnrollmentDeviceCode
+	if len(deviceCode) > maxEnrollmentDeviceCodeLength || !validBearerToken(deviceCode) {
+		return nil, errors.New("enrollment device code is invalid")
+	}
+	verificationCode := strings.TrimSpace(msg.EnrollmentVerificationCode)
+	if verificationCode == "" || len(verificationCode) > maxEnrollmentVerificationCodeLength || !validBearerToken(verificationCode) {
+		return nil, errors.New("enrollment verification code is invalid")
+	}
+
+	pollInterval := defaultEnrollmentPoll
+	if msg.EnrollmentPollSeconds > 0 {
+		if msg.EnrollmentPollSeconds > int(maxEnrollmentPoll/time.Second) {
+			pollInterval = maxEnrollmentPoll
+		} else {
+			pollInterval = time.Duration(msg.EnrollmentPollSeconds) * time.Second
+		}
+	}
+	return &enrollmentRequiredError{
+		url:              msg.EnrollmentURL,
+		verificationCode: verificationCode,
+		statusURL:        msg.EnrollmentStatusURL,
+		deviceCode:       deviceCode,
+		pollInterval:     pollInterval,
+	}, nil
+}
+
+func validateEnrollmentStatusURL(serverURL, statusURL string) error {
+	server, err := url.Parse(serverURL)
+	if err != nil {
+		return fmt.Errorf("parse tunnel server URL: %w", err)
+	}
+	switch server.Scheme {
+	case "ws":
+		server.Scheme = "http"
+	case "wss":
+		server.Scheme = "https"
+	default:
+		return errors.New("tunnel server URL must use WS or WSS")
+	}
+	want, err := httpOrigin(server)
+	if err != nil {
+		return fmt.Errorf("parse tunnel server origin: %w", err)
+	}
+
+	status, err := url.Parse(statusURL)
+	if err != nil {
+		return fmt.Errorf("parse enrollment status URL: %w", err)
+	}
+	if status.User != nil || status.RawQuery != "" || status.Fragment != "" {
+		return errors.New("enrollment status URL must not contain user information, a query, or a fragment")
+	}
+	got, err := httpOrigin(status)
+	if err != nil {
+		return fmt.Errorf("parse enrollment status origin: %w", err)
+	}
+	if got != want {
+		return errors.New("enrollment status URL must use the tunnel server origin")
+	}
+	return nil
+}
+
+func validBearerToken(value string) bool {
+	if value == "" {
+		return false
+	}
+	for i := range len(value) {
+		if value[i] <= ' ' || value[i] >= 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func httpOrigin(value *url.URL) (string, error) {
+	if value.Scheme != "http" && value.Scheme != "https" {
+		return "", errors.New("URL must use HTTP or HTTPS")
+	}
+	host := strings.ToLower(strings.TrimSuffix(value.Hostname(), "."))
+	if host == "" {
+		return "", errors.New("URL host is required")
+	}
+	port := value.Port()
+	if port == "" {
+		port = "80"
+		if value.Scheme == "https" {
+			port = "443"
+		}
+	}
+	return value.Scheme + "://" + net.JoinHostPort(host, port), nil
+}
+
+func (c *Client) pollEnrollment(ctx context.Context, enrollment *enrollmentRequiredError) error {
+	for {
+		status, retry, err := c.fetchEnrollmentStatus(ctx, enrollment)
+		if err == nil {
+			switch status.Status {
+			case "approved":
+				c.enrollmentGrant = enrollment.deviceCode
+				return nil
+			case "pending":
+			default:
+				message := strings.TrimSpace(status.Error)
+				if message == "" {
+					message = fmt.Sprintf("unexpected status %q", status.Status)
+				}
+				return fmt.Errorf("%w: tunnel enrollment failed: %s", errTerminal, message)
+			}
+		} else if !retry {
+			return err
+		} else {
+			c.cfg.Logger.Warn("enrollment status request failed; retrying", "error", err)
+		}
+
+		timer := time.NewTimer(enrollment.pollInterval)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		}
+	}
+}
+
+func (c *Client) fetchEnrollmentStatus(ctx context.Context, enrollment *enrollmentRequiredError) (protocol.EnrollmentStatus, bool, error) {
+	requestCtx, cancel := context.WithTimeout(ctx, enrollmentRequestTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, enrollment.statusURL, nil)
+	if err != nil {
+		return protocol.EnrollmentStatus{}, false, fmt.Errorf("create enrollment status request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+enrollment.deviceCode)
+	req.Header.Set("Cache-Control", "no-store")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return protocol.EnrollmentStatus{}, false, ctx.Err()
+		}
+		return protocol.EnrollmentStatus{}, true, fmt.Errorf("get enrollment status: %w", err)
+	}
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
+		closeErr := resp.Body.Close()
+		return protocol.EnrollmentStatus{}, true, errors.Join(fmt.Errorf("get enrollment status: HTTP %s", resp.Status), closeErr)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		closeErr := resp.Body.Close()
+		return protocol.EnrollmentStatus{}, false, errors.Join(fmt.Errorf("%w: get enrollment status: HTTP %s", errTerminal, resp.Status), closeErr)
+	}
+
+	var status protocol.EnrollmentStatus
+	decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&status)
+	closeErr := resp.Body.Close()
+	if err := errors.Join(decodeErr, closeErr); err != nil {
+		return protocol.EnrollmentStatus{}, false, fmt.Errorf("%w: decode enrollment status: %v", errTerminal, err)
+	}
+	return status, false, nil
 }
 
 func writeLoop(conn *websocket.Conn, send <-chan protocol.Message, done <-chan struct{}, errCh chan<- error, closeConn func()) {

@@ -22,10 +22,11 @@ func TestGitHubWebAuthentication(t *testing.T) {
 			r.Equal("test-secret", req.PostForm.Get("client_secret"))
 			r.Equal("auth-code", req.PostForm.Get("code"))
 			r.Equal("https://example.com/auth/github/callback", req.PostForm.Get("redirect_uri"))
+			r.Equal("verifier-123", req.PostForm.Get("code_verifier"))
 			r.NoError(json.NewEncoder(w).Encode(TokenResponse{AccessToken: "token-123"}))
 		case "/user":
 			r.Equal("Bearer token-123", req.Header.Get("Authorization"))
-			r.NoError(json.NewEncoder(w).Encode(GitHubUser{Login: "rselbach"}))
+			r.NoError(json.NewEncoder(w).Encode(GitHubUser{ID: 123, Login: "rselbach"}))
 		default:
 			http.NotFound(w, req)
 		}
@@ -39,7 +40,7 @@ func TestGitHubWebAuthentication(t *testing.T) {
 		TokenURL:     server.URL + "/access-token",
 		UserURL:      server.URL + "/user",
 	}
-	token, err := client.ExchangeWebCode(context.Background(), "auth-code", "https://example.com/auth/github/callback")
+	token, err := client.ExchangeWebCode(context.Background(), "auth-code", "https://example.com/auth/github/callback", "verifier-123")
 	r.NoError(err)
 	user, err := client.User(context.Background(), token.AccessToken)
 	r.NoError(err)
@@ -48,15 +49,18 @@ func TestGitHubWebAuthentication(t *testing.T) {
 
 func TestGitHubAuthorizeURL(t *testing.T) {
 	client := GitHubClient{ClientID: "test-client-id"}
-	value := client.AuthorizeURL("state-123", "https://example.com/auth/github/callback")
+	value := client.AuthorizeURL("state-123", "https://example.com/auth/github/callback", "challenge-123")
 	require.True(t, strings.HasPrefix(value, GitHubAuthorizeURL))
 	require.Contains(t, value, "client_id=test-client-id")
 	require.Contains(t, value, "state=state-123")
 	require.Contains(t, value, "redirect_uri=https%3A%2F%2Fexample.com%2Fauth%2Fgithub%2Fcallback")
+	require.Contains(t, value, "code_challenge=challenge-123")
+	require.Contains(t, value, "code_challenge_method=S256")
+	require.NotContains(t, value, "scope=")
 }
 
 func TestGitHubExchangeRequiresCredentials(t *testing.T) {
-	_, err := (GitHubClient{}).ExchangeWebCode(context.Background(), "code", "")
+	_, err := (GitHubClient{}).ExchangeWebCode(context.Background(), "code", "", "")
 	require.ErrorContains(t, err, "client id and secret are required")
 }
 
@@ -78,7 +82,7 @@ func TestGitHubClientTimesOutHungEndpoints(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := client.ExchangeWebCode(context.Background(), "auth-code", "https://example.com/callback")
+		_, err := client.ExchangeWebCode(context.Background(), "auth-code", "https://example.com/callback", "verifier")
 		errCh <- err
 	}()
 
@@ -94,6 +98,24 @@ func TestGitHubClientTimesOutHungEndpoints(t *testing.T) {
 		r.ErrorContains(err, "context deadline exceeded")
 	case <-time.After(time.Second):
 		t.Fatal("GitHub token exchange did not time out")
+	}
+}
+
+func TestGitHubUserRequiresStableIdentity(t *testing.T) {
+	tests := map[string]GitHubUser{
+		"missing id":    {Login: "troy"},
+		"missing login": {ID: 123},
+	}
+	for name, user := range tests {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				require.NoError(t, json.NewEncoder(w).Encode(user))
+			}))
+			defer server.Close()
+
+			_, err := (GitHubClient{HTTPClient: server.Client(), UserURL: server.URL}).User(context.Background(), "token")
+			require.ErrorContains(t, err, "invalid user")
+		})
 	}
 }
 

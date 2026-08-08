@@ -14,8 +14,7 @@ builds:
       - -s -w
       - -X=main.version={{ .Version }}
       - -X=github.com/rselbach/scimtest/internal/web.tunnelApplicationProfileID={{ .Env.SCIMTEST_APPLICATION_PROFILE_ID }}
-      - -X=github.com/rselbach/scimtest/internal/web.tunnelApplicationPrivateSeed={{ .Env.SCIMTEST_APPLICATION_PRIVATE_SEED_BASE64 }}
-      - -X=github.com/rselbach/scimtest/internal/web.tunnelReleaseIdentityRequired=true
+      - -X=github.com/rselbach/scimtest/internal/web.tunnelReleaseProfileRequired=true
     goos:
       - darwin
       - linux

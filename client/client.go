@@ -16,14 +16,15 @@ import (
 )
 
 type Config struct {
-	ServerURL             string
-	ServerBaseURL         string
-	ApplicationProfileID  string
-	InstanceID            string
+	ServerURL            string
+	ServerBaseURL        string
+	ApplicationProfileID string
+	InstanceID           string
+	// ApplicationPrivateKey authenticates against legacy tunnel servers.
 	ApplicationPrivateKey ed25519.PrivateKey
-	// InstancePrivateKey is this installation's own key. When set, the client
-	// enrolls it with servers that support per-install identities and only
-	// falls back to the shared application key on older servers.
+	// InstancePrivateKey is this installation's own key and is sufficient for
+	// modern tunnel servers. Persist and reuse it to retain the installation's
+	// identity and public tunnel name.
 	InstancePrivateKey    ed25519.PrivateKey
 	LocalHost             string
 	LocalPort             int
@@ -33,6 +34,9 @@ type Config struct {
 	Logger                *slog.Logger
 	ReconnectTimeout      time.Duration
 	OnRegistered          func(Registration)
+	// OnEnrollmentRequired receives the user-facing authorization URL before
+	// the client starts polling. It never receives the enrollment credential.
+	OnEnrollmentRequired func(Enrollment)
 }
 
 // Registration identifies the current public tunnel assigned by the server.
@@ -40,6 +44,14 @@ type Registration struct {
 	TunnelID  string
 	PublicURL string
 	ClientIP  string
+}
+
+// Enrollment identifies the browser page where the user can authorize this
+// installation for its first tunnel connection. Show VerificationCode
+// independently so the user can compare it with the authorization page.
+type Enrollment struct {
+	URL              string
+	VerificationCode string
 }
 
 type Tunnel struct {
@@ -76,8 +88,10 @@ func Start(ctx context.Context, cfg Config) (*Tunnel, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if cfg.ApplicationProfileID == "" || cfg.InstanceID == "" || len(cfg.ApplicationPrivateKey) != ed25519.PrivateKeySize {
-		return nil, errors.New("application profile id, instance id, and Ed25519 private key are required")
+	hasApplicationKey := len(cfg.ApplicationPrivateKey) == ed25519.PrivateKeySize
+	hasInstanceKey := len(cfg.InstancePrivateKey) == ed25519.PrivateKeySize
+	if cfg.ApplicationProfileID == "" || cfg.InstanceID == "" || (!hasApplicationKey && !hasInstanceKey) {
+		return nil, errors.New("application profile id, instance id, and an Ed25519 application or instance private key are required")
 	}
 	if cfg.LocalPort <= 0 || cfg.LocalPort > 65535 {
 		return nil, fmt.Errorf("invalid local port %d", cfg.LocalPort)
@@ -91,11 +105,25 @@ func Start(ctx context.Context, cfg Config) (*Tunnel, error) {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
+	enrollmentLogger := cfg.Logger
+	if enrollmentLogger == nil {
+		enrollmentLogger = slog.Default()
+	}
 
 	runCtx, cancel := context.WithCancel(ctx)
 	registered := make(chan Registration, 1)
 	registration := &registrationState{}
 	var registeredOnce sync.Once
+	var onEnrollmentRequired func(internalclient.Enrollment)
+	if cfg.OnEnrollmentRequired != nil {
+		onEnrollmentRequired = func(enrollment internalclient.Enrollment) {
+			cfg.OnEnrollmentRequired(Enrollment{URL: enrollment.URL, VerificationCode: enrollment.VerificationCode})
+		}
+	} else {
+		onEnrollmentRequired = func(enrollment internalclient.Enrollment) {
+			enrollmentLogger.Warn("scimtest installation authorization required", "url", enrollment.URL, "verification_code", enrollment.VerificationCode)
+		}
+	}
 
 	c := internalclient.New(internalclient.Config{
 		ServerURL:             serverURL,
@@ -111,6 +139,7 @@ func Start(ctx context.Context, cfg Config) (*Tunnel, error) {
 		Logger:                logger,
 		ReconnectTimeout:      cfg.ReconnectTimeout,
 		Output:                io.Discard,
+		OnEnrollmentRequired:  onEnrollmentRequired,
 		OnRegistered: func(reg internalclient.Registration) {
 			current := Registration{
 				TunnelID:  reg.TunnelID,

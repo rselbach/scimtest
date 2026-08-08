@@ -2,9 +2,6 @@ package web
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -2377,15 +2374,12 @@ func TestAutomaticTunnelRetry(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{}))
-	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	r.NoError(err)
-	oldProfileID, oldSeed, oldRequired := tunnelApplicationProfileID, tunnelApplicationPrivateSeed, tunnelReleaseIdentityRequired
+	oldProfileID, oldRequired := tunnelApplicationProfileID, tunnelReleaseProfileRequired
 	t.Cleanup(func() {
-		tunnelApplicationProfileID, tunnelApplicationPrivateSeed, tunnelReleaseIdentityRequired = oldProfileID, oldSeed, oldRequired
+		tunnelApplicationProfileID, tunnelReleaseProfileRequired = oldProfileID, oldRequired
 	})
 	tunnelApplicationProfileID = strings.Repeat("a", 32)
-	tunnelApplicationPrivateSeed = base64.StdEncoding.EncodeToString(privateKey.Seed())
-	tunnelReleaseIdentityRequired = "true"
+	tunnelReleaseProfileRequired = "true"
 
 	attempts := 0
 	app := &webApp{
@@ -2420,15 +2414,12 @@ func TestAutomaticTunnelRetrySurfacesRegistrationError(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{}))
-	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	r.NoError(err)
-	oldProfileID, oldSeed, oldRequired := tunnelApplicationProfileID, tunnelApplicationPrivateSeed, tunnelReleaseIdentityRequired
+	oldProfileID, oldRequired := tunnelApplicationProfileID, tunnelReleaseProfileRequired
 	t.Cleanup(func() {
-		tunnelApplicationProfileID, tunnelApplicationPrivateSeed, tunnelReleaseIdentityRequired = oldProfileID, oldSeed, oldRequired
+		tunnelApplicationProfileID, tunnelReleaseProfileRequired = oldProfileID, oldRequired
 	})
 	tunnelApplicationProfileID = strings.Repeat("a", 32)
-	tunnelApplicationPrivateSeed = base64.StdEncoding.EncodeToString(privateKey.Seed())
-	tunnelReleaseIdentityRequired = "true"
+	tunnelReleaseProfileRequired = "true"
 
 	app := &webApp{
 		tunnelStart: func(context.Context, scimtestclient.Config) (*startedTunnel, error) {
@@ -2452,11 +2443,11 @@ func TestAutomaticTunnelRetrySurfacesMissingIdentity(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{}))
-	oldProfileID, oldSeed, oldRequired := tunnelApplicationProfileID, tunnelApplicationPrivateSeed, tunnelReleaseIdentityRequired
+	oldProfileID, oldRequired := tunnelApplicationProfileID, tunnelReleaseProfileRequired
 	t.Cleanup(func() {
-		tunnelApplicationProfileID, tunnelApplicationPrivateSeed, tunnelReleaseIdentityRequired = oldProfileID, oldSeed, oldRequired
+		tunnelApplicationProfileID, tunnelReleaseProfileRequired = oldProfileID, oldRequired
 	})
-	tunnelApplicationProfileID, tunnelApplicationPrivateSeed, tunnelReleaseIdentityRequired = "", "", ""
+	tunnelApplicationProfileID, tunnelReleaseProfileRequired = "", ""
 
 	app := &webApp{}
 	app.setTunnelError("application profile rejected")
@@ -2468,22 +2459,19 @@ func TestAutomaticTunnelRetrySurfacesMissingIdentity(t *testing.T) {
 
 	r.Equal(http.StatusSeeOther, rec.Code)
 	r.Equal("/?modal=config&tab=users", rec.Header().Get("Location"))
-	r.Equal("retry automatic tunnel: embedded application identity is unavailable", app.tunnelError())
+	r.Equal("retry automatic tunnel: application profile is unavailable", app.tunnelError())
 }
 
 func TestAutomaticTunnelRetryAvoidsConcurrentAttempts(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{}))
-	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	r.NoError(err)
-	oldProfileID, oldSeed, oldRequired := tunnelApplicationProfileID, tunnelApplicationPrivateSeed, tunnelReleaseIdentityRequired
+	oldProfileID, oldRequired := tunnelApplicationProfileID, tunnelReleaseProfileRequired
 	t.Cleanup(func() {
-		tunnelApplicationProfileID, tunnelApplicationPrivateSeed, tunnelReleaseIdentityRequired = oldProfileID, oldSeed, oldRequired
+		tunnelApplicationProfileID, tunnelReleaseProfileRequired = oldProfileID, oldRequired
 	})
 	tunnelApplicationProfileID = strings.Repeat("a", 32)
-	tunnelApplicationPrivateSeed = base64.StdEncoding.EncodeToString(privateKey.Seed())
-	tunnelReleaseIdentityRequired = "true"
+	tunnelReleaseProfileRequired = "true"
 
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -2522,34 +2510,25 @@ func TestAutomaticTunnelRetryIsPostOnly(t *testing.T) {
 }
 
 func TestLoadTunnelApplicationIdentity(t *testing.T) {
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	require.NoError(t, err)
-	_ = publicKey
-	seed := privateKey.Seed()
-
 	tests := map[string]struct {
 		profileID string
-		seed      string
 		required  string
 		wantNil   bool
 		wantErr   string
 	}{
 		"development build without identity": {wantNil: true},
 		"release missing identity":           {required: "true", wantErr: "profile id"},
-		"invalid profile":                    {profileID: "not-a-profile", seed: base64.StdEncoding.EncodeToString(seed), wantErr: "profile id"},
-		"missing seed":                       {profileID: strings.Repeat("a", 32), wantErr: "private seed is required"},
-		"invalid base64":                     {profileID: strings.Repeat("a", 32), seed: "%%%", wantErr: "invalid base64"},
-		"wrong seed size":                    {profileID: strings.Repeat("a", 32), seed: base64.StdEncoding.EncodeToString([]byte("short")), wantErr: "32 bytes"},
-		"valid identity":                     {profileID: strings.Repeat("a", 32), seed: base64.StdEncoding.EncodeToString(seed)},
+		"invalid profile":                    {profileID: "not-a-profile", wantErr: "profile id"},
+		"valid profile":                      {profileID: strings.Repeat("a", 32)},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			r := require.New(t)
-			oldProfileID, oldSeed, oldRequired := tunnelApplicationProfileID, tunnelApplicationPrivateSeed, tunnelReleaseIdentityRequired
+			oldProfileID, oldRequired := tunnelApplicationProfileID, tunnelReleaseProfileRequired
 			t.Cleanup(func() {
-				tunnelApplicationProfileID, tunnelApplicationPrivateSeed, tunnelReleaseIdentityRequired = oldProfileID, oldSeed, oldRequired
+				tunnelApplicationProfileID, tunnelReleaseProfileRequired = oldProfileID, oldRequired
 			})
-			tunnelApplicationProfileID, tunnelApplicationPrivateSeed, tunnelReleaseIdentityRequired = tc.profileID, tc.seed, tc.required
+			tunnelApplicationProfileID, tunnelReleaseProfileRequired = tc.profileID, tc.required
 
 			identity, err := loadTunnelApplicationIdentity()
 			if tc.wantErr != "" {
@@ -2562,17 +2541,14 @@ func TestLoadTunnelApplicationIdentity(t *testing.T) {
 				return
 			}
 			r.Equal(tc.profileID, identity.profileID)
-			r.Equal(privateKey, identity.privateKey)
 		})
 	}
 }
 
-func TestAutomaticTunnelUsesApplicationIdentity(t *testing.T) {
+func TestAutomaticTunnelUsesApplicationProfile(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{}))
-	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	r.NoError(err)
 	var got scimtestclient.Config
 	tunnel := &fakeTunnel{}
 	app := &webApp{
@@ -2587,15 +2563,16 @@ func TestAutomaticTunnelUsesApplicationIdentity(t *testing.T) {
 		},
 	}
 
-	app.startAutomaticTunnel(tunnelApplicationIdentity{profileID: strings.Repeat("a", 32), privateKey: privateKey})
+	app.startAutomaticTunnel(tunnelApplicationIdentity{profileID: strings.Repeat("a", 32)})
 
 	r.Equal("https://scimtest.rselbach.com", got.ServerBaseURL)
 	r.Equal(strings.Repeat("a", 32), got.ApplicationProfileID)
 	r.NotEmpty(got.InstanceID)
-	r.Equal(privateKey, got.ApplicationPrivateKey)
+	r.Empty(got.ApplicationPrivateKey)
 	r.Equal(8080, got.LocalPort)
 	r.NotNil(got.Logger)
 	r.NotNil(got.OnRegistered)
+	r.NotNil(got.OnEnrollmentRequired)
 	r.Equal("https://scimtest.rselbach.com/random-tunnel", app.tunnelPublicURL())
 	r.Equal("/random-tunnel", app.tunnelPathPrefix())
 	r.Equal("203.0.113.50", app.tunnelChooserClientIP())
@@ -2612,12 +2589,56 @@ func TestAutomaticTunnelUsesApplicationIdentity(t *testing.T) {
 	r.Empty(app.tunnelPublicURL())
 }
 
+func TestAutomaticTunnelEnrollmentOpensBrowserAndShowsLink(t *testing.T) {
+	r := require.New(t)
+	opened := make(chan string, 1)
+	app := &webApp{
+		tunnelSupported: true,
+		browserOpen: func(value string) error {
+			opened <- value
+			return nil
+		},
+	}
+	value := "https://admin.example.com/enroll?code=study-group"
+	app.handleTunnelEnrollmentRequired(scimtestclient.Enrollment{URL: value, VerificationCode: "study-group"})
+	r.Equal(value, <-opened)
+	r.Equal("authorizing", app.tunnelState())
+	r.Equal(value, app.buildConfigFormView(config{}, "users", 1, 15, "").TunnelEnrollmentURL)
+	r.Equal("study-group", app.buildConfigFormView(config{}, "users", 1, 15, "").TunnelEnrollmentCode)
+
+	disabled := &webApp{
+		tunnelSupported: true,
+		noOpen:          true,
+		browserOpen: func(string) error {
+			r.Fail("browser opener must not run with --no-open")
+			return nil
+		},
+	}
+	disabled.handleTunnelEnrollmentRequired(scimtestclient.Enrollment{URL: value, VerificationCode: "study-group"})
+	r.Equal("authorizing", disabled.tunnelState())
+	r.Equal(value, disabled.tunnelEnrollmentURLValue())
+}
+
+func TestTunnelEnrollmentExtendsRegistrationTimeout(t *testing.T) {
+	r := require.New(t)
+	tunnel := &fakeTunnel{}
+	started, err := startTunnelWithTimeout(context.Background(), func(_ context.Context, cfg scimtestclient.Config) (*startedTunnel, error) {
+		cfg.OnEnrollmentRequired(scimtestclient.Enrollment{URL: "https://admin.example.com/enroll?code=study-group", VerificationCode: "study-group"})
+		time.Sleep(100 * time.Millisecond)
+		return &startedTunnel{
+			PublicURL: "https://scimtest.example.com/study-group",
+			Tunnel:    tunnel,
+		}, nil
+	}, scimtestclient.Config{}, 30*time.Millisecond)
+	r.NoError(err)
+	r.NotNil(started)
+	r.NoError(started.Tunnel.Close())
+}
+
 func TestAutomaticTunnelSurfacesRegistrationError(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{}))
-	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	r.NoError(err)
 	app := &webApp{
 		localPort: 8080,
 		tunnelStart: func(context.Context, scimtestclient.Config) (*startedTunnel, error) {
@@ -2625,7 +2646,7 @@ func TestAutomaticTunnelSurfacesRegistrationError(t *testing.T) {
 		},
 	}
 
-	app.startAutomaticTunnel(tunnelApplicationIdentity{profileID: strings.Repeat("a", 32), privateKey: privateKey})
+	app.startAutomaticTunnel(tunnelApplicationIdentity{profileID: strings.Repeat("a", 32)})
 
 	r.Equal("start automatic tunnel: application profile rejected", app.tunnelError())
 }
@@ -2634,20 +2655,26 @@ func TestAutomaticTunnelClosesInvalidTunnel(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{}))
-	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	r.NoError(err)
 	tunnel := &fakeTunnel{}
 	app := &webApp{
 		localPort: 8080,
-		tunnelStart: func(context.Context, scimtestclient.Config) (*startedTunnel, error) {
+		noOpen:    true,
+		tunnelStart: func(_ context.Context, cfg scimtestclient.Config) (*startedTunnel, error) {
+			cfg.OnEnrollmentRequired(scimtestclient.Enrollment{
+				URL:              "https://admin.example.com/enroll?code=study-group",
+				VerificationCode: "study-group",
+			})
 			return &startedTunnel{Tunnel: tunnel}, nil
 		},
 	}
 
-	app.startAutomaticTunnel(tunnelApplicationIdentity{profileID: strings.Repeat("a", 32), privateKey: privateKey})
+	app.startAutomaticTunnel(tunnelApplicationIdentity{profileID: strings.Repeat("a", 32)})
 
 	r.True(tunnel.closed)
 	r.Equal("tunnel did not return a public URL", app.tunnelError())
+	r.Equal("failed", app.tunnelState())
+	r.Empty(app.tunnelEnrollmentURLValue())
+	r.Empty(app.tunnelEnrollmentCodeValue())
 }
 
 type fakeTunnel struct {
@@ -3343,9 +3370,11 @@ func TestGoreleaserInjectsTunnelIdentitySymbols(t *testing.T) {
 	r.NoError(err)
 
 	// A mismatched -X package path silently ships release builds with no
-	// tunnel identity, defeating tunnelReleaseIdentityRequired.
+	// tunnel profile, defeating tunnelReleaseProfileRequired.
 	pkg := reflect.TypeOf(webApp{}).PkgPath()
-	for _, symbol := range []string{"tunnelApplicationProfileID", "tunnelApplicationPrivateSeed", "tunnelReleaseIdentityRequired"} {
+	for _, symbol := range []string{"tunnelApplicationProfileID", "tunnelReleaseProfileRequired"} {
 		r.Contains(string(data), "-X="+pkg+"."+symbol+"=", "goreleaser must inject %s into %s", symbol, pkg)
 	}
+	r.NotContains(string(data), "PRIVATE_SEED")
+	r.NotContains(string(data), "PrivateSeed")
 }

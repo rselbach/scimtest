@@ -160,6 +160,220 @@ func TestApplicationProfileStorage(t *testing.T) {
 	r.ErrorContains(err, "already used")
 }
 
+func TestEnrollApplicationInstanceStoresGitHubIdentity(t *testing.T) {
+	r := require.New(t)
+	store, profile := newTestApplicationProfile(t)
+	r.NoError(store.RememberApplicationTunnel(
+		profile.ID,
+		"legacy-installation",
+		"human-timeline-club",
+	))
+	actor := enrollmentActor{GitHubUserID: 123, GitHubLogin: "troynabed"}
+
+	r.NoError(store.EnrollApplicationInstance(
+		profile.ID,
+		"enrolled-installation",
+		"instance-public-key",
+		actor,
+	))
+	instance, ok := store.ApplicationInstance(profile.ID, "enrolled-installation")
+	r.True(ok)
+	r.Equal("instance-public-key", instance.PublicKey)
+	r.Equal(actor.GitHubUserID, instance.GitHubUserID)
+	r.Equal(actor.GitHubLogin, instance.GitHubLogin)
+	r.Empty(instance.TunnelID)
+	legacy, ok := store.ApplicationInstance(profile.ID, "legacy-installation")
+	r.True(ok)
+	r.Equal("human-timeline-club", legacy.TunnelID)
+	r.Equal(1, store.CountApplicationInstancesByGitHubUserID(profile.ID, actor.GitHubUserID))
+
+	reopened, err := OpenStore(store.path)
+	r.NoError(err)
+	instance, ok = reopened.ApplicationInstance(profile.ID, "enrolled-installation")
+	r.True(ok)
+	r.Equal(actor.GitHubUserID, instance.GitHubUserID)
+	r.Equal(actor.GitHubLogin, instance.GitHubLogin)
+}
+
+func TestEnrollApplicationInstanceRequiresGitHubIdentity(t *testing.T) {
+	tests := map[string]enrollmentActor{
+		"missing id":    {GitHubLogin: "troynabed"},
+		"missing login": {GitHubUserID: 123},
+	}
+
+	for name, actor := range tests {
+		t.Run(name, func(t *testing.T) {
+			store, profile := newTestApplicationProfile(t)
+			err := store.EnrollApplicationInstance(
+				profile.ID,
+				"enrolled-installation",
+				"instance-public-key",
+				actor,
+			)
+			require.ErrorContains(t, err, "github enrollment identity is required")
+			_, ok := store.ApplicationInstance(profile.ID, "enrolled-installation")
+			require.False(t, ok)
+		})
+	}
+}
+
+func TestEnrollApplicationInstanceRejectsRevokedIdentity(t *testing.T) {
+	r := require.New(t)
+	store, profile := newTestApplicationProfile(t)
+	actor := enrollmentActor{GitHubUserID: 123, GitHubLogin: "troynabed"}
+	r.NoError(store.EnrollApplicationInstance(
+		profile.ID,
+		"enrolled-installation",
+		"instance-public-key",
+		actor,
+	))
+	changed, err := store.SetApplicationInstanceRevoked(profile.ID, "enrolled-installation", true)
+	r.NoError(err)
+	r.True(changed)
+	r.ErrorContains(store.EnrollApplicationInstance(
+		profile.ID,
+		"enrolled-installation",
+		"instance-public-key",
+		enrollmentActor{GitHubUserID: 456, GitHubLogin: "abed"},
+	), revokedInstanceMessage)
+	instance, exists := store.ApplicationInstance(profile.ID, "enrolled-installation")
+	r.True(exists)
+	r.True(instance.Revoked)
+	r.Equal(actor.GitHubUserID, instance.GitHubUserID)
+}
+
+func TestRevokedApplicationInstanceIsNeverAgePruned(t *testing.T) {
+	tests := map[string]func(*Store, string) error{
+		"enroll": func(store *Store, profileID string) error {
+			return store.EnrollApplicationInstance(
+				profileID,
+				"new-installation",
+				"new-public-key",
+				enrollmentActor{GitHubUserID: 456, GitHubLogin: "abednadirtroy"},
+			)
+		},
+		"remember tunnel": func(store *Store, profileID string) error {
+			return store.RememberApplicationTunnel(profileID, "new-installation", "study-room-club")
+		},
+	}
+
+	for name, triggerPruning := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			store, profile := newTestApplicationProfile(t)
+			r.NoError(store.EnrollApplicationInstance(
+				profile.ID,
+				"revoked-installation",
+				"revoked-public-key",
+				enrollmentActor{GitHubUserID: 123, GitHubLogin: "troynabed"},
+			))
+			changed, err := store.SetApplicationInstanceRevoked(
+				profile.ID,
+				"revoked-installation",
+				true,
+			)
+			r.NoError(err)
+			r.True(changed)
+
+			store.mu.Lock()
+			storedProfile := store.data.ApplicationProfiles[profile.ID]
+			instance := storedProfile.Instances["revoked-installation"]
+			instance.LastUsedAt = time.Now().UTC().Add(-applicationInstanceMaxIdle - time.Hour)
+			storedProfile.Instances["revoked-installation"] = instance
+			store.data.ApplicationProfiles[profile.ID] = storedProfile
+			store.mu.Unlock()
+
+			r.NoError(triggerPruning(store, profile.ID))
+			instance, ok := store.ApplicationInstance(profile.ID, "revoked-installation")
+			r.True(ok)
+			r.True(instance.Revoked)
+		})
+	}
+}
+
+func TestUnreserveApplicationTunnelRetainsEnrolledIdentity(t *testing.T) {
+	r := require.New(t)
+	store, profile := newTestApplicationProfile(t)
+	actor := enrollmentActor{GitHubUserID: 123, GitHubLogin: "troynabed"}
+	r.NoError(store.EnrollApplicationInstance(
+		profile.ID,
+		"enrolled-installation",
+		"instance-public-key",
+		actor,
+	))
+	r.NoError(store.RememberApplicationTunnel(
+		profile.ID,
+		"enrolled-installation",
+		"human-timeline-club",
+	))
+	changed, err := store.SetApplicationInstanceRevoked(
+		profile.ID,
+		"enrolled-installation",
+		true,
+	)
+	r.NoError(err)
+	r.True(changed)
+
+	removed, err := store.UnreserveApplicationTunnel(profile.ID, "enrolled-installation")
+	r.NoError(err)
+	r.True(removed)
+	instance, ok := store.ApplicationInstance(profile.ID, "enrolled-installation")
+	r.True(ok)
+	r.Empty(instance.TunnelID)
+	r.Equal("instance-public-key", instance.PublicKey)
+	r.Equal(actor.GitHubUserID, instance.GitHubUserID)
+	r.Equal(actor.GitHubLogin, instance.GitHubLogin)
+	r.True(instance.Revoked)
+	r.Zero(store.CountApplicationInstancesByGitHubUserID(profile.ID, actor.GitHubUserID))
+}
+
+func TestRememberApplicationTunnelRejectsRevokedIdentity(t *testing.T) {
+	r := require.New(t)
+	store, profile := newTestApplicationProfile(t)
+	r.NoError(store.EnrollApplicationInstance(
+		profile.ID,
+		"enrolled-installation",
+		"instance-public-key",
+		enrollmentActor{GitHubUserID: 123, GitHubLogin: "troynabed"},
+	))
+	changed, err := store.SetApplicationInstanceRevoked(profile.ID, "enrolled-installation", true)
+	r.NoError(err)
+	r.True(changed)
+	r.ErrorContains(
+		store.RememberApplicationTunnel(profile.ID, "enrolled-installation", "study-room-club"),
+		revokedInstanceMessage,
+	)
+	r.Empty(store.ApplicationTunnelID(profile.ID, "enrolled-installation"))
+}
+
+func TestRememberAuthenticatedApplicationTunnelRequiresExistingIdentity(t *testing.T) {
+	store, profile := newTestApplicationProfile(t)
+	err := store.RememberAuthenticatedApplicationTunnel(
+		profile.ID,
+		"unknown-installation",
+		"study-room-club",
+	)
+	require.ErrorContains(t, err, "authorization no longer exists")
+	_, exists := store.ApplicationInstance(profile.ID, "unknown-installation")
+	require.False(t, exists)
+}
+
+func TestUnreserveApplicationTunnelDeletesLegacyIdentity(t *testing.T) {
+	r := require.New(t)
+	store, profile := newTestApplicationProfile(t)
+	r.NoError(store.RememberApplicationTunnel(
+		profile.ID,
+		"legacy-installation",
+		"human-timeline-club",
+	))
+
+	removed, err := store.UnreserveApplicationTunnel(profile.ID, "legacy-installation")
+	r.NoError(err)
+	r.True(removed)
+	_, ok := store.ApplicationInstance(profile.ID, "legacy-installation")
+	r.False(ok)
+}
+
 func TestApplicationInstanceTimestampMigration(t *testing.T) {
 	r := require.New(t)
 	_, _, publicKeyText := testEd25519Key(t)
@@ -462,6 +676,7 @@ func TestEndToEndApplicationTunnel(t *testing.T) {
 		1,
 	)
 	r.NoError(err)
+	r.NoError(store.RememberApplicationTunnel(profile.ID, "installation-1", "study-room-club"))
 
 	s := &Server{
 		cfg: Config{

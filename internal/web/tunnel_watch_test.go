@@ -2,8 +2,6 @@ package web
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"errors"
 	"strings"
 	"testing"
@@ -24,8 +22,6 @@ func TestTunnelExitClearsPublicURLAndOffersRetry(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{}))
-	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	r.NoError(err)
 
 	done := make(chan error, 1)
 	app := &webApp{
@@ -38,7 +34,7 @@ func TestTunnelExitClearsPublicURLAndOffersRetry(t *testing.T) {
 			}, nil
 		},
 	}
-	app.startAutomaticTunnel(tunnelApplicationIdentity{profileID: strings.Repeat("a", 32), privateKey: privateKey})
+	app.startAutomaticTunnel(tunnelApplicationIdentity{profileID: strings.Repeat("a", 32)})
 	r.Equal("https://scimtest.rselbach.com/study-group", app.tunnelPublicURL())
 
 	done <- errors.New("application profile rejected")
@@ -52,8 +48,6 @@ func TestDeliberateTunnelCloseSetsNoError(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{}))
-	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	r.NoError(err)
 
 	done := make(chan error, 1)
 	app := &webApp{
@@ -66,10 +60,61 @@ func TestDeliberateTunnelCloseSetsNoError(t *testing.T) {
 			}, nil
 		},
 	}
-	app.startAutomaticTunnel(tunnelApplicationIdentity{profileID: strings.Repeat("a", 32), privateKey: privateKey})
+	app.startAutomaticTunnel(tunnelApplicationIdentity{profileID: strings.Repeat("a", 32)})
 
 	r.NoError(app.closeAutomaticTunnel())
 	done <- nil
 	time.Sleep(50 * time.Millisecond)
 	r.Empty(app.tunnelError())
+}
+
+func TestCloseCancelsPendingTunnelEnrollment(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+
+	started := make(chan struct{})
+	app := &webApp{
+		localPort: 8080,
+		noOpen:    true,
+		tunnelStart: func(ctx context.Context, cfg scimtestclient.Config) (*startedTunnel, error) {
+			cfg.OnEnrollmentRequired(scimtestclient.Enrollment{
+				URL:              "https://admin.example.com/enroll?code=study-group",
+				VerificationCode: "study-group",
+			})
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	done := make(chan struct{})
+	go func() {
+		app.startAutomaticTunnel(tunnelApplicationIdentity{profileID: strings.Repeat("a", 32)})
+		close(done)
+	}()
+	<-started
+
+	r.NoError(app.closeAutomaticTunnel())
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		r.Fail("pending tunnel start did not stop")
+	}
+}
+
+func TestClosePreventsLaterAutomaticTunnelStart(t *testing.T) {
+	r := require.New(t)
+	started := false
+	app := &webApp{
+		tunnelStart: func(context.Context, scimtestclient.Config) (*startedTunnel, error) {
+			started = true
+			return nil, errors.New("unexpected tunnel start")
+		},
+	}
+
+	r.NoError(app.closeAutomaticTunnel())
+	app.startAutomaticTunnel(tunnelApplicationIdentity{profileID: strings.Repeat("a", 32)})
+
+	r.False(started)
+	r.Nil(app.tunnelStarting)
 }

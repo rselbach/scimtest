@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,6 +37,9 @@ const (
 	tunnelResponseTimeout = 2 * time.Minute
 	maxRandomIDAttempts   = 10
 	sendChannelSize       = 64
+	registrationReadLimit = 64 << 10
+	registrationLimit     = 128
+	registrationsPerIP    = 8
 
 	enrollmentsPerIPLimit = 10
 	enrollmentWindow      = time.Hour
@@ -45,6 +49,8 @@ const (
 	revokedInstanceMessage     = "installation revoked"
 	enrollmentThrottledMessage = "too many new installations from this network; try again later"
 )
+
+var errEnrollmentRequired = errors.New("installation authorization required")
 
 type Config struct {
 	Addr                     string
@@ -59,6 +65,7 @@ type Config struct {
 	Logger                   *slog.Logger
 	ShutdownTimeout          time.Duration
 	MaxTunnelsPerApplication int
+	MaxInstallationsPerUser  int
 	BehindProxy              bool
 	TrustedProxyCIDRs        []string
 }
@@ -69,11 +76,19 @@ type Server struct {
 	github           auth.GitHubClient
 	trustedProxyNets []*net.IPNet
 
-	mu      sync.RWMutex
-	tunnels map[string]*tunnel
+	mu                sync.RWMutex
+	tunnels           map[string]*tunnel
+	profileMu         sync.RWMutex
+	registrationMu    sync.Mutex
+	registrationSlots chan struct{}
+	registrationsByIP map[string]int
 
-	enrollMu    sync.Mutex
-	enrollments map[string][]time.Time
+	enrollMu           sync.Mutex
+	enrollments        map[string][]time.Time
+	pendingEnrollments map[[32]byte]pendingEnrollment
+	pendingByUserCode  map[string][32]byte
+	pendingByBinding   map[string][32]byte
+	oauthIntents       map[string]oauthIntent
 
 	nextStream    atomic.Uint64
 	requestsTotal atomic.Uint64
@@ -156,6 +171,9 @@ func New(cfg Config) (*Server, error) {
 	if cfg.MaxTunnelsPerApplication <= 0 {
 		cfg.MaxTunnelsPerApplication = 5
 	}
+	if cfg.MaxInstallationsPerUser <= 0 {
+		cfg.MaxInstallationsPerUser = 2
+	}
 
 	store, err := OpenStore(cfg.DataPath)
 	if err != nil {
@@ -163,12 +181,16 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	return &Server{
-		cfg:              cfg,
-		store:            store,
-		github:           auth.GitHubClient{ClientID: cfg.GitHubClientID, ClientSecret: cfg.GitHubClientSecret},
-		trustedProxyNets: trustedProxyNets,
-		tunnels:          make(map[string]*tunnel),
-		enrollments:      make(map[string][]time.Time),
+		cfg:                cfg,
+		store:              store,
+		github:             auth.GitHubClient{ClientID: cfg.GitHubClientID, ClientSecret: cfg.GitHubClientSecret},
+		trustedProxyNets:   trustedProxyNets,
+		tunnels:            make(map[string]*tunnel),
+		enrollments:        make(map[string][]time.Time),
+		pendingEnrollments: make(map[[32]byte]pendingEnrollment),
+		pendingByUserCode:  make(map[string][32]byte),
+		pendingByBinding:   make(map[string][32]byte),
+		oauthIntents:       make(map[string]oauthIntent),
 	}, nil
 }
 
@@ -178,8 +200,10 @@ func (s *Server) Run() error {
 	mux.HandleFunc("/ready", s.handleReady)
 	mux.HandleFunc("/api/metrics", s.baseHostOnly(s.handleMetrics))
 	mux.HandleFunc(s.cfg.ConnectPath, s.publicHostOnly(s.handleConnect))
+	mux.HandleFunc("/api/enroll/status", s.publicHostOnly(s.requirePost(s.handleEnrollmentStatus)))
 	mux.HandleFunc("/login/github", s.baseHostOnly(s.handleGitHubLogin))
 	mux.HandleFunc("/auth/github/callback", s.baseHostOnly(s.handleGitHubCallback))
+	mux.HandleFunc("/enroll", s.baseHostOnly(s.handleEnrollmentAuthorization))
 	mux.HandleFunc("/logout", s.baseHostOnly(s.requirePost(s.handleLogout)))
 	mux.HandleFunc("/dashboard", s.baseHostOnly(s.handleDashboard))
 	mux.HandleFunc("/dashboard/app.js", s.baseHostOnly(s.handleDashboardJS))
@@ -361,6 +385,18 @@ func (s *Server) publicHostOnly(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
+	registrationIP := enrollmentIPKey(s.clientIP(r))
+	if !s.acquireRegistrationSlot(registrationIP) {
+		http.Error(w, "too many tunnel registrations; try again later", http.StatusServiceUnavailable)
+		return
+	}
+	registrationSlotHeld := true
+	defer func() {
+		if registrationSlotHeld {
+			s.releaseRegistrationSlot(registrationIP)
+		}
+	}()
+
 	upgrader := websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
 			origin := r.Header.Get("Origin")
@@ -382,7 +418,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 			s.logger().Debug("close tunnel connection failed", "err", err)
 		}
 	}()
-	conn.SetReadLimit(protocol.MaxMessageBytes(s.cfg.MaxBodyBytes))
+	conn.SetReadLimit(registrationReadLimit)
 
 	// Bound the whole registration handshake, including the application
 	// challenge exchange, so unauthenticated connections cannot idle.
@@ -403,12 +439,27 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	profile, instanceID, err := s.authenticateApplicationRegistration(conn, reg, s.clientIP(r))
 	if err != nil {
+		if errors.Is(err, errEnrollmentRequired) {
+			return
+		}
 		s.writeClose(conn, websocket.ClosePolicyViolation, err.Error())
 		return
 	}
+	conn.SetReadLimit(protocol.MaxMessageBytes(s.cfg.MaxBodyBytes))
+	s.releaseRegistrationSlot(registrationIP)
+	registrationSlotHeld = false
+	s.profileMu.RLock()
+	currentProfile, exists := s.store.ApplicationProfile(profile.ID)
+	if !exists || (reg.InstancePublicKey == "" && currentProfile.PublicKey != profile.PublicKey) {
+		s.profileMu.RUnlock()
+		s.writeClose(conn, websocket.ClosePolicyViolation, "application profile changed during registration")
+		return
+	}
+	profile = &currentProfile
 
 	id, err := s.chooseApplicationID(profile.ID, instanceID)
 	if err != nil {
+		s.profileMu.RUnlock()
 		s.writeClose(conn, websocket.ClosePolicyViolation, err.Error())
 		return
 	}
@@ -434,14 +485,17 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.registerTunnel(t); err != nil {
+		s.profileMu.RUnlock()
 		s.writeClose(conn, websocket.ClosePolicyViolation, err.Error())
 		return
 	}
-	if err := s.store.RememberApplicationTunnel(profile.ID, instanceID, id); err != nil {
+	if err := s.store.RememberAuthenticatedApplicationTunnel(profile.ID, instanceID, id); err != nil {
 		s.unregisterTunnel(t)
+		s.profileMu.RUnlock()
 		s.writeClose(conn, websocket.CloseInternalServerErr, "could not remember application tunnel")
 		return
 	}
+	s.profileMu.RUnlock()
 	defer s.unregisterTunnel(t)
 
 	s.cfg.Logger.Info("tunnel connected", "id", t.id, "root_path", t.rootPath, "application", t.applicationName, "local_port", reg.LocalPort)
@@ -617,6 +671,10 @@ func (s *Server) authenticateApplicationRegistration(conn *websocket.Conn, reg p
 		return nil, "", errors.New("invalid application profile")
 	}
 	if reg.InstancePublicKey == "" {
+		stored, exists := s.store.ApplicationInstance(profile.ID, reg.InstanceID)
+		if !exists || stored.Enrolled() {
+			return nil, "", errors.New("legacy installation is not registered; upgrade scimtest to authorize this installation")
+		}
 		if err := s.verifyLegacyRegistration(conn, profile, reg); err != nil {
 			return nil, "", err
 		}
@@ -683,68 +741,38 @@ func (s *Server) verifyEnrolledRegistration(conn *websocket.Conn, profile Stored
 	if !ed25519.Verify(instanceKey, payload, response.Signature) {
 		return "", errors.New("invalid instance signature")
 	}
+	canonicalInstanceKey := base64.StdEncoding.EncodeToString(instanceKey)
 
 	stored, exists := s.store.ApplicationInstance(profile.ID, instanceID)
 	if exists && stored.Enrolled() {
-		if stored.PublicKey != reg.InstancePublicKey {
+		if stored.PublicKey != canonicalInstanceKey {
 			return "", errors.New("instance id is already enrolled with a different key")
 		}
 		if stored.Revoked {
 			return "", errors.New(revokedInstanceMessage)
 		}
-		return instanceID, nil
-	}
-
-	// First sight of this key: the embedded release key must authorize the
-	// enrollment, and new enrollments are throttled per client IP.
-	if !s.enrollmentAllowed(clientIP) {
-		return "", errors.New(enrollmentThrottledMessage)
-	}
-	_, profileKey, _, err := parseEd25519PublicKey(profile.PublicKey)
-	if err != nil {
-		return "", errors.New("application profile has an invalid public key")
-	}
-	enrollPayload := protocol.EnrollmentAuthorizationPayload(profile.ID, reg.InstancePublicKey, reg.InstanceID, challenge)
-	if !ed25519.Verify(profileKey, enrollPayload, response.EnrollmentSignature) {
-		return "", errors.New("invalid enrollment signature")
-	}
-	if err := s.store.EnrollApplicationInstance(profile.ID, instanceID, reg.InstancePublicKey, reg.InstanceID); err != nil {
-		return "", err
-	}
-	s.recordEnrollment(clientIP)
-	s.logger().Info("application instance enrolled", "profile_id", profile.ID, "instance_id", instanceID, "legacy_instance_id", reg.InstanceID, "client_ip", clientIP)
-	return instanceID, nil
-}
-
-func (s *Server) enrollmentAllowed(clientIP string) bool {
-	s.enrollMu.Lock()
-	defer s.enrollMu.Unlock()
-	return len(s.pruneEnrollmentsLocked(clientIP)) < enrollmentsPerIPLimit
-}
-
-func (s *Server) recordEnrollment(clientIP string) {
-	s.enrollMu.Lock()
-	defer s.enrollMu.Unlock()
-	if s.enrollments == nil {
-		s.enrollments = make(map[string][]time.Time)
-	}
-	s.enrollments[clientIP] = append(s.pruneEnrollmentsLocked(clientIP), time.Now())
-}
-
-func (s *Server) pruneEnrollmentsLocked(clientIP string) []time.Time {
-	cutoff := time.Now().Add(-enrollmentWindow)
-	recent := s.enrollments[clientIP][:0]
-	for _, at := range s.enrollments[clientIP] {
-		if at.After(cutoff) {
-			recent = append(recent, at)
+		if stored.GitHubUserID > 0 && strings.TrimSpace(stored.GitHubLogin) != "" {
+			return instanceID, nil
 		}
 	}
-	if len(recent) == 0 {
-		delete(s.enrollments, clientIP)
-		return nil
+
+	if response.EnrollmentGrant == "" {
+		required, err := s.beginEnrollment(profile.ID, instanceID, canonicalInstanceKey, reg.InstanceID, clientIP)
+		if err != nil {
+			return "", err
+		}
+		if err := conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+			return "", fmt.Errorf("set enrollment response deadline: %w", err)
+		}
+		if err := conn.WriteJSON(required); err != nil {
+			return "", fmt.Errorf("write enrollment response: %w", err)
+		}
+		return "", errEnrollmentRequired
 	}
-	s.enrollments[clientIP] = recent
-	return recent
+	if err := s.consumeEnrollmentGrant(response.EnrollmentGrant, profile.ID, instanceID, canonicalInstanceKey, reg.InstanceID); err != nil {
+		return "", err
+	}
+	return instanceID, nil
 }
 
 func (s *Server) tunnelForPath(value string) *tunnel {
@@ -1022,6 +1050,44 @@ func (s *Server) writeClose(conn *websocket.Conn, code int, text string) {
 	}
 }
 
+func (s *Server) acquireRegistrationSlot(clientIP string) bool {
+	s.registrationMu.Lock()
+	defer s.registrationMu.Unlock()
+	if s.registrationSlots == nil {
+		s.registrationSlots = make(chan struct{}, registrationLimit)
+	}
+	if s.registrationsByIP == nil {
+		s.registrationsByIP = make(map[string]int)
+	}
+	if s.registrationsByIP[clientIP] >= registrationsPerIP {
+		return false
+	}
+	select {
+	case s.registrationSlots <- struct{}{}:
+		s.registrationsByIP[clientIP]++
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) releaseRegistrationSlot(clientIP string) {
+	s.registrationMu.Lock()
+	defer s.registrationMu.Unlock()
+	if s.registrationSlots == nil {
+		return
+	}
+	select {
+	case <-s.registrationSlots:
+		if s.registrationsByIP[clientIP] <= 1 {
+			delete(s.registrationsByIP, clientIP)
+		} else {
+			s.registrationsByIP[clientIP]--
+		}
+	default:
+	}
+}
+
 // clientIP returns the address of the closest untrusted hop. Behind a
 // trusted proxy that is the rightmost X-Forwarded-For entry not itself a
 // trusted proxy; leftmost entries are client-supplied and spoofable.
@@ -1167,8 +1233,10 @@ func validateConnectPath(value string) error {
 		"/healthz":                       true,
 		"/ready":                         true,
 		"/api/metrics":                   true,
+		"/api/enroll/status":             true,
 		"/login/github":                  true,
 		"/auth/github/callback":          true,
+		"/enroll":                        true,
 		"/logout":                        true,
 		"/dashboard":                     true,
 		"/dashboard/app.js":              true,
@@ -1177,6 +1245,7 @@ func validateConnectPath(value string) error {
 		"/dashboard/applications/update": true,
 		"/dashboard/applications/delete": true,
 		"/dashboard/applications/reservations/delete": true,
+		"/dashboard/applications/instances/revoke":    true,
 		"/dashboard/tunnels/disconnect":               true,
 	}
 	if managementPaths[value] {

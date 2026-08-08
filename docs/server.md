@@ -14,20 +14,29 @@ public HTTP tunnels:
 - no standalone generic tunnel client
 - Ed25519-authenticated application instances with random, reusable names
 
-Each application profile defines an OpenSSH Ed25519 public key, the HTTP
-method/path combinations it may expose, and its request limits. That key only
-authorizes enrolling new installations: each installation generates its own
-Ed25519 key, and its first connection enrolls the public half under an
-instance ID derived from the key's fingerprint. Later connections authenticate
-with the installation key alone, so rotating the application key never breaks
-enrolled installations. The stable instance ID lets the server reuse the same
-random public name after reconnecting; new enrollments are rate limited per
-client IP, and individual installations can be revoked from the dashboard.
+Each application profile defines the HTTP method/path combinations it may
+expose and its request limits. Each installation generates its own Ed25519 key.
+On its first connection, the client proves possession of that key and opens a
+dashboard-hosted page where the user authorizes the installation with GitHub.
+The OAuth callback and token exchange happen on the server. The client receives
+only a short-lived, single-use enrollment credential bound to its exact public
+key; GitHub access tokens are never returned to it or stored.
+
+Later connections authenticate with the installation key alone. Its stable
+fingerprint-derived instance ID lets the server reuse the same random public
+name after reconnecting. New enrollments are rate limited per client network
+and GitHub account, and individual installations can be revoked from the
+dashboard.
 
 Clients that predate installation keys authenticate every connection with the
-application key and a client-chosen instance ID. The server still accepts this
-legacy handshake, and an enrolling client that presents the legacy ID carries
-its remembered public name over to the enrolled identity.
+application key and a client-chosen instance ID. The server accepts this legacy
+handshake only for instance IDs already present in its data file; possession of
+the old shared key cannot create a new identity. A newly authorized installation
+does not automatically claim a legacy public name: knowledge of a legacy ID is
+not treated as sufficient proof of ownership. The legacy record and public name
+remain until an administrator releases them from the dashboard; automatic
+deletion would let anyone who learned its ID disable it. Rotating the profile's
+legacy key separately disables authentication for every remaining legacy record.
 
 ### Run Locally
 
@@ -48,7 +57,8 @@ account, and create an application profile. The dashboard must use a different
 origin from public tunnels so tunnel applications cannot access its session
 cookie.
 
-Generate a key pair for an application if it does not already have one:
+The profile's OpenSSH Ed25519 public key is retained only for reconnecting
+already-known legacy clients during migration. Generate one if needed:
 
 ```sh
 ssh-keygen -t ed25519 -f scimtest_application -N ''
@@ -65,22 +75,28 @@ GET,PUT,PATCH,DELETE /scim/v2/Users/{id}
 
 ### Embed the Tunnel Client
 
-Applications use the public client package to connect. Loading an encrypted or
-unencrypted OpenSSH private-key file as an `ed25519.PrivateKey` is the embedding
-application's responsibility. `InstancePrivateKey` is the installation's own
-generated key; persist it locally and reuse it so the installation keeps its
-identity and public name.
+Applications use the public client package to connect. `InstancePrivateKey` is
+the installation's own generated key; persist it locally and reuse it so the
+installation keeps its identity and public name. The enrollment callback should
+open the supplied URL in the user's browser (or display it in a terminal) and
+show `VerificationCode` independently for comparison with the page.
 
 ```go
-import scimtestclient "github.com/rselbach/scimtest/client"
+import (
+	"log"
+
+	scimtestclient "github.com/rselbach/scimtest/client"
+)
 
 tunnel, err := scimtestclient.Start(ctx, scimtestclient.Config{
 	ServerBaseURL:         "https://tunnels.example.com",
 	ApplicationProfileID: "0123456789abcdef0123456789abcdef",
 	InstanceID:            installationID,
-	ApplicationPrivateKey: privateKey,
 	InstancePrivateKey:    installationKey,
 	LocalPort:             3000,
+	OnEnrollmentRequired: func(enrollment scimtestclient.Enrollment) {
+		log.Printf("Authorize this installation at %s and compare code %s", enrollment.URL, enrollment.VerificationCode)
+	},
 })
 if err != nil {
 	return err
@@ -96,8 +112,11 @@ allowed route `/scim/v2/Users` at
 `/human-timeline-club/scim/v2/Users`. The full public path, including the
 tunnel root, is forwarded to the client application unchanged.
 
-The client reconnects transient failures automatically. Invalid profile IDs,
-instance IDs, or signatures are terminal errors.
+The client polls while the browser flow is pending, reconnects with the
+single-use credential after approval, and then forgets it. It reconnects
+transient failures automatically. Invalid profile IDs, instance IDs, or
+signatures are terminal errors. `ApplicationPrivateKey` remains available only
+for a previously registered legacy client connecting to an older handshake.
 
 ### Production
 
@@ -117,6 +136,7 @@ scimtest-server \
   --dashboard-domain admin.example.com \
   --scheme https \
   --behind-proxy \
+  --max-installations-per-user 2 \
   --data /var/lib/scimtest-server/scimtest-server.json \
   --logs
 ```
@@ -129,8 +149,23 @@ service environment. The production OAuth callback URL is
 The default trusted networks are loopback; use `--trusted-proxy-cidrs` when the
 proxy runs elsewhere.
 
-The JSON data file contains the dashboard whitelist and sessions, application
-profiles, and remembered instance names. GitHub access tokens are not stored.
+The JSON data file contains dashboard sessions, application profiles, remembered
+instance names, and the immutable numeric GitHub account ID associated with each
+installation. GitHub access tokens and pending enrollment secrets are not
+stored. Revoked installation identities remain as durable deny records even if
+their public tunnel name is released.
+
+This enrollment protocol requires the matching client and server releases.
+Publish the new client first, then deploy the server once the update is
+available. A fresh new client cannot enroll with the old server. After the new
+server is deployed, old clients cannot complete authorization, and existing
+installations without GitHub attribution must update and authorize once before
+they reconnect. GitHub-attributed installations then reconnect using their
+installation key alone.
+
+Treat every application private key shipped in an older release as compromised.
+After the intended legacy installations have upgraded, rotate the profile's
+legacy public key to stop all remaining shared-key reconnects.
 
 #### Deploy to exe.dev
 

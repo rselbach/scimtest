@@ -33,15 +33,17 @@ type dashboardApplication struct {
 }
 
 type dashboardReservation struct {
-	ProfileID   string
-	ProfileName string
-	InstanceID  string
-	TunnelID    string
-	PublicURL   string
-	Enrolled    bool
-	Revoked     bool
-	CreatedAt   time.Time
-	LastUsedAt  time.Time
+	ProfileID    string
+	ProfileName  string
+	InstanceID   string
+	TunnelID     string
+	PublicURL    string
+	Enrolled     bool
+	Revoked      bool
+	GitHubUserID int64
+	GitHubLogin  string
+	CreatedAt    time.Time
+	LastUsedAt   time.Time
 }
 
 type dashboardViewData struct {
@@ -55,25 +57,7 @@ type dashboardViewData struct {
 }
 
 func (s *Server) handleGitHubLogin(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.GitHubClientID == "" || s.cfg.GitHubClientSecret == "" {
-		http.Error(w, "GitHub OAuth is not configured", http.StatusServiceUnavailable)
-		return
-	}
-	state, err := randomHex(24)
-	if err != nil {
-		http.Error(w, "could not create login state", http.StatusInternalServerError)
-		return
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     stateCookieName,
-		Value:    state,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   s.cookieSecure(),
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   600,
-	})
-	http.Redirect(w, r, s.github.AuthorizeURL(state, s.callbackURL()), http.StatusFound)
+	s.beginGitHubOAuth(w, r, oauthIntent{kind: oauthIntentDashboard})
 }
 
 func (s *Server) handleLanding(w http.ResponseWriter, _ *http.Request) {
@@ -86,18 +70,24 @@ func (s *Server) handleLanding(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
-	stateCookie, err := r.Cookie(stateCookieName)
-	if err != nil || stateCookie.Value == "" || stateCookie.Value != r.URL.Query().Get("state") {
+	state := r.URL.Query().Get("state")
+	stateCookie, err := r.Cookie(s.cookieName(stateCookieName))
+	if err != nil || stateCookie.Value == "" || stateCookie.Value != state {
 		http.Error(w, "invalid login state", http.StatusBadRequest)
 		return
 	}
-	clearCookie(w, stateCookieName, s.cookieSecure())
+	clearCookie(w, s.cookieName(stateCookieName), s.cookieSecure())
+	intent, ok := s.takeOAuthIntent(state)
+	if !ok {
+		http.Error(w, "invalid or expired login state", http.StatusBadRequest)
+		return
+	}
 	code := r.URL.Query().Get("code")
 	if code == "" {
 		http.Error(w, "missing code", http.StatusBadRequest)
 		return
 	}
-	token, err := s.github.ExchangeWebCode(r.Context(), code, s.callbackURL())
+	token, err := s.github.ExchangeWebCode(r.Context(), code, s.callbackURL(), intent.codeVerifier)
 	if err != nil {
 		s.logger().Warn("GitHub token exchange failed", "err", err)
 		http.Error(w, "GitHub token exchange failed", http.StatusBadGateway)
@@ -107,6 +97,24 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.logger().Warn("GitHub user lookup failed", "err", err)
 		http.Error(w, "GitHub user lookup failed", http.StatusBadGateway)
+		return
+	}
+	if intent.kind == oauthIntentEnrollment {
+		if err := s.approveEnrollment(intent.enrollmentHash, githubUser); err != nil {
+			s.logger().Warn("installation authorization failed", "github_user_id", githubUser.ID, "github_login", githubUser.Login, "err", err)
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'")
+		if err := enrollmentCompleteTemplate.Execute(w, nil); err != nil {
+			s.logger().Error("enrollment completion page render failed", "err", err)
+		}
+		return
+	}
+	if intent.kind != oauthIntentDashboard {
+		http.Error(w, "invalid login state", http.StatusBadRequest)
 		return
 	}
 	if normalizeLogin(githubUser.Login) != "rselbach" {
@@ -119,7 +127,7 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
+		Name:     s.cookieName(sessionCookieName),
 		Value:    session.ID,
 		Path:     "/",
 		HttpOnly: true,
@@ -140,7 +148,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not delete session", http.StatusInternalServerError)
 		return
 	}
-	clearCookie(w, sessionCookieName, s.cookieSecure())
+	clearCookie(w, s.cookieName(sessionCookieName), s.cookieSecure())
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
@@ -172,15 +180,17 @@ func (s *Server) renderDashboard(w http.ResponseWriter, session StoredSession) {
 		})
 		for instanceID, instance := range profile.Instances {
 			data.Reservations = append(data.Reservations, dashboardReservation{
-				ProfileID:   profile.ID,
-				ProfileName: profile.Name,
-				InstanceID:  instanceID,
-				TunnelID:    instance.TunnelID,
-				PublicURL:   s.cfg.PublicScheme + "://" + s.cfg.Domain + "/" + instance.TunnelID,
-				Enrolled:    instance.Enrolled(),
-				Revoked:     instance.Revoked,
-				CreatedAt:   instance.CreatedAt,
-				LastUsedAt:  instance.LastUsedAt,
+				ProfileID:    profile.ID,
+				ProfileName:  profile.Name,
+				InstanceID:   instanceID,
+				TunnelID:     instance.TunnelID,
+				PublicURL:    s.cfg.PublicScheme + "://" + s.cfg.Domain + "/" + instance.TunnelID,
+				Enrolled:     instance.Enrolled(),
+				Revoked:      instance.Revoked,
+				GitHubUserID: instance.GitHubUserID,
+				GitHubLogin:  instance.GitHubLogin,
+				CreatedAt:    instance.CreatedAt,
+				LastUsedAt:   instance.LastUsedAt,
 			})
 		}
 	}
@@ -279,6 +289,8 @@ func (s *Server) handleUpdateApplication(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	id := r.PostForm.Get("id")
+	s.profileMu.Lock()
+	defer s.profileMu.Unlock()
 	profile, err := s.store.UpdateApplicationProfile(
 		id,
 		form.name,
@@ -307,6 +319,8 @@ func (s *Server) handleDeleteApplication(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	id := r.PostForm.Get("id")
+	s.profileMu.Lock()
+	defer s.profileMu.Unlock()
 	if err := s.store.DeleteApplicationProfile(id); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -323,12 +337,12 @@ func (s *Server) handleUnreserveApplicationTunnel(w http.ResponseWriter, r *http
 	}
 	profileID := r.PostForm.Get("profile_id")
 	instanceID := r.PostForm.Get("instance_id")
-	deleted, err := s.store.UnreserveApplicationTunnel(profileID, instanceID)
+	changed, err := s.store.UnreserveApplicationTunnel(profileID, instanceID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if !deleted {
+	if !changed {
 		http.NotFound(w, r)
 		return
 	}
@@ -418,7 +432,7 @@ func (s *Server) requireCSRF(w http.ResponseWriter, r *http.Request, session Sto
 }
 
 func (s *Server) requireSession(w http.ResponseWriter, r *http.Request) (StoredSession, bool) {
-	cookie, err := r.Cookie(sessionCookieName)
+	cookie, err := r.Cookie(s.cookieName(sessionCookieName))
 	if err != nil {
 		http.Redirect(w, r, "/login/github", http.StatusFound)
 		return StoredSession{}, false
@@ -430,7 +444,7 @@ func (s *Server) requireSession(w http.ResponseWriter, r *http.Request) (StoredS
 		return StoredSession{}, false
 	}
 	if !ok {
-		clearCookie(w, sessionCookieName, s.cookieSecure())
+		clearCookie(w, s.cookieName(sessionCookieName), s.cookieSecure())
 		http.Redirect(w, r, "/login/github", http.StatusFound)
 		return StoredSession{}, false
 	}
@@ -452,6 +466,13 @@ func clearCookie(w http.ResponseWriter, name string, secure bool) {
 		Expires:  time.Unix(0, 0),
 		MaxAge:   -1,
 	})
+}
+
+func (s *Server) cookieName(name string) string {
+	if s.cookieSecure() {
+		return "__Host-" + name
+	}
+	return name
 }
 
 func (s *Server) visibleTunnels() []dashboardTunnel {

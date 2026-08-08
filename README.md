@@ -119,20 +119,22 @@ the version. Use `--no-open` to start without opening a browser and
 **IDP base URL and tunnel.** Leave the IDP base URL empty when clients can
 reach the current request host; set it when clients need another
 externally reachable URL. Release builds automatically establish an
-application-authenticated tunnel through `https://scimtest.rselbach.com`:
+installation-authenticated tunnel through `https://scimtest.rselbach.com`:
 no token or tunnel name is needed, a random tunnel path is assigned and
 reused, and only the OIDC and SAML endpoints are exposed through it — the
 admin UI and SCIM credentials stay on the loopback listener. The config
-modal shows the tunnel state (connected, connecting, failed with a retry
-button, or unavailable in source builds).
+modal shows the tunnel state and an authorization link on first use (then
+connected, connecting, failed with a retry button, or unavailable in source
+builds). Unless `--no-open` is set, the GitHub authorization page opens
+automatically. Compare the verification code shown in scimtest with the code on
+the authorization page before continuing to GitHub.
 
 ## Release builds
 
 Release builds require the `SCIMTEST_APPLICATION_PROFILE_ID` GitHub
-Actions variable and `SCIMTEST_APPLICATION_PRIVATE_SEED_BASE64` secret
-(standard base64 of the raw 32-byte Ed25519 seed). Convert an unencrypted
-OpenSSH Ed25519 key with `just application-seed /path/to/id_ed25519`
-(requires [just](https://github.com/casey/just)).
+Actions variable. They contain no tunnel enrollment private key; a new
+installation authorizes its generated installation key through GitHub on its
+first connection.
 
 The tunnel server's application profile must allow these routes:
 
@@ -148,10 +150,9 @@ GET /saml/{slug}/certificate.pem
 GET,POST /saml/{slug}/sso
 ```
 
-Tunnel startup diagnostics are written to the application log; private
-keys and seeds are never logged. `automatic tunnel disabled: build has no
-embedded application identity` means the binary was built without the
-release identity linker values.
+Tunnel startup diagnostics are written to the application log; private keys
+are never logged. `automatic tunnel disabled: build has no application
+profile` means the binary was built without the release profile linker value.
 
 ## Tunnel server
 

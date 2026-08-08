@@ -284,11 +284,17 @@ func (s *Store) ApplicationInstance(profileID, instanceID string) (StoredApplica
 	return instance, ok
 }
 
-// EnrollApplicationInstance records a new per-install public key under its
-// fingerprint-derived instance ID. When legacyInstanceID names an existing
-// legacy record, its remembered tunnel ID moves to the enrolled instance and
-// the legacy record is retired, so the installation keeps its public URL.
-func (s *Store) EnrollApplicationInstance(profileID, instanceID, publicKey, legacyInstanceID string) error {
+// EnrollApplicationInstance records a per-install public key and its GitHub
+// actor under the key's fingerprint-derived instance ID.
+func (s *Store) EnrollApplicationInstance(
+	profileID, instanceID, publicKey string,
+	actor enrollmentActor,
+) error {
+	actor.GitHubLogin = strings.TrimSpace(actor.GitHubLogin)
+	if actor.GitHubUserID <= 0 || actor.GitHubLogin == "" {
+		return errors.New("github enrollment identity is required")
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	profile, ok := s.data.ApplicationProfiles[profileID]
@@ -300,12 +306,17 @@ func (s *Store) EnrollApplicationInstance(profileID, instanceID, publicKey, lega
 	if profile.Instances == nil {
 		profile.Instances = make(map[string]StoredApplicationInstance)
 	}
-	if existing, exists := profile.Instances[instanceID]; exists && existing.Enrolled() && existing.PublicKey != publicKey {
-		return errors.New("instance id is already enrolled with a different key")
+	if existing, exists := profile.Instances[instanceID]; exists && existing.Enrolled() {
+		if existing.PublicKey != publicKey {
+			return errors.New("instance id is already enrolled with a different key")
+		}
+		if existing.Revoked {
+			return errors.New(revokedInstanceMessage)
+		}
 	}
 	now := time.Now().UTC()
 	for id, instance := range profile.Instances {
-		if id != instanceID && now.Sub(instance.LastUsedAt) > applicationInstanceMaxIdle {
+		if id != instanceID && !instance.Revoked && now.Sub(instance.LastUsedAt) > applicationInstanceMaxIdle {
 			delete(profile.Instances, id)
 		}
 	}
@@ -314,13 +325,9 @@ func (s *Store) EnrollApplicationInstance(profileID, instanceID, publicKey, lega
 		instance.CreatedAt = now
 	}
 	instance.PublicKey = publicKey
+	instance.GitHubUserID = actor.GitHubUserID
+	instance.GitHubLogin = actor.GitHubLogin
 	instance.LastUsedAt = now
-	if legacy, exists := profile.Instances[legacyInstanceID]; exists && legacyInstanceID != instanceID && !legacy.Enrolled() {
-		if instance.TunnelID == "" {
-			instance.TunnelID = legacy.TunnelID
-		}
-		delete(profile.Instances, legacyInstanceID)
-	}
 	if _, exists := previous.Instances[instanceID]; !exists && len(profile.Instances) >= applicationInstancesMax {
 		return errors.New("application has too many remembered instances")
 	}
@@ -331,6 +338,24 @@ func (s *Store) EnrollApplicationInstance(profileID, instanceID, publicKey, lega
 		return err
 	}
 	return nil
+}
+
+// CountApplicationInstancesByGitHubUserID returns the number of non-revoked
+// enrolled identities attributed to a GitHub account for one application.
+func (s *Store) CountApplicationInstancesByGitHubUserID(profileID string, userID int64) int {
+	if userID <= 0 {
+		return 0
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for _, instance := range s.data.ApplicationProfiles[profileID].Instances {
+		if instance.Enrolled() && !instance.Revoked && instance.GitHubUserID == userID {
+			count++
+		}
+	}
+	return count
 }
 
 func (s *Store) SetApplicationInstanceRevoked(profileID, instanceID string, revoked bool) (bool, error) {
@@ -363,6 +388,16 @@ func (s *Store) ApplicationTunnelID(profileID, instanceID string) string {
 }
 
 func (s *Store) RememberApplicationTunnel(profileID, instanceID, tunnelID string) error {
+	return s.rememberApplicationTunnel(profileID, instanceID, tunnelID, false)
+}
+
+// RememberAuthenticatedApplicationTunnel updates a tunnel reservation only if
+// the authenticated identity still exists and remains allowed.
+func (s *Store) RememberAuthenticatedApplicationTunnel(profileID, instanceID, tunnelID string) error {
+	return s.rememberApplicationTunnel(profileID, instanceID, tunnelID, true)
+}
+
+func (s *Store) rememberApplicationTunnel(profileID, instanceID, tunnelID string, requireExisting bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	profile, ok := s.data.ApplicationProfiles[profileID]
@@ -376,14 +411,20 @@ func (s *Store) RememberApplicationTunnel(profileID, instanceID, tunnelID string
 	}
 	now := time.Now().UTC()
 	for id, instance := range profile.Instances {
-		if now.Sub(instance.LastUsedAt) > applicationInstanceMaxIdle {
+		if id != instanceID && !instance.Revoked && now.Sub(instance.LastUsedAt) > applicationInstanceMaxIdle {
 			delete(profile.Instances, id)
 		}
 	}
-	if _, exists := profile.Instances[instanceID]; !exists && len(profile.Instances) >= applicationInstancesMax {
+	instance, exists := profile.Instances[instanceID]
+	if requireExisting && !exists {
+		return errors.New("application instance authorization no longer exists")
+	}
+	if !exists && len(profile.Instances) >= applicationInstancesMax {
 		return errors.New("application has too many remembered instances")
 	}
-	instance := profile.Instances[instanceID]
+	if instance.Enrolled() && instance.Revoked {
+		return errors.New(revokedInstanceMessage)
+	}
 	if instance.CreatedAt.IsZero() {
 		instance.CreatedAt = now
 	}
@@ -405,12 +446,18 @@ func (s *Store) UnreserveApplicationTunnel(profileID, instanceID string) (bool, 
 	if !ok {
 		return false, nil
 	}
-	if _, ok := profile.Instances[instanceID]; !ok {
+	instance, ok := profile.Instances[instanceID]
+	if !ok {
 		return false, nil
 	}
 	previous := cloneApplicationProfile(profile)
 	profile = cloneApplicationProfile(profile)
-	delete(profile.Instances, instanceID)
+	if instance.Enrolled() {
+		instance.TunnelID = ""
+		profile.Instances[instanceID] = instance
+	} else {
+		delete(profile.Instances, instanceID)
+	}
 	s.data.ApplicationProfiles[profileID] = profile
 	if err := s.saveLocked(); err != nil {
 		s.data.ApplicationProfiles[profileID] = previous

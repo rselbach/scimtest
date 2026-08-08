@@ -42,27 +42,32 @@ type webApp struct {
 	// mu serializes the read-modify-write state sections of the admin
 	// handlers. Long-running remote walks (sync, import preview) must not
 	// hold it: they snapshot state, run unlocked, and re-lock to merge.
-	mu                sync.Mutex
-	signingKey        *rsa.PrivateKey
-	certDER           []byte
-	debugRP           atomic.Bool
-	debugSecrets      atomic.Bool
-	trafficRecord     atomic.Bool
-	traffic           trafficLog
-	localPort         int
-	adminHost         string
-	instanceToken     string
-	tunnelStart       tunnelStarter
-	tunnelSupported   bool
-	tunnelLifecycleMu sync.Mutex
-	tunnelMu          sync.Mutex
-	tunnel            *activeTunnel
-	tunnelLastError   string
-	faultMu           sync.Mutex
-	armedFaults       map[string]faultOptions
-	syncJobMu         sync.Mutex
-	syncJobs          map[string]*syncJobSnapshot
-	syncCancels       map[string]context.CancelFunc
+	mu                   sync.Mutex
+	signingKey           *rsa.PrivateKey
+	certDER              []byte
+	debugRP              atomic.Bool
+	debugSecrets         atomic.Bool
+	trafficRecord        atomic.Bool
+	traffic              trafficLog
+	localPort            int
+	adminHost            string
+	instanceToken        string
+	tunnelStart          tunnelStarter
+	tunnelSupported      bool
+	tunnelMu             sync.Mutex
+	tunnel               *activeTunnel
+	tunnelStarting       *automaticTunnelStart
+	tunnelClosing        bool
+	tunnelLastError      string
+	tunnelEnrollmentURL  string
+	tunnelEnrollmentCode string
+	browserOpen          browserOpener
+	noOpen               bool
+	faultMu              sync.Mutex
+	armedFaults          map[string]faultOptions
+	syncJobMu            sync.Mutex
+	syncJobs             map[string]*syncJobSnapshot
+	syncCancels          map[string]context.CancelFunc
 	// oidcMu guards authCodes and accessTokens so sign-in flows never
 	// contend with admin handlers holding mu.
 	oidcMu           sync.Mutex
@@ -149,22 +154,28 @@ type activeTunnel struct {
 	Tunnel     tunnelCloser
 }
 
+type automaticTunnelStart struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
 type tunnelView struct {
 	PublicURL string
 	ClientIP  string
 }
 
 type tunnelApplicationIdentity struct {
-	profileID  string
-	privateKey ed25519.PrivateKey
+	profileID string
 }
 
-const tunnelServerBaseURL = "https://scimtest.rselbach.com"
+const (
+	tunnelServerBaseURL     = "https://scimtest.rselbach.com"
+	tunnelEnrollmentTimeout = 11 * time.Minute
+)
 
 var (
-	tunnelApplicationProfileID    string
-	tunnelApplicationPrivateSeed  string
-	tunnelReleaseIdentityRequired string
+	tunnelApplicationProfileID   string
+	tunnelReleaseProfileRequired string
 )
 
 type flashMessage struct {
@@ -384,10 +395,12 @@ type configFormView struct {
 	IDPBaseURLDisabled bool
 	Tunnel             *tunnelView
 	// TunnelState is one of "connected", "failed", "connecting", or
-	// "unavailable" (build has no embedded application identity).
-	TunnelState       string
-	TunnelError       string
-	TunnelErrorDetail string
+	// "unavailable" (build has no application profile).
+	TunnelState          string
+	TunnelEnrollmentURL  string
+	TunnelEnrollmentCode string
+	TunnelError          string
+	TunnelErrorDetail    string
 }
 
 type toolsFormView struct {
@@ -565,6 +578,8 @@ func Run(options ...RunOptions) error {
 		localPort:       idpAddress.Port,
 		tunnelStart:     startTunnel,
 		tunnelSupported: identity != nil,
+		browserOpen:     opts.browserOpen,
+		noOpen:          opts.NoOpen,
 		authCodes:       make(map[string]authCode),
 		accessTokens:    make(map[string]accessToken),
 	}
@@ -649,7 +664,7 @@ func Run(options ...RunOptions) error {
 		go app.startAutomaticTunnel(*identity)
 	}
 	if identity == nil {
-		log.Printf("automatic tunnel disabled: build has no embedded application identity")
+		log.Printf("automatic tunnel disabled: build has no application profile")
 	}
 	maybeOpenBrowser(localURL, opts.NoOpen, opts.browserOpen)
 
@@ -1167,32 +1182,44 @@ func (a *webApp) retryAutomaticTunnel() {
 
 	identity, err := loadTunnelApplicationIdentity()
 	if err != nil {
-		a.setTunnelError(fmt.Sprintf("retry automatic tunnel: load embedded application identity: %v", err))
+		a.setTunnelError(fmt.Sprintf("retry automatic tunnel: load application profile: %v", err))
 		return
 	}
 	if identity == nil {
-		a.setTunnelError("retry automatic tunnel: embedded application identity is unavailable")
+		a.setTunnelError("retry automatic tunnel: application profile is unavailable")
 		return
 	}
 
-	if !a.tunnelLifecycleMu.TryLock() {
-		return
-	}
-	defer a.tunnelLifecycleMu.Unlock()
 	if !a.tunnelRetryAvailable() {
 		return
 	}
-	a.startAutomaticTunnelLocked(*identity)
+	a.startAutomaticTunnel(*identity)
 }
 
 func (a *webApp) startAutomaticTunnel(identity tunnelApplicationIdentity) {
-	a.tunnelLifecycleMu.Lock()
-	defer a.tunnelLifecycleMu.Unlock()
-	a.startAutomaticTunnelLocked(identity)
-}
+	ctx, cancel := context.WithCancel(context.Background())
+	attempt := &automaticTunnelStart{cancel: cancel, done: make(chan struct{})}
+	a.tunnelMu.Lock()
+	if a.tunnelClosing || a.tunnelStarting != nil || a.tunnel != nil {
+		a.tunnelMu.Unlock()
+		cancel()
+		close(attempt.done)
+		return
+	}
+	a.tunnelStarting = attempt
+	a.tunnelLastError = ""
+	a.tunnelEnrollmentURL = ""
+	a.tunnelEnrollmentCode = ""
+	a.tunnelMu.Unlock()
+	defer func() {
+		a.tunnelMu.Lock()
+		if a.tunnelStarting == attempt {
+			a.tunnelStarting = nil
+		}
+		a.tunnelMu.Unlock()
+		close(attempt.done)
+	}()
 
-func (a *webApp) startAutomaticTunnelLocked(identity tunnelApplicationIdentity) {
-	a.setTunnelError("")
 	instanceID, err := ensureTunnelInstanceID()
 	if err != nil {
 		a.setTunnelError(fmt.Sprintf("load tunnel instance identity: %v", err))
@@ -1216,22 +1243,27 @@ func (a *webApp) startAutomaticTunnelLocked(identity tunnelApplicationIdentity) 
 	if starter == nil {
 		starter = startTunnel
 	}
-	started, err := startTunnelWithTimeout(starter, scimtestclient.Config{
-		ServerBaseURL:         tunnelServerBaseURL,
-		ApplicationProfileID:  identity.profileID,
-		InstanceID:            instanceID,
-		ApplicationPrivateKey: identity.privateKey,
-		InstancePrivateKey:    instanceKey,
-		LocalPort:             a.localPort,
-		Logger:                slog.Default(),
-		OnRegistered:          a.updateAutomaticTunnelRegistration,
+	started, err := startTunnelWithTimeout(ctx, starter, scimtestclient.Config{
+		ServerBaseURL:        tunnelServerBaseURL,
+		ApplicationProfileID: identity.profileID,
+		InstanceID:           instanceID,
+		InstancePrivateKey:   instanceKey,
+		LocalPort:            a.localPort,
+		Logger:               slog.Default(),
+		OnRegistered:         a.updateAutomaticTunnelRegistration,
+		OnEnrollmentRequired: a.handleTunnelEnrollmentRequired,
 	}, 20*time.Second)
 	if err != nil {
+		a.setTunnelEnrollmentURL("")
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		a.setTunnelError(fmt.Sprintf("start automatic tunnel: %v", err))
 		log.Printf("start tunnel: %v", err)
 		return
 	}
 	if started == nil || started.Tunnel == nil || strings.TrimSpace(started.PublicURL) == "" {
+		a.setTunnelEnrollmentURL("")
 		err := fmt.Errorf("tunnel did not return a public URL")
 		if started != nil && started.Tunnel != nil {
 			if closeErr := started.Tunnel.Close(); closeErr != nil {
@@ -1246,6 +1278,7 @@ func (a *webApp) startAutomaticTunnelLocked(identity tunnelApplicationIdentity) 
 	publicURL := strings.TrimRight(strings.TrimSpace(started.PublicURL), "/")
 	pathPrefix, err := tunnelPathPrefix(publicURL)
 	if err != nil {
+		a.setTunnelEnrollmentURL("")
 		if closeErr := started.Tunnel.Close(); closeErr != nil {
 			err = fmt.Errorf("%w; close tunnel: %v", err, closeErr)
 		}
@@ -1261,8 +1294,17 @@ func (a *webApp) startAutomaticTunnelLocked(identity tunnelApplicationIdentity) 
 		Tunnel:     started.Tunnel,
 	}
 	a.tunnelMu.Lock()
+	if ctx.Err() != nil {
+		a.tunnelMu.Unlock()
+		if closeErr := started.Tunnel.Close(); closeErr != nil {
+			log.Printf("close canceled tunnel start: %v", closeErr)
+		}
+		return
+	}
 	a.tunnel = entry
 	a.tunnelLastError = ""
+	a.tunnelEnrollmentURL = ""
+	a.tunnelEnrollmentCode = ""
 	a.tunnelMu.Unlock()
 	go a.watchAutomaticTunnel(entry)
 	log.Printf("tunnel established at %s (chooser restricted to %s)", publicURL, strings.TrimSpace(started.ClientIP))
@@ -1313,17 +1355,35 @@ func (a *webApp) updateAutomaticTunnelRegistration(registration scimtestclient.R
 	a.tunnel.PublicURL = publicURL
 	a.tunnel.ClientIP = strings.TrimSpace(registration.ClientIP)
 	a.tunnelLastError = ""
+	a.tunnelEnrollmentURL = ""
+	a.tunnelEnrollmentCode = ""
 	log.Printf("tunnel re-established at %s (chooser restricted to %s)", publicURL, a.tunnel.ClientIP)
 }
 
-func (a *webApp) closeAutomaticTunnel() error {
-	a.tunnelLifecycleMu.Lock()
-	defer a.tunnelLifecycleMu.Unlock()
-
+func (a *webApp) handleTunnelEnrollmentRequired(enrollment scimtestclient.Enrollment) {
+	value := strings.TrimSpace(enrollment.URL)
+	if value == "" {
+		return
+	}
 	a.tunnelMu.Lock()
+	a.tunnelEnrollmentURL = value
+	a.tunnelEnrollmentCode = strings.TrimSpace(enrollment.VerificationCode)
+	a.tunnelMu.Unlock()
+	log.Printf("authorize this scimtest installation in GitHub: %s (verification code %s)", value, enrollment.VerificationCode)
+	maybeOpenBrowser(value, a.noOpen, a.browserOpen)
+}
+
+func (a *webApp) closeAutomaticTunnel() error {
+	a.tunnelMu.Lock()
+	a.tunnelClosing = true
+	attempt := a.tunnelStarting
 	tunnel := a.tunnel
 	a.tunnel = nil
 	a.tunnelMu.Unlock()
+	if attempt != nil {
+		attempt.cancel()
+		<-attempt.done
+	}
 	if tunnel == nil || tunnel.Tunnel == nil {
 		return nil
 	}
@@ -1342,8 +1402,19 @@ func startTunnel(ctx context.Context, cfg scimtestclient.Config) (*startedTunnel
 	}, nil
 }
 
-func startTunnelWithTimeout(starter tunnelStarter, cfg scimtestclient.Config, timeout time.Duration) (*startedTunnel, error) {
-	ctx, cancel := context.WithCancel(context.Background())
+func startTunnelWithTimeout(parent context.Context, starter tunnelStarter, cfg scimtestclient.Config, timeout time.Duration) (*startedTunnel, error) {
+	ctx, cancel := context.WithCancel(parent)
+	enrollmentRequired := make(chan struct{}, 1)
+	onEnrollmentRequired := cfg.OnEnrollmentRequired
+	cfg.OnEnrollmentRequired = func(enrollment scimtestclient.Enrollment) {
+		if onEnrollmentRequired != nil {
+			onEnrollmentRequired(enrollment)
+		}
+		select {
+		case enrollmentRequired <- struct{}{}:
+		default:
+		}
+	}
 	result := make(chan struct {
 		tunnel *startedTunnel
 		err    error
@@ -1357,16 +1428,33 @@ func startTunnelWithTimeout(starter tunnelStarter, cfg scimtestclient.Config, ti
 		}{tunnel: tunnel, err: err}
 	}()
 
-	select {
-	case outcome := <-result:
-		if outcome.err != nil {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	activeTimeout := timeout
+	for {
+		select {
+		case outcome := <-result:
+			if outcome.err != nil {
+				cancel()
+				return nil, outcome.err
+			}
+			return startedTunnelWithCancel(outcome.tunnel, cancel), nil
+		case <-enrollmentRequired:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			activeTimeout = tunnelEnrollmentTimeout
+			timer.Reset(activeTimeout)
+		case <-timer.C:
 			cancel()
-			return nil, outcome.err
+			return nil, fmt.Errorf("timed out after %s waiting for tunnel registration", activeTimeout)
+		case <-ctx.Done():
+			cancel()
+			return nil, ctx.Err()
 		}
-		return startedTunnelWithCancel(outcome.tunnel, cancel), nil
-	case <-time.After(timeout):
-		cancel()
-		return nil, fmt.Errorf("timed out after %s waiting for tunnel registration", timeout)
 	}
 }
 
@@ -1396,37 +1484,27 @@ var tunnelApplicationProfilePattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 func loadTunnelApplicationIdentity() (*tunnelApplicationIdentity, error) {
 	profileID := strings.TrimSpace(tunnelApplicationProfileID)
-	encodedSeed := strings.TrimSpace(tunnelApplicationPrivateSeed)
-	required := strings.EqualFold(strings.TrimSpace(tunnelReleaseIdentityRequired), "true")
-	if profileID == "" && encodedSeed == "" && !required {
+	required := strings.EqualFold(strings.TrimSpace(tunnelReleaseProfileRequired), "true")
+	if profileID == "" && !required {
 		return nil, nil
 	}
 	if !tunnelApplicationProfilePattern.MatchString(profileID) {
 		return nil, fmt.Errorf("tunnel application profile id must be 32 lowercase hexadecimal characters")
 	}
-	if encodedSeed == "" {
-		return nil, fmt.Errorf("tunnel application private seed is required")
-	}
-	seed, err := base64.StdEncoding.DecodeString(encodedSeed)
-	if err != nil {
-		return nil, fmt.Errorf("decode tunnel application private seed: invalid base64")
-	}
-	if len(seed) != ed25519.SeedSize {
-		return nil, fmt.Errorf("tunnel application private seed must decode to %d bytes", ed25519.SeedSize)
-	}
 	return &tunnelApplicationIdentity{
-		profileID:  profileID,
-		privateKey: ed25519.NewKeyFromSeed(seed),
+		profileID: profileID,
 	}, nil
 }
 
 func (a *webApp) buildConfigFormView(cfg config, tab string, page int, pageSize int, search string) *configFormView {
 	closeURL := dashboardURLWithPage(tab, page, pageSize, search, nil)
 	form := &configFormView{
-		Config:          cfg,
-		Close:           closeURL,
-		IDPBaseURLValue: cfg.IDPBaseURL,
-		TunnelState:     a.tunnelState(),
+		Config:               cfg,
+		Close:                closeURL,
+		IDPBaseURLValue:      cfg.IDPBaseURL,
+		TunnelState:          a.tunnelState(),
+		TunnelEnrollmentURL:  a.tunnelEnrollmentURLValue(),
+		TunnelEnrollmentCode: a.tunnelEnrollmentCodeValue(),
 	}
 	if raw := a.tunnelError(); raw != "" {
 		form.TunnelError = humanTunnelError(raw)
@@ -1443,14 +1521,16 @@ func (a *webApp) buildConfigFormView(cfg config, tab string, page int, pageSize 
 }
 
 // tunnelState reports the automatic tunnel lifecycle for display:
-// "connected", "failed", "connecting", or "unavailable" when the build
-// carries no embedded application identity and a tunnel can never start.
+// "connected", "authorizing", "failed", "connecting", or "unavailable" when the build
+// carries no application profile and a tunnel can never start.
 func (a *webApp) tunnelState() string {
 	a.tunnelMu.Lock()
 	defer a.tunnelMu.Unlock()
 	switch {
 	case a.tunnel != nil:
 		return "connected"
+	case a.tunnelEnrollmentURL != "":
+		return "authorizing"
 	case a.tunnelLastError != "":
 		return "failed"
 	case a.tunnelSupported:
@@ -1571,13 +1651,34 @@ func sameIP(a, b string) bool {
 func (a *webApp) tunnelRetryAvailable() bool {
 	a.tunnelMu.Lock()
 	defer a.tunnelMu.Unlock()
-	return a.tunnel == nil && a.tunnelLastError != ""
+	return a.tunnel == nil && a.tunnelStarting == nil && a.tunnelLastError != ""
 }
 
 func (a *webApp) setTunnelError(message string) {
 	a.tunnelMu.Lock()
 	defer a.tunnelMu.Unlock()
 	a.tunnelLastError = message
+}
+
+func (a *webApp) setTunnelEnrollmentURL(value string) {
+	a.tunnelMu.Lock()
+	defer a.tunnelMu.Unlock()
+	a.tunnelEnrollmentURL = value
+	if value == "" {
+		a.tunnelEnrollmentCode = ""
+	}
+}
+
+func (a *webApp) tunnelEnrollmentCodeValue() string {
+	a.tunnelMu.Lock()
+	defer a.tunnelMu.Unlock()
+	return a.tunnelEnrollmentCode
+}
+
+func (a *webApp) tunnelEnrollmentURLValue() string {
+	a.tunnelMu.Lock()
+	defer a.tunnelMu.Unlock()
+	return a.tunnelEnrollmentURL
 }
 
 func (a *webApp) tunnelError() string {

@@ -221,9 +221,10 @@ summary { color: var(--accent); cursor: pointer; }
       <div class="reservation row">
         <div>
           <div class="name">{{.ProfileName}} <span class="muted">/ {{.InstanceID}}</span></div>
-          <a class="url" href="{{.PublicURL}}">{{.TunnelID}}</a>
+          {{if .TunnelID}}<a class="url" href="{{.PublicURL}}">{{.TunnelID}}</a>{{else}}<span class="muted">name released</span>{{end}}
           <div><small>Last used {{.LastUsedAt.Format "2006-01-02 15:04 MST"}}
-            {{if .Revoked}}&middot; revoked{{else if .Enrolled}}&middot; enrolled{{else}}&middot; legacy{{end}}</small></div>
+            {{if .Revoked}}&middot; revoked{{else if .Enrolled}}&middot; enrolled{{else}}&middot; legacy{{end}}
+            {{if .GitHubUserID}}&middot; GitHub @{{.GitHubLogin}} ({{.GitHubUserID}}){{end}}</small></div>
         </div>
         <div class="actions">
           {{if .Enrolled}}

@@ -46,6 +46,3 @@ restart-server:
 
 status-server:
   systemctl status scimtest-server.service
-
-application-seed private_key:
-  go -C ./cmd/application-seed run . {{quote(clean(if private_key =~ '^/' { private_key } else { invocation_directory() / private_key }))}}

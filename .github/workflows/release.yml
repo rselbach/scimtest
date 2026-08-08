@@ -36,21 +36,12 @@ jobs:
             exit 1
           fi
 
-      - name: Check tunnel application identity
+      - name: Check tunnel application profile
         env:
           SCIMTEST_APPLICATION_PROFILE_ID: ${{ vars.SCIMTEST_APPLICATION_PROFILE_ID }}
-          SCIMTEST_APPLICATION_PRIVATE_SEED_BASE64: ${{ secrets.SCIMTEST_APPLICATION_PRIVATE_SEED_BASE64 }}
         run: |
           if [[ ! "${SCIMTEST_APPLICATION_PROFILE_ID}" =~ ^[a-f0-9]{32}$ ]]; then
             echo "::error::Set SCIMTEST_APPLICATION_PROFILE_ID to the application profile ID"
-            exit 1
-          fi
-          if [[ -z "${SCIMTEST_APPLICATION_PRIVATE_SEED_BASE64}" ]]; then
-            echo "::error::Set SCIMTEST_APPLICATION_PRIVATE_SEED_BASE64 to a base64-encoded 32-byte Ed25519 seed"
-            exit 1
-          fi
-          if ! python3 -c 'import base64, os; assert len(base64.b64decode(os.environ["SCIMTEST_APPLICATION_PRIVATE_SEED_BASE64"], validate=True)) == 32'; then
-            echo "::error::SCIMTEST_APPLICATION_PRIVATE_SEED_BASE64 must encode exactly 32 bytes"
             exit 1
           fi
 
@@ -64,4 +55,3 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
           SCIMTEST_APPLICATION_PROFILE_ID: ${{ vars.SCIMTEST_APPLICATION_PROFILE_ID }}
-          SCIMTEST_APPLICATION_PRIVATE_SEED_BASE64: ${{ secrets.SCIMTEST_APPLICATION_PRIVATE_SEED_BASE64 }}

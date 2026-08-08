@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -89,10 +91,8 @@ func handshakeServer(t *testing.T, check func(conn *websocket.Conn) error) (stri
 	return "ws" + strings.TrimPrefix(srv.URL, "http"), checks
 }
 
-func TestRunOnceEnrollsInstanceKey(t *testing.T) {
+func TestRunOnceAuthenticatesInstanceKeyWithoutApplicationKey(t *testing.T) {
 	r := require.New(t)
-	appPub, appKey, err := ed25519.GenerateKey(rand.Reader)
-	r.NoError(err)
 	instPub, instKey, err := ed25519.GenerateKey(rand.Reader)
 	r.NoError(err)
 	wantPublicKey := base64.StdEncoding.EncodeToString(instPub)
@@ -120,9 +120,8 @@ func TestRunOnceEnrollsInstanceKey(t *testing.T) {
 		if !ed25519.Verify(instPub, payload, signed.Signature) {
 			return errors.New("instance signature does not verify")
 		}
-		enrollPayload := protocol.EnrollmentAuthorizationPayload(register.ApplicationProfileID, wantPublicKey, register.InstanceID, "challenge-1")
-		if !ed25519.Verify(appPub, enrollPayload, signed.EnrollmentSignature) {
-			return errors.New("enrollment signature does not verify")
+		if signed.EnrollmentGrant != "" {
+			return errors.New("initial instance handshake must not carry an enrollment grant")
 		}
 		return conn.WriteJSON(protocol.Message{
 			Type:      protocol.TypeTunnelRegistered,
@@ -133,19 +132,300 @@ func TestRunOnceEnrollsInstanceKey(t *testing.T) {
 
 	registered := make(chan Registration, 1)
 	c := New(Config{
-		ServerURL:             wsURL,
-		ApplicationProfileID:  "0123456789abcdef0123456789abcdef",
-		InstanceID:            "legacy-uuid-1",
-		ApplicationPrivateKey: appKey,
-		InstancePrivateKey:    instKey,
-		LocalPort:             8080,
-		Output:                io.Discard,
-		OnRegistered:          func(reg Registration) { registered <- reg },
+		ServerURL:            wsURL,
+		ApplicationProfileID: "0123456789abcdef0123456789abcdef",
+		InstanceID:           "legacy-uuid-1",
+		InstancePrivateKey:   instKey,
+		LocalPort:            8080,
+		Output:               io.Discard,
+		OnRegistered:         func(reg Registration) { registered <- reg },
 	})
 	_ = c.runOnce(context.Background())
 
 	r.NoError(<-checks)
 	r.Equal("human-timeline-club", (<-registered).TunnelID)
+}
+
+func TestRunContextCompletesEnrollmentAndReconnectsImmediately(t *testing.T) {
+	r := require.New(t)
+	instancePublicKey, instanceKey, err := ed25519.GenerateKey(rand.Reader)
+	r.NoError(err)
+	wantPublicKey := base64.StdEncoding.EncodeToString(instancePublicKey)
+	const deviceCode = "greendale-device-secret"
+
+	var connections atomic.Int32
+	upgrader := websocket.Upgrader{}
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/enrollment/status" {
+			r.Equal(http.MethodPost, req.Method)
+			r.Empty(req.URL.RawQuery)
+			r.Zero(req.ContentLength)
+			r.Equal("Bearer "+deviceCode, req.Header.Get("Authorization"))
+			r.NoError(json.NewEncoder(w).Encode(protocol.EnrollmentStatus{Status: "approved"}))
+			return
+		}
+
+		conn, err := upgrader.Upgrade(w, req, nil)
+		r.NoError(err)
+		defer func() { r.NoError(conn.Close()) }()
+		var register protocol.Message
+		r.NoError(conn.ReadJSON(&register))
+		r.Equal(wantPublicKey, register.InstancePublicKey)
+		r.NoError(conn.WriteJSON(protocol.Message{
+			Type:                protocol.TypeApplicationChallenge,
+			Challenge:           "challenge-1",
+			EnrollmentSupported: true,
+		}))
+		var signed protocol.Message
+		r.NoError(conn.ReadJSON(&signed))
+		payload := protocol.InstanceChallengePayload(register.ApplicationProfileID, wantPublicKey, register.InstanceID, "challenge-1")
+		r.True(ed25519.Verify(instancePublicKey, payload, signed.Signature))
+
+		switch connections.Add(1) {
+		case 1:
+			r.Empty(signed.EnrollmentGrant)
+			r.NoError(conn.WriteJSON(protocol.Message{
+				Type:                       protocol.TypeEnrollmentRequired,
+				EnrollmentURL:              srv.URL + "/enrollment/start",
+				EnrollmentStatusURL:        srv.URL + "/enrollment/status",
+				EnrollmentDeviceCode:       deviceCode,
+				EnrollmentVerificationCode: "study-group",
+				EnrollmentPollSeconds:      1,
+			}))
+		case 2:
+			r.Equal(deviceCode, signed.EnrollmentGrant)
+			r.NoError(conn.WriteJSON(protocol.Message{
+				Type:      protocol.TypeTunnelRegistered,
+				TunnelID:  "human-timeline-club",
+				PublicURL: srv.URL + "/human-timeline-club",
+			}))
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		default:
+			r.Fail("unexpected tunnel reconnect")
+		}
+	}))
+	defer srv.Close()
+
+	enrollments := make(chan Enrollment, 1)
+	registrations := make(chan Registration, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	c := New(Config{
+		ServerURL:            "ws" + strings.TrimPrefix(srv.URL, "http"),
+		ApplicationProfileID: "0123456789abcdef0123456789abcdef",
+		InstanceID:           "legacy-uuid-1",
+		InstancePrivateKey:   instanceKey,
+		LocalPort:            8080,
+		Output:               io.Discard,
+		OnEnrollmentRequired: func(enrollment Enrollment) {
+			enrollments <- enrollment
+		},
+		OnRegistered: func(registration Registration) {
+			registrations <- registration
+			cancel()
+		},
+	})
+	startedAt := time.Now()
+	err = c.RunContext(ctx)
+
+	r.ErrorIs(err, context.Canceled)
+	r.Less(time.Since(startedAt), time.Second)
+	r.Equal(Enrollment{URL: srv.URL + "/enrollment/start", VerificationCode: "study-group"}, <-enrollments)
+	r.Equal("human-timeline-club", (<-registrations).TunnelID)
+	r.Equal(int32(2), connections.Load())
+	r.Empty(c.enrollmentGrant)
+}
+
+func TestPollEnrollmentWaitsForApproval(t *testing.T) {
+	r := require.New(t)
+	const deviceCode = "greendale-device-secret"
+	var polls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		r.Equal(http.MethodPost, req.Method)
+		r.Empty(req.URL.RawQuery)
+		r.Zero(req.ContentLength)
+		r.Equal("Bearer "+deviceCode, req.Header.Get("Authorization"))
+		status := "pending"
+		if polls.Add(1) == 2 {
+			status = "approved"
+		}
+		r.NoError(json.NewEncoder(w).Encode(protocol.EnrollmentStatus{Status: status}))
+	}))
+	defer srv.Close()
+
+	c := New(Config{Output: io.Discard})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := c.pollEnrollment(ctx, &enrollmentRequiredError{
+		statusURL:    srv.URL,
+		deviceCode:   deviceCode,
+		pollInterval: 10 * time.Millisecond,
+	})
+
+	r.NoError(err)
+	r.Equal(int32(2), polls.Load())
+	r.Equal(deviceCode, c.enrollmentGrant)
+}
+
+func TestRunContextRejectsCrossOriginEnrollmentStatusURL(t *testing.T) {
+	r := require.New(t)
+	_, instanceKey, err := ed25519.GenerateKey(rand.Reader)
+	r.NoError(err)
+
+	wsURL, checks := handshakeServer(t, func(conn *websocket.Conn) error {
+		var register protocol.Message
+		if err := conn.ReadJSON(&register); err != nil {
+			return err
+		}
+		if err := conn.WriteJSON(protocol.Message{
+			Type:                protocol.TypeApplicationChallenge,
+			Challenge:           "challenge-1",
+			EnrollmentSupported: true,
+		}); err != nil {
+			return err
+		}
+		var signed protocol.Message
+		if err := conn.ReadJSON(&signed); err != nil {
+			return err
+		}
+		return conn.WriteJSON(protocol.Message{
+			Type:                 protocol.TypeEnrollmentRequired,
+			EnrollmentURL:        "https://admin.example.com/enrollment/start",
+			EnrollmentStatusURL:  "https://attacker.example/enrollment/status",
+			EnrollmentDeviceCode: "device-secret",
+		})
+	})
+
+	called := false
+	c := New(Config{
+		ServerURL:            wsURL,
+		ApplicationProfileID: "0123456789abcdef0123456789abcdef",
+		InstanceID:           "legacy-uuid-1",
+		InstancePrivateKey:   instanceKey,
+		LocalPort:            8080,
+		Output:               io.Discard,
+		OnEnrollmentRequired: func(Enrollment) { called = true },
+	})
+	err = c.RunContext(context.Background())
+
+	r.NoError(<-checks)
+	r.ErrorContains(err, "enrollment status URL must use the tunnel server origin")
+	r.False(called)
+}
+
+func TestValidateEnrollmentStatusURL(t *testing.T) {
+	tests := map[string]struct {
+		server  string
+		status  string
+		wantErr string
+	}{
+		"matching secure origin": {
+			server: "wss://scimtest.example/api/connect",
+			status: "https://scimtest.example/api/enroll/status",
+		},
+		"matching development port": {
+			server: "ws://localhost:7000/api/connect",
+			status: "http://localhost:7000/api/enroll/status",
+		},
+		"different host": {
+			server:  "wss://scimtest.example/api/connect",
+			status:  "https://attacker.example/api/enroll/status",
+			wantErr: "server origin",
+		},
+		"different port": {
+			server:  "wss://scimtest.example/api/connect",
+			status:  "https://scimtest.example:8443/api/enroll/status",
+			wantErr: "server origin",
+		},
+		"different transport": {
+			server:  "wss://scimtest.example/api/connect",
+			status:  "http://scimtest.example/api/enroll/status",
+			wantErr: "server origin",
+		},
+		"query rejected": {
+			server:  "wss://scimtest.example/api/connect",
+			status:  "https://scimtest.example/api/enroll/status?secret=nope",
+			wantErr: "query",
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := validateEnrollmentStatusURL(tc.server, tc.status)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tc.wantErr)
+		})
+	}
+}
+
+func TestEnrollmentRequiredValidation(t *testing.T) {
+	validMessage := func() protocol.Message {
+		return protocol.Message{
+			EnrollmentURL:              "https://admin.example.com/enroll?code=study-group",
+			EnrollmentStatusURL:        "https://scimtest.example.com/api/enroll/status",
+			EnrollmentDeviceCode:       "greendale-device-secret",
+			EnrollmentVerificationCode: "study-group",
+		}
+	}
+	tests := map[string]struct {
+		mutate  func(*protocol.Message)
+		wantErr string
+	}{
+		"valid secure enrollment": {
+			mutate: func(*protocol.Message) {},
+		},
+		"secure tunnel rejects insecure enrollment page": {
+			mutate: func(msg *protocol.Message) {
+				msg.EnrollmentURL = "http://admin.example.com/enroll?code=study-group"
+			},
+			wantErr: "must use HTTPS with a secure tunnel server",
+		},
+		"enrollment page URL too long": {
+			mutate: func(msg *protocol.Message) {
+				msg.EnrollmentURL = "https://admin.example.com/" + strings.Repeat("a", maxEnrollmentURLLength)
+			},
+			wantErr: "enrollment URL is too long",
+		},
+		"status URL too long": {
+			mutate: func(msg *protocol.Message) {
+				msg.EnrollmentStatusURL = "https://scimtest.example.com/" + strings.Repeat("a", maxEnrollmentURLLength)
+			},
+			wantErr: "enrollment URL is too long",
+		},
+		"device code too long": {
+			mutate: func(msg *protocol.Message) {
+				msg.EnrollmentDeviceCode = strings.Repeat("a", maxEnrollmentDeviceCodeLength+1)
+			},
+			wantErr: "enrollment device code is invalid",
+		},
+		"verification code too long": {
+			mutate: func(msg *protocol.Message) {
+				msg.EnrollmentVerificationCode = strings.Repeat("a", maxEnrollmentVerificationCodeLength+1)
+			},
+			wantErr: "enrollment verification code is invalid",
+		},
+	}
+
+	client := New(Config{ServerURL: "wss://scimtest.example.com/api/connect"})
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			msg := validMessage()
+			tc.mutate(&msg)
+			_, err := client.enrollmentRequired(msg)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tc.wantErr)
+		})
+	}
 }
 
 func TestRunOnceFallsBackToLegacySignature(t *testing.T) {
@@ -170,8 +450,8 @@ func TestRunOnceFallsBackToLegacySignature(t *testing.T) {
 		if err := conn.ReadJSON(&signed); err != nil {
 			return err
 		}
-		if len(signed.EnrollmentSignature) != 0 {
-			return errors.New("legacy handshake must not carry an enrollment signature")
+		if signed.EnrollmentGrant != "" {
+			return errors.New("legacy handshake must not carry an enrollment grant")
 		}
 		payload := protocol.ApplicationChallengePayload(register.ApplicationProfileID, register.InstanceID, "challenge-1")
 		if !ed25519.Verify(appPub, payload, signed.Signature) {

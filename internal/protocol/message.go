@@ -14,6 +14,7 @@ const (
 	TypeRegisterTunnel       = "register_tunnel"
 	TypeApplicationChallenge = "application_challenge"
 	TypeApplicationSignature = "application_signature"
+	TypeEnrollmentRequired   = "enrollment_required"
 	TypeTunnelRegistered     = "tunnel_registered"
 	TypeRequest              = "request"
 	TypeResponse             = "response"
@@ -28,14 +29,19 @@ type Message struct {
 	PublicURL string `json:"public_url,omitempty"`
 	ClientIP  string `json:"client_ip,omitempty"`
 
-	LocalPort            int    `json:"local_port,omitempty"`
-	ApplicationProfileID string `json:"application_profile_id,omitempty"`
-	InstanceID           string `json:"instance_id,omitempty"`
-	InstancePublicKey    string `json:"instance_public_key,omitempty"`
-	EnrollmentSupported  bool   `json:"enrollment_supported,omitempty"`
-	Challenge            string `json:"challenge,omitempty"`
-	Signature            []byte `json:"signature,omitempty"`
-	EnrollmentSignature  []byte `json:"enrollment_signature,omitempty"`
+	LocalPort                  int    `json:"local_port,omitempty"`
+	ApplicationProfileID       string `json:"application_profile_id,omitempty"`
+	InstanceID                 string `json:"instance_id,omitempty"`
+	InstancePublicKey          string `json:"instance_public_key,omitempty"`
+	EnrollmentSupported        bool   `json:"enrollment_supported,omitempty"`
+	Challenge                  string `json:"challenge,omitempty"`
+	Signature                  []byte `json:"signature,omitempty"`
+	EnrollmentGrant            string `json:"enrollment_grant,omitempty"`
+	EnrollmentURL              string `json:"enrollment_url,omitempty"`
+	EnrollmentStatusURL        string `json:"enrollment_status_url,omitempty"`
+	EnrollmentDeviceCode       string `json:"enrollment_device_code,omitempty"`
+	EnrollmentVerificationCode string `json:"enrollment_verification_code,omitempty"`
+	EnrollmentPollSeconds      int    `json:"enrollment_poll_seconds,omitempty"`
 
 	StreamID uint64      `json:"stream_id,omitempty"`
 	Method   string      `json:"method,omitempty"`
@@ -47,6 +53,12 @@ type Message struct {
 
 	StatusCode int    `json:"status_code,omitempty"`
 	Error      string `json:"error,omitempty"`
+}
+
+// EnrollmentStatus reports whether a pending installation has been approved.
+type EnrollmentStatus struct {
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
 }
 
 // MaxMessageBytes returns the WebSocket read limit needed for a message with
@@ -84,20 +96,6 @@ func ApplicationChallengePayload(profileID, instanceID, challenge string) []byte
 func InstanceChallengePayload(profileID, instancePublicKey, legacyInstanceID, challenge string) []byte {
 	return []byte(fmt.Sprintf(
 		"scimtest-server-instance-registration-v1\n%s\n%s\n%s\n%s",
-		profileID,
-		instancePublicKey,
-		legacyInstanceID,
-		challenge,
-	))
-}
-
-// EnrollmentAuthorizationPayload returns the versioned bytes the embedded
-// release key signs to authorize enrolling a new installation key. It covers
-// the same fields as InstanceChallengePayload under a distinct domain prefix
-// so neither signature can be replayed as the other.
-func EnrollmentAuthorizationPayload(profileID, instancePublicKey, legacyInstanceID, challenge string) []byte {
-	return []byte(fmt.Sprintf(
-		"scimtest-server-instance-enrollment-v1\n%s\n%s\n%s\n%s",
 		profileID,
 		instancePublicKey,
 		legacyInstanceID,

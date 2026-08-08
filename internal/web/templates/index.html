@@ -914,7 +914,7 @@
 			<div class="tunnel-row">
 			  <strong>Automatic tunnel:</strong> unavailable in this build
 			</div>
-			<span class="hint">Public tunnels require a release build with an embedded application identity. Source builds serve OIDC and SAML on this machine only.</span>
+			<span class="hint">Public tunnels require a release build with an application profile. Source builds serve OIDC and SAML on this machine only.</span>
 			{{else if eq .ConfigForm.TunnelState "failed"}}
 			<div class="tunnel-row">
 			  <strong>Automatic tunnel:</strong> connection failed
@@ -922,6 +922,13 @@
 			<div class="inline-error" role="alert">{{.ConfigForm.TunnelError}}</div>
 			{{if .ConfigForm.TunnelErrorDetail}}<details class="hint"><summary>Error detail</summary><span class="mono">{{.ConfigForm.TunnelErrorDetail}}</span></details>{{end}}
 			<button class="btn btn-sm btn-ghost" type="submit" formaction="/config/tunnel/retry">Retry</button>
+			{{else if eq .ConfigForm.TunnelState "authorizing"}}
+			<div class="tunnel-row">
+			  <strong>Automatic tunnel:</strong> GitHub authorization required
+			</div>
+			<a class="btn btn-sm btn-primary" href="{{.ConfigForm.TunnelEnrollmentURL}}" target="_blank" rel="noopener noreferrer">Authorize installation with GitHub</a>
+			{{if .ConfigForm.TunnelEnrollmentCode}}<span class="hint">Verify that the authorization page shows code <span class="mono">{{.ConfigForm.TunnelEnrollmentCode}}</span> before continuing to GitHub.</span>{{end}}
+			<span class="hint">This is required once for each scimtest installation.</span>
 			{{else}}
 			<div class="tunnel-row">
 			  <strong>Automatic tunnel:</strong> waiting for connection

@@ -31,6 +31,7 @@ type GitHubClient struct {
 }
 
 type GitHubUser struct {
+	ID    int64  `json:"id"`
 	Login string `json:"login"`
 }
 
@@ -40,7 +41,7 @@ type TokenResponse struct {
 	Description string `json:"error_description"`
 }
 
-func (c GitHubClient) ExchangeWebCode(ctx context.Context, code, redirectURI string) (TokenResponse, error) {
+func (c GitHubClient) ExchangeWebCode(ctx context.Context, code, redirectURI, codeVerifier string) (TokenResponse, error) {
 	if c.ClientID == "" || c.ClientSecret == "" {
 		return TokenResponse{}, errors.New("github client id and secret are required")
 	}
@@ -51,6 +52,9 @@ func (c GitHubClient) ExchangeWebCode(ctx context.Context, code, redirectURI str
 	form.Set("code", code)
 	if redirectURI != "" {
 		form.Set("redirect_uri", redirectURI)
+	}
+	if codeVerifier != "" {
+		form.Set("code_verifier", codeVerifier)
 	}
 
 	var token TokenResponse
@@ -99,19 +103,22 @@ func (c GitHubClient) User(ctx context.Context, token string) (GitHubUser, error
 	if err := errors.Join(decodeErr, closeErr); err != nil {
 		return GitHubUser{}, err
 	}
-	if user.Login == "" {
-		return GitHubUser{}, errors.New("github returned an empty login")
+	if user.ID <= 0 || user.Login == "" {
+		return GitHubUser{}, errors.New("github returned an invalid user")
 	}
 	return user, nil
 }
 
-func (c GitHubClient) AuthorizeURL(state, redirectURI string) string {
+func (c GitHubClient) AuthorizeURL(state, redirectURI, codeChallenge string) string {
 	query := url.Values{}
 	query.Set("client_id", c.ClientID)
-	query.Set("scope", "read:user")
 	query.Set("state", state)
 	if redirectURI != "" {
 		query.Set("redirect_uri", redirectURI)
+	}
+	if codeChallenge != "" {
+		query.Set("code_challenge", codeChallenge)
+		query.Set("code_challenge_method", "S256")
 	}
 	return GitHubAuthorizeURL + "?" + query.Encode()
 }
