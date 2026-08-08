@@ -602,7 +602,11 @@ func Run(options ...RunOptions) error {
 		idpCloseErr := idpListener.Close()
 		return fmt.Errorf("%w; close admin listener: %v; close tunneled IDP listener: %v", err, adminCloseErr, idpCloseErr)
 	}
-	log.Printf("merged auth test service listening on %s", localURL)
+	tunnelNote := "unavailable in this build (OIDC and SAML are served locally only)"
+	if identity != nil {
+		tunnelNote = "connecting to " + tunnelServerBaseURL
+	}
+	log.Printf("scimtest is running\n  Admin UI:   %s\n  State file: %s\n  Tunnel:     %s", localURL, statePath, tunnelNote)
 	if opts.Debug {
 		if _, err := fmt.Fprintln(os.Stdout, "RP debug logging enabled"); err != nil {
 			adminCloseErr := listener.Close()
