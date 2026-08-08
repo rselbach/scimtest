@@ -345,6 +345,18 @@
       <div class="modal-body">
         <div class="tool-grid">
           <section class="tool-card">
+            <h3>Greendale sample</h3>
+            <p>Load a small realistic directory: 10 named users (one inactive) and 3 overlapping groups. Loading twice adds nothing.</p>
+            <form data-sync-disable method="post" action="/tools/seed-sample">
+              <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
+              <input type="hidden" name="tab" value="{{.Tab}}">
+              {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
+              <div class="form-actions">
+                <button class="btn btn-primary" type="submit">Load Greendale sample</button>
+              </div>
+            </form>
+          </section>
+          <section class="tool-card">
             <h3>Create users</h3>
             <p>Generate active test users. They will be ready for the next SCIM sync.</p>
             <form data-sync-disable method="post" action="/tools/create-users">

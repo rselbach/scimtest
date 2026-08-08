@@ -243,6 +243,13 @@
                 <div class="card-empty">
                   <div class="h">{{if and $.Pagination $.Pagination.ActiveFilters}}No users match the filters{{else}}No users yet{{end}}</div>
                   <div>{{if and $.Pagination $.Pagination.ActiveFilters}}Try different search or status filters.{{else if not $.ActiveEnvironment.ID}}Create an environment first.{{else if $.SCIMEnabled}}Add one with the button above, or import from {{$.ActiveEnvironment.Name}}.{{else}}Add one with the button above.{{end}}</div>
+                  {{if and $.ActiveEnvironment.ID (or (not $.Pagination) (not $.Pagination.ActiveFilters))}}
+                  <form data-sync-disable method="post" action="/tools/seed-sample">
+                    <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
+                    <input type="hidden" name="tab" value="users">
+                    <button class="btn btn-sm" type="submit">Load Greendale sample</button>
+                  </form>
+                  {{end}}
                 </div>
               </td></tr>
               {{end}}

@@ -867,6 +867,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /tools/deactivate-all", a.rejectWhileSyncing(a.handleToolsDeactivateAll))
 	mux.HandleFunc("POST /tools/activate-all", a.rejectWhileSyncing(a.handleToolsActivateAll))
 	mux.HandleFunc("POST /tools/create-users", a.rejectWhileSyncing(a.handleToolsCreateUsers))
+	mux.HandleFunc("POST /tools/seed-sample", a.rejectWhileSyncing(a.handleToolsSeedSample))
 	mux.HandleFunc("GET /backup", a.handleBackupDownload)
 	mux.HandleFunc("GET /traffic", a.handleTraffic)
 	mux.HandleFunc("POST /traffic/settings", a.handleTrafficSettings)
