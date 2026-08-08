@@ -132,10 +132,10 @@ func (a *webApp) handleToolsSeedSample(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, created := range state.Users[firstNewUser:] {
-		markUserDirtyForApps(&state, created.ID, false)
+		markUserDirty(&state, created.ID, false)
 	}
 	for _, created := range state.Groups[firstNewGroup:] {
-		markGroupDirtyForApps(&state, created.ID, false)
+		markGroupDirty(&state, created.ID, false)
 	}
 	if err := saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)

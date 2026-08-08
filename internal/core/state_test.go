@@ -734,8 +734,8 @@ func TestMarkDirtyUpdatesEverySyncApp(t *testing.T) {
 		{ID: "app-c"},
 	}}
 
-	MarkUserDirtyForApps(&state, "troy", false)
-	MarkGroupDirtyForApps(&state, "study-group", false)
+	MarkUserDirty(&state, "troy", false)
+	MarkGroupDirty(&state, "study-group", false)
 
 	r.True(state.UserSync["app-a"]["troy"].Dirty)
 	r.True(state.UserSync["app-b"]["troy"].Dirty)
@@ -760,8 +760,8 @@ func TestMarkDirtyUpdatesPausedAppsThatRememberResources(t *testing.T) {
 		},
 	}
 
-	MarkUserDirtyForApps(&state, "troy", true)
-	MarkGroupDirtyForApps(&state, "study-group", true)
+	MarkUserDirty(&state, "troy", true)
+	MarkGroupDirty(&state, "study-group", true)
 
 	r.Equal(ResourceSyncState{RemoteID: "remote-b", Dirty: true, Deleted: true}, state.UserSync["app-b"]["troy"])
 	r.Equal(ResourceSyncState{RemoteID: "remote-group-b", Dirty: true, Deleted: true}, state.GroupSync["app-b"]["study-group"])
@@ -815,17 +815,16 @@ func TestAppHasSyncState(t *testing.T) {
 	}, "app-a"))
 }
 
-func TestMergeAppImportPreservesOtherAppRemoteIDs(t *testing.T) {
+func TestMergeAppImportReplacesDirectoryAndTombstonesMissing(t *testing.T) {
 	r := require.New(t)
 	state := AppState{
 		Users: []User{
 			{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true},
 			{ID: "abed", GivenName: "Abed", FamilyName: "Nadir", Email: "abed@greendale.edu", Username: "abed", Active: true},
 		},
-		Apps: []App{{ID: "app-a", SCIMEnabled: true}, {ID: "app-b", SCIMEnabled: true}},
+		Apps: []App{{ID: "app-a", SCIMEnabled: true}},
 		UserSync: map[string]map[string]ResourceSyncState{
 			"app-a": {"troy": {RemoteID: "a-troy"}, "abed": {RemoteID: "a-abed"}},
-			"app-b": {"troy": {RemoteID: "b-troy"}, "abed": {RemoteID: "b-abed"}},
 		},
 	}
 	imported := AppState{Users: []User{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true, RemoteID: "a-troy"}}}
@@ -833,13 +832,11 @@ func TestMergeAppImportPreservesOtherAppRemoteIDs(t *testing.T) {
 	MergeAppImportState(&state, "app-a", imported)
 
 	r.Len(state.Users, 2)
-	r.True(state.Users[1].Deleted)
+	r.True(state.Users[1].Deleted, "a user absent from the import is tombstoned")
 	r.Equal("a-troy", state.UserSync["app-a"]["troy"].RemoteID)
 	r.False(state.UserSync["app-a"]["troy"].Dirty)
-	r.Equal("b-troy", state.UserSync["app-b"]["troy"].RemoteID)
-	r.True(state.UserSync["app-b"]["troy"].Dirty)
-	r.Equal("b-abed", state.UserSync["app-b"]["abed"].RemoteID)
-	r.True(state.UserSync["app-b"]["abed"].Deleted)
+	_, abedTracked := state.UserSync["app-a"]["abed"]
+	r.False(abedTracked, "the import replaces this app's sync rows entirely")
 }
 
 func TestMergeAppImportRetainsOperationHistory(t *testing.T) {

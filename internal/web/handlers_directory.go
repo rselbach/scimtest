@@ -73,7 +73,7 @@ func (a *webApp) handleUserSave(w http.ResponseWriter, r *http.Request) {
 			appendLocalOperationLog(&state, "user", state.Users[index].ID, summary)
 		}
 	}
-	markUserDirtyForApps(&state, id, false)
+	markUserDirty(&state, id, false)
 
 	if err := saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
@@ -108,7 +108,7 @@ func (a *webApp) handleUserToggleActive(w http.ResponseWriter, r *http.Request) 
 	state.Users[index].Active = !state.Users[index].Active
 	state.Users[index].Dirty = true
 	state.Users[index].LastError = ""
-	markUserDirtyForApps(&state, id, false)
+	markUserDirty(&state, id, false)
 	appendLocalOperationLog(&state, "user", state.Users[index].ID, summarizeActiveToggle(state.Users[index].Active))
 
 	if err := saveRequestState(state); err != nil {
@@ -163,7 +163,7 @@ func (a *webApp) handleUsersDelete(w http.ResponseWriter, r *http.Request) {
 			state.Users[i].Deleted = true
 			state.Users[i].Dirty = true
 			state.Users[i].LastError = ""
-			markUserDirtyForApps(&state, state.Users[i].ID, true)
+			markUserDirty(&state, state.Users[i].ID, true)
 			appendLocalOperationLog(&state, "user", state.Users[i].ID, "Marked for deletion in bulk")
 		}
 	} else {
@@ -234,7 +234,7 @@ func (a *webApp) handleUserDeletedState(w http.ResponseWriter, r *http.Request, 
 	state.Users[index].Deleted = deleted
 	state.Users[index].Dirty = true
 	state.Users[index].LastError = ""
-	markUserDirtyForApps(&state, id, deleted)
+	markUserDirty(&state, id, deleted)
 	appendLocalOperationLog(&state, "user", state.Users[index].ID, localDeleteSummary(deleted))
 
 	if err := saveRequestState(state); err != nil {
@@ -302,7 +302,7 @@ func (a *webApp) handleGroupSave(w http.ResponseWriter, r *http.Request) {
 			appendLocalOperationLog(&state, "group", state.Groups[index].ID, summary)
 		}
 	}
-	markGroupDirtyForApps(&state, id, false)
+	markGroupDirty(&state, id, false)
 
 	if err := saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
@@ -352,7 +352,7 @@ func (a *webApp) handleGroupsDelete(w http.ResponseWriter, r *http.Request) {
 			state.Groups[i].Deleted = true
 			state.Groups[i].Dirty = true
 			state.Groups[i].LastError = ""
-			markGroupDirtyForApps(&state, state.Groups[i].ID, true)
+			markGroupDirty(&state, state.Groups[i].ID, true)
 			appendLocalOperationLog(&state, "group", state.Groups[i].ID, "Marked for deletion in bulk")
 		}
 	} else {
@@ -415,7 +415,7 @@ func (a *webApp) handleGroupDeletedState(w http.ResponseWriter, r *http.Request,
 	state.Groups[index].Deleted = deleted
 	state.Groups[index].Dirty = true
 	state.Groups[index].LastError = ""
-	markGroupDirtyForApps(&state, id, deleted)
+	markGroupDirty(&state, id, deleted)
 	appendLocalOperationLog(&state, "group", state.Groups[index].ID, localDeleteSummary(deleted))
 
 	if err := saveRequestState(state); err != nil {

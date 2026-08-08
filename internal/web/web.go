@@ -1578,7 +1578,7 @@ func (a *webApp) handleToolsDeleteAll(w http.ResponseWriter, r *http.Request) {
 			state.Users[i].Deleted = true
 			state.Users[i].Dirty = true
 			state.Users[i].LastError = ""
-			markUserDirtyForApps(&state, state.Users[i].ID, true)
+			markUserDirty(&state, state.Users[i].ID, true)
 			appendLocalOperationLog(&state, "user", state.Users[i].ID, "Marked for deletion by tools")
 			changed++
 		}
@@ -1628,7 +1628,7 @@ func (a *webApp) handleToolsClearUsersLocal(w http.ResponseWriter, r *http.Reque
 		state.Groups[i].MemberIDs = nil
 		state.Groups[i].Dirty = true
 		state.Groups[i].LastError = ""
-		markGroupDirtyForApps(&state, state.Groups[i].ID, false)
+		markGroupDirty(&state, state.Groups[i].ID, false)
 		affectedGroups++
 	}
 	if err := saveRequestState(state); err != nil {
@@ -1667,7 +1667,7 @@ func (a *webApp) handleToolsSetAllActive(w http.ResponseWriter, r *http.Request,
 		state.Users[i].Active = active
 		state.Users[i].Dirty = true
 		state.Users[i].LastError = ""
-		markUserDirtyForApps(&state, state.Users[i].ID, false)
+		markUserDirty(&state, state.Users[i].ID, false)
 		appendLocalOperationLog(&state, "user", state.Users[i].ID, summarizeActiveToggle(active))
 		changed++
 	}
@@ -1719,7 +1719,7 @@ func (a *webApp) handleToolsCreateUsers(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	for _, createdUser := range state.Users[firstNewUser:] {
-		markUserDirtyForApps(&state, createdUser.ID, false)
+		markUserDirty(&state, createdUser.ID, false)
 	}
 	if err := saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)

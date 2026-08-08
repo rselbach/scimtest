@@ -87,48 +87,32 @@ func operationLogsForApp(logs map[string][]OperationLog, appID string) map[strin
 	return filtered
 }
 
-// MarkUserDirtyForApps schedules a user change for every sync-enabled app,
-// and for SCIM-paused apps that already remember this user so a later
-// re-enable still pushes the edit or delete.
-func MarkUserDirtyForApps(state *AppState, userID string, deleted bool) {
+// MarkUserDirty schedules a user change for the environment's app. A
+// SCIM-enabled app always records it; a paused app only when it already
+// remembers the user, so a later re-enable still pushes the edit or delete.
+func MarkUserDirty(state *AppState, userID string, deleted bool) {
 	if state.UserSync == nil {
 		state.UserSync = make(map[string]map[string]ResourceSyncState)
 	}
 	for _, app := range state.Apps {
-		_, hasEntry := state.UserSync[app.ID][userID]
-		if !app.SCIMEnabled && !hasEntry {
+		if _, hasEntry := state.UserSync[app.ID][userID]; !app.SCIMEnabled && !hasEntry {
 			continue
 		}
-		if state.UserSync[app.ID] == nil {
-			state.UserSync[app.ID] = make(map[string]ResourceSyncState)
-		}
-		syncState := state.UserSync[app.ID][userID]
-		syncState.Dirty = true
-		syncState.Deleted = deleted
-		syncState.LastError = ""
-		state.UserSync[app.ID][userID] = syncState
+		markResourceDirty(state.UserSync, app.ID, userID, deleted)
 	}
 }
 
-// MarkGroupDirtyForApps schedules a group change for every sync-enabled app,
-// and for SCIM-paused apps that already remember this group.
-func MarkGroupDirtyForApps(state *AppState, groupID string, deleted bool) {
+// MarkGroupDirty schedules a group change for the environment's app under
+// the same rules as MarkUserDirty.
+func MarkGroupDirty(state *AppState, groupID string, deleted bool) {
 	if state.GroupSync == nil {
 		state.GroupSync = make(map[string]map[string]ResourceSyncState)
 	}
 	for _, app := range state.Apps {
-		_, hasEntry := state.GroupSync[app.ID][groupID]
-		if !app.SCIMEnabled && !hasEntry {
+		if _, hasEntry := state.GroupSync[app.ID][groupID]; !app.SCIMEnabled && !hasEntry {
 			continue
 		}
-		if state.GroupSync[app.ID] == nil {
-			state.GroupSync[app.ID] = make(map[string]ResourceSyncState)
-		}
-		syncState := state.GroupSync[app.ID][groupID]
-		syncState.Dirty = true
-		syncState.Deleted = deleted
-		syncState.LastError = ""
-		state.GroupSync[app.ID][groupID] = syncState
+		markResourceDirty(state.GroupSync, app.ID, groupID, deleted)
 	}
 }
 
@@ -187,8 +171,9 @@ func MergeAppSyncState(state *AppState, appID string, synced AppState) {
 	state.GroupSync[appID] = groupSync
 }
 
-// MergeAppImportState replaces the directory from one app and schedules the
-// resulting changes for every other sync-enabled app.
+// MergeAppImportState replaces the environment's directory with the one
+// imported from its SCIM server, preserving operation history and
+// tombstoning resources the import no longer contains.
 func MergeAppImportState(state *AppState, appID string, imported AppState) {
 	MergeAppSyncState(state, appID, imported)
 	if state.UserOperations == nil {
@@ -247,18 +232,6 @@ func MergeAppImportState(state *AppState, appID string, imported AppState) {
 		group.LastError = ""
 		state.Groups = append(state.Groups, group)
 	}
-
-	for _, app := range state.Apps {
-		if !app.SCIMEnabled || app.ID == appID {
-			continue
-		}
-		for _, user := range state.Users {
-			markResourceDirty(state.UserSync, app.ID, user.ID, user.Deleted)
-		}
-		for _, group := range state.Groups {
-			markResourceDirty(state.GroupSync, app.ID, group.ID, group.Deleted)
-		}
-	}
 }
 
 func mergeImportOperationLog(destination map[string][]OperationLog, imported map[string][]OperationLog, resourceID string) {
@@ -282,10 +255,10 @@ func markResourceDirty(syncStates map[string]map[string]ResourceSyncState, appID
 	syncStates[appID][resourceID] = syncState
 }
 
-// PurgeFullySyncedDeletions removes locally soft-deleted resources only after
-// every SCIM-linked environment that still remembers them has finished
-// deleting. Pausing SCIM (SCIMEnabled=false) does not count as finished: a
-// remembered RemoteID or pending dirty delete still blocks purge.
+// PurgeFullySyncedDeletions removes locally soft-deleted resources once the
+// environment's app has finished deleting them remotely. Pausing SCIM
+// (SCIMEnabled=false) does not count as finished: a remembered RemoteID or
+// pending dirty delete still blocks purge.
 func PurgeFullySyncedDeletions(state *AppState) {
 	keptUsers := state.Users[:0]
 	for _, user := range state.Users {
@@ -324,9 +297,7 @@ func syncDeletionSettled(syncState ResourceSyncState, ok bool) bool {
 }
 
 func resourceDeletedEverywhere(apps []App, syncByApp map[string]map[string]ResourceSyncState, resourceID string) bool {
-	seen := make(map[string]bool, len(apps))
 	for _, app := range apps {
-		seen[app.ID] = true
 		syncState, ok := syncByApp[app.ID][resourceID]
 		if app.SCIMEnabled {
 			if !syncDeletionSettled(syncState, ok) {
@@ -336,22 +307,7 @@ func resourceDeletedEverywhere(apps []App, syncByApp map[string]map[string]Resou
 		}
 		// SCIM paused: no row means this environment never tracked the
 		// resource. Any remaining live or pending remote identity blocks GC.
-		if !ok {
-			continue
-		}
-		if !syncDeletionSettled(syncState, true) {
-			return false
-		}
-	}
-	for appID, syncs := range syncByApp {
-		if seen[appID] {
-			continue
-		}
-		syncState, ok := syncs[resourceID]
-		if !ok {
-			continue
-		}
-		if !syncDeletionSettled(syncState, true) {
+		if ok && !syncDeletionSettled(syncState, true) {
 			return false
 		}
 	}

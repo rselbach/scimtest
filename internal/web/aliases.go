@@ -60,8 +60,8 @@ var (
 	samlNameIDValue              = core.SAMLNameIDValue
 	appBySlug                    = core.AppBySlug
 	stateForApp                  = core.StateForApp
-	markUserDirtyForApps         = core.MarkUserDirtyForApps
-	markGroupDirtyForApps        = core.MarkGroupDirtyForApps
+	markUserDirty                = core.MarkUserDirty
+	markGroupDirty               = core.MarkGroupDirty
 	initializeAppSync            = core.InitializeAppSync
 	appHasSyncState              = core.AppHasSyncState
 	mergeAppSyncState            = core.MergeAppSyncState
