@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -3334,4 +3335,17 @@ func TestReconcileAsksForConfirmation(t *testing.T) {
 	r.Equal(http.StatusOK, rec.Code)
 	r.Contains(rec.Body.String(), `data-sync-confirm="Reconcile Greendale Portal?`)
 	r.Contains(dashboardAsset(t, app, "/assets/app.js"), "form.dataset.syncConfirm")
+}
+
+func TestGoreleaserInjectsTunnelIdentitySymbols(t *testing.T) {
+	r := require.New(t)
+	data, err := os.ReadFile("../../.goreleaser.yaml")
+	r.NoError(err)
+
+	// A mismatched -X package path silently ships release builds with no
+	// tunnel identity, defeating tunnelReleaseIdentityRequired.
+	pkg := reflect.TypeOf(webApp{}).PkgPath()
+	for _, symbol := range []string{"tunnelApplicationProfileID", "tunnelApplicationPrivateSeed", "tunnelReleaseIdentityRequired"} {
+		r.Contains(string(data), "-X="+pkg+"."+symbol+"=", "goreleaser must inject %s into %s", symbol, pkg)
+	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -47,4 +48,10 @@ func TestParseArgs(t *testing.T) {
 			r.Equal(tc.want, got)
 		})
 	}
+}
+
+func TestGoreleaserInjectsVersion(t *testing.T) {
+	data, err := os.ReadFile("../../.goreleaser.yaml")
+	require.NoError(t, err)
+	require.Contains(t, string(data), "-X=main.version=")
 }
