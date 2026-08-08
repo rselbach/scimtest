@@ -21,6 +21,10 @@ type Config struct {
 	ApplicationProfileID  string
 	InstanceID            string
 	ApplicationPrivateKey ed25519.PrivateKey
+	// InstancePrivateKey is this installation's own key. When set, the client
+	// enrolls it with servers that support per-install identities and only
+	// falls back to the shared application key on older servers.
+	InstancePrivateKey    ed25519.PrivateKey
 	LocalHost             string
 	LocalPort             int
 	PreserveHost          bool
@@ -98,6 +102,7 @@ func Start(ctx context.Context, cfg Config) (*Tunnel, error) {
 		ApplicationProfileID:  cfg.ApplicationProfileID,
 		InstanceID:            cfg.InstanceID,
 		ApplicationPrivateKey: cfg.ApplicationPrivateKey,
+		InstancePrivateKey:    cfg.InstancePrivateKey,
 		LocalHost:             cfg.LocalHost,
 		LocalPort:             cfg.LocalPort,
 		PreserveHost:          cfg.PreserveHost,

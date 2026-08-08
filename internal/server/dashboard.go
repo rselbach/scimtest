@@ -38,6 +38,8 @@ type dashboardReservation struct {
 	InstanceID  string
 	TunnelID    string
 	PublicURL   string
+	Enrolled    bool
+	Revoked     bool
 	CreatedAt   time.Time
 	LastUsedAt  time.Time
 }
@@ -175,6 +177,8 @@ func (s *Server) renderDashboard(w http.ResponseWriter, session StoredSession) {
 				InstanceID:  instanceID,
 				TunnelID:    instance.TunnelID,
 				PublicURL:   s.cfg.PublicScheme + "://" + s.cfg.Domain + "/" + instance.TunnelID,
+				Enrolled:    instance.Enrolled(),
+				Revoked:     instance.Revoked,
 				CreatedAt:   instance.CreatedAt,
 				LastUsedAt:  instance.LastUsedAt,
 			})
@@ -329,6 +333,30 @@ func (s *Server) handleUnreserveApplicationTunnel(w http.ResponseWriter, r *http
 		return
 	}
 	s.cfg.Logger.Info("application tunnel unreserved", "actor", session.Login, "profile_id", profileID, "instance_id", instanceID)
+	http.Redirect(w, r, "/dashboard#reserved-names", http.StatusFound)
+}
+
+func (s *Server) handleRevokeApplicationInstance(w http.ResponseWriter, r *http.Request) {
+	session, ok := s.requireAdmin(w, r)
+	if !ok || !s.requireCSRF(w, r, session) {
+		return
+	}
+	profileID := r.PostForm.Get("profile_id")
+	instanceID := r.PostForm.Get("instance_id")
+	revoked := r.PostForm.Get("revoked") == "true"
+	changed, err := s.store.SetApplicationInstanceRevoked(profileID, instanceID, revoked)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !changed {
+		http.NotFound(w, r)
+		return
+	}
+	if revoked {
+		s.disconnectApplicationInstance(profileID, instanceID)
+	}
+	s.cfg.Logger.Info("application instance revocation changed", "actor", session.Login, "profile_id", profileID, "instance_id", instanceID, "revoked", revoked)
 	http.Redirect(w, r, "/dashboard#reserved-names", http.StatusFound)
 }
 
@@ -488,6 +516,24 @@ func (s *Server) disconnectTunnel(id string) bool {
 		s.cfg.Logger.Warn("tunnel disconnect failed", "id", id, "err", err)
 	}
 	return true
+}
+
+func (s *Server) disconnectApplicationInstance(profileID, instanceID string) {
+	s.mu.RLock()
+	var target *tunnel
+	for _, tunnel := range s.tunnels {
+		if tunnel.applicationProfileID == profileID && tunnel.instanceID == instanceID {
+			target = tunnel
+			break
+		}
+	}
+	s.mu.RUnlock()
+	if target == nil {
+		return
+	}
+	if err := target.conn.Close(); err != nil {
+		s.cfg.Logger.Warn("application instance disconnect failed", "id", target.id, "err", err)
+	}
 }
 
 func (s *Server) disconnectApplicationTunnels(profileID string) {

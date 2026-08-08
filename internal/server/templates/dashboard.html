@@ -222,14 +222,26 @@ summary { color: var(--accent); cursor: pointer; }
         <div>
           <div class="name">{{.ProfileName}} <span class="muted">/ {{.InstanceID}}</span></div>
           <a class="url" href="{{.PublicURL}}">{{.TunnelID}}</a>
-          <div><small>Last used {{.LastUsedAt.Format "2006-01-02 15:04 MST"}}</small></div>
+          <div><small>Last used {{.LastUsedAt.Format "2006-01-02 15:04 MST"}}
+            {{if .Revoked}}&middot; revoked{{else if .Enrolled}}&middot; enrolled{{else}}&middot; legacy{{end}}</small></div>
         </div>
-        <form method="post" action="/dashboard/applications/reservations/delete" data-confirm="release name?">
-          <input type="hidden" name="csrf_token" value="{{$.Session.CSRFToken}}">
-          <input type="hidden" name="profile_id" value="{{.ProfileID}}">
-          <input type="hidden" name="instance_id" value="{{.InstanceID}}">
-          <button class="danger" type="submit">release</button>
-        </form>
+        <div class="actions">
+          {{if .Enrolled}}
+          <form method="post" action="/dashboard/applications/instances/revoke" {{if not .Revoked}}data-confirm="revoke installation?"{{end}}>
+            <input type="hidden" name="csrf_token" value="{{$.Session.CSRFToken}}">
+            <input type="hidden" name="profile_id" value="{{.ProfileID}}">
+            <input type="hidden" name="instance_id" value="{{.InstanceID}}">
+            <input type="hidden" name="revoked" value="{{if .Revoked}}false{{else}}true{{end}}">
+            <button {{if not .Revoked}}class="danger" {{end}}type="submit">{{if .Revoked}}restore{{else}}revoke{{end}}</button>
+          </form>
+          {{end}}
+          <form method="post" action="/dashboard/applications/reservations/delete" data-confirm="release name?">
+            <input type="hidden" name="csrf_token" value="{{$.Session.CSRFToken}}">
+            <input type="hidden" name="profile_id" value="{{.ProfileID}}">
+            <input type="hidden" name="instance_id" value="{{.InstanceID}}">
+            <button class="danger" type="submit">release</button>
+          </form>
+        </div>
       </div>
       {{else}}
       <div class="empty">No names have been reserved.</div>

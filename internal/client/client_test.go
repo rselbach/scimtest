@@ -4,7 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -62,6 +66,139 @@ func TestRunOnceReportsRegistrationStage(t *testing.T) {
 	r := require.New(t)
 	r.NoError(<-serverErr)
 	r.ErrorContains(err, "read application challenge")
+}
+
+// handshakeServer runs one scripted registration handshake and reports the
+// outcome of check on the checks channel.
+func handshakeServer(t *testing.T, check func(conn *websocket.Conn) error) (string, chan error) {
+	t.Helper()
+	checks := make(chan error, 1)
+	upgrader := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		conn, err := upgrader.Upgrade(w, req, nil)
+		if err != nil {
+			checks <- err
+			return
+		}
+		checks <- check(conn)
+		if err := conn.Close(); err != nil {
+			t.Logf("close handshake server connection: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return "ws" + strings.TrimPrefix(srv.URL, "http"), checks
+}
+
+func TestRunOnceEnrollsInstanceKey(t *testing.T) {
+	r := require.New(t)
+	appPub, appKey, err := ed25519.GenerateKey(rand.Reader)
+	r.NoError(err)
+	instPub, instKey, err := ed25519.GenerateKey(rand.Reader)
+	r.NoError(err)
+	wantPublicKey := base64.StdEncoding.EncodeToString(instPub)
+
+	wsURL, checks := handshakeServer(t, func(conn *websocket.Conn) error {
+		var register protocol.Message
+		if err := conn.ReadJSON(&register); err != nil {
+			return err
+		}
+		if register.InstancePublicKey != wantPublicKey {
+			return fmt.Errorf("registration public key = %q, want %q", register.InstancePublicKey, wantPublicKey)
+		}
+		if err := conn.WriteJSON(protocol.Message{
+			Type:                protocol.TypeApplicationChallenge,
+			Challenge:           "challenge-1",
+			EnrollmentSupported: true,
+		}); err != nil {
+			return err
+		}
+		var signed protocol.Message
+		if err := conn.ReadJSON(&signed); err != nil {
+			return err
+		}
+		payload := protocol.InstanceChallengePayload(register.ApplicationProfileID, wantPublicKey, register.InstanceID, "challenge-1")
+		if !ed25519.Verify(instPub, payload, signed.Signature) {
+			return errors.New("instance signature does not verify")
+		}
+		enrollPayload := protocol.EnrollmentAuthorizationPayload(register.ApplicationProfileID, wantPublicKey, register.InstanceID, "challenge-1")
+		if !ed25519.Verify(appPub, enrollPayload, signed.EnrollmentSignature) {
+			return errors.New("enrollment signature does not verify")
+		}
+		return conn.WriteJSON(protocol.Message{
+			Type:      protocol.TypeTunnelRegistered,
+			TunnelID:  "human-timeline-club",
+			PublicURL: "http://localhost:7000/human-timeline-club",
+		})
+	})
+
+	registered := make(chan Registration, 1)
+	c := New(Config{
+		ServerURL:             wsURL,
+		ApplicationProfileID:  "0123456789abcdef0123456789abcdef",
+		InstanceID:            "legacy-uuid-1",
+		ApplicationPrivateKey: appKey,
+		InstancePrivateKey:    instKey,
+		LocalPort:             8080,
+		Output:                io.Discard,
+		OnRegistered:          func(reg Registration) { registered <- reg },
+	})
+	_ = c.runOnce(context.Background())
+
+	r.NoError(<-checks)
+	r.Equal("human-timeline-club", (<-registered).TunnelID)
+}
+
+func TestRunOnceFallsBackToLegacySignature(t *testing.T) {
+	r := require.New(t)
+	appPub, appKey, err := ed25519.GenerateKey(rand.Reader)
+	r.NoError(err)
+	_, instKey, err := ed25519.GenerateKey(rand.Reader)
+	r.NoError(err)
+
+	wsURL, checks := handshakeServer(t, func(conn *websocket.Conn) error {
+		var register protocol.Message
+		if err := conn.ReadJSON(&register); err != nil {
+			return err
+		}
+		if err := conn.WriteJSON(protocol.Message{
+			Type:      protocol.TypeApplicationChallenge,
+			Challenge: "challenge-1",
+		}); err != nil {
+			return err
+		}
+		var signed protocol.Message
+		if err := conn.ReadJSON(&signed); err != nil {
+			return err
+		}
+		if len(signed.EnrollmentSignature) != 0 {
+			return errors.New("legacy handshake must not carry an enrollment signature")
+		}
+		payload := protocol.ApplicationChallengePayload(register.ApplicationProfileID, register.InstanceID, "challenge-1")
+		if !ed25519.Verify(appPub, payload, signed.Signature) {
+			return errors.New("legacy application signature does not verify")
+		}
+		return conn.WriteJSON(protocol.Message{
+			Type:      protocol.TypeTunnelRegistered,
+			TunnelID:  "human-timeline-club",
+			PublicURL: "http://localhost:7000/human-timeline-club",
+		})
+	})
+
+	registered := make(chan Registration, 1)
+	c := New(Config{
+		ServerURL:             wsURL,
+		ApplicationProfileID:  "0123456789abcdef0123456789abcdef",
+		InstanceID:            "legacy-uuid-1",
+		ApplicationPrivateKey: appKey,
+		InstancePrivateKey:    instKey,
+		LocalPort:             8080,
+		Output:                io.Discard,
+		OnRegistered:          func(reg Registration) { registered <- reg },
+	})
+	_ = c.runOnce(context.Background())
+
+	r.NoError(<-checks)
+	r.Equal("human-timeline-club", (<-registered).TunnelID)
 }
 
 func TestRunContextLogsConnectionFailureWithoutPrivateKey(t *testing.T) {

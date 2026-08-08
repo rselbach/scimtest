@@ -36,6 +36,14 @@ const (
 	tunnelResponseTimeout = 2 * time.Minute
 	maxRandomIDAttempts   = 10
 	sendChannelSize       = 64
+
+	enrollmentsPerIPLimit = 10
+	enrollmentWindow      = time.Hour
+)
+
+const (
+	revokedInstanceMessage     = "installation revoked"
+	enrollmentThrottledMessage = "too many new installations from this network; try again later"
 )
 
 type Config struct {
@@ -63,6 +71,9 @@ type Server struct {
 
 	mu      sync.RWMutex
 	tunnels map[string]*tunnel
+
+	enrollMu    sync.Mutex
+	enrollments map[string][]time.Time
 
 	nextStream    atomic.Uint64
 	requestsTotal atomic.Uint64
@@ -157,6 +168,7 @@ func New(cfg Config) (*Server, error) {
 		github:           auth.GitHubClient{ClientID: cfg.GitHubClientID, ClientSecret: cfg.GitHubClientSecret},
 		trustedProxyNets: trustedProxyNets,
 		tunnels:          make(map[string]*tunnel),
+		enrollments:      make(map[string][]time.Time),
 	}, nil
 }
 
@@ -176,6 +188,7 @@ func (s *Server) Run() error {
 	mux.HandleFunc("/dashboard/applications/update", s.baseHostOnly(s.requirePost(s.handleUpdateApplication)))
 	mux.HandleFunc("/dashboard/applications/delete", s.baseHostOnly(s.requirePost(s.handleDeleteApplication)))
 	mux.HandleFunc("/dashboard/applications/reservations/delete", s.baseHostOnly(s.requirePost(s.handleUnreserveApplicationTunnel)))
+	mux.HandleFunc("/dashboard/applications/instances/revoke", s.baseHostOnly(s.requirePost(s.handleRevokeApplicationInstance)))
 	mux.HandleFunc("/dashboard/tunnels/disconnect", s.baseHostOnly(s.requirePost(s.handleDisconnectTunnel)))
 	mux.HandleFunc("/", s.handlePublic)
 
@@ -388,13 +401,13 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	profile, err := s.authenticateApplicationRegistration(conn, reg)
+	profile, instanceID, err := s.authenticateApplicationRegistration(conn, reg, s.clientIP(r))
 	if err != nil {
 		s.writeClose(conn, websocket.ClosePolicyViolation, err.Error())
 		return
 	}
 
-	id, err := s.chooseApplicationID(profile.ID, reg.InstanceID)
+	id, err := s.chooseApplicationID(profile.ID, instanceID)
 	if err != nil {
 		s.writeClose(conn, websocket.ClosePolicyViolation, err.Error())
 		return
@@ -409,7 +422,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		localPort:            reg.LocalPort,
 		connectedAt:          time.Now().UTC(),
 		applicationProfileID: profile.ID,
-		instanceID:           reg.InstanceID,
+		instanceID:           instanceID,
 		routes:               profile.Routes,
 		rateLimiter:          newApplicationRateLimiter(profile.RequestsPerMinute, profile.RequestBurst),
 		conn:                 conn,
@@ -424,7 +437,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		s.writeClose(conn, websocket.ClosePolicyViolation, err.Error())
 		return
 	}
-	if err := s.store.RememberApplicationTunnel(profile.ID, reg.InstanceID, id); err != nil {
+	if err := s.store.RememberApplicationTunnel(profile.ID, instanceID, id); err != nil {
 		s.unregisterTunnel(t)
 		s.writeClose(conn, websocket.CloseInternalServerErr, "could not remember application tunnel")
 		return
@@ -585,43 +598,153 @@ func (s *Server) handlePublic(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) authenticateApplicationRegistration(conn *websocket.Conn, reg protocol.Message) (*StoredApplicationProfile, error) {
-	if !applicationIDRE.MatchString(reg.ApplicationProfileID) || !instanceIDRE.MatchString(reg.InstanceID) {
-		return nil, errors.New("invalid application profile or instance id")
+// authenticateApplicationRegistration runs the challenge exchange and returns
+// the profile plus the effective instance ID. Registrations carrying an
+// instance public key authenticate with the per-install key (enrolling it on
+// first sight); registrations without one use the legacy shared-key flow.
+func (s *Server) authenticateApplicationRegistration(conn *websocket.Conn, reg protocol.Message, clientIP string) (*StoredApplicationProfile, string, error) {
+	if !applicationIDRE.MatchString(reg.ApplicationProfileID) {
+		return nil, "", errors.New("invalid application profile or instance id")
+	}
+	if reg.InstanceID != "" && !instanceIDRE.MatchString(reg.InstanceID) {
+		return nil, "", errors.New("invalid application profile or instance id")
+	}
+	if reg.InstancePublicKey == "" && reg.InstanceID == "" {
+		return nil, "", errors.New("invalid application profile or instance id")
 	}
 	profile, ok := s.store.ApplicationProfile(reg.ApplicationProfileID)
 	if !ok {
-		return nil, errors.New("invalid application profile")
+		return nil, "", errors.New("invalid application profile")
 	}
+	if reg.InstancePublicKey == "" {
+		if err := s.verifyLegacyRegistration(conn, profile, reg); err != nil {
+			return nil, "", err
+		}
+		return &profile, reg.InstanceID, nil
+	}
+	instanceID, err := s.verifyEnrolledRegistration(conn, profile, reg, clientIP)
+	if err != nil {
+		return nil, "", err
+	}
+	return &profile, instanceID, nil
+}
+
+func (s *Server) exchangeChallenge(conn *websocket.Conn, enrollment bool) (string, protocol.Message, error) {
 	challenge, err := randomHex(32)
 	if err != nil {
-		return nil, errors.New("could not create application challenge")
+		return "", protocol.Message{}, errors.New("could not create application challenge")
 	}
 	if err := conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
-		return nil, fmt.Errorf("set application challenge deadline: %w", err)
+		return "", protocol.Message{}, fmt.Errorf("set application challenge deadline: %w", err)
 	}
 	if err := conn.WriteJSON(protocol.Message{
-		Type:      protocol.TypeApplicationChallenge,
-		Challenge: challenge,
+		Type:                protocol.TypeApplicationChallenge,
+		Challenge:           challenge,
+		EnrollmentSupported: enrollment,
 	}); err != nil {
-		return nil, fmt.Errorf("write application challenge: %w", err)
+		return "", protocol.Message{}, fmt.Errorf("write application challenge: %w", err)
 	}
 	var response protocol.Message
 	if err := conn.ReadJSON(&response); err != nil {
-		return nil, fmt.Errorf("read application signature: %w", err)
+		return "", protocol.Message{}, fmt.Errorf("read application signature: %w", err)
 	}
 	if response.Type != protocol.TypeApplicationSignature {
-		return nil, errors.New("expected application signature")
+		return "", protocol.Message{}, errors.New("expected application signature")
+	}
+	return challenge, response, nil
+}
+
+func (s *Server) verifyLegacyRegistration(conn *websocket.Conn, profile StoredApplicationProfile, reg protocol.Message) error {
+	challenge, response, err := s.exchangeChallenge(conn, false)
+	if err != nil {
+		return err
 	}
 	_, publicKey, _, err := parseEd25519PublicKey(profile.PublicKey)
 	if err != nil {
-		return nil, errors.New("application profile has an invalid public key")
+		return errors.New("application profile has an invalid public key")
 	}
 	payload := protocol.ApplicationChallengePayload(profile.ID, reg.InstanceID, challenge)
 	if !ed25519.Verify(publicKey, payload, response.Signature) {
-		return nil, errors.New("invalid application signature")
+		return errors.New("invalid application signature")
 	}
-	return &profile, nil
+	return nil
+}
+
+func (s *Server) verifyEnrolledRegistration(conn *websocket.Conn, profile StoredApplicationProfile, reg protocol.Message, clientIP string) (string, error) {
+	instanceKey, instanceID, err := parseInstancePublicKey(reg.InstancePublicKey)
+	if err != nil {
+		return "", err
+	}
+	challenge, response, err := s.exchangeChallenge(conn, true)
+	if err != nil {
+		return "", err
+	}
+	payload := protocol.InstanceChallengePayload(profile.ID, reg.InstancePublicKey, reg.InstanceID, challenge)
+	if !ed25519.Verify(instanceKey, payload, response.Signature) {
+		return "", errors.New("invalid instance signature")
+	}
+
+	stored, exists := s.store.ApplicationInstance(profile.ID, instanceID)
+	if exists && stored.Enrolled() {
+		if stored.PublicKey != reg.InstancePublicKey {
+			return "", errors.New("instance id is already enrolled with a different key")
+		}
+		if stored.Revoked {
+			return "", errors.New(revokedInstanceMessage)
+		}
+		return instanceID, nil
+	}
+
+	// First sight of this key: the embedded release key must authorize the
+	// enrollment, and new enrollments are throttled per client IP.
+	if !s.enrollmentAllowed(clientIP) {
+		return "", errors.New(enrollmentThrottledMessage)
+	}
+	_, profileKey, _, err := parseEd25519PublicKey(profile.PublicKey)
+	if err != nil {
+		return "", errors.New("application profile has an invalid public key")
+	}
+	enrollPayload := protocol.EnrollmentAuthorizationPayload(profile.ID, reg.InstancePublicKey, reg.InstanceID, challenge)
+	if !ed25519.Verify(profileKey, enrollPayload, response.EnrollmentSignature) {
+		return "", errors.New("invalid enrollment signature")
+	}
+	if err := s.store.EnrollApplicationInstance(profile.ID, instanceID, reg.InstancePublicKey, reg.InstanceID); err != nil {
+		return "", err
+	}
+	s.recordEnrollment(clientIP)
+	s.logger().Info("application instance enrolled", "profile_id", profile.ID, "instance_id", instanceID, "legacy_instance_id", reg.InstanceID, "client_ip", clientIP)
+	return instanceID, nil
+}
+
+func (s *Server) enrollmentAllowed(clientIP string) bool {
+	s.enrollMu.Lock()
+	defer s.enrollMu.Unlock()
+	return len(s.pruneEnrollmentsLocked(clientIP)) < enrollmentsPerIPLimit
+}
+
+func (s *Server) recordEnrollment(clientIP string) {
+	s.enrollMu.Lock()
+	defer s.enrollMu.Unlock()
+	if s.enrollments == nil {
+		s.enrollments = make(map[string][]time.Time)
+	}
+	s.enrollments[clientIP] = append(s.pruneEnrollmentsLocked(clientIP), time.Now())
+}
+
+func (s *Server) pruneEnrollmentsLocked(clientIP string) []time.Time {
+	cutoff := time.Now().Add(-enrollmentWindow)
+	recent := s.enrollments[clientIP][:0]
+	for _, at := range s.enrollments[clientIP] {
+		if at.After(cutoff) {
+			recent = append(recent, at)
+		}
+	}
+	if len(recent) == 0 {
+		delete(s.enrollments, clientIP)
+		return nil
+	}
+	s.enrollments[clientIP] = recent
+	return recent
 }
 
 func (s *Server) tunnelForPath(value string) *tunnel {

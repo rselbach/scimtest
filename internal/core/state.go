@@ -1,6 +1,7 @@
 package core
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
@@ -169,6 +170,60 @@ func EnsureTunnelInstanceID() (string, error) {
 		return saved, nil
 	}
 	return instanceID, nil
+}
+
+// EnsureTunnelInstanceKey returns this installation's private tunnel key,
+// generating and persisting the seed when necessary. The key never leaves
+// the local state database; the server only ever sees its public half.
+func EnsureTunnelInstanceKey() (ed25519.PrivateKey, error) {
+	db, err := openStateDB()
+	if err != nil {
+		return nil, err
+	}
+	seed := make([]byte, ed25519.SeedSize)
+	if _, err := rand.Read(seed); err != nil {
+		return nil, fmt.Errorf("generate tunnel instance key: %w", err)
+	}
+	encoded := base64.StdEncoding.EncodeToString(seed)
+	if _, err := db.Exec(`INSERT OR IGNORE INTO config(key, value) VALUES('tunnel_instance_key', ?)`, encoded); err != nil {
+		return nil, fmt.Errorf("persist tunnel instance key: %w", err)
+	}
+
+	var saved string
+	if err := db.QueryRow(`SELECT value FROM config WHERE key = 'tunnel_instance_key'`).Scan(&saved); err != nil {
+		return nil, fmt.Errorf("load tunnel instance key: %w", err)
+	}
+	if key, ok := decodeInstanceKeySeed(saved); ok {
+		return key, nil
+	}
+
+	result, err := db.Exec(`UPDATE config SET value = ? WHERE key = 'tunnel_instance_key' AND value = ?`, encoded, saved)
+	if err != nil {
+		return nil, fmt.Errorf("repair tunnel instance key: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("check repaired tunnel instance key: %w", err)
+	}
+	if changed == 0 {
+		if err := db.QueryRow(`SELECT value FROM config WHERE key = 'tunnel_instance_key'`).Scan(&saved); err != nil {
+			return nil, fmt.Errorf("reload tunnel instance key: %w", err)
+		}
+		key, ok := decodeInstanceKeySeed(saved)
+		if !ok {
+			return nil, errors.New("reload tunnel instance key: invalid concurrent value")
+		}
+		return key, nil
+	}
+	return ed25519.NewKeyFromSeed(seed), nil
+}
+
+func decodeInstanceKeySeed(value string) (ed25519.PrivateKey, bool) {
+	seed, err := base64.StdEncoding.DecodeString(value)
+	if err != nil || len(seed) != ed25519.SeedSize {
+		return nil, false
+	}
+	return ed25519.NewKeyFromSeed(seed), true
 }
 
 func newUUID() (string, error) {

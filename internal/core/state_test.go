@@ -1,6 +1,7 @@
 package core
 
 import (
+	"crypto/ed25519"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -178,6 +179,35 @@ func TestEnsureTunnelInstanceIDMigratesLegacyValue(t *testing.T) {
 	state, err := LoadState()
 	r.NoError(err)
 	r.Equal(instanceID, state.Config.TunnelInstanceID)
+}
+
+func TestEnsureTunnelInstanceKeyGeneratesAndReusesKey(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r.NoError(SaveState(AppState{}))
+
+	first, err := EnsureTunnelInstanceKey()
+	r.NoError(err)
+	r.Len(first, ed25519.PrivateKeySize)
+	second, err := EnsureTunnelInstanceKey()
+	r.NoError(err)
+	r.Equal(first, second)
+}
+
+func TestEnsureTunnelInstanceKeyRepairsInvalidValue(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	db, err := openStateDB()
+	r.NoError(err)
+	_, err = db.Exec(`INSERT INTO config(key, value) VALUES ('tunnel_instance_key', 'not-a-key')`)
+	r.NoError(err)
+
+	first, err := EnsureTunnelInstanceKey()
+	r.NoError(err)
+	r.Len(first, ed25519.PrivateKeySize)
+	second, err := EnsureTunnelInstanceKey()
+	r.NoError(err)
+	r.Equal(first, second)
 }
 
 func TestEnsureTunnelInstanceIDSurfacesStateError(t *testing.T) {

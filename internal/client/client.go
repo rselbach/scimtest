@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -37,6 +38,7 @@ type Config struct {
 	ApplicationProfileID  string
 	InstanceID            string
 	ApplicationPrivateKey ed25519.PrivateKey
+	InstancePrivateKey    ed25519.PrivateKey
 	LocalHost             string
 	LocalPort             int
 	PreserveHost          bool
@@ -219,12 +221,16 @@ func (c *Client) runOnce(ctx context.Context) error {
 		closeConn()
 	}()
 
-	if err := conn.WriteJSON(protocol.Message{
+	register := protocol.Message{
 		Type:                 protocol.TypeRegisterTunnel,
 		LocalPort:            c.cfg.LocalPort,
 		ApplicationProfileID: c.cfg.ApplicationProfileID,
 		InstanceID:           c.cfg.InstanceID,
-	}); err != nil {
+	}
+	if len(c.cfg.InstancePrivateKey) == ed25519.PrivateKeySize {
+		register.InstancePublicKey = base64.StdEncoding.EncodeToString(c.cfg.InstancePrivateKey.Public().(ed25519.PublicKey))
+	}
+	if err := conn.WriteJSON(register); err != nil {
 		return fmt.Errorf("write tunnel registration: %w", err)
 	}
 
@@ -235,19 +241,11 @@ func (c *Client) runOnce(ctx context.Context) error {
 	if registered.Type != protocol.TypeApplicationChallenge {
 		return fmt.Errorf("%w: expected application_challenge, got %q", errTerminal, registered.Type)
 	}
-	if len(c.cfg.ApplicationPrivateKey) != ed25519.PrivateKeySize {
-		return fmt.Errorf("%w: application private key is required", errTerminal)
+	signed, err := c.signChallenge(registered)
+	if err != nil {
+		return err
 	}
-	payload := protocol.ApplicationChallengePayload(
-		c.cfg.ApplicationProfileID,
-		c.cfg.InstanceID,
-		registered.Challenge,
-	)
-	signature := ed25519.Sign(c.cfg.ApplicationPrivateKey, payload)
-	if err := conn.WriteJSON(protocol.Message{
-		Type:      protocol.TypeApplicationSignature,
-		Signature: signature,
-	}); err != nil {
+	if err := conn.WriteJSON(signed); err != nil {
 		return fmt.Errorf("write application signature: %w", err)
 	}
 	if err := conn.ReadJSON(&registered); err != nil {
@@ -327,6 +325,52 @@ func (c *Client) runOnce(ctx context.Context) error {
 			c.cfg.Logger.Debug("ignoring server message", "type", msg.Type)
 		}
 	}
+}
+
+// signChallenge answers the server's challenge. A server that supports
+// enrollment gets the per-install key signature plus the release key's
+// enrollment authorization; older servers get the legacy shared-key
+// signature over the client-chosen instance ID.
+func (c *Client) signChallenge(challenge protocol.Message) (protocol.Message, error) {
+	if !challenge.EnrollmentSupported {
+		if len(c.cfg.ApplicationPrivateKey) != ed25519.PrivateKeySize {
+			return protocol.Message{}, fmt.Errorf("%w: application private key is required", errTerminal)
+		}
+		payload := protocol.ApplicationChallengePayload(
+			c.cfg.ApplicationProfileID,
+			c.cfg.InstanceID,
+			challenge.Challenge,
+		)
+		return protocol.Message{
+			Type:      protocol.TypeApplicationSignature,
+			Signature: ed25519.Sign(c.cfg.ApplicationPrivateKey, payload),
+		}, nil
+	}
+
+	if len(c.cfg.InstancePrivateKey) != ed25519.PrivateKeySize {
+		return protocol.Message{}, fmt.Errorf("%w: instance private key is required", errTerminal)
+	}
+	instancePublicKey := base64.StdEncoding.EncodeToString(c.cfg.InstancePrivateKey.Public().(ed25519.PublicKey))
+	payload := protocol.InstanceChallengePayload(
+		c.cfg.ApplicationProfileID,
+		instancePublicKey,
+		c.cfg.InstanceID,
+		challenge.Challenge,
+	)
+	signed := protocol.Message{
+		Type:      protocol.TypeApplicationSignature,
+		Signature: ed25519.Sign(c.cfg.InstancePrivateKey, payload),
+	}
+	if len(c.cfg.ApplicationPrivateKey) == ed25519.PrivateKeySize {
+		enrollPayload := protocol.EnrollmentAuthorizationPayload(
+			c.cfg.ApplicationProfileID,
+			instancePublicKey,
+			c.cfg.InstanceID,
+			challenge.Challenge,
+		)
+		signed.EnrollmentSignature = ed25519.Sign(c.cfg.ApplicationPrivateKey, enrollPayload)
+	}
+	return signed, nil
 }
 
 func writeLoop(conn *websocket.Conn, send <-chan protocol.Message, done <-chan struct{}, errCh chan<- error, closeConn func()) {

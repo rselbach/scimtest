@@ -31,8 +31,11 @@ type Message struct {
 	LocalPort            int    `json:"local_port,omitempty"`
 	ApplicationProfileID string `json:"application_profile_id,omitempty"`
 	InstanceID           string `json:"instance_id,omitempty"`
+	InstancePublicKey    string `json:"instance_public_key,omitempty"`
+	EnrollmentSupported  bool   `json:"enrollment_supported,omitempty"`
 	Challenge            string `json:"challenge,omitempty"`
 	Signature            []byte `json:"signature,omitempty"`
+	EnrollmentSignature  []byte `json:"enrollment_signature,omitempty"`
 
 	StreamID uint64      `json:"stream_id,omitempty"`
 	Method   string      `json:"method,omitempty"`
@@ -70,6 +73,34 @@ func ApplicationChallengePayload(profileID, instanceID, challenge string) []byte
 		"scimtest-server-application-registration-v1\n%s\n%s\n%s",
 		profileID,
 		instanceID,
+		challenge,
+	))
+}
+
+// InstanceChallengePayload returns the versioned bytes an installation signs
+// with its per-install key to authenticate a tunnel registration. The legacy
+// instance ID is included so a remembered-name migration claim cannot be
+// tampered with; it is empty when the installation has nothing to migrate.
+func InstanceChallengePayload(profileID, instancePublicKey, legacyInstanceID, challenge string) []byte {
+	return []byte(fmt.Sprintf(
+		"scimtest-server-instance-registration-v1\n%s\n%s\n%s\n%s",
+		profileID,
+		instancePublicKey,
+		legacyInstanceID,
+		challenge,
+	))
+}
+
+// EnrollmentAuthorizationPayload returns the versioned bytes the embedded
+// release key signs to authorize enrolling a new installation key. It covers
+// the same fields as InstanceChallengePayload under a distinct domain prefix
+// so neither signature can be replayed as the other.
+func EnrollmentAuthorizationPayload(profileID, instancePublicKey, legacyInstanceID, challenge string) []byte {
+	return []byte(fmt.Sprintf(
+		"scimtest-server-instance-enrollment-v1\n%s\n%s\n%s\n%s",
+		profileID,
+		instancePublicKey,
+		legacyInstanceID,
 		challenge,
 	))
 }

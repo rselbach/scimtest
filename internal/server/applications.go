@@ -43,8 +43,16 @@ type StoredApplicationRoute struct {
 
 type StoredApplicationInstance struct {
 	TunnelID   string    `json:"tunnel_id"`
+	PublicKey  string    `json:"public_key,omitempty"`
+	Revoked    bool      `json:"revoked,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 	LastUsedAt time.Time `json:"last_used_at"`
+}
+
+// Enrolled reports whether the instance authenticated with its own key; a
+// false value marks a legacy record identified only by a client-chosen UUID.
+func (i StoredApplicationInstance) Enrolled() bool {
+	return i.PublicKey != ""
 }
 
 type applicationRateLimiter struct {
@@ -256,6 +264,22 @@ func parseEd25519PublicKey(value string) (string, ed25519.PublicKey, string, err
 	fingerprint := sha256.Sum256(blob)
 	canonical := "ssh-ed25519 " + base64.StdEncoding.EncodeToString(blob)
 	return canonical, ed25519.PublicKey(key), "SHA256:" + base64.RawStdEncoding.EncodeToString(fingerprint[:]), nil
+}
+
+// parseInstancePublicKey decodes a per-install Ed25519 public key sent as
+// standard base64 of the raw 32-byte key. It returns the key and the derived
+// instance ID: unpadded base64url of the key's SHA-256, which satisfies
+// instanceIDRE so enrolled instances reuse the remembered-tunnel plumbing.
+func parseInstancePublicKey(value string) (ed25519.PublicKey, string, error) {
+	raw, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return nil, "", errors.New("instance public key is not valid base64")
+	}
+	if len(raw) != ed25519.PublicKeySize {
+		return nil, "", fmt.Errorf("instance public key must be %d bytes", ed25519.PublicKeySize)
+	}
+	sum := sha256.Sum256(raw)
+	return ed25519.PublicKey(raw), base64.RawURLEncoding.EncodeToString(sum[:]), nil
 }
 
 func readSSHString(value []byte) ([]byte, []byte, bool) {

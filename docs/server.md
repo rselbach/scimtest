@@ -15,9 +15,19 @@ public HTTP tunnels:
 - Ed25519-authenticated application instances with random, reusable names
 
 Each application profile defines an OpenSSH Ed25519 public key, the HTTP
-method/path combinations it may expose, and its request limits. A connecting
-application proves possession of the matching private key. Its stable instance
-ID lets the server reuse the same random public name after reconnecting.
+method/path combinations it may expose, and its request limits. That key only
+authorizes enrolling new installations: each installation generates its own
+Ed25519 key, and its first connection enrolls the public half under an
+instance ID derived from the key's fingerprint. Later connections authenticate
+with the installation key alone, so rotating the application key never breaks
+enrolled installations. The stable instance ID lets the server reuse the same
+random public name after reconnecting; new enrollments are rate limited per
+client IP, and individual installations can be revoked from the dashboard.
+
+Clients that predate installation keys authenticate every connection with the
+application key and a client-chosen instance ID. The server still accepts this
+legacy handshake, and an enrolling client that presents the legacy ID carries
+its remembered public name over to the enrolled identity.
 
 ### Run Locally
 
@@ -57,7 +67,9 @@ GET,PUT,PATCH,DELETE /scim/v2/Users/{id}
 
 Applications use the public client package to connect. Loading an encrypted or
 unencrypted OpenSSH private-key file as an `ed25519.PrivateKey` is the embedding
-application's responsibility.
+application's responsibility. `InstancePrivateKey` is the installation's own
+generated key; persist it locally and reuse it so the installation keeps its
+identity and public name.
 
 ```go
 import scimtestclient "github.com/rselbach/scimtest/client"
@@ -67,6 +79,7 @@ tunnel, err := scimtestclient.Start(ctx, scimtestclient.Config{
 	ApplicationProfileID: "0123456789abcdef0123456789abcdef",
 	InstanceID:            installationID,
 	ApplicationPrivateKey: privateKey,
+	InstancePrivateKey:    installationKey,
 	LocalPort:             3000,
 })
 if err != nil {

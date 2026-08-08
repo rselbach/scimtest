@@ -56,11 +56,11 @@ func TestResolveAdminPort(t *testing.T) {
 		want       string
 		wantPinned bool
 	}{
-		"flag wins":                    {flagPort: "9001", scimPort: "9002", envPort: "9003", lastPort: "9004", want: "9001", wantPinned: true},
-		"SCIMTEST_PORT over PORT":      {scimPort: "9002", envPort: "9003", want: "9002", wantPinned: true},
-		"deprecated PORT still pins":   {envPort: "9003", want: "9003", wantPinned: true},
-		"last bound port not pinned":   {lastPort: "9004", want: "9004", wantPinned: false},
-		"default when nothing is set":  {want: "8080", wantPinned: false},
+		"flag wins":                          {flagPort: "9001", scimPort: "9002", envPort: "9003", lastPort: "9004", want: "9001", wantPinned: true},
+		"SCIMTEST_PORT over PORT":            {scimPort: "9002", envPort: "9003", want: "9002", wantPinned: true},
+		"deprecated PORT still pins":         {envPort: "9003", want: "9003", wantPinned: true},
+		"last bound port not pinned":         {lastPort: "9004", want: "9004", wantPinned: false},
+		"default when nothing is set":        {want: "8080", wantPinned: false},
 		"whitespace values treated as unset": {flagPort: " ", scimPort: " ", envPort: " ", lastPort: " ", want: "8080", wantPinned: false},
 	}
 	for name, tc := range tests {

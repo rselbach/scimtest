@@ -277,6 +277,85 @@ func (s *Store) TunnelIDReserved(id string) bool {
 	return false
 }
 
+func (s *Store) ApplicationInstance(profileID, instanceID string) (StoredApplicationInstance, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	instance, ok := s.data.ApplicationProfiles[profileID].Instances[instanceID]
+	return instance, ok
+}
+
+// EnrollApplicationInstance records a new per-install public key under its
+// fingerprint-derived instance ID. When legacyInstanceID names an existing
+// legacy record, its remembered tunnel ID moves to the enrolled instance and
+// the legacy record is retired, so the installation keeps its public URL.
+func (s *Store) EnrollApplicationInstance(profileID, instanceID, publicKey, legacyInstanceID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	profile, ok := s.data.ApplicationProfiles[profileID]
+	if !ok {
+		return errors.New("application profile not found")
+	}
+	previous := cloneApplicationProfile(profile)
+	profile = cloneApplicationProfile(profile)
+	if profile.Instances == nil {
+		profile.Instances = make(map[string]StoredApplicationInstance)
+	}
+	if existing, exists := profile.Instances[instanceID]; exists && existing.Enrolled() && existing.PublicKey != publicKey {
+		return errors.New("instance id is already enrolled with a different key")
+	}
+	now := time.Now().UTC()
+	for id, instance := range profile.Instances {
+		if id != instanceID && now.Sub(instance.LastUsedAt) > applicationInstanceMaxIdle {
+			delete(profile.Instances, id)
+		}
+	}
+	instance := profile.Instances[instanceID]
+	if instance.CreatedAt.IsZero() {
+		instance.CreatedAt = now
+	}
+	instance.PublicKey = publicKey
+	instance.LastUsedAt = now
+	if legacy, exists := profile.Instances[legacyInstanceID]; exists && legacyInstanceID != instanceID && !legacy.Enrolled() {
+		if instance.TunnelID == "" {
+			instance.TunnelID = legacy.TunnelID
+		}
+		delete(profile.Instances, legacyInstanceID)
+	}
+	if _, exists := previous.Instances[instanceID]; !exists && len(profile.Instances) >= applicationInstancesMax {
+		return errors.New("application has too many remembered instances")
+	}
+	profile.Instances[instanceID] = instance
+	s.data.ApplicationProfiles[profileID] = profile
+	if err := s.saveLocked(); err != nil {
+		s.data.ApplicationProfiles[profileID] = previous
+		return err
+	}
+	return nil
+}
+
+func (s *Store) SetApplicationInstanceRevoked(profileID, instanceID string, revoked bool) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	profile, ok := s.data.ApplicationProfiles[profileID]
+	if !ok {
+		return false, nil
+	}
+	instance, ok := profile.Instances[instanceID]
+	if !ok || !instance.Enrolled() {
+		return false, nil
+	}
+	previous := cloneApplicationProfile(profile)
+	profile = cloneApplicationProfile(profile)
+	instance.Revoked = revoked
+	profile.Instances[instanceID] = instance
+	s.data.ApplicationProfiles[profileID] = profile
+	if err := s.saveLocked(); err != nil {
+		s.data.ApplicationProfiles[profileID] = previous
+		return false, err
+	}
+	return true, nil
+}
+
 func (s *Store) ApplicationTunnelID(profileID, instanceID string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

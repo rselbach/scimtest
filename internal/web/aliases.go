@@ -27,6 +27,7 @@ var (
 	loadStateForAppSlug          = core.LoadStateForAppSlug
 	stateFilePath                = core.StateFilePath
 	ensureTunnelInstanceID       = core.EnsureTunnelInstanceID
+	ensureTunnelInstanceKey      = core.EnsureTunnelInstanceKey
 	lastAdminPort                = core.LastAdminPort
 	rememberAdminPort            = core.RememberAdminPort
 	saveGlobalConfig             = core.SaveGlobalConfig

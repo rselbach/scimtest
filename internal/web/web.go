@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rsa"
+	"crypto/sha256"
 	"embed"
 	"encoding/base64"
 	"errors"
@@ -1198,11 +1199,17 @@ func (a *webApp) startAutomaticTunnelLocked(identity tunnelApplicationIdentity) 
 		log.Printf("start tunnel: load instance identity: %v", err)
 		return
 	}
+	instanceKey, err := ensureTunnelInstanceKey()
+	if err != nil {
+		a.setTunnelError(fmt.Sprintf("load tunnel instance key: %v", err))
+		log.Printf("start tunnel: load instance key: %v", err)
+		return
+	}
 	log.Printf(
-		"starting tunnel: server=%s profile_id=%s instance_id=%s local_port=%d",
+		"starting tunnel: server=%s profile_id=%s installation=%s local_port=%d",
 		tunnelServerBaseURL,
 		identity.profileID,
-		instanceID,
+		instanceFingerprint(instanceKey),
 		a.localPort,
 	)
 	starter := a.tunnelStart
@@ -1214,6 +1221,7 @@ func (a *webApp) startAutomaticTunnelLocked(identity tunnelApplicationIdentity) 
 		ApplicationProfileID:  identity.profileID,
 		InstanceID:            instanceID,
 		ApplicationPrivateKey: identity.privateKey,
+		InstancePrivateKey:    instanceKey,
 		LocalPort:             a.localPort,
 		Logger:                slog.Default(),
 		OnRegistered:          a.updateAutomaticTunnelRegistration,
@@ -1452,11 +1460,22 @@ func (a *webApp) tunnelState() string {
 	}
 }
 
+// instanceFingerprint derives the identity the server assigns this
+// installation: unpadded base64url of the public key's SHA-256.
+func instanceFingerprint(key ed25519.PrivateKey) string {
+	sum := sha256.Sum256(key.Public().(ed25519.PublicKey))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
 // humanTunnelError maps raw tunnel client errors to actionable messages.
 // Unrecognized errors pass through unchanged.
 func humanTunnelError(raw string) string {
 	lower := strings.ToLower(raw)
 	switch {
+	case strings.Contains(lower, "installation revoked"):
+		return "the tunnel operator revoked this installation; scimtest keeps working locally"
+	case strings.Contains(lower, "too many new installations"):
+		return "the tunnel server is limiting new installations from your network; try again later"
 	case strings.Contains(lower, "bad handshake") || strings.Contains(lower, "403"):
 		return "the tunnel server rejected this build's identity; upgrading scimtest usually fixes this"
 	case strings.Contains(lower, "context deadline exceeded") || strings.Contains(lower, "timeout"):
