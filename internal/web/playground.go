@@ -26,12 +26,18 @@ func (a *webApp) playgroundCallbackURI(slug string) string {
 // short-lived cookie, and redirects to this IDP's own authorize endpoint with
 // the playground callback as the redirect URI.
 func (a *webApp) handleOIDCPlayground(w http.ResponseWriter, r *http.Request) {
-	state, foundApp, ok := appForProtocol(w, r, supportsOIDC)
+	_, foundApp, ok := appForProtocol(w, r, supportsOIDC)
 	if !ok {
 		return
 	}
-	if oidcSetupStatus(foundApp) != setupStatusConfigured {
-		http.Error(w, "configure OIDC for this environment before using the playground", http.StatusBadRequest)
+	// The playground supplies its own callback, so registered redirect URIs
+	// are not required; only credentials the token exchange needs are.
+	if strings.TrimSpace(foundApp.OIDCClientID) == "" {
+		http.Error(w, "set an OIDC client ID for this environment before using the playground", http.StatusBadRequest)
+		return
+	}
+	if !foundApp.OIDCPublicClient && strings.TrimSpace(foundApp.OIDCClientSecret) == "" {
+		http.Error(w, "set an OIDC client secret for this environment before using the playground", http.StatusBadRequest)
 		return
 	}
 	callback := a.playgroundCallbackURI(foundApp.Slug)
@@ -86,8 +92,14 @@ func (a *webApp) handleOIDCPlayground(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})
-	issuer := oidcIssuer(a.effectiveIDPBaseURL(r, state), foundApp)
-	http.Redirect(w, r, issuer+"/authorize?"+query.Encode(), http.StatusFound)
+	http.Redirect(w, r, a.playgroundIssuer(foundApp)+"/authorize?"+query.Encode(), http.StatusFound)
+}
+
+// playgroundIssuer returns the loopback issuer for the built-in RP. The
+// playground must not use the public tunnel base: its callback is a loopback
+// URI, which authorize only accepts on untunneled requests.
+func (a *webApp) playgroundIssuer(foundApp app) string {
+	return oidcIssuer("http://"+a.adminHost, foundApp)
 }
 
 type playgroundResult struct {
@@ -109,7 +121,7 @@ type playgroundResult struct {
 // response, the decoded ID token, and a userinfo call so the whole exchange is
 // visible on one page.
 func (a *webApp) handleOIDCPlaygroundCallback(w http.ResponseWriter, r *http.Request) {
-	appState, foundApp, ok := appForProtocol(w, r, supportsOIDC)
+	_, foundApp, ok := appForProtocol(w, r, supportsOIDC)
 	if !ok {
 		return
 	}
@@ -150,7 +162,7 @@ func (a *webApp) handleOIDCPlaygroundCallback(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	issuer := oidcIssuer(a.effectiveIDPBaseURL(r, appState), foundApp)
+	issuer := a.playgroundIssuer(foundApp)
 	tokenForm := url.Values{
 		"grant_type":   {"authorization_code"},
 		"code":         {code},
