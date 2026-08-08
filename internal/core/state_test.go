@@ -1235,3 +1235,51 @@ func TestOpenStateDBAtPreservesSpecialFilenameCharacters(t *testing.T) {
 		})
 	}
 }
+
+func TestSchemaVersionStampAndGuards(t *testing.T) {
+	r := require.New(t)
+	path := filepath.Join(t.TempDir(), "state.db")
+	t.Setenv("SCIMTEST_STATE_FILE", path)
+
+	// A fresh database is stamped with the current version and needs no
+	// pre-migration copy.
+	r.NoError(SaveState(AppState{}))
+	db, err := openStateDB()
+	r.NoError(err)
+	version, err := schemaVersion(db)
+	r.NoError(err)
+	r.Equal(currentSchemaVersion, version)
+	_, err = os.Stat(filepath.Join(filepath.Dir(path), "backups"))
+	r.True(os.IsNotExist(err), "fresh databases must not write pre-migration copies")
+
+	// A database stamped by a newer scimtest is refused with a clear error.
+	_, err = db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, currentSchemaVersion+5))
+	r.NoError(err)
+	r.NoError(resetStateDBCache())
+	_, err = LoadState()
+	r.ErrorContains(err, "written by a newer scimtest")
+	r.ErrorContains(err, "upgrade scimtest")
+}
+
+func TestSchemaMigrationWritesPreMigrationCopy(t *testing.T) {
+	r := require.New(t)
+	path := filepath.Join(t.TempDir(), "state.db")
+	t.Setenv("SCIMTEST_STATE_FILE", path)
+
+	// Simulate a pre-versioning database: populated tables, user_version 0.
+	r.NoError(SaveState(AppState{Users: []User{{ID: "u1", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}}}))
+	db, err := openStateDB()
+	r.NoError(err)
+	_, err = db.Exec(`PRAGMA user_version = 0`)
+	r.NoError(err)
+	r.NoError(resetStateDBCache())
+
+	state, err := LoadState()
+	r.NoError(err)
+	r.Len(state.Users, 1)
+
+	entries, err := os.ReadDir(filepath.Join(filepath.Dir(path), "backups"))
+	r.NoError(err)
+	r.Len(entries, 1)
+	r.Contains(entries[0].Name(), "pre-migrate-v000-")
+}

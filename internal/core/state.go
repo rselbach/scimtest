@@ -462,7 +462,7 @@ func openStateDBAt(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("open sqlite state db %s: %w", path, err)
 	}
 
-	if err := initStateDB(db); err != nil {
+	if err := prepareStateDB(db, path); err != nil {
 		if closeErr := db.Close(); closeErr != nil {
 			return nil, fmt.Errorf("%w; close sqlite state db: %v", err, closeErr)
 		}
@@ -470,6 +470,107 @@ func openStateDBAt(path string) (*sql.DB, error) {
 	}
 
 	return db, nil
+}
+
+// currentSchemaVersion is stamped into PRAGMA user_version after the schema
+// is initialized. Bump it whenever initStateDB's schema or migrations
+// change, so older builds refuse newer state files instead of silently
+// dropping columns they do not know.
+const currentSchemaVersion = 1
+
+// maxPreMigrationCopies bounds the pre-migration snapshots kept next to the
+// state database.
+const maxPreMigrationCopies = 10
+
+// prepareStateDB guards the schema version and runs migrations. Databases
+// written by a newer scimtest are refused; databases about to be migrated
+// forward are snapshotted first so a failed upgrade can be rolled back.
+func prepareStateDB(db *sql.DB, path string) error {
+	version, err := schemaVersion(db)
+	if err != nil {
+		return err
+	}
+	if version > currentSchemaVersion {
+		return fmt.Errorf("state file %s was written by a newer scimtest (schema %d; this build understands %d): upgrade scimtest, or point SCIMTEST_STATE_FILE at a different file", path, version, currentSchemaVersion)
+	}
+	if version < currentSchemaVersion {
+		populated, err := stateDBHasTables(db)
+		if err != nil {
+			return err
+		}
+		if populated {
+			if err := writePreMigrationCopy(db, path, version); err != nil {
+				return err
+			}
+		}
+	}
+	if err := initStateDB(db); err != nil {
+		return err
+	}
+	if version != currentSchemaVersion {
+		if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, currentSchemaVersion)); err != nil {
+			return fmt.Errorf("stamp schema version: %w", err)
+		}
+	}
+	return nil
+}
+
+func schemaVersion(db *sql.DB) (int, error) {
+	var version int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		return 0, fmt.Errorf("read schema version: %w", err)
+	}
+	return version, nil
+}
+
+func stateDBHasTables(db *sql.DB) (bool, error) {
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'`).Scan(&count); err != nil {
+		return false, fmt.Errorf("inspect state schema: %w", err)
+	}
+	return count > 0, nil
+}
+
+// writePreMigrationCopy snapshots the database with VACUUM INTO, which
+// produces a consistent single file even in WAL mode.
+func writePreMigrationCopy(db *sql.DB, path string, fromVersion int) error {
+	directory := filepath.Join(filepath.Dir(path), "backups")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return fmt.Errorf("create backup directory: %w", err)
+	}
+	name := fmt.Sprintf("pre-migrate-v%03d-%s.db", fromVersion, currentTime().UTC().Format("20060102T150405"))
+	target := filepath.Join(directory, name)
+	if _, err := os.Stat(target); err == nil {
+		return nil
+	}
+	if _, err := db.Exec(`VACUUM INTO '` + strings.ReplaceAll(target, "'", "''") + `'`); err != nil {
+		return fmt.Errorf("write pre-migration copy: %w", err)
+	}
+	log.Printf("state schema is moving from version %d to %d; wrote a copy to %s", fromVersion, currentSchemaVersion, target)
+	prunePreMigrationCopies(directory)
+	return nil
+}
+
+func prunePreMigrationCopies(directory string) {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		log.Printf("prune pre-migration copies: %v", err)
+		return
+	}
+	var copies []string
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "pre-migrate-") && strings.HasSuffix(entry.Name(), ".db") {
+			copies = append(copies, entry.Name())
+		}
+	}
+	sort.Strings(copies)
+	for len(copies) > maxPreMigrationCopies {
+		if err := os.Remove(filepath.Join(directory, copies[0])); err != nil {
+			log.Printf("prune pre-migration copy %s: %v", copies[0], err)
+			return
+		}
+		copies = copies[1:]
+	}
 }
 
 func sqliteStateDSN(path string) string {
