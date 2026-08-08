@@ -48,14 +48,19 @@ func (w *debugResponseWriter) Flush() {
 	}
 }
 
-func (a *webApp) debugRPEnabled() bool      { return a.debugRP.Load() }
-func (a *webApp) debugSecretsEnabled() bool { return a.debugSecrets.Load() }
+func (a *webApp) debugRPEnabled() bool       { return a.debugRP.Load() }
+func (a *webApp) debugSecretsEnabled() bool  { return a.debugSecrets.Load() }
+func (a *webApp) trafficRecordEnabled() bool { return a.trafficRecord.Load() }
 
 // debugRPHandler always wraps its route so tracing can be toggled at runtime.
-// When tracing is off it forwards to next with no overhead beyond the check.
+// Transcripts go to stdout when --debug is on and to the in-app Traffic view
+// when recording is on; with both off it forwards with no overhead beyond
+// the check.
 func (a *webApp) debugRPHandler(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !a.debugRPEnabled() {
+		stdout := a.debugRPEnabled()
+		record := a.trafficRecordEnabled()
+		if !stdout && !record {
 			next(w, r)
 			return
 		}
@@ -89,9 +94,13 @@ func (a *webApp) debugRPHandler(next http.HandlerFunc) http.HandlerFunc {
 		a.writeDebugHTTPRequest(&transcript, r, requestBody)
 		a.writeDebugHTTPResponse(&transcript, capture)
 		writeDebugln(&transcript, "===== end RP interaction =====")
-		writeDebugln(os.Stdout)
-		writeDebugln(os.Stdout, transcript.String())
-		a.traffic.add(transcript.String())
+		if stdout {
+			writeDebugln(os.Stdout)
+			writeDebugln(os.Stdout, transcript.String())
+		}
+		if record {
+			a.traffic.add(transcript.String())
+		}
 	}
 }
 

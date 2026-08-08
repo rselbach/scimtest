@@ -43,11 +43,11 @@ func (t *trafficLog) clear() {
 func (a *webApp) handleTraffic(w http.ResponseWriter, r *http.Request) {
 	data := struct {
 		Entries   []string
-		DebugOn   bool
+		RecordOn  bool
 		SecretsOn bool
 	}{
 		Entries:   a.traffic.snapshot(),
-		DebugOn:   a.debugRPEnabled(),
+		RecordOn:  a.trafficRecordEnabled(),
 		SecretsOn: a.debugSecretsEnabled(),
 	}
 	if err := pageTemplate.ExecuteTemplate(w, "traffic.html", data); err != nil {
@@ -56,9 +56,9 @@ func (a *webApp) handleTraffic(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *webApp) handleTrafficSettings(w http.ResponseWriter, r *http.Request) {
-	a.debugRP.Store(r.FormValue("debug") == "on")
-	// Raw credentials are only ever exposed when tracing is also on.
-	a.debugSecrets.Store(r.FormValue("debug") == "on" && r.FormValue("debug_secrets") == "on")
+	a.trafficRecord.Store(r.FormValue("record") == "on")
+	// Raw credentials are only ever exposed when recording is also on.
+	a.debugSecrets.Store(r.FormValue("record") == "on" && r.FormValue("record_secrets") == "on")
 	http.Redirect(w, r, "/traffic", http.StatusSeeOther)
 }
 

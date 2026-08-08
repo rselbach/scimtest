@@ -46,6 +46,7 @@ type webApp struct {
 	certDER           []byte
 	debugRP           atomic.Bool
 	debugSecrets      atomic.Bool
+	trafficRecord     atomic.Bool
 	traffic           trafficLog
 	localPort         int
 	adminHost         string
@@ -564,6 +565,10 @@ func Run(options ...RunOptions) error {
 	}
 	app.debugRP.Store(opts.Debug)
 	app.debugSecrets.Store(opts.DebugSecrets)
+	// The Traffic view records into a bounded in-memory ring on a loopback
+	// tool, so recording defaults to on; --debug additionally prints
+	// transcripts to stdout.
+	app.trafficRecord.Store(true)
 	app.instanceToken, err = newInstanceToken()
 	if err != nil {
 		if closeErr := idpListener.Close(); closeErr != nil {

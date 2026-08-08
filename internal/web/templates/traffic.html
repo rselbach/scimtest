@@ -4,7 +4,6 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  {{if .DebugOn}}<meta http-equiv="refresh" content="5">{{end}}
   <title>Traffic · scimtest</title>
   <link rel="stylesheet" href="/assets/app.css?v=wizard">
 </head>
@@ -16,18 +15,20 @@
     <div class="page-heading">
       <div>
         <h1>Traffic</h1>
-        <p>Live OIDC and SAML request/response transcripts. {{if .DebugOn}}Recording — this page refreshes every 5s.{{else}}Recording is off.{{end}}</p>
+        <p>Live OIDC and SAML request/response transcripts.{{if not .RecordOn}} Recording is off.{{end}}</p>
       </div>
       <a class="btn" href="/?tab=apps">Back to environments</a>
     </div>
     <section class="card inspector-card">
       <form method="post" action="/traffic/settings" class="traffic-controls">
-        <label><input type="checkbox" name="debug" value="on" {{if .DebugOn}}checked{{end}} onchange="this.form.submit()"> Record traffic</label>
-        <label><input type="checkbox" name="debug_secrets" value="on" {{if .SecretsOn}}checked{{end}} onchange="this.form.submit()"> Include raw credentials, tokens, and assertions</label>
+        <label><input type="checkbox" name="record" value="on" {{if .RecordOn}}checked{{end}} onchange="this.form.submit()"> Record traffic</label>
+        <label><input type="checkbox" name="record_secrets" value="on" {{if .SecretsOn}}checked{{end}} onchange="this.form.submit()"> Include raw credentials, tokens, and assertions</label>
         <noscript><button type="submit">Apply</button></noscript>
       </form>
+      <label class="traffic-controls"><input type="checkbox" data-traffic-pause> Pause auto-refresh</label>
       {{if .SecretsOn}}<p class="hint" style="color:var(--danger)">Raw secrets are being recorded. Turn this off when you are done.</p>{{end}}
     </section>
+    <div data-traffic-list>
     {{if .Entries}}
     <div class="page-heading" style="border:0;padding-bottom:0">
       <div></div>
@@ -41,9 +42,32 @@
     {{else}}
     <section class="card card-empty">
       <div class="h">No traffic recorded yet</div>
-      <p>{{if .DebugOn}}Run a sign-in flow and the exchange will appear here.{{else}}Turn on recording, then run a sign-in flow.{{end}}</p>
+      <p>{{if .RecordOn}}Run a sign-in flow and the exchange will appear here.{{else}}Turn on recording, then run a sign-in flow.{{end}}</p>
     </section>
     {{end}}
+    </div>
+  <script>
+  // Refresh only the transcript list in place so reading position and
+  // text selection survive, unlike a whole-page refresh.
+  (function () {
+    const list = document.querySelector('[data-traffic-list]');
+    const pause = document.querySelector('[data-traffic-pause]');
+    if (!list) return;
+    async function refresh() {
+      if (document.hidden || (pause && pause.checked)) return;
+      try {
+        const response = await fetch(window.location.pathname);
+        if (!response.ok) return;
+        const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+        const next = doc.querySelector('[data-traffic-list]');
+        if (next && next.innerHTML !== list.innerHTML) list.innerHTML = next.innerHTML;
+      } catch (_error) {
+        // Transient fetch failures just skip this cycle.
+      }
+    }
+    setInterval(refresh, 5000);
+  })();
+  </script>
   </main>
 </body>
 </html>

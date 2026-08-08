@@ -27,7 +27,8 @@ func TestTrafficRecordingTogglesAtRuntime(t *testing.T) {
 		}},
 	}))
 
-	// Recording is off by default: a discovery call records nothing.
+	// Recording is off until enabled on this hand-built app; a discovery
+	// call records nothing.
 	discovery := func() {
 		rec := httptest.NewRecorder()
 		svc.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/oidc/example/.well-known/openid-configuration", nil))
@@ -36,13 +37,15 @@ func TestTrafficRecordingTogglesAtRuntime(t *testing.T) {
 	discovery()
 	r.Empty(svc.traffic.snapshot())
 
-	// Turn recording on through the settings endpoint.
+	// Turn recording on through the settings endpoint; stdout debug
+	// output stays off.
 	settingsRec := httptest.NewRecorder()
-	settingsReq := httptest.NewRequest(http.MethodPost, "/traffic/settings", strings.NewReader(url.Values{"debug": {"on"}}.Encode()))
+	settingsReq := httptest.NewRequest(http.MethodPost, "/traffic/settings", strings.NewReader(url.Values{"record": {"on"}}.Encode()))
 	settingsReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	svc.routes().ServeHTTP(settingsRec, settingsReq)
 	r.Equal(http.StatusSeeOther, settingsRec.Code)
-	r.True(svc.debugRPEnabled())
+	r.True(svc.trafficRecordEnabled())
+	r.False(svc.debugRPEnabled())
 
 	discovery()
 	entries := svc.traffic.snapshot()
@@ -61,7 +64,7 @@ func TestTrafficSecretsRequireRecording(t *testing.T) {
 	svc := newTestIDPApp(t)
 	// Asking for secrets without recording must not enable secret capture.
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/traffic/settings", strings.NewReader(url.Values{"debug_secrets": {"on"}}.Encode()))
+	req := httptest.NewRequest(http.MethodPost, "/traffic/settings", strings.NewReader(url.Values{"record_secrets": {"on"}}.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	svc.routes().ServeHTTP(rec, req)
 	r.False(svc.debugSecretsEnabled())
