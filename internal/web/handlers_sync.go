@@ -18,6 +18,63 @@ func (a *webApp) handleReconcile(w http.ResponseWriter, r *http.Request) {
 	a.startSyncRequest(w, r, "reconcile")
 }
 
+func (a *webApp) handleUserPush(w http.ResponseWriter, r *http.Request) {
+	a.startPushRequest(w, r, "user", r.PathValue("id"))
+}
+
+func (a *webApp) handleGroupPush(w http.ResponseWriter, r *http.Request) {
+	a.startPushRequest(w, r, "group", r.PathValue("id"))
+}
+
+// startPushRequest starts a sync job restricted to one resource, so a single
+// user or group can be pushed without walking the whole directory.
+func (a *webApp) startPushRequest(w http.ResponseWriter, r *http.Request, resourceType string, resourceID string) {
+	tab := normalizedTab(r.FormValue("tab"))
+	state, err := loadRequestState(r)
+	if err != nil {
+		a.respondSyncStartError(w, r, tab, err)
+		return
+	}
+	appID := requestSyncAppID(r, state)
+	if appID == "" {
+		a.respondSyncStartError(w, r, tab, fmt.Errorf("SCIM is not enabled for the active environment"))
+		return
+	}
+	label := ""
+	switch resourceType {
+	case "user":
+		found, ok := userByID(state.Users, resourceID)
+		if !ok {
+			a.respondSyncStartError(w, r, tab, fmt.Errorf("user not found"))
+			return
+		}
+		label = userLabel(found)
+	case "group":
+		found, ok := groupByID(state.Groups, resourceID)
+		if !ok {
+			a.respondSyncStartError(w, r, tab, fmt.Errorf("group not found"))
+			return
+		}
+		label = found.DisplayName
+	}
+	activeEnvironment, _ := appByID(state.Apps, appID)
+	if job := a.currentSyncJob(appID); job != nil && job.Running {
+		a.respondSyncStartError(w, r, tab, fmt.Errorf("sync already running"))
+		return
+	}
+	job, err := a.startSyncJob(appID, activeEnvironment.Name, "push", resourceType, resourceID)
+	if err != nil {
+		a.respondSyncStartError(w, r, tab, err)
+		return
+	}
+
+	if wantsJSON(r) {
+		writeJSON(w, job)
+		return
+	}
+	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: "pushing " + label})
+}
+
 func (a *webApp) startSyncRequest(w http.ResponseWriter, r *http.Request, kind string) {
 	tab := normalizedTab(r.FormValue("tab"))
 	state, err := loadRequestState(r)
@@ -35,7 +92,7 @@ func (a *webApp) startSyncRequest(w http.ResponseWriter, r *http.Request, kind s
 		a.respondSyncStartError(w, r, tab, fmt.Errorf("sync already running"))
 		return
 	}
-	job, err := a.startSyncJob(appID, activeEnvironment.Name, kind)
+	job, err := a.startSyncJob(appID, activeEnvironment.Name, kind, "", "")
 	if err != nil {
 		a.respondSyncStartError(w, r, tab, err)
 		return
@@ -104,7 +161,7 @@ func (a *webApp) respondSyncStartError(w http.ResponseWriter, r *http.Request, t
 	a.redirectError(w, r, tab, err)
 }
 
-func (a *webApp) startSyncJob(appID string, environmentName string, kind string) (*syncJobSnapshot, error) {
+func (a *webApp) startSyncJob(appID string, environmentName string, kind string, targetType string, targetID string) (*syncJobSnapshot, error) {
 	a.syncJobMu.Lock()
 	defer a.syncJobMu.Unlock()
 
@@ -134,12 +191,12 @@ func (a *webApp) startSyncJob(appID string, environmentName string, kind string)
 	a.syncJobs[appID] = job
 	ctx, cancel := context.WithCancel(context.Background())
 	a.syncCancels[appID] = cancel
-	go a.runSyncJob(ctx, job.ID, appID, kind)
+	go a.runSyncJob(ctx, job.ID, appID, kind, targetType, targetID)
 
 	return cloneSyncJob(job), nil
 }
 
-func (a *webApp) runSyncJob(ctx context.Context, id string, appID string, kind string) {
+func (a *webApp) runSyncJob(ctx context.Context, id string, appID string, kind string, targetType string, targetID string) {
 	a.mu.Lock()
 	state, err := loadStateForApp(appID)
 	a.mu.Unlock()
@@ -151,6 +208,14 @@ func (a *webApp) runSyncJob(ctx context.Context, id string, appID string, kind s
 	if err != nil {
 		a.finishSyncJob(appID, id, false, err.Error(), false)
 		return
+	}
+	if kind == "push" {
+		var ok bool
+		projected, ok = restrictDirtyToResource(projected, targetType, targetID)
+		if !ok {
+			a.finishSyncJob(appID, id, false, targetType+" not found", false)
+			return
+		}
 	}
 
 	// The remote walk runs without a.mu so the dashboard, backups, and
@@ -178,11 +243,18 @@ func (a *webApp) runSyncJob(ctx context.Context, id string, appID string, kind s
 		a.finishSyncJob(appID, id, false, err.Error(), len(result.Traces) > 0)
 		return
 	}
-	userSyncBeforeMerge := fresh.UserSync[appID]
-	groupSyncBeforeMerge := fresh.GroupSync[appID]
-	mergeAppSyncState(&fresh, appID, result.State)
-	restoreMidSyncEdits(fresh.UserSync[appID], state.UserSync[appID], userSyncBeforeMerge)
-	restoreMidSyncEdits(fresh.GroupSync[appID], state.GroupSync[appID], groupSyncBeforeMerge)
+	if kind == "push" {
+		// A push cleared everyone else's dirty flag in the projection, so a
+		// whole-state merge would erase their pending changes; only the
+		// target's row may be written back.
+		applyPushResult(&fresh, appID, targetType, targetID, result.State)
+	} else {
+		userSyncBeforeMerge := fresh.UserSync[appID]
+		groupSyncBeforeMerge := fresh.GroupSync[appID]
+		mergeAppSyncState(&fresh, appID, result.State)
+		restoreMidSyncEdits(fresh.UserSync[appID], state.UserSync[appID], userSyncBeforeMerge)
+		restoreMidSyncEdits(fresh.GroupSync[appID], state.GroupSync[appID], groupSyncBeforeMerge)
+	}
 	appendOperationLogs(&fresh, appID, result.Traces)
 	purgeFullySyncedDeletions(&fresh)
 	if err := saveRequestState(fresh); err != nil {
@@ -192,6 +264,68 @@ func (a *webApp) runSyncJob(ctx context.Context, id string, appID string, kind s
 
 	success := result.Stopped == nil && !result.Failed
 	a.finishSyncJob(appID, id, success, result.Status, len(result.Traces) > 0)
+}
+
+// restrictDirtyToResource narrows a projected state so a sync pushes exactly
+// one resource: the target is forced dirty and everything else is left
+// clean. The result must be merged with applyPushResult rather than
+// mergeAppSyncState.
+func restrictDirtyToResource(state appState, resourceType string, resourceID string) (appState, bool) {
+	found := false
+	for i := range state.Users {
+		if resourceType == "user" && state.Users[i].ID == resourceID {
+			state.Users[i].Dirty = true
+			found = true
+			continue
+		}
+		state.Users[i].Dirty = false
+	}
+	for i := range state.Groups {
+		if resourceType == "group" && state.Groups[i].ID == resourceID {
+			state.Groups[i].Dirty = true
+			found = true
+			continue
+		}
+		state.Groups[i].Dirty = false
+	}
+	return state, found
+}
+
+// applyPushResult stores one resource's sync outcome without touching any
+// other row. A target missing from the synced state means its remote
+// deletion settled and the engine dropped it.
+func applyPushResult(state *appState, appID string, resourceType string, resourceID string, synced appState) {
+	row := resourceSyncState{Deleted: true}
+	switch resourceType {
+	case "user":
+		for _, u := range synced.Users {
+			if u.ID == resourceID {
+				row = resourceSyncState{RemoteID: u.RemoteID, Dirty: u.Dirty, Deleted: u.Deleted, LastError: u.LastError}
+				break
+			}
+		}
+		if state.UserSync == nil {
+			state.UserSync = make(map[string]map[string]resourceSyncState)
+		}
+		if state.UserSync[appID] == nil {
+			state.UserSync[appID] = make(map[string]resourceSyncState)
+		}
+		state.UserSync[appID][resourceID] = row
+	case "group":
+		for _, g := range synced.Groups {
+			if g.ID == resourceID {
+				row = resourceSyncState{RemoteID: g.RemoteID, Dirty: g.Dirty, Deleted: g.Deleted, LastError: g.LastError}
+				break
+			}
+		}
+		if state.GroupSync == nil {
+			state.GroupSync = make(map[string]map[string]resourceSyncState)
+		}
+		if state.GroupSync[appID] == nil {
+			state.GroupSync[appID] = make(map[string]resourceSyncState)
+		}
+		state.GroupSync[appID][resourceID] = row
+	}
 }
 
 // restoreMidSyncEdits keeps sync entries that changed while the remote walk

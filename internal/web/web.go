@@ -894,6 +894,8 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /sync/status", a.handleSyncStatus)
 	mux.HandleFunc("POST /sync", a.handleSync)
 	mux.HandleFunc("POST /sync/cancel", a.handleSyncCancel)
+	mux.HandleFunc("POST /users/{id}/sync", a.handleUserPush)
+	mux.HandleFunc("POST /groups/{id}/sync", a.handleGroupPush)
 	mux.HandleFunc("POST /reconcile", a.handleReconcile)
 	mux.HandleFunc("POST /import", a.rejectWhileSyncing(a.handleImport))
 	mux.HandleFunc("POST /reset", a.rejectWhileSyncing(a.handleReset))

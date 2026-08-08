@@ -51,6 +51,16 @@
                 {{end}}
                 <td class="col-actions cell-widget">
                   <div class="row-actions">
+                    {{if and $.SCIMEnabled (not .Deleted)}}
+                    <form data-sync-disable method="post" action="/groups/{{.ID}}/sync">
+                      <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
+                      <input type="hidden" name="tab" value="groups">
+                      {{if $.Pagination}}<input type="hidden" name="page" value="{{$.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{$.Pagination.PageSize}}">{{if $.Pagination.SearchQuery}}<input type="hidden" name="q" value="{{$.Pagination.SearchQuery}}">{{end}}{{end}}
+                      <button class="icon-btn" type="submit" title="Push this group over SCIM now" aria-label="Push this group over SCIM now">
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12V3.5"/><path d="M4.5 7L8 3.5 11.5 7"/><path d="M3 13h10"/></svg>
+                      </button>
+                    </form>
+                    {{end}}
                     <a class="icon-btn" href="{{.EditURL}}" title="Edit group" aria-label="Edit group">
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M10 4l2 2"/></svg>
                     </a>
@@ -206,6 +216,16 @@
                 {{end}}
                 <td class="col-actions cell-widget">
                   <div class="row-actions">
+                    {{if and $.SCIMEnabled (not .Deleted)}}
+                    <form data-sync-disable method="post" action="/users/{{.ID}}/sync">
+                      <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
+                      <input type="hidden" name="tab" value="users">
+                      {{if $.Pagination}}<input type="hidden" name="page" value="{{$.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{$.Pagination.PageSize}}">{{if $.Pagination.SearchQuery}}<input type="hidden" name="q" value="{{$.Pagination.SearchQuery}}">{{end}}{{end}}
+                      <button class="icon-btn" type="submit" title="Push this user over SCIM now" aria-label="Push this user over SCIM now">
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12V3.5"/><path d="M4.5 7L8 3.5 11.5 7"/><path d="M3 13h10"/></svg>
+                      </button>
+                    </form>
+                    {{end}}
                     <a class="icon-btn" href="{{.EditURL}}" title="Edit user" aria-label="Edit user">
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M10 4l2 2"/></svg>
                     </a>
