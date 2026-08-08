@@ -422,7 +422,6 @@
 	  const index = setupSteps.indexOf(section);
 	  if (setupPrevious) setupPrevious.classList.toggle('is-hidden', index <= 0);
 	  if (setupNext) setupNext.classList.toggle('is-hidden', index < 0 || index >= setupSteps.length - 1);
-	  if (setupSave) setupSave.classList.toggle('is-hidden', section !== 'review');
 	}
 
 	function setupSectionState(section, states) {
@@ -496,11 +495,25 @@
 	  }
 	}
 
+	function setupSectionSkipped(section) {
+	  if (section !== 'oidc' && section !== 'saml' && section !== 'scim') return false;
+	  // Only skip disabled protocols once at least one is enabled: on a
+	  // brand-new environment every panel must stay reachable so protocols
+	  // can be turned on in the first place.
+	  const anyEnabled = ['oidc', 'saml', 'scim'].some(function (protocol) {
+		return setupFieldChecked(protocol + '_enabled');
+	  });
+	  return anyEnabled && !setupFieldChecked(section + '_enabled');
+	}
+
 	function moveSetupSection(direction) {
 	  const current = setupSection ? setupSection.value : 'overview';
 	  if (direction > 0 && !validateSetupSection(current)) return;
 	  const index = setupSteps.indexOf(current);
-	  const nextIndex = Math.min(Math.max(index + direction, 0), setupSteps.length - 1);
+	  let nextIndex = Math.min(Math.max(index + direction, 0), setupSteps.length - 1);
+	  while (setupSectionSkipped(setupSteps[nextIndex])) {
+		nextIndex = Math.min(Math.max(nextIndex + direction, 0), setupSteps.length - 1);
+	  }
 	  showSetupSection(setupSteps[nextIndex], true);
 	}
 
@@ -559,7 +572,10 @@
 	  environmentForm.addEventListener('submit', function (event) {
 		const submitter = event.submitter;
 		if (submitter && (submitter.name === 'remove_protocol' || submitter.hasAttribute('formaction'))) return;
-		if (setupSection && setupSection.value === 'review') {
+		// The visible save button submits from any step; Enter keeps
+		// advancing through the wizard until the review step.
+		const saveRequested = submitter && submitter.hasAttribute('data-setup-save');
+		if (saveRequested || (setupSection && setupSection.value === 'review')) {
 		  if (!validateAllSetupSections()) event.preventDefault();
 		  return;
 		}
