@@ -5,15 +5,43 @@ import (
 	"log"
 	"net"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
+	"strings"
 )
 
 const (
 	defaultHost = "127.0.0.1"
 	defaultPort = 8080
+	// maxAdminPortScan bounds the upward search for a free admin port so
+	// fallback cannot land on an unrelated well-known port far from the
+	// requested one.
+	maxAdminPortScan = 100
 )
+
+// resolveAdminPort picks the admin port and reports whether it must bind
+// exactly. Sources in priority order: the --port flag, SCIMTEST_PORT, the
+// deprecated PORT variable, the port bound on the previous run, and the
+// default. Only the first three pin the port; the last two allow fallback
+// to a nearby free port.
+func resolveAdminPort(flagPort, lastPort string) (port string, pinned bool) {
+	if port = strings.TrimSpace(flagPort); port != "" {
+		return port, true
+	}
+	if port = strings.TrimSpace(os.Getenv("SCIMTEST_PORT")); port != "" {
+		return port, true
+	}
+	if port = strings.TrimSpace(os.Getenv("PORT")); port != "" {
+		log.Printf("using port %s from the ambient PORT variable; set SCIMTEST_PORT or pass --port to silence this", port)
+		return port, true
+	}
+	if port = strings.TrimSpace(lastPort); port != "" {
+		return port, false
+	}
+	return strconv.Itoa(defaultPort), false
+}
 
 type browserOpener func(string) error
 
@@ -31,7 +59,8 @@ func listenForAdmin(host, port string, fallback bool) (net.Listener, error) {
 		return listener, nil
 	}
 
-	for candidate := start; candidate <= 65535; candidate++ {
+	end := min(start+maxAdminPortScan, 65535)
+	for candidate := start; candidate <= end; candidate++ {
 		address := net.JoinHostPort(host, strconv.Itoa(candidate))
 		listener, listenErr := net.Listen("tcp", address)
 		if listenErr == nil {
@@ -41,7 +70,7 @@ func listenForAdmin(host, port string, fallback bool) (net.Listener, error) {
 			return nil, fmt.Errorf("listen on %s: %w", address, listenErr)
 		}
 	}
-	return nil, fmt.Errorf("no available port from %d through 65535 on %s", start, host)
+	return nil, fmt.Errorf("no available port from %d through %d on %s; pass --port to choose one", start, end, host)
 }
 
 func listenerURL(listener net.Listener) (string, error) {

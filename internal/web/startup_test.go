@@ -47,6 +47,36 @@ func TestListenForAdmin(t *testing.T) {
 	}
 }
 
+func TestResolveAdminPort(t *testing.T) {
+	tests := map[string]struct {
+		flagPort   string
+		scimPort   string
+		envPort    string
+		lastPort   string
+		want       string
+		wantPinned bool
+	}{
+		"flag wins":                    {flagPort: "9001", scimPort: "9002", envPort: "9003", lastPort: "9004", want: "9001", wantPinned: true},
+		"SCIMTEST_PORT over PORT":      {scimPort: "9002", envPort: "9003", want: "9002", wantPinned: true},
+		"deprecated PORT still pins":   {envPort: "9003", want: "9003", wantPinned: true},
+		"last bound port not pinned":   {lastPort: "9004", want: "9004", wantPinned: false},
+		"default when nothing is set":  {want: "8080", wantPinned: false},
+		"whitespace values treated as unset": {flagPort: " ", scimPort: " ", envPort: " ", lastPort: " ", want: "8080", wantPinned: false},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			t.Setenv("SCIMTEST_PORT", tc.scimPort)
+			t.Setenv("PORT", tc.envPort)
+
+			port, pinned := resolveAdminPort(tc.flagPort, tc.lastPort)
+
+			r.Equal(tc.want, port)
+			r.Equal(tc.wantPinned, pinned)
+		})
+	}
+}
+
 func TestListenForAdminReturnsNonAddressInUseError(t *testing.T) {
 	r := require.New(t)
 	listener, err := listenForAdmin("192.0.2.1", "8080", true)

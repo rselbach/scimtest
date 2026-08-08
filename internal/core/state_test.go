@@ -13,6 +13,25 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+func TestRememberAdminPortRoundTrip(t *testing.T) {
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r := require.New(t)
+
+	port, err := LastAdminPort()
+	r.NoError(err)
+	r.Empty(port)
+
+	r.NoError(RememberAdminPort("8085"))
+	port, err = LastAdminPort()
+	r.NoError(err)
+	r.Equal("8085", port)
+
+	r.NoError(RememberAdminPort("8090"))
+	port, err = LastAdminPort()
+	r.NoError(err)
+	r.Equal("8090", port)
+}
+
 func TestSaveAndLoadState(t *testing.T) {
 	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
 	r := require.New(t)

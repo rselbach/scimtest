@@ -511,14 +511,11 @@ func Run(options ...RunOptions) error {
 		}
 	}()
 
-	port := strings.TrimSpace(opts.Port)
-	if port == "" {
-		port = strings.TrimSpace(os.Getenv("PORT"))
+	lastPort, err := lastAdminPort()
+	if err != nil {
+		log.Printf("load last admin port: %v", err)
 	}
-	portSpecified := port != ""
-	if !portSpecified {
-		port = strconv.Itoa(defaultPort)
-	}
+	port, portSpecified := resolveAdminPort(opts.Port, lastPort)
 
 	key, certDER, err := loadOrCreateSigningMaterial()
 	if err != nil {
@@ -575,6 +572,12 @@ func Run(options ...RunOptions) error {
 		return fmt.Errorf("parse admin listener URL: %w; close admin listener: %v; close tunneled IDP listener: %v", err, adminCloseErr, idpCloseErr)
 	}
 	app.adminHost = parsedLocalURL.Host
+	if boundPort := parsedLocalURL.Port(); boundPort != port {
+		log.Printf("warning: port %s is in use; scimtest started on port %s instead — issuer and metadata URLs pasted into relying parties now use the new port", port, boundPort)
+	}
+	if err := rememberAdminPort(parsedLocalURL.Port()); err != nil {
+		log.Printf("persist admin port: %v", err)
+	}
 	if err := lease.Publish(instanceMetadata{URL: localURL, Token: app.instanceToken}); err != nil {
 		adminCloseErr := listener.Close()
 		idpCloseErr := idpListener.Close()

@@ -26,6 +26,8 @@ var (
 	loadStateForAppSlug          = core.LoadStateForAppSlug
 	stateFilePath                = core.StateFilePath
 	ensureTunnelInstanceID       = core.EnsureTunnelInstanceID
+	lastAdminPort                = core.LastAdminPort
+	rememberAdminPort            = core.RememberAdminPort
 	saveGlobalConfig             = core.SaveGlobalConfig
 	saveEnvironmentState         = core.SaveEnvironmentState
 	deleteEnvironment            = core.DeleteEnvironment

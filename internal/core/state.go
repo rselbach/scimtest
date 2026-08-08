@@ -91,6 +91,37 @@ func fillClaimMappingDefaults(value *string, fallback string) {
 const SAMLNameIDFormatUnspecified = "urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified"
 const DefaultEnvironmentID = "env_default"
 
+// LastAdminPort returns the admin port bound on the previous run, or ""
+// when no port has been recorded.
+func LastAdminPort() (string, error) {
+	db, err := openStateDB()
+	if err != nil {
+		return "", err
+	}
+	var port string
+	err = db.QueryRow(`SELECT value FROM config WHERE key = 'last_admin_port'`).Scan(&port)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("load last admin port: %w", err)
+	}
+	return strings.TrimSpace(port), nil
+}
+
+// RememberAdminPort persists the bound admin port so the next run prefers
+// it, keeping issuer and metadata URLs stable across restarts.
+func RememberAdminPort(port string) error {
+	db, err := openStateDB()
+	if err != nil {
+		return err
+	}
+	if _, err := db.Exec(`INSERT INTO config(key, value) VALUES('last_admin_port', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, port); err != nil {
+		return fmt.Errorf("persist last admin port: %w", err)
+	}
+	return nil
+}
+
 // EnsureTunnelInstanceID returns the stable identity used for tunnel
 // reservations, generating and persisting it when necessary.
 func EnsureTunnelInstanceID() (string, error) {
