@@ -60,6 +60,7 @@ type webApp struct {
 	tunnel               *activeTunnel
 	tunnelStarting       *automaticTunnelStart
 	tunnelClosing        bool
+	tunnelResetting      bool
 	tunnelLastError      string
 	tunnelEnrollmentURL  string
 	tunnelEnrollmentCode string
@@ -168,6 +169,11 @@ type automaticTunnelStart struct {
 type tunnelView struct {
 	PublicURL string
 	ClientIP  string
+}
+
+type githubAccountView struct {
+	Linked bool
+	Login  string
 }
 
 type tunnelApplicationIdentity struct {
@@ -458,8 +464,7 @@ type pageData struct {
 	FormError              string
 	Environments           []app
 	ActiveEnvironment      app
-	GitHubLogin            string
-	GitHubAccountLinked    bool
+	GitHubAccount          githubAccountView
 }
 
 type RunOptions struct {
@@ -933,6 +938,11 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	})
 	mux.HandleFunc("POST /desktop/auth/retry", a.handleDesktopAuthRetry)
+	mux.HandleFunc("POST /desktop/auth/logout", a.handleDesktopAuthLogout)
+	mux.HandleFunc("GET /desktop/auth/logout", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	})
 	mux.HandleFunc("POST /tools/delete-all", a.rejectWhileSyncing(a.handleToolsDeleteAll))
 	mux.HandleFunc("POST /tools/clear-users-local", a.rejectWhileSyncing(a.handleToolsClearUsersLocal))
 	mux.HandleFunc("POST /tools/deactivate-all", a.rejectWhileSyncing(a.handleToolsDeactivateAll))
@@ -1114,8 +1124,7 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		HasSCIMEnvironments:    activeEnvironment.SCIMEnabled,
 		Environments:           globalState.Apps,
 		ActiveEnvironment:      activeEnvironment,
-		GitHubLogin:            a.authenticatedGitHubLogin(),
-		GitHubAccountLinked:    a.requireGitHubAccount && a.githubAccountConnected(),
+		GitHubAccount:          a.githubAccountView(),
 	}
 	if !data.SCIMEnabled {
 		data.Errors = nil
@@ -1243,7 +1252,7 @@ func (a *webApp) startAutomaticTunnel(identity tunnelApplicationIdentity) {
 	ctx, cancel := context.WithCancel(context.Background())
 	attempt := &automaticTunnelStart{cancel: cancel, done: make(chan struct{})}
 	a.tunnelMu.Lock()
-	if a.tunnelClosing || a.tunnelStarting != nil || a.tunnel != nil {
+	if a.tunnelClosing || a.tunnelResetting || a.tunnelStarting != nil || a.tunnel != nil {
 		a.tunnelMu.Unlock()
 		cancel()
 		close(attempt.done)

@@ -210,6 +210,38 @@ func TestEnsureTunnelInstanceKeyRepairsInvalidValue(t *testing.T) {
 	r.Equal(first, second)
 }
 
+func TestRotateTunnelInstanceIdentityReplacesIDAndKeyTogether(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	db, err := openStateDB()
+	r.NoError(err)
+	legacyID := "12345678-1234-4234-8234-123456789abc"
+	_, err = db.Exec(`INSERT INTO config(key, value) VALUES('rgrok_instance_id', ?)`, legacyID)
+	r.NoError(err)
+
+	oldID, err := EnsureTunnelInstanceID()
+	r.NoError(err)
+	oldKey, err := EnsureTunnelInstanceKey()
+	r.NoError(err)
+
+	newID, newKey, err := RotateTunnelInstanceIdentity()
+	r.NoError(err)
+	r.True(validUUID(newID))
+	r.NotEqual(oldID, newID)
+	r.NotEqual(oldKey, newKey)
+
+	savedID, err := EnsureTunnelInstanceID()
+	r.NoError(err)
+	r.Equal(newID, savedID)
+	savedKey, err := EnsureTunnelInstanceKey()
+	r.NoError(err)
+	r.Equal(newKey, savedKey)
+
+	var legacyCount int
+	r.NoError(db.QueryRow(`SELECT COUNT(*) FROM config WHERE key = 'rgrok_instance_id'`).Scan(&legacyCount))
+	r.Zero(legacyCount)
+}
+
 func TestEnsureTunnelInstanceIDSurfacesStateError(t *testing.T) {
 	r := require.New(t)
 	root := t.TempDir()

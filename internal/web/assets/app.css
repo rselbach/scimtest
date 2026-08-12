@@ -91,6 +91,27 @@
       font-size: 12px;
     }
     .github-account svg { width: 15px; height: 15px; }
+    .github-account-control {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin-left: auto;
+      white-space: nowrap;
+    }
+    .environment-context + .github-account-control { margin-left: 4px; }
+    .github-account-control form { margin: 0; }
+    .github-logout {
+      min-height: 28px;
+      padding: 0 9px;
+      border: 1px solid #444851;
+      border-radius: var(--radius);
+      background: #24262b;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .github-logout:hover { background: #30333a; border-color: #5b606b; }
     .environment-context {
       display: flex;
       align-items: center;
@@ -1595,6 +1616,9 @@
 	  .topbar { padding-inline: 10px; }
 	  .brand { font-size: 0; gap: 0; }
 	  .brand-glyph { font-size: 14px; }
+	  .github-account-prefix { display: none; }
+	  .github-account-control { gap: 5px; }
+	  .github-logout { padding-inline: 7px; }
 	  .environment-context { min-width: 0; }
 	  .environment-context select { width: 100%; min-width: 0; max-width: none; }
 	  .page-header { flex-wrap: wrap; }

@@ -64,8 +64,15 @@ The tunnel server performs the OAuth code exchange with PKCE. The desktop
 binary never contains a GitHub OAuth client secret and never stores the GitHub
 access token. It persists the existing per-installation Ed25519 key in the
 scimtest state database; the server records which GitHub account enrolled that
-key. A matching server reports the login for the account badge. Older deployed
-servers still prove enrollment and show **GitHub linked** until upgraded.
+key. The app bar shows **Signed in as @login** when a matching server reports
+the login. Older deployed servers still prove enrollment but can only show the
+explicit **Signed in with GitHub** fallback until upgraded.
+
+**Log out** closes the current tunnel, atomically replaces the local
+installation ID and private key, and returns the app to the account gate for a
+fresh GitHub authorization. This forgets the account on this computer. The old
+installation remains as an inactive record on the tunnel server until an
+operator removes or revokes it.
 
 Closing the native window cancels and gracefully shuts down both local HTTP
 listeners and the tunnel. A browser-mode scimtest process must be stopped before
@@ -73,8 +80,7 @@ starting desktop mode so it cannot bypass the desktop account gate.
 
 ## Known spike limitations
 
-- Sign-in is remembered per installation; there is no account switch or logout
-  UI yet.
+- Account switching uses **Log out** followed by a new GitHub authorization.
 - Each launch needs network access long enough to authenticate the installation
   tunnel. The app locks again if that tunnel disconnects.
 - GitHub OAuth currently runs in the embedded system WebView as requested. A

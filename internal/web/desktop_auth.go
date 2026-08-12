@@ -1,6 +1,9 @@
 package web
 
 import (
+	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -41,13 +44,20 @@ func (a *webApp) githubAccountConnected() bool {
 	return a.tunnel != nil
 }
 
-func (a *webApp) authenticatedGitHubLogin() string {
+func (a *webApp) githubAccountView() githubAccountView {
+	if !a.requireGitHubAccount {
+		return githubAccountView{}
+	}
 	a.tunnelMu.Lock()
 	defer a.tunnelMu.Unlock()
-	if a.tunnel == nil || a.tunnel.GitHubUserID <= 0 {
-		return ""
+	if a.tunnel == nil {
+		return githubAccountView{}
 	}
-	return strings.TrimSpace(a.tunnel.GitHubLogin)
+	view := githubAccountView{Linked: true}
+	if a.tunnel.GitHubUserID > 0 {
+		view.Login = strings.TrimSpace(a.tunnel.GitHubLogin)
+	}
+	return view
 }
 
 func (a *webApp) desktopAuthView() desktopAuthView {
@@ -89,4 +99,75 @@ func (a *webApp) renderDesktopAuth(w http.ResponseWriter) {
 func (a *webApp) handleDesktopAuthRetry(w http.ResponseWriter, r *http.Request) {
 	a.retryAutomaticTunnel()
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (a *webApp) handleDesktopAuthLogout(w http.ResponseWriter, r *http.Request) {
+	if !a.requireGitHubAccount {
+		http.NotFound(w, r)
+		return
+	}
+	identity, err := loadTunnelApplicationIdentity()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if identity == nil {
+		http.Error(w, "GitHub account sign-in is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if err := a.logoutGitHubAccount(*identity); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (a *webApp) logoutGitHubAccount(identity tunnelApplicationIdentity) error {
+	a.tunnelMu.Lock()
+	if a.tunnelClosing {
+		a.tunnelMu.Unlock()
+		return errors.New("scimtest is shutting down")
+	}
+	if a.tunnelResetting {
+		a.tunnelMu.Unlock()
+		return errors.New("GitHub account sign-out is already in progress")
+	}
+	a.tunnelResetting = true
+	attempt := a.tunnelStarting
+	a.tunnelMu.Unlock()
+
+	if attempt != nil {
+		attempt.cancel()
+		<-attempt.done
+	}
+
+	a.mu.Lock()
+	if _, _, err := rotateTunnelInstanceIdentity(); err != nil {
+		a.mu.Unlock()
+		a.tunnelMu.Lock()
+		a.tunnelResetting = false
+		a.tunnelMu.Unlock()
+		return fmt.Errorf("sign out of GitHub: %w", err)
+	}
+	a.mu.Unlock()
+
+	a.tunnelMu.Lock()
+	tunnel := a.tunnel
+	a.tunnel = nil
+	a.tunnelLastError = ""
+	a.tunnelEnrollmentURL = ""
+	a.tunnelEnrollmentCode = ""
+	a.tunnelResetting = false
+	closing := a.tunnelClosing
+	a.tunnelMu.Unlock()
+
+	if tunnel != nil && tunnel.Tunnel != nil {
+		if err := tunnel.Tunnel.Close(); err != nil {
+			log.Printf("close signed-out tunnel: %v", err)
+		}
+	}
+	if !closing {
+		go a.startAutomaticTunnel(identity)
+	}
+	return nil
 }
