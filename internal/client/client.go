@@ -59,9 +59,11 @@ type Config struct {
 }
 
 type Registration struct {
-	TunnelID  string
-	PublicURL string
-	ClientIP  string
+	TunnelID     string
+	PublicURL    string
+	ClientIP     string
+	GitHubUserID int64
+	GitHubLogin  string
 }
 
 // Enrollment identifies the browser page where the user can authorize this
@@ -308,9 +310,11 @@ func (c *Client) runOnce(ctx context.Context) error {
 	c.enrollmentGrant = ""
 
 	registration := Registration{
-		TunnelID:  registered.TunnelID,
-		PublicURL: registered.PublicURL,
-		ClientIP:  registered.ClientIP,
+		TunnelID:     registered.TunnelID,
+		PublicURL:    registered.PublicURL,
+		ClientIP:     registered.ClientIP,
+		GitHubUserID: registered.GitHubUserID,
+		GitHubLogin:  registered.GitHubLogin,
 	}
 	c.cfg.Logger.Info(
 		"tunnel registered",

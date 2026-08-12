@@ -28,6 +28,11 @@ type Message struct {
 	TunnelID  string `json:"tunnel_id,omitempty"`
 	PublicURL string `json:"public_url,omitempty"`
 	ClientIP  string `json:"client_ip,omitempty"`
+	// GitHubUserID and GitHubLogin identify the account that enrolled an
+	// installation. They are returned only after the installation key has
+	// authenticated successfully.
+	GitHubUserID int64  `json:"github_user_id,omitempty"`
+	GitHubLogin  string `json:"github_login,omitempty"`
 
 	LocalPort                  int    `json:"local_port,omitempty"`
 	ApplicationProfileID       string `json:"application_profile_id,omitempty"`

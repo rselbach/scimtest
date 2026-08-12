@@ -83,6 +83,14 @@
       justify-content: center;
       color: var(--topbar-fg);
     }
+    .github-account {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      color: #cfd4dc;
+      font-size: 12px;
+    }
+    .github-account svg { width: 15px; height: 15px; }
     .environment-context {
       display: flex;
       align-items: center;
@@ -108,6 +116,72 @@
       font-weight: 500;
     }
     .environment-manage { color: #c8d7ff; font-size: 12.5px; }
+
+    /* Desktop account gate */
+    .desktop-auth-page { background: var(--bg-soft); }
+    .desktop-auth-topbar { position: static; }
+    .desktop-auth-shell {
+      flex: 1;
+      display: grid;
+      place-items: center;
+      padding: 40px 20px;
+    }
+    .desktop-auth-card {
+      width: min(100%, 460px);
+      padding: 36px;
+      text-align: center;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+    .desktop-auth-mark {
+      display: grid;
+      place-items: center;
+      width: 52px;
+      height: 52px;
+      margin: 0 auto 18px;
+      color: var(--text-strong);
+      border-radius: 50%;
+      background: var(--bg-soft);
+      border: 1px solid var(--line);
+    }
+    .desktop-auth-mark svg { width: 28px; height: 28px; }
+    .desktop-auth-card h1 {
+      margin: 7px 0 10px;
+      color: var(--text-strong);
+      font-size: 25px;
+      letter-spacing: -0.02em;
+    }
+    .desktop-auth-card > p { margin: 0 auto; max-width: 42ch; color: var(--muted); }
+    .desktop-auth-action { min-width: 180px; margin-top: 24px; }
+    .desktop-auth-code { margin-top: 12px !important; font-size: 12px; }
+    .desktop-auth-error {
+      margin-top: 22px;
+      padding: 10px 12px;
+      color: var(--danger);
+      border: 1px solid rgba(199, 52, 68, 0.28);
+      border-radius: var(--radius);
+      background: var(--danger-soft);
+      text-align: left;
+    }
+    .desktop-auth-progress {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      margin-top: 24px;
+      color: var(--muted);
+    }
+    .desktop-auth-spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid var(--line-strong);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: desktop-auth-spin 800ms linear infinite;
+    }
+    .desktop-auth-note { margin-top: 26px !important; font-size: 11.5px; }
+    @keyframes desktop-auth-spin { to { transform: rotate(360deg); } }
 
     /* App grid */
     .app {
@@ -325,6 +399,7 @@
     }
     @media (prefers-reduced-motion: reduce) {
       .flash, .flash.is-leaving { animation: none; }
+      .desktop-auth-spinner { animation: none; }
     }
     .errors {
       margin-bottom: 14px;

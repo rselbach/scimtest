@@ -124,9 +124,11 @@ func TestRunOnceAuthenticatesInstanceKeyWithoutApplicationKey(t *testing.T) {
 			return errors.New("initial instance handshake must not carry an enrollment grant")
 		}
 		return conn.WriteJSON(protocol.Message{
-			Type:      protocol.TypeTunnelRegistered,
-			TunnelID:  "human-timeline-club",
-			PublicURL: "http://localhost:7000/human-timeline-club",
+			Type:         protocol.TypeTunnelRegistered,
+			TunnelID:     "human-timeline-club",
+			PublicURL:    "http://localhost:7000/human-timeline-club",
+			GitHubUserID: 42,
+			GitHubLogin:  "troy-barnes",
 		})
 	})
 
@@ -143,7 +145,10 @@ func TestRunOnceAuthenticatesInstanceKeyWithoutApplicationKey(t *testing.T) {
 	_ = c.runOnce(context.Background())
 
 	r.NoError(<-checks)
-	r.Equal("human-timeline-club", (<-registered).TunnelID)
+	registration := <-registered
+	r.Equal("human-timeline-club", registration.TunnelID)
+	r.Equal(int64(42), registration.GitHubUserID)
+	r.Equal("troy-barnes", registration.GitHubLogin)
 }
 
 func TestRunContextCompletesEnrollmentAndReconnectsImmediately(t *testing.T) {

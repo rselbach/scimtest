@@ -350,10 +350,12 @@ func TestTunnelReportsReplacementRegistrationAfterReconnect(t *testing.T) {
 			clientIP = "198.51.100.20"
 		}
 		r.NoError(conn.WriteJSON(protocol.Message{
-			Type:      protocol.TypeTunnelRegistered,
-			TunnelID:  registrationID,
-			PublicURL: "https://example.com/" + registrationID,
-			ClientIP:  clientIP,
+			Type:         protocol.TypeTunnelRegistered,
+			TunnelID:     registrationID,
+			PublicURL:    "https://example.com/" + registrationID,
+			ClientIP:     clientIP,
+			GitHubUserID: 42,
+			GitHubLogin:  "troy-barnes",
 		}))
 		if connection == 1 {
 			return
@@ -381,17 +383,21 @@ func TestTunnelReportsReplacementRegistrationAfterReconnect(t *testing.T) {
 	})
 	r.NoError(err)
 	r.Equal(Registration{
-		TunnelID:  "study-room-a",
-		PublicURL: "https://example.com/study-room-a",
-		ClientIP:  "203.0.113.10",
+		TunnelID:     "study-room-a",
+		PublicURL:    "https://example.com/study-room-a",
+		ClientIP:     "203.0.113.10",
+		GitHubUserID: 42,
+		GitHubLogin:  "troy-barnes",
 	}, <-registrations)
 
 	select {
 	case registration := <-registrations:
 		r.Equal(Registration{
-			TunnelID:  "study-room-f",
-			PublicURL: "https://example.com/study-room-f",
-			ClientIP:  "198.51.100.20",
+			TunnelID:     "study-room-f",
+			PublicURL:    "https://example.com/study-room-f",
+			ClientIP:     "198.51.100.20",
+			GitHubUserID: 42,
+			GitHubLogin:  "troy-barnes",
 		}, registration)
 		r.Equal(registration, tunnel.Registration())
 	case <-ctx.Done():

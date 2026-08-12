@@ -41,9 +41,11 @@ type Config struct {
 
 // Registration identifies the current public tunnel assigned by the server.
 type Registration struct {
-	TunnelID  string
-	PublicURL string
-	ClientIP  string
+	TunnelID     string
+	PublicURL    string
+	ClientIP     string
+	GitHubUserID int64
+	GitHubLogin  string
 }
 
 // Enrollment identifies the browser page where the user can authorize this
@@ -142,9 +144,11 @@ func Start(ctx context.Context, cfg Config) (*Tunnel, error) {
 		OnEnrollmentRequired:  onEnrollmentRequired,
 		OnRegistered: func(reg internalclient.Registration) {
 			current := Registration{
-				TunnelID:  reg.TunnelID,
-				PublicURL: reg.PublicURL,
-				ClientIP:  reg.ClientIP,
+				TunnelID:     reg.TunnelID,
+				PublicURL:    reg.PublicURL,
+				ClientIP:     reg.ClientIP,
+				GitHubUserID: reg.GitHubUserID,
+				GitHubLogin:  reg.GitHubLogin,
 			}
 			registration.set(current)
 			registeredOnce.Do(func() {

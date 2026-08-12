@@ -506,12 +506,17 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		t.writeLoop()
 	}()
 
-	t.send <- protocol.Message{
+	registered := protocol.Message{
 		Type:      protocol.TypeTunnelRegistered,
 		TunnelID:  t.id,
 		PublicURL: t.publicURL,
 		ClientIP:  s.clientIP(r),
 	}
+	if instance, ok := s.store.ApplicationInstance(profile.ID, instanceID); ok && instance.Enrolled() {
+		registered.GitHubUserID = instance.GitHubUserID
+		registered.GitHubLogin = instance.GitHubLogin
+	}
+	t.send <- registered
 
 	// The client answers every ping, so a healthy tunnel delivers a message
 	// at least once per ping interval; refreshing the read deadline on each

@@ -32,6 +32,14 @@ this machine only:
 go run ./cmd/scimtest
 ```
 
+### Desktop preview
+
+An experimental native WebView build reuses the same Go server and embedded UI
+without an Electron or JavaScript rewrite. Desktop mode requires a GitHub
+account linked in the app before the admin UI or local test endpoints unlock.
+See [the desktop spike](docs/desktop.md) for PR artifacts, local build steps,
+the authentication design, and current packaging limitations.
+
 ## Quick start
 
 1. Run `scimtest`. The admin UI opens at `http://127.0.0.1:8080` and a

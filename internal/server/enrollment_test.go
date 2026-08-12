@@ -142,6 +142,8 @@ func TestEnrollmentRequiresGitHubWithoutClaimingLegacyReservation(t *testing.T) 
 	r.NoError(err)
 	r.Equal(protocol.TypeTunnelRegistered, registered.Type)
 	r.NotEqual("human-timeline-club", registered.TunnelID)
+	r.Equal(int64(8675309), registered.GitHubUserID)
+	r.Equal("troy-barnes", registered.GitHubLogin)
 
 	instance, ok := store.ApplicationInstance(profile.ID, fingerprint)
 	r.True(ok)

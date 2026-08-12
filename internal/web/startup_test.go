@@ -1,12 +1,14 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"net"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -176,6 +178,43 @@ func TestMaybeOpenBrowserHonorsDisabled(t *testing.T) {
 	r.False(called)
 	maybeOpenBrowser("http://127.0.0.1:8080", false, opener)
 	r.True(called)
+}
+
+func TestRunStopsWhenCallerContextIsCanceled(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	r.NoError(err)
+	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+	r.NoError(listener.Close())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	opened := make(chan string, 1)
+	go func() {
+		done <- Run(RunOptions{
+			Context: ctx,
+			Port:    port,
+			OpenURL: func(value string) error {
+				opened <- value
+				return nil
+			},
+		})
+	}()
+
+	select {
+	case value := <-opened:
+		r.Contains(value, "127.0.0.1:"+port)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not open the admin URL")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		r.NoError(err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not stop after its context was canceled")
+	}
 }
 
 func TestAdminListenerOwnsPortUntilClosed(t *testing.T) {
