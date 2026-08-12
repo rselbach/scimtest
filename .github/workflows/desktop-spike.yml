@@ -39,8 +39,8 @@ jobs:
             windows_ldflags: -H=windowsgui
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -69,7 +69,7 @@ jobs:
             -ldflags="-s -w ${WINDOWS_LDFLAGS} -X=github.com/rselbach/scimtest/internal/web.tunnelApplicationProfileID=${SCIMTEST_APPLICATION_PROFILE_ID} -X=github.com/rselbach/scimtest/internal/web.tunnelReleaseProfileRequired=true" \
             -o "build/${{ matrix.binary }}" ./cmd/scimtest-desktop
           tar -czf "dist/${{ matrix.artifact }}.tar.gz" -C build "${{ matrix.binary }}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: dist/${{ matrix.artifact }}.tar.gz
