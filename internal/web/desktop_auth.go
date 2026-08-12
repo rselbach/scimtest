@@ -5,14 +5,13 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
 type desktopAuthView struct {
-	State            string
-	EnrollmentURL    string
-	VerificationCode string
-	Error            string
+	State string
+	Error string
 }
 
 func (a *webApp) githubAccountGate(next http.Handler) http.Handler {
@@ -27,6 +26,8 @@ func (a *webApp) githubAccountGate(next http.Handler) http.Handler {
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/assets/"):
 			next.ServeHTTP(w, r)
 		case r.Method == http.MethodGet && r.URL.Path == instanceReadyPath:
+			next.ServeHTTP(w, r)
+		case r.Method == http.MethodPost && r.URL.Path == "/desktop/auth/start":
 			next.ServeHTTP(w, r)
 		case r.Method == http.MethodPost && r.URL.Path == "/desktop/auth/retry":
 			next.ServeHTTP(w, r)
@@ -63,10 +64,7 @@ func (a *webApp) githubAccountView() githubAccountView {
 func (a *webApp) desktopAuthView() desktopAuthView {
 	a.tunnelMu.Lock()
 	defer a.tunnelMu.Unlock()
-	view := desktopAuthView{
-		EnrollmentURL:    a.tunnelEnrollmentURL,
-		VerificationCode: a.tunnelEnrollmentCode,
-	}
+	view := desktopAuthView{}
 	switch {
 	case a.tunnel != nil:
 		view.State = "connected"
@@ -88,12 +86,49 @@ func (a *webApp) desktopAuthView() desktopAuthView {
 	return view
 }
 
+func desktopEnrollmentURL(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	enrollmentURL, err := url.Parse(value)
+	if err != nil {
+		return value
+	}
+	query := enrollmentURL.Query()
+	query.Set("presentation", "desktop")
+	enrollmentURL.RawQuery = query.Encode()
+	return enrollmentURL.String()
+}
+
 func (a *webApp) renderDesktopAuth(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	if err := pageTemplate.ExecuteTemplate(w, "desktop_auth.html", a.desktopAuthView()); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func (a *webApp) handleDesktopAuthStart(w http.ResponseWriter, r *http.Request) {
+	if !a.requireGitHubAccount {
+		http.NotFound(w, r)
+		return
+	}
+	a.tunnelMu.Lock()
+	enrollmentURL := strings.TrimSpace(a.tunnelEnrollmentURL)
+	a.tunnelMu.Unlock()
+	if enrollmentURL == "" {
+		http.Error(w, "GitHub authorization is not ready; try again", http.StatusConflict)
+		return
+	}
+	opener := a.browserOpen
+	if opener == nil {
+		opener = OpenBrowser
+	}
+	if err := opener(enrollmentURL); err != nil {
+		http.Error(w, fmt.Sprintf("open GitHub authorization: %v", err), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func (a *webApp) handleDesktopAuthRetry(w http.ResponseWriter, r *http.Request) {

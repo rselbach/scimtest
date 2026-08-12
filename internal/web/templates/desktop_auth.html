@@ -32,8 +32,9 @@
       <p>Link a GitHub account to this installation before creating environments or running identity tests.</p>
 
       {{if eq .State "authorizing"}}
-      <a class="btn btn-primary desktop-auth-action" href="{{.EnrollmentURL}}">Continue with GitHub</a>
-      {{if .VerificationCode}}<p class="desktop-auth-code">Confirm code <strong class="mono">{{.VerificationCode}}</strong> on the authorization page.</p>{{end}}
+      <form method="post" action="/desktop/auth/start">
+        <button class="btn btn-primary desktop-auth-action" type="submit">Continue with GitHub</button>
+      </form>
       {{else if eq .State "failed"}}
       <div class="desktop-auth-error" role="alert">{{.Error}}</div>
       <form method="post" action="/desktop/auth/retry">
@@ -48,7 +49,7 @@
       </div>
       {{end}}
 
-      <p class="desktop-auth-note">GitHub authorization stays in this window. scimtest stores an installation key, not your GitHub access token.</p>
+      <p class="desktop-auth-note">GitHub authorization opens in your default browser. scimtest stores an installation key, not your GitHub access token.</p>
     </section>
   </main>
 </body>

@@ -191,12 +191,13 @@ func TestRunContextCompletesEnrollmentAndReconnectsImmediately(t *testing.T) {
 		case 1:
 			r.Empty(signed.EnrollmentGrant)
 			r.NoError(conn.WriteJSON(protocol.Message{
-				Type:                       protocol.TypeEnrollmentRequired,
-				EnrollmentURL:              srv.URL + "/enrollment/start",
-				EnrollmentStatusURL:        srv.URL + "/enrollment/status",
-				EnrollmentDeviceCode:       deviceCode,
-				EnrollmentVerificationCode: "study-group",
-				EnrollmentPollSeconds:      1,
+				Type:                        protocol.TypeEnrollmentRequired,
+				EnrollmentURL:               srv.URL + "/enrollment/start",
+				EnrollmentBrowserHandoffURL: srv.URL + "/enrollment/browser?handoff=one-use",
+				EnrollmentStatusURL:         srv.URL + "/enrollment/status",
+				EnrollmentDeviceCode:        deviceCode,
+				EnrollmentVerificationCode:  "study-group",
+				EnrollmentPollSeconds:       1,
 			}))
 		case 2:
 			r.Equal(deviceCode, signed.EnrollmentGrant)
@@ -240,7 +241,11 @@ func TestRunContextCompletesEnrollmentAndReconnectsImmediately(t *testing.T) {
 
 	r.ErrorIs(err, context.Canceled)
 	r.Less(time.Since(startedAt), time.Second)
-	r.Equal(Enrollment{URL: srv.URL + "/enrollment/start", VerificationCode: "study-group"}, <-enrollments)
+	r.Equal(Enrollment{
+		URL:               srv.URL + "/enrollment/start",
+		BrowserHandoffURL: srv.URL + "/enrollment/browser?handoff=one-use",
+		VerificationCode:  "study-group",
+	}, <-enrollments)
 	r.Equal("human-timeline-club", (<-registrations).TunnelID)
 	r.Equal(int32(2), connections.Load())
 	r.Empty(c.enrollmentGrant)
@@ -373,10 +378,11 @@ func TestValidateEnrollmentStatusURL(t *testing.T) {
 func TestEnrollmentRequiredValidation(t *testing.T) {
 	validMessage := func() protocol.Message {
 		return protocol.Message{
-			EnrollmentURL:              "https://admin.example.com/enroll?code=study-group",
-			EnrollmentStatusURL:        "https://scimtest.example.com/api/enroll/status",
-			EnrollmentDeviceCode:       "greendale-device-secret",
-			EnrollmentVerificationCode: "study-group",
+			EnrollmentURL:               "https://admin.example.com/enroll?code=study-group",
+			EnrollmentBrowserHandoffURL: "https://admin.example.com/enroll/browser?handoff=one-use",
+			EnrollmentStatusURL:         "https://scimtest.example.com/api/enroll/status",
+			EnrollmentDeviceCode:        "greendale-device-secret",
+			EnrollmentVerificationCode:  "study-group",
 		}
 	}
 	tests := map[string]struct {
@@ -397,6 +403,24 @@ func TestEnrollmentRequiredValidation(t *testing.T) {
 				msg.EnrollmentURL = "https://admin.example.com/" + strings.Repeat("a", maxEnrollmentURLLength)
 			},
 			wantErr: "enrollment URL is too long",
+		},
+		"browser handoff URL too long": {
+			mutate: func(msg *protocol.Message) {
+				msg.EnrollmentBrowserHandoffURL = "https://admin.example.com/" + strings.Repeat("a", maxEnrollmentURLLength)
+			},
+			wantErr: "enrollment URL is too long",
+		},
+		"secure tunnel rejects insecure browser handoff": {
+			mutate: func(msg *protocol.Message) {
+				msg.EnrollmentBrowserHandoffURL = "http://admin.example.com/enroll/browser?handoff=one-use"
+			},
+			wantErr: "browser handoff URL must use HTTPS with a secure tunnel server",
+		},
+		"browser handoff requires enrollment origin": {
+			mutate: func(msg *protocol.Message) {
+				msg.EnrollmentBrowserHandoffURL = "https://other.example.com/enroll/browser?handoff=one-use"
+			},
+			wantErr: "browser handoff URL must use the enrollment page origin",
 		},
 		"status URL too long": {
 			mutate: func(msg *protocol.Message) {

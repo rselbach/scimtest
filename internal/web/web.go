@@ -937,6 +937,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	})
+	mux.HandleFunc("POST /desktop/auth/start", a.handleDesktopAuthStart)
 	mux.HandleFunc("POST /desktop/auth/retry", a.handleDesktopAuthRetry)
 	mux.HandleFunc("POST /desktop/auth/logout", a.handleDesktopAuthLogout)
 	mux.HandleFunc("GET /desktop/auth/logout", func(w http.ResponseWriter, _ *http.Request) {
@@ -1423,10 +1424,21 @@ func (a *webApp) handleTunnelEnrollmentRequired(enrollment scimtestclient.Enroll
 	if value == "" {
 		return
 	}
+	if a.requireGitHubAccount {
+		if handoffURL := strings.TrimSpace(enrollment.BrowserHandoffURL); handoffURL != "" {
+			value = handoffURL
+		} else {
+			value = desktopEnrollmentURL(value)
+		}
+	}
 	a.tunnelMu.Lock()
 	a.tunnelEnrollmentURL = value
 	a.tunnelEnrollmentCode = strings.TrimSpace(enrollment.VerificationCode)
 	a.tunnelMu.Unlock()
+	if a.requireGitHubAccount {
+		log.Printf("GitHub authorization is ready to open in the default browser")
+		return
+	}
 	log.Printf("authorize this scimtest installation in GitHub: %s (verification code %s)", value, enrollment.VerificationCode)
 	maybeOpenBrowser(value, a.noOpen, a.browserOpen)
 }

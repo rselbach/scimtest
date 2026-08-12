@@ -34,12 +34,12 @@ func run() error {
 	go func() {
 		serverResult <- web.Run(web.RunOptions{
 			Context:              ctx,
-			OpenURL:              queuedOpener(urls, stopped),
+			OpenURL:              desktopOpener(urls, stopped, web.OpenBrowser),
 			RequireGitHubAccount: true,
 		})
 	}()
 
-	initialURL, pending, err := waitForAdminURL(urls, serverResult)
+	initialURL, err := waitForAdminURL(urls, serverResult)
 	if err != nil {
 		close(stopped)
 		return err
@@ -54,9 +54,6 @@ func run() error {
 	window.SetTitle("scimtest")
 	window.SetSize(1280, 820, webview.HintNone)
 	window.Navigate(initialURL)
-	for _, value := range pending {
-		window.Navigate(value)
-	}
 
 	navigationDone := make(chan struct{})
 	go func() {
@@ -91,7 +88,7 @@ func run() error {
 	return err
 }
 
-func queuedOpener(urls chan<- string, stopped <-chan struct{}) func(string) error {
+func desktopOpener(urls chan<- string, stopped <-chan struct{}, openExternal func(string) error) func(string) error {
 	return func(value string) error {
 		parsed, err := url.Parse(value)
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
@@ -102,6 +99,12 @@ func queuedOpener(urls chan<- string, stopped <-chan struct{}) func(string) erro
 			return errors.New("desktop window is closed")
 		default:
 		}
+		if parsed.Scheme != "http" || !isLoopbackHost(parsed.Hostname()) {
+			if openExternal == nil {
+				return errors.New("default browser opener is unavailable")
+			}
+			return openExternal(value)
+		}
 		select {
 		case urls <- value:
 			return nil
@@ -111,21 +114,20 @@ func queuedOpener(urls chan<- string, stopped <-chan struct{}) func(string) erro
 	}
 }
 
-func waitForAdminURL(urls <-chan string, serverResult <-chan error) (string, []string, error) {
-	var pending []string
+func waitForAdminURL(urls <-chan string, serverResult <-chan error) (string, error) {
 	for {
 		select {
 		case value := <-urls:
 			parsed, err := url.Parse(value)
 			if err == nil && parsed.Scheme == "http" && isLoopbackHost(parsed.Hostname()) {
-				return value, pending, nil
+				return value, nil
 			}
-			pending = append(pending, value)
+			return "", fmt.Errorf("desktop received a non-loopback application URL %q", value)
 		case err := <-serverResult:
 			if err == nil {
 				err = errors.New("local scimtest server stopped before opening the desktop window")
 			}
-			return "", nil, err
+			return "", err
 		}
 	}
 }

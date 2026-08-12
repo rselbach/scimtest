@@ -26,6 +26,12 @@ func TestRandomIDIsCommunityPhrase(t *testing.T) {
 	r.NotEmpty(parts[2])
 }
 
+func TestDefaultInstallationLimitIsFive(t *testing.T) {
+	s, err := New(Config{DataPath: t.TempDir() + "/server.json"})
+	require.NoError(t, err)
+	require.Equal(t, 5, s.cfg.MaxInstallationsPerUser)
+}
+
 func TestRandomIDIsAlwaysValidPathSegment(t *testing.T) {
 	nameRE := regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 	for range 200 {

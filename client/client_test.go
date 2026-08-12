@@ -122,12 +122,13 @@ func TestStartCompletesFirstRunEnrollmentWithInstanceKey(t *testing.T) {
 		if connections.Add(1) == 1 {
 			r.Empty(signed.EnrollmentGrant)
 			r.NoError(conn.WriteJSON(protocol.Message{
-				Type:                       protocol.TypeEnrollmentRequired,
-				EnrollmentURL:              srv.URL + "/enrollment/start",
-				EnrollmentStatusURL:        srv.URL + "/enrollment/status",
-				EnrollmentDeviceCode:       deviceCode,
-				EnrollmentVerificationCode: "study-group",
-				EnrollmentPollSeconds:      1,
+				Type:                        protocol.TypeEnrollmentRequired,
+				EnrollmentURL:               srv.URL + "/enrollment/start",
+				EnrollmentBrowserHandoffURL: srv.URL + "/enrollment/browser?handoff=one-use",
+				EnrollmentStatusURL:         srv.URL + "/enrollment/status",
+				EnrollmentDeviceCode:        deviceCode,
+				EnrollmentVerificationCode:  "study-group",
+				EnrollmentPollSeconds:       1,
 			}))
 			return
 		}
@@ -160,7 +161,11 @@ func TestStartCompletesFirstRunEnrollmentWithInstanceKey(t *testing.T) {
 		},
 	})
 	r.NoError(err)
-	r.Equal(Enrollment{URL: srv.URL + "/enrollment/start", VerificationCode: "study-group"}, <-enrollments)
+	r.Equal(Enrollment{
+		URL:               srv.URL + "/enrollment/start",
+		BrowserHandoffURL: srv.URL + "/enrollment/browser?handoff=one-use",
+		VerificationCode:  "study-group",
+	}, <-enrollments)
 	r.Equal("human-timeline-club", tunnel.ID)
 	r.Equal(int32(2), connections.Load())
 	r.NoError(tunnel.Close())

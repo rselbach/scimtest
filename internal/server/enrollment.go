@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html/template"
 	"net"
 	"net/http"
@@ -44,23 +45,25 @@ type oauthIntent struct {
 }
 
 type pendingEnrollment struct {
-	userCode          string
-	profileID         string
-	instanceID        string
-	instancePublicKey string
-	legacyInstanceID  string
-	clientIP          string
-	createdAt         time.Time
-	expiresAt         time.Time
-	approvedAt        time.Time
-	actor             enrollmentActor
+	userCode           string
+	browserHandoffHash [32]byte
+	profileID          string
+	instanceID         string
+	instancePublicKey  string
+	legacyInstanceID   string
+	clientIP           string
+	createdAt          time.Time
+	expiresAt          time.Time
+	approvedAt         time.Time
+	actor              enrollmentActor
 }
 
 type enrollmentPageData struct {
-	UserCode            string
-	CSRFToken           string
-	ApplicationName     string
-	InstanceFingerprint string
+	UserCode             string
+	CSRFToken            string
+	ApplicationName      string
+	InstanceFingerprint  string
+	ShowVerificationCode bool
 }
 
 const enrollmentPageStyles = `<style>
@@ -241,24 +244,24 @@ var enrollmentTemplate = template.Must(template.New("enrollment").Parse(`<!docty
         </div>
         <p class="lede">GitHub confirms who is responsible for this installation before scimtest assigns it a public tunnel.</p>
 
-        <section class="verification" aria-labelledby="verification-heading">
+        {{if .ShowVerificationCode}}<section class="verification" aria-labelledby="verification-heading">
           <div class="verification-head">
             <h2 id="verification-heading">Match this code</h2>
             <span class="required">Required</span>
           </div>
           <p>Compare it with the verification code shown by scimtest on this computer.</p>
           <code class="verification-code">{{.UserCode}}</code>
-        </section>
+        </section>{{end}}
 
         <dl class="details">
           <div><dt>Application</dt><dd>{{.ApplicationName}}</dd></div>
           <div><dt>Installation fingerprint</dt><dd><code>{{.InstanceFingerprint}}</code></dd></div>
         </dl>
 
-        <div class="caution">
+        {{if .ShowVerificationCode}}<div class="caution">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><path d="M8 7v3.5M8 4.7v.1"/></svg>
           <p>If the codes do not match, close this page. Continuing would authorize a different installation.</p>
-        </div>
+        </div>{{end}}
 
         <form method="post" action="/enroll">
           <input type="hidden" name="code" value="{{.UserCode}}">
@@ -330,6 +333,11 @@ func (s *Server) beginEnrollment(profileID, instanceID, instancePublicKey, legac
 	if err != nil {
 		return protocol.Message{}, errors.New("could not create installation authorization")
 	}
+	browserHandoff, err := randomHex(32)
+	if err != nil {
+		return protocol.Message{}, errors.New("could not create installation authorization")
+	}
+	browserHandoffHash := sha256.Sum256([]byte(browserHandoff))
 
 	now := time.Now().UTC()
 	clientIP = enrollmentIPKey(clientIP)
@@ -381,27 +389,43 @@ func (s *Server) beginEnrollment(profileID, instanceID, instancePublicKey, legac
 			return protocol.Message{}, errors.New("could not create installation authorization")
 		}
 	}
+	for attempts := 0; ; attempts++ {
+		if _, exists := s.pendingByHandoff[browserHandoffHash]; !exists {
+			break
+		}
+		if attempts == maxRandomIDAttempts-1 {
+			return protocol.Message{}, errors.New("could not create installation authorization")
+		}
+		browserHandoff, err = randomHex(32)
+		if err != nil {
+			return protocol.Message{}, errors.New("could not create installation authorization")
+		}
+		browserHandoffHash = sha256.Sum256([]byte(browserHandoff))
+	}
 	pending := pendingEnrollment{
-		userCode:          userCode,
-		profileID:         profileID,
-		instanceID:        instanceID,
-		instancePublicKey: instancePublicKey,
-		legacyInstanceID:  legacyInstanceID,
-		clientIP:          clientIP,
-		createdAt:         now,
-		expiresAt:         now.Add(enrollmentLifetime),
+		userCode:           userCode,
+		browserHandoffHash: browserHandoffHash,
+		profileID:          profileID,
+		instanceID:         instanceID,
+		instancePublicKey:  instancePublicKey,
+		legacyInstanceID:   legacyInstanceID,
+		clientIP:           clientIP,
+		createdAt:          now,
+		expiresAt:          now.Add(enrollmentLifetime),
 	}
 	s.pendingEnrollments[deviceHash] = pending
 	s.pendingByUserCode[userCode] = deviceHash
 	s.pendingByBinding[binding] = deviceHash
+	s.pendingByHandoff[browserHandoffHash] = deviceHash
 
 	return protocol.Message{
-		Type:                       protocol.TypeEnrollmentRequired,
-		EnrollmentURL:              s.cfg.PublicScheme + "://" + s.dashboardDomain() + "/enroll?code=" + userCode,
-		EnrollmentStatusURL:        s.cfg.PublicScheme + "://" + s.cfg.Domain + "/api/enroll/status",
-		EnrollmentDeviceCode:       deviceCode,
-		EnrollmentVerificationCode: userCode,
-		EnrollmentPollSeconds:      enrollmentPollSeconds,
+		Type:                        protocol.TypeEnrollmentRequired,
+		EnrollmentURL:               s.cfg.PublicScheme + "://" + s.dashboardDomain() + "/enroll?code=" + userCode,
+		EnrollmentBrowserHandoffURL: s.cfg.PublicScheme + "://" + s.dashboardDomain() + "/enroll/browser?handoff=" + browserHandoff,
+		EnrollmentStatusURL:         s.cfg.PublicScheme + "://" + s.cfg.Domain + "/api/enroll/status",
+		EnrollmentDeviceCode:        deviceCode,
+		EnrollmentVerificationCode:  userCode,
+		EnrollmentPollSeconds:       enrollmentPollSeconds,
 	}, nil
 }
 
@@ -446,6 +470,25 @@ func (s *Server) handleEnrollmentAuthorization(w http.ResponseWriter, r *http.Re
 	}
 }
 
+func (s *Server) handleEnrollmentBrowserHandoff(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	handoff := r.URL.Query().Get("handoff")
+	deviceHash, handoffHash, exists := s.takeEnrollmentBrowserHandoff(handoff)
+	if !exists {
+		http.Error(w, "installation authorization is invalid or expired", http.StatusGone)
+		return
+	}
+	if !s.beginGitHubOAuth(w, r, oauthIntent{kind: oauthIntentEnrollment, enrollmentHash: deviceHash}) {
+		s.restoreEnrollmentBrowserHandoff(handoffHash, deviceHash)
+	}
+}
+
 func (s *Server) renderEnrollmentAuthorization(w http.ResponseWriter, r *http.Request) {
 	userCode := r.URL.Query().Get("code")
 	pending, exists := s.pendingEnrollmentByUserCode(userCode)
@@ -476,10 +519,11 @@ func (s *Server) renderEnrollmentAuthorization(w http.ResponseWriter, r *http.Re
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://github.com; frame-ancestors 'none'")
 	if err := enrollmentTemplate.Execute(w, enrollmentPageData{
-		UserCode:            userCode,
-		CSRFToken:           csrfToken,
-		ApplicationName:     profile.Name,
-		InstanceFingerprint: pending.instanceID,
+		UserCode:             userCode,
+		CSRFToken:            csrfToken,
+		ApplicationName:      profile.Name,
+		InstanceFingerprint:  pending.instanceID,
+		ShowVerificationCode: r.URL.Query().Get("presentation") != "desktop",
 	}); err != nil {
 		s.logger().Error("enrollment page render failed", "err", err)
 	}
@@ -511,20 +555,20 @@ func (s *Server) startEnrollmentAuthorization(w http.ResponseWriter, r *http.Req
 	s.beginGitHubOAuth(w, r, oauthIntent{kind: oauthIntentEnrollment, enrollmentHash: deviceHash})
 }
 
-func (s *Server) beginGitHubOAuth(w http.ResponseWriter, r *http.Request, intent oauthIntent) {
+func (s *Server) beginGitHubOAuth(w http.ResponseWriter, r *http.Request, intent oauthIntent) bool {
 	if !s.githubConfigured() {
 		http.Error(w, "GitHub OAuth is not configured", http.StatusServiceUnavailable)
-		return
+		return false
 	}
 	state, err := randomHex(24)
 	if err != nil {
 		http.Error(w, "could not create login state", http.StatusInternalServerError)
-		return
+		return false
 	}
 	codeVerifier, err := randomHex(32)
 	if err != nil {
 		http.Error(w, "could not create login state", http.StatusInternalServerError)
-		return
+		return false
 	}
 	verifierHash := sha256.Sum256([]byte(codeVerifier))
 	codeChallenge := base64.RawURLEncoding.EncodeToString(verifierHash[:])
@@ -547,7 +591,7 @@ func (s *Server) beginGitHubOAuth(w http.ResponseWriter, r *http.Request, intent
 	if intentsFromIP >= oauthIntentsPerIPLimit {
 		s.enrollMu.Unlock()
 		http.Error(w, "too many pending logins from this network; try again later", http.StatusTooManyRequests)
-		return
+		return false
 	}
 	if len(s.oauthIntents) >= oauthIntentLimit {
 		var oldestState string
@@ -576,6 +620,43 @@ func (s *Server) beginGitHubOAuth(w http.ResponseWriter, r *http.Request, intent
 		MaxAge:   int(oauthIntentLifetime.Seconds()),
 	})
 	http.Redirect(w, r, s.github.AuthorizeURL(state, s.callbackURL(), codeChallenge), http.StatusFound)
+	return true
+}
+
+func (s *Server) takeEnrollmentBrowserHandoff(handoff string) ([32]byte, [32]byte, bool) {
+	if !validHexToken(handoff, 64) {
+		return [32]byte{}, [32]byte{}, false
+	}
+	handoffHash := sha256.Sum256([]byte(handoff))
+	s.enrollMu.Lock()
+	defer s.enrollMu.Unlock()
+	s.initializeEnrollmentStateLocked()
+	s.pruneEnrollmentStateLocked(time.Now().UTC())
+	deviceHash, exists := s.pendingByHandoff[handoffHash]
+	if !exists {
+		return [32]byte{}, [32]byte{}, false
+	}
+	pending, exists := s.pendingEnrollments[deviceHash]
+	if !exists || !pending.approvedAt.IsZero() {
+		delete(s.pendingByHandoff, handoffHash)
+		return [32]byte{}, [32]byte{}, false
+	}
+	delete(s.pendingByHandoff, handoffHash)
+	return deviceHash, handoffHash, true
+}
+
+func (s *Server) restoreEnrollmentBrowserHandoff(handoffHash, deviceHash [32]byte) {
+	s.enrollMu.Lock()
+	defer s.enrollMu.Unlock()
+	s.initializeEnrollmentStateLocked()
+	s.pruneEnrollmentStateLocked(time.Now().UTC())
+	pending, exists := s.pendingEnrollments[deviceHash]
+	if !exists || !pending.approvedAt.IsZero() || pending.browserHandoffHash != handoffHash {
+		return
+	}
+	if _, exists := s.pendingByHandoff[handoffHash]; !exists {
+		s.pendingByHandoff[handoffHash] = deviceHash
+	}
 }
 
 func (s *Server) takeOAuthIntent(state string) (oauthIntent, bool) {
@@ -606,24 +687,38 @@ func (s *Server) approveEnrollment(deviceHash [32]byte, user auth.GitHubUser) er
 	if !pending.approvedAt.IsZero() {
 		return errors.New("installation authorization was already used")
 	}
+	if err := s.pruneIdleApplicationInstances(pending.profileID, now); err != nil {
+		return fmt.Errorf("prune idle installations: %w", err)
+	}
 	limit := s.cfg.MaxInstallationsPerUser
 	if limit <= 0 {
-		limit = 2
+		limit = 5
 	}
-	count := s.store.CountApplicationInstancesByGitHubUserID(pending.profileID, user.ID)
+	count := s.enrollmentCountLocked(deviceHash, pending.profileID, user.ID)
+	if count >= limit {
+		return errInstallationLimitReached
+	}
+	s.approvePendingEnrollmentLocked(deviceHash, pending, user, now)
+	return nil
+}
+
+func (s *Server) enrollmentCountLocked(deviceHash [32]byte, profileID string, userID int64) int {
+	count := s.store.CountApplicationInstancesByGitHubUserID(profileID, userID)
 	for hash, other := range s.pendingEnrollments {
-		if hash != deviceHash && other.profileID == pending.profileID && other.actor.GitHubUserID == user.ID && !other.approvedAt.IsZero() {
+		if hash != deviceHash && other.profileID == profileID && other.actor.GitHubUserID == userID && !other.approvedAt.IsZero() {
 			count++
 		}
 	}
-	if count >= limit {
-		return errors.New("GitHub account has reached the installation limit for this application")
-	}
+	return count
+}
+
+func (s *Server) approvePendingEnrollmentLocked(deviceHash [32]byte, pending pendingEnrollment, user auth.GitHubUser, now time.Time) {
 	pending.actor = enrollmentActor{GitHubUserID: user.ID, GitHubLogin: user.Login}
 	pending.approvedAt = now
 	s.pendingEnrollments[deviceHash] = pending
+	delete(s.pendingByHandoff, pending.browserHandoffHash)
+	s.deleteReplacementIntentsForEnrollmentLocked(deviceHash)
 	s.enrollments[pending.clientIP] = append(s.pruneEnrollmentsLocked(pending.clientIP, now), now)
-	return nil
 }
 
 func (s *Server) consumeEnrollmentGrant(grant, profileID, instanceID, instancePublicKey, legacyInstanceID string) error {
@@ -692,8 +787,14 @@ func (s *Server) initializeEnrollmentStateLocked() {
 	if s.pendingByBinding == nil {
 		s.pendingByBinding = make(map[string][32]byte)
 	}
+	if s.pendingByHandoff == nil {
+		s.pendingByHandoff = make(map[[32]byte][32]byte)
+	}
 	if s.oauthIntents == nil {
 		s.oauthIntents = make(map[string]oauthIntent)
+	}
+	if s.replacementIntents == nil {
+		s.replacementIntents = make(map[[32]byte]enrollmentReplacementIntent)
 	}
 }
 
@@ -706,6 +807,11 @@ func (s *Server) pruneEnrollmentStateLocked(now time.Time) {
 	for state, intent := range s.oauthIntents {
 		if !now.Before(intent.expiresAt) {
 			delete(s.oauthIntents, state)
+		}
+	}
+	for hash, intent := range s.replacementIntents {
+		if !now.Before(intent.expiresAt) {
+			delete(s.replacementIntents, hash)
 		}
 	}
 	for clientIP := range s.enrollments {
@@ -731,6 +837,10 @@ func (s *Server) pruneEnrollmentsLocked(clientIP string, now time.Time) []time.T
 
 func (s *Server) deletePendingEnrollmentLocked(hash [32]byte, pending pendingEnrollment) {
 	delete(s.pendingEnrollments, hash)
+	s.deleteReplacementIntentsForEnrollmentLocked(hash)
+	if current, exists := s.pendingByHandoff[pending.browserHandoffHash]; exists && current == hash {
+		delete(s.pendingByHandoff, pending.browserHandoffHash)
+	}
 	if current, exists := s.pendingByUserCode[pending.userCode]; exists && current == hash {
 		delete(s.pendingByUserCode, pending.userCode)
 	}

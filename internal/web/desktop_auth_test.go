@@ -61,16 +61,69 @@ func TestDesktopRendersGitHubEnrollmentInApp(t *testing.T) {
 	app := newTestIDPApp(t)
 	app.requireGitHubAccount = true
 	app.tunnelSupported = true
-	app.tunnelEnrollmentURL = "https://admin.example.test/enroll?code=study-group"
-	app.tunnelEnrollmentCode = "study-group"
+	opened := ""
+	app.browserOpen = func(value string) error {
+		opened = value
+		return nil
+	}
+	app.handleTunnelEnrollmentRequired(scimtestclient.Enrollment{
+		URL:               "https://admin.example.test/enroll?code=study-group",
+		BrowserHandoffURL: "https://admin.example.test/enroll/browser?handoff=one-use",
+		VerificationCode:  "study-group",
+	})
+	r.Empty(opened)
 
 	page := httptest.NewRecorder()
 	app.routes().ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/", nil))
 
 	r.Equal(http.StatusOK, page.Code)
 	r.Contains(page.Body.String(), "Continue with GitHub")
-	r.Contains(page.Body.String(), app.tunnelEnrollmentURL)
-	r.Contains(page.Body.String(), "study-group")
+	r.Contains(page.Body.String(), `action="/desktop/auth/start"`)
+	r.Contains(page.Body.String(), "opens in your default browser")
+	r.NotContains(page.Body.String(), "Confirm code")
+
+	start := httptest.NewRecorder()
+	app.routes().ServeHTTP(start, httptest.NewRequest(http.MethodPost, "/desktop/auth/start", nil))
+	r.Equal(http.StatusSeeOther, start.Code)
+	r.Equal("/", start.Header().Get("Location"))
+	r.Equal("https://admin.example.test/enroll/browser?handoff=one-use", opened)
+}
+
+func TestDesktopGitHubAuthorizationFallsBackForOlderServer(t *testing.T) {
+	r := require.New(t)
+	app := newTestIDPApp(t)
+	app.requireGitHubAccount = true
+	app.tunnelSupported = true
+	opened := ""
+	app.browserOpen = func(value string) error {
+		opened = value
+		return nil
+	}
+	app.handleTunnelEnrollmentRequired(scimtestclient.Enrollment{
+		URL:              "https://admin.example.test/enroll?code=study-group",
+		VerificationCode: "study-group",
+	})
+
+	response := httptest.NewRecorder()
+	app.routes().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/desktop/auth/start", nil))
+	r.Equal(http.StatusSeeOther, response.Code)
+	r.Equal("https://admin.example.test/enroll?code=study-group&presentation=desktop", opened)
+}
+
+func TestDesktopGitHubAuthorizationRequiresPendingEnrollment(t *testing.T) {
+	r := require.New(t)
+	app := newTestIDPApp(t)
+	app.requireGitHubAccount = true
+	app.tunnelSupported = true
+	app.browserOpen = func(string) error {
+		r.Fail("browser opener must not run without a pending enrollment")
+		return nil
+	}
+
+	response := httptest.NewRecorder()
+	app.routes().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/desktop/auth/start", nil))
+	r.Equal(http.StatusConflict, response.Code)
+	r.Contains(response.Body.String(), "GitHub authorization is not ready")
 }
 
 func TestDesktopServesAppAfterAuthenticatedTunnel(t *testing.T) {

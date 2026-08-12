@@ -176,7 +176,6 @@
     }
     .desktop-auth-card > p { margin: 0 auto; max-width: 42ch; color: var(--muted); }
     .desktop-auth-action { min-width: 180px; margin-top: 24px; }
-    .desktop-auth-code { margin-top: 12px !important; font-size: 12px; }
     .desktop-auth-error {
       margin-top: 22px;
       padding: 10px 12px;

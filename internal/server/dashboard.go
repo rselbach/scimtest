@@ -2,6 +2,7 @@ package server
 
 import (
 	_ "embed"
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -101,16 +102,18 @@ func (s *Server) handleGitHubCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	if intent.kind == oauthIntentEnrollment {
 		if err := s.approveEnrollment(intent.enrollmentHash, githubUser); err != nil {
+			if errors.Is(err, errInstallationLimitReached) {
+				if renderErr := s.renderEnrollmentReplacement(w, intent.enrollmentHash, githubUser, ""); renderErr != nil {
+					s.logger().Warn("installation replacement page failed", "github_user_id", githubUser.ID, "github_login", githubUser.Login, "err", renderErr)
+					http.Error(w, renderErr.Error(), http.StatusForbidden)
+				}
+				return
+			}
 			s.logger().Warn("installation authorization failed", "github_user_id", githubUser.ID, "github_login", githubUser.Login, "err", err)
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'")
-		if err := enrollmentCompleteTemplate.Execute(w, nil); err != nil {
-			s.logger().Error("enrollment completion page render failed", "err", err)
-		}
+		s.renderEnrollmentComplete(w)
 		return
 	}
 	if intent.kind != oauthIntentDashboard {

@@ -66,13 +66,15 @@ type Registration struct {
 	GitHubLogin  string
 }
 
-// Enrollment identifies the browser page where the user can authorize this
-// installation. Show VerificationCode independently so the user can compare
-// it with the page. The device secret used to poll enrollment status is never
-// exposed to callbacks.
+// Enrollment identifies where the user can authorize this installation.
+// Generic clients should open URL and show VerificationCode independently for
+// comparison. Trusted local UIs may open the short-lived, single-use
+// BrowserHandoffURL directly instead. The device secret used to poll enrollment
+// status is never exposed to callbacks.
 type Enrollment struct {
-	URL              string
-	VerificationCode string
+	URL               string
+	BrowserHandoffURL string
+	VerificationCode  string
 }
 
 type Client struct {
@@ -82,11 +84,12 @@ type Client struct {
 }
 
 type enrollmentRequiredError struct {
-	url              string
-	verificationCode string
-	statusURL        string
-	deviceCode       string
-	pollInterval     time.Duration
+	url               string
+	browserHandoffURL string
+	verificationCode  string
+	statusURL         string
+	deviceCode        string
+	pollInterval      time.Duration
 }
 
 func (e *enrollmentRequiredError) Error() string {
@@ -176,7 +179,11 @@ func (c *Client) RunContext(ctx context.Context) error {
 		if errors.As(err, &enrollmentRequired) {
 			c.enrollmentGrant = ""
 			if c.cfg.OnEnrollmentRequired != nil {
-				c.cfg.OnEnrollmentRequired(Enrollment{URL: enrollmentRequired.url, VerificationCode: enrollmentRequired.verificationCode})
+				c.cfg.OnEnrollmentRequired(Enrollment{
+					URL:               enrollmentRequired.url,
+					BrowserHandoffURL: enrollmentRequired.browserHandoffURL,
+					VerificationCode:  enrollmentRequired.verificationCode,
+				})
 			}
 			if pollErr := c.pollEnrollment(ctx, enrollmentRequired); pollErr != nil {
 				err = pollErr
@@ -421,7 +428,9 @@ func (c *Client) signChallenge(challenge protocol.Message) (protocol.Message, er
 }
 
 func (c *Client) enrollmentRequired(msg protocol.Message) (*enrollmentRequiredError, error) {
-	if len(msg.EnrollmentURL) > maxEnrollmentURLLength || len(msg.EnrollmentStatusURL) > maxEnrollmentURLLength {
+	if len(msg.EnrollmentURL) > maxEnrollmentURLLength ||
+		len(msg.EnrollmentBrowserHandoffURL) > maxEnrollmentURLLength ||
+		len(msg.EnrollmentStatusURL) > maxEnrollmentURLLength {
 		return nil, errors.New("enrollment URL is too long")
 	}
 	enrollmentURL, err := url.Parse(msg.EnrollmentURL)
@@ -440,6 +449,33 @@ func (c *Client) enrollmentRequired(msg protocol.Message) (*enrollmentRequiredEr
 	}
 	if serverURL.Scheme == "wss" && enrollmentURL.Scheme != "https" {
 		return nil, errors.New("enrollment URL must use HTTPS with a secure tunnel server")
+	}
+	browserHandoffURL := strings.TrimSpace(msg.EnrollmentBrowserHandoffURL)
+	if browserHandoffURL != "" {
+		browserURL, parseErr := url.Parse(browserHandoffURL)
+		if parseErr != nil || browserURL.Scheme == "" || browserURL.Host == "" {
+			return nil, errors.New("browser handoff URL must be absolute")
+		}
+		if browserURL.Scheme != "http" && browserURL.Scheme != "https" {
+			return nil, errors.New("browser handoff URL must use HTTP or HTTPS")
+		}
+		if browserURL.User != nil {
+			return nil, errors.New("browser handoff URL must not contain user information")
+		}
+		if serverURL.Scheme == "wss" && browserURL.Scheme != "https" {
+			return nil, errors.New("browser handoff URL must use HTTPS with a secure tunnel server")
+		}
+		enrollmentOrigin, originErr := httpOrigin(enrollmentURL)
+		if originErr != nil {
+			return nil, fmt.Errorf("parse enrollment page origin: %w", originErr)
+		}
+		browserOrigin, originErr := httpOrigin(browserURL)
+		if originErr != nil {
+			return nil, fmt.Errorf("parse browser handoff origin: %w", originErr)
+		}
+		if browserOrigin != enrollmentOrigin {
+			return nil, errors.New("browser handoff URL must use the enrollment page origin")
+		}
 	}
 	if err := validateEnrollmentStatusURL(c.cfg.ServerURL, msg.EnrollmentStatusURL); err != nil {
 		return nil, err
@@ -462,11 +498,12 @@ func (c *Client) enrollmentRequired(msg protocol.Message) (*enrollmentRequiredEr
 		}
 	}
 	return &enrollmentRequiredError{
-		url:              msg.EnrollmentURL,
-		verificationCode: verificationCode,
-		statusURL:        msg.EnrollmentStatusURL,
-		deviceCode:       deviceCode,
-		pollInterval:     pollInterval,
+		url:               msg.EnrollmentURL,
+		browserHandoffURL: browserHandoffURL,
+		verificationCode:  verificationCode,
+		statusURL:         msg.EnrollmentStatusURL,
+		deviceCode:        deviceCode,
+		pollInterval:      pollInterval,
 	}, nil
 }
 

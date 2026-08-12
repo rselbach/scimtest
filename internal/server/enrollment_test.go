@@ -131,6 +131,8 @@ func TestEnrollmentRequiresGitHubWithoutClaimingLegacyReservation(t *testing.T) 
 	r.NotEmpty(required.EnrollmentVerificationCode)
 	r.Contains(required.EnrollmentURL, "/enroll?code=")
 	r.NotContains(required.EnrollmentURL, required.EnrollmentDeviceCode)
+	r.Contains(required.EnrollmentBrowserHandoffURL, "/enroll/browser?handoff=")
+	r.NotContains(required.EnrollmentBrowserHandoffURL, required.EnrollmentDeviceCode)
 	r.Equal("http://localhost:7000/api/enroll/status", required.EnrollmentStatusURL)
 	r.NoError(conn.Close())
 
@@ -380,6 +382,68 @@ func TestEnrollmentAccountAndNetworkLimits(t *testing.T) {
 	r.ErrorContains(err, enrollmentThrottledMessage)
 }
 
+func TestEnrollmentLimitPrunesIdleInstallationBeforeCounting(t *testing.T) {
+	r := require.New(t)
+	store, profile, _ := newEnrollmentProfile(t)
+	s, _ := newEnrollmentTestServer(t, store)
+	s.cfg.MaxInstallationsPerUser = 1
+	user := auth.GitHubUser{ID: 109, Login: "professor-duncan"}
+	r.NoError(store.EnrollApplicationInstance(
+		profile.ID,
+		"idle-installation",
+		"idle-public-key",
+		enrollmentActor{GitHubUserID: user.ID, GitHubLogin: user.Login},
+	))
+	store.mu.Lock()
+	storedProfile := cloneApplicationProfile(store.data.ApplicationProfiles[profile.ID])
+	idle := storedProfile.Instances["idle-installation"]
+	idle.LastUsedAt = time.Now().UTC().Add(-applicationInstanceMaxIdle - time.Hour)
+	storedProfile.Instances["idle-installation"] = idle
+	store.data.ApplicationProfiles[profile.ID] = storedProfile
+	store.mu.Unlock()
+
+	_, publicKey, instanceID := testInstanceKey(t)
+	required, err := s.beginEnrollment(profile.ID, instanceID, publicKey, "", "10.0.0.10")
+	r.NoError(err)
+	hash := sha256.Sum256([]byte(required.EnrollmentDeviceCode))
+	r.NoError(s.approveEnrollment(hash, user))
+	_, exists := store.ApplicationInstance(profile.ID, "idle-installation")
+	r.False(exists)
+}
+
+func TestEnrollmentLimitPreservesConnectedIdleInstallation(t *testing.T) {
+	r := require.New(t)
+	store, profile, _ := newEnrollmentProfile(t)
+	s, _ := newEnrollmentTestServer(t, store)
+	s.cfg.MaxInstallationsPerUser = 1
+	user := auth.GitHubUser{ID: 110, Login: "frankie-dart"}
+	r.NoError(store.EnrollApplicationInstance(
+		profile.ID,
+		"connected-installation",
+		"connected-public-key",
+		enrollmentActor{GitHubUserID: user.ID, GitHubLogin: user.Login},
+	))
+	store.mu.Lock()
+	storedProfile := cloneApplicationProfile(store.data.ApplicationProfiles[profile.ID])
+	connected := storedProfile.Instances["connected-installation"]
+	connected.LastUsedAt = time.Now().UTC().Add(-applicationInstanceMaxIdle - time.Hour)
+	storedProfile.Instances["connected-installation"] = connected
+	store.data.ApplicationProfiles[profile.ID] = storedProfile
+	store.mu.Unlock()
+	s.tunnels["/connected"] = &tunnel{
+		applicationProfileID: profile.ID,
+		instanceID:           "connected-installation",
+	}
+
+	_, publicKey, instanceID := testInstanceKey(t)
+	required, err := s.beginEnrollment(profile.ID, instanceID, publicKey, "", "10.0.0.11")
+	r.NoError(err)
+	hash := sha256.Sum256([]byte(required.EnrollmentDeviceCode))
+	r.ErrorIs(s.approveEnrollment(hash, user), errInstallationLimitReached)
+	_, exists := store.ApplicationInstance(profile.ID, "connected-installation")
+	r.True(exists)
+}
+
 func TestEnrollmentPrunesExpiredState(t *testing.T) {
 	r := require.New(t)
 	store, profile, _ := newEnrollmentProfile(t)
@@ -395,6 +459,7 @@ func TestEnrollmentPrunesExpiredState(t *testing.T) {
 	s.enrollMu.Unlock()
 	r.ErrorContains(s.approveEnrollment(hash, auth.GitHubUser{ID: 107, Login: "chang"}), "invalid or expired")
 	r.Empty(s.pendingEnrollments)
+	r.Empty(s.pendingByHandoff)
 
 	s.enrollments["10.0.0.9"] = []time.Time{time.Now().Add(-2 * enrollmentWindow)}
 	s.enrollMu.Lock()

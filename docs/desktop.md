@@ -55,9 +55,11 @@ Tools; Windows needs a CGO-capable C++ toolchain.
 ## GitHub account gate
 
 Desktop mode requires the release application profile and starts locked. On a
-new installation it shows the existing tunnel enrollment page in the desktop
-window, continues through GitHub OAuth there, and polls for approval. The local
-admin UI and local OIDC/SAML endpoints return `401` until the enrolled
+new installation it shows the sign-in action in the desktop window, opens the
+GitHub OAuth flow in the default browser, and polls for approval. The server
+issues a short-lived, single-use browser handoff URL so the app's action can
+redirect directly to GitHub without showing a second confirmation page.
+The local admin UI and local OIDC/SAML endpoints return `401` until the enrolled
 installation key authenticates to the tunnel server.
 
 The tunnel server performs the OAuth code exchange with PKCE. The desktop
@@ -83,9 +85,6 @@ starting desktop mode so it cannot bypass the desktop account gate.
 - Account switching uses **Log out** followed by a new GitHub authorization.
 - Each launch needs network access long enough to authenticate the installation
   tunnel. The app locks again if that tunnel disconnects.
-- GitHub OAuth currently runs in the embedded system WebView as requested. A
-  production pass should validate this user-agent choice against GitHub policy
-  and compare it with an external browser plus a loopback return.
 - Packaging, code signing, notarization, icons, native menus, auto-update, and
   protocol/deep-link registration are intentionally outside this spike.
 - Linux artifacts dynamically depend on the distribution's WebKitGTK runtime.

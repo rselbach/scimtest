@@ -77,9 +77,11 @@ GET,PUT,PATCH,DELETE /scim/v2/Users/{id}
 
 Applications use the public client package to connect. `InstancePrivateKey` is
 the installation's own generated key; persist it locally and reuse it so the
-installation keeps its identity and public name. The enrollment callback should
-open the supplied URL in the user's browser (or display it in a terminal) and
-show `VerificationCode` independently for comparison with the page.
+installation keeps its identity and public name. Generic clients should open
+`URL` in the user's browser (or display it in a terminal) and show
+`VerificationCode` independently for comparison with the page. A trusted local
+UI may instead open `BrowserHandoffURL` to go directly to GitHub OAuth. That URL
+is short-lived and single-use, so do not log or persist it.
 
 ```go
 import (
@@ -136,7 +138,7 @@ scimtest-server \
   --dashboard-domain admin.example.com \
   --scheme https \
   --behind-proxy \
-  --max-installations-per-user 2 \
+  --max-installations-per-user 5 \
   --data /var/lib/scimtest-server/scimtest-server.json \
   --logs
 ```
@@ -144,6 +146,16 @@ scimtest-server \
 Set `SCIMTEST_GITHUB_CLIENT_ID` and `SCIMTEST_GITHUB_CLIENT_SECRET` in the
 service environment. The production OAuth callback URL is
 `https://admin.example.com/auth/github/callback`.
+
+The default installation limit is five per GitHub account and application.
+When an account reaches it, the authorization flow asks the user to explicitly
+deactivate one of their existing installations before continuing. Disconnected
+installations are ordered by least recent use and preferred over active ones;
+choosing an active installation disconnects it immediately. Deactivation
+revokes the old installation without deleting its audit record. An approved
+setup that has not connected yet can be canceled from the same chooser.
+Disconnected, non-revoked installations idle for more than 90 days are pruned
+before the limit is checked.
 
 `--behind-proxy` trusts `X-Forwarded-*` only from configured proxy networks.
 The default trusted networks are loopback; use `--trusted-proxy-cidrs` when the
