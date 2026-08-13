@@ -1,6 +1,7 @@
 //go:build desktop && darwin
 
 #import <Cocoa/Cocoa.h>
+#import <Sparkle/Sparkle.h>
 #import <WebKit/WebKit.h>
 
 @interface SCIMTestMenuController : NSObject <NSMenuDelegate>
@@ -40,6 +41,15 @@
 @end
 
 static SCIMTestMenuController *scimtestMenuController;
+static SPUStandardUpdaterController *scimtestUpdaterController;
+
+static BOOL SCIMTestCanStartUpdater(void) {
+  NSBundle *bundle = [NSBundle mainBundle];
+  return [bundle bundleIdentifier] != nil &&
+      [bundle objectForInfoDictionaryKey:@"CFBundleVersion"] != nil &&
+      [bundle objectForInfoDictionaryKey:@"SUFeedURL"] != nil &&
+      [bundle objectForInfoDictionaryKey:@"SUPublicEDKey"] != nil;
+}
 
 static NSMenuItem *SCIMTestMenuItem(NSString *title,
                                     SEL action,
@@ -100,6 +110,21 @@ void scimtest_install_application_menu(void) {
     [applicationMenu addItem:SCIMTestMenuItem(
         [@"About " stringByAppendingString:applicationName],
         @selector(orderFrontStandardAboutPanel:), @"", 0)];
+
+    NSMenuItem *updateItem = SCIMTestMenuItem(
+        @"Check for Updates…", @selector(checkForUpdates:), @"", 0);
+    if (SCIMTestCanStartUpdater()) {
+      if (scimtestUpdaterController == nil) {
+        scimtestUpdaterController = [[SPUStandardUpdaterController alloc]
+            initWithStartingUpdater:YES
+                  updaterDelegate:nil
+               userDriverDelegate:nil];
+      }
+      [updateItem setTarget:scimtestUpdaterController];
+    } else {
+      [updateItem setEnabled:NO];
+    }
+    [applicationMenu addItem:updateItem];
     [applicationMenu addItem:[NSMenuItem separatorItem]];
 
     NSMenuItem *servicesItem = SCIMTestMenuItem(@"Services", nil, @"", 0);
@@ -202,6 +227,25 @@ int scimtest_application_menu_has_quit_item(void) {
       BOOL hasCommand = (item.keyEquivalentModifierMask &
                          NSEventModifierFlagCommand) != 0;
       if (isQuit && hasQuitTitle && hasQShortcut && hasCommand) {
+        return 1;
+      }
+    }
+    return 0;
+  }
+}
+
+int scimtest_application_menu_has_update_item(void) {
+  @autoreleasepool {
+    NSMenu *mainMenu = [[NSApplication sharedApplication] mainMenu];
+    if ([mainMenu numberOfItems] == 0) {
+      return 0;
+    }
+
+    NSMenu *applicationMenu = [[mainMenu itemAtIndex:0] submenu];
+    for (NSMenuItem *item in [applicationMenu itemArray]) {
+      BOOL isUpdate = [item action] == @selector(checkForUpdates:);
+      BOOL hasTitle = [[item title] isEqualToString:@"Check for Updates…"];
+      if (isUpdate && hasTitle) {
         return 1;
       }
     }

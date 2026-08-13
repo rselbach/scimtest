@@ -25,6 +25,10 @@ Or download the universal macOS 26+ DMG or ZIP from the
 [releases page](https://github.com/rselbach/scimtest/releases). Tagged releases
 no longer distribute the command-line application.
 
+The signed macOS app uses Sparkle for updates. After installing a
+Sparkle-enabled release, choose **scimtest > Check for Updates…** or allow
+automatic checks when prompted.
+
 Running from source also works, but source builds have no embedded tunnel
 identity, so the public tunnel is unavailable and OIDC/SAML are served on
 this machine only:

@@ -48,6 +48,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Fetch Sparkle
+        if: runner.os == 'macOS'
+        run: ./packaging/macos/fetch-sparkle.sh
       - name: Install Linux WebView headers
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
@@ -61,6 +64,8 @@ jobs:
             exit 1
           fi
       - name: Test desktop shell
+        env:
+          DYLD_FRAMEWORK_PATH: ${{ github.workspace }}/build/sparkle
         run: go test -tags desktop ./cmd/scimtest-desktop
       - name: Build desktop executable
         shell: bash
@@ -82,9 +87,9 @@ jobs:
             build \
             0.0.0 \
             "${GITHUB_RUN_NUMBER}"
-          codesign --force --options runtime --sign - build/scimtest.app
+          ./packaging/macos/sign-app.sh build/scimtest.app -
           codesign --verify --deep --strict --verbose=2 build/scimtest.app
-          ditto -c -k --keepParent \
+          ditto -c -k --sequesterRsrc --keepParent \
             build/scimtest.app \
             "dist/${{ matrix.artifact }}.zip"
       - name: Archive preview executable

@@ -7,6 +7,8 @@ cask "scimtest-desktop" do
   desc "Desktop SCIM, OIDC, and SAML testing service"
   homepage "https://github.com/rselbach/scimtest"
 
+  auto_updates true
+
   depends_on macos: ">= :tahoe"
 
   app "scimtest.app"

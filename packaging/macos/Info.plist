@@ -35,5 +35,9 @@
 	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>SUFeedURL</key>
+	<string>https://rselbach.github.io/scimtest/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>2obyIySbPw8xSuXQwzSw2sCbOixUww08jk95se82unc=</string>
 </dict>
 </plist>

@@ -43,6 +43,12 @@ Debian or Ubuntu, install the native headers first:
 sudo apt-get install build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.0-dev
 ```
 
+On macOS, fetch the pinned Sparkle framework first:
+
+```sh
+just fetch-sparkle
+```
+
 Then inject the same public application profile ID used by release builds:
 
 ```sh
@@ -54,6 +60,13 @@ go build -tags desktop \
 On Windows, add `-H=windowsgui` to `-ldflags`. macOS needs Xcode Command Line
 Tools; Windows needs a CGO-capable C++ toolchain. macOS release builds set
 `MACOSX_DEPLOYMENT_TARGET=26.0`.
+
+Run the macOS desktop tests with Sparkle on the dynamic library search path:
+
+```sh
+DYLD_FRAMEWORK_PATH="$PWD/build/sparkle" \
+  go test -tags desktop ./cmd/scimtest-desktop
+```
 
 ## macOS releases
 
@@ -85,6 +98,7 @@ The release environment requires these secrets:
 - `APPLE_ID`: Apple Account email used for notarization
 - `APPLE_APP_SPECIFIC_PASSWORD`: app-specific password for that Apple Account
 - `APPLE_TEAM_ID`: Apple Developer team containing the Developer ID certificate
+- `SPARKLE_EDDSA_PRIVATE_KEY`: private key that signs Sparkle update archives
 - `TAP_GITHUB_TOKEN`: write access to `rselbach/homebrew-tap`
 
 The release job generates its temporary keychain password and discovers the
@@ -93,9 +107,17 @@ are not required; releases use Developer ID distribution outside the Mac App
 Store.
 
 The repository variable `SCIMTEST_APPLICATION_PROFILE_ID` remains required.
+GitHub Pages must use GitHub Actions as its source so the release workflow can
+publish `https://rselbach.github.io/scimtest/appcast.xml`.
 The release workflow loads signing credentials for `v*` tag pushes and the
 explicit `spike/desktop-app` preview trigger. Pull request artifacts never
 receive those secrets and remain unnotarized.
+
+The signed macOS app checks that appcast through Sparkle. Sparkle asks for
+permission to check automatically on the second launch. Users can also choose
+**scimtest > Check for Updates…**. The first release that contains Sparkle must
+still be installed through Homebrew or a manual download. Later releases can
+replace it in place.
 
 ## GitHub account gate
 

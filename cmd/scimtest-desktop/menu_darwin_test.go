@@ -8,13 +8,21 @@ import (
 )
 
 var installedMenuHasQuitItem bool
+var installedMenuHasUpdateItem bool
 var installedMenuIsStandard bool
 
 func TestMain(m *testing.M) {
 	installApplicationMenu()
 	installedMenuHasQuitItem = applicationMenuHasQuitItem()
+	installedMenuHasUpdateItem = applicationMenuHasUpdateItem()
 	installedMenuIsStandard = applicationMenuIsStandard()
 	os.Exit(m.Run())
+}
+
+func TestInstallApplicationMenuAddsUpdateItem(t *testing.T) {
+	if !installedMenuHasUpdateItem {
+		t.Fatal("scimtest application menu has no update item")
+	}
 }
 
 func TestInstallApplicationMenuAddsQuitShortcut(t *testing.T) {

@@ -18,16 +18,30 @@ main() {
   local version="$3"
   local build_version="$4"
   local executable_name
+  local framework_path
+  local project_root
   local script_dir
+  local sparkle_path
   local app_path
 
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  project_root="$(cd "${script_dir}/../.." && pwd)"
   app_path="${output_dir}/scimtest.app"
+  framework_path="${project_root}/build/sparkle/Sparkle.framework"
+  sparkle_path="${app_path}/Contents/Frameworks/Sparkle.framework"
   executable_name="$(plutil -extract CFBundleExecutable raw \
     "${script_dir}/Info.plist")"
 
   if [[ ! -f "${binary_path}" ]]; then
     echo "desktop executable does not exist: ${binary_path}" >&2
+    return 1
+  fi
+  if [[ ! -d "${framework_path}" ]]; then
+    echo "Sparkle framework does not exist: ${framework_path}" >&2
+    return 1
+  fi
+  if [[ ! -f "${project_root}/build/sparkle/LICENSE" ]]; then
+    echo "Sparkle license does not exist" >&2
     return 1
   fi
   if [[ ! "${version}" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
@@ -47,13 +61,25 @@ main() {
     return 1
   fi
 
-  install -d "${app_path}/Contents/MacOS" "${app_path}/Contents/Resources"
+  install -d \
+    "${app_path}/Contents/Frameworks" \
+    "${app_path}/Contents/MacOS" \
+    "${app_path}/Contents/Resources/ThirdPartyLicenses"
   install -m 0755 "${binary_path}" \
     "${app_path}/Contents/MacOS/${executable_name}"
   install -m 0644 "${script_dir}/Info.plist" \
     "${app_path}/Contents/Info.plist"
   install -m 0644 "${script_dir}/AppIcon.icns" \
     "${app_path}/Contents/Resources/AppIcon.icns"
+  install -m 0644 "${project_root}/build/sparkle/LICENSE" \
+    "${app_path}/Contents/Resources/ThirdPartyLicenses/Sparkle.txt"
+  ditto "${framework_path}" "${sparkle_path}"
+  rm -rf "${sparkle_path}/Versions/B/XPCServices"
+  rm -f "${sparkle_path}/XPCServices"
+
+  install_name_tool -add_rpath \
+    @executable_path/../Frameworks \
+    "${app_path}/Contents/MacOS/${executable_name}"
 
   plutil -replace CFBundleShortVersionString -string "${version}" \
     "${app_path}/Contents/Info.plist"

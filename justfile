@@ -9,6 +9,9 @@ default:
 build:
   go build ./...
 
+fetch-sparkle:
+  ./packaging/macos/fetch-sparkle.sh
+
 test:
   go test ./...
 

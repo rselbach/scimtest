@@ -1,5 +1,6 @@
 /scimtest
 /bin/
+/build/
 AGENTS.md
 .pi-lens/
 .serena/
