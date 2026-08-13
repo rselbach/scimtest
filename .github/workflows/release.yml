@@ -32,6 +32,38 @@ jobs:
           cache: true
       - run: go test ./...
 
+  release-notes:
+    name: Generate release notes
+    needs:
+      - test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Generate tagged release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: rselbach/actions/pi-release-notes@pi-release-notes-v1
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        with:
+          project-name: scimtest
+          project-description: Local identity provider and SCIM client for testing OIDC, SAML, and SCIM integrations.
+          output-file: build/release-notes.md
+      - name: Write preview release notes
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        shell: bash
+        run: |
+          mkdir -p build
+          printf '# scimtest %s\n\nDevelopment preview build.\n' \
+            "${RELEASE_VERSION}" > build/release-notes.md
+      - uses: actions/upload-artifact@v7
+        with:
+          name: scimtest-release-notes
+          path: build/release-notes.md
+          if-no-files-found: error
+          retention-days: 7
+
   build-desktop:
     name: Desktop arm64
     runs-on: macos-26
@@ -110,6 +142,7 @@ jobs:
     needs:
       - test
       - build-desktop
+      - release-notes
     runs-on: macos-26
     env:
       APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
@@ -125,6 +158,10 @@ jobs:
         with:
           name: scimtest-desktop-arm64
           path: build/arm64
+      - uses: actions/download-artifact@v7
+        with:
+          name: scimtest-release-notes
+          path: build
       - name: Install signing credentials
         shell: bash
         run: |
@@ -193,7 +230,8 @@ jobs:
             build/arm64/scimtest-desktop \
             package \
             "${version}" \
-            "${GITHUB_RUN_NUMBER}"
+            "${GITHUB_RUN_NUMBER}" \
+            build/release-notes.md
       - name: Sign application
         shell: bash
         run: |
@@ -317,21 +355,16 @@ jobs:
         with:
           name: scimtest-desktop-release
           path: ${{ runner.temp }}/desktop-release
-      - name: Generate release notes
-        id: release_notes
-        uses: rselbach/actions/pi-release-notes@pi-release-notes-v1
-        env:
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      - uses: actions/download-artifact@v7
         with:
-          project-name: scimtest
-          project-description: Local identity provider and SCIM client for testing OIDC, SAML, and SCIM integrations.
-          output-file: build/release-notes.md
+          name: scimtest-release-notes
+          path: build
       - name: Publish server release
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean --release-notes ${{ steps.release_notes.outputs.body-path }}
+          args: release --clean --release-notes build/release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish desktop artifacts

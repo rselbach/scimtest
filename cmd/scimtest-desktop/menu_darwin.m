@@ -6,8 +6,108 @@
 
 @interface SCIMTestMenuController : NSObject <NSMenuDelegate>
 - (void)reloadPage:(id)sender;
+- (void)showReleaseNotes:(id)sender;
 - (void)showHelp:(id)sender;
 @end
+
+static NSString *SCIMTestReleaseNotesPath(void) {
+  return [[NSBundle mainBundle] pathForResource:@"ReleaseNotes" ofType:@"md"];
+}
+
+static NSString *SCIMTestReleaseNotesVersion(void) {
+  NSString *version = [[NSBundle mainBundle]
+      objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
+  return [version length] > 0 ? version : @"Development Preview";
+}
+
+static NSString *SCIMTestReleaseNotes(void) {
+  NSString *path = SCIMTestReleaseNotesPath();
+  if (path != nil) {
+    NSError *error = nil;
+    NSString *markdown = [NSString stringWithContentsOfFile:path
+                                                    encoding:NSUTF8StringEncoding
+                                                       error:&error];
+    if (markdown == nil) {
+      NSLog(@"Could not read release notes: %@", [error localizedDescription]);
+    }
+    return markdown;
+  }
+
+  NSString *bundleVersion = [[NSBundle mainBundle]
+      objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
+  if ([bundleVersion length] > 0) {
+    return nil;
+  }
+
+  return @"# A more native scimtest\n"
+      "\n"
+      "This development preview shows how release notes will appear after "
+      "an update.\n"
+      "\n"
+      "## A proper Mac interface\n"
+      "\n"
+      "- Redesigned the application with native Mac spacing, controls, and "
+      "translucent navigation.\n"
+      "- Added automatic light and dark appearances that follow your system "
+      "setting.\n"
+      "- Replaced the generic sync mark with the scimtest application icon.\n"
+      "\n"
+      "## Release notes where you need them\n"
+      "\n"
+      "- What's New opens once when you launch a newly updated version.\n"
+      "- You can return to these notes at any time from the Help menu.\n"
+      "\n"
+      "## Smaller fixes\n"
+      "\n"
+      "- Kept the toolbar height consistent when large user directories "
+      "overflow the window.\n"
+      "- Improved sheets, tables, status indicators, and code panes in both "
+      "appearances.\n";
+}
+
+static NSAttributedString *SCIMTestRenderedReleaseNotes(NSString *markdown) {
+  NSMutableAttributedString *result =
+      [[[NSMutableAttributedString alloc] init] autorelease];
+  NSColor *textColor = [NSColor labelColor];
+  NSFont *bodyFont = [NSFont systemFontOfSize:13.0];
+
+  for (NSString *rawLine in [markdown componentsSeparatedByCharactersInSet:
+      [NSCharacterSet newlineCharacterSet]]) {
+    NSString *line = rawLine;
+    NSFont *font = bodyFont;
+    NSMutableParagraphStyle *style =
+        [[[NSMutableParagraphStyle alloc] init] autorelease];
+    [style setParagraphSpacing:7.0];
+
+    if ([line hasPrefix:@"## "]) {
+      line = [line substringFromIndex:3];
+      font = [NSFont boldSystemFontOfSize:16.0];
+      [style setParagraphSpacingBefore:10.0];
+      [style setParagraphSpacing:5.0];
+    } else if ([line hasPrefix:@"# "]) {
+      line = [line substringFromIndex:2];
+      font = [NSFont boldSystemFontOfSize:20.0];
+      [style setParagraphSpacing:8.0];
+    } else if ([line hasPrefix:@"- "]) {
+      line = [@"•  " stringByAppendingString:[line substringFromIndex:2]];
+      [style setFirstLineHeadIndent:8.0];
+      [style setHeadIndent:22.0];
+      [style setParagraphSpacing:4.0];
+    }
+
+    line = [line stringByReplacingOccurrencesOfString:@"**" withString:@""];
+    NSString *renderedLine = [line stringByAppendingString:@"\n"];
+    NSDictionary *attributes = @{
+      NSFontAttributeName: font,
+      NSForegroundColorAttributeName: textColor,
+      NSParagraphStyleAttributeName: style,
+    };
+    NSAttributedString *rendered = [[[NSAttributedString alloc]
+        initWithString:renderedLine attributes:attributes] autorelease];
+    [result appendAttributedString:rendered];
+  }
+  return result;
+}
 
 @implementation SCIMTestMenuController
 - (void)reloadPage:(id)sender {
@@ -21,6 +121,54 @@
   }
 }
 
+- (void)showReleaseNotes:(id)sender {
+  NSString *markdown = SCIMTestReleaseNotes();
+  if (markdown == nil) {
+    return;
+  }
+
+  NSString *version = SCIMTestReleaseNotesVersion();
+  NSString *title = [NSString stringWithFormat:@"What's New in scimtest %@",
+                                             version ?: @""];
+  NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+  [alert setAlertStyle:NSAlertStyleInformational];
+  [alert setMessageText:title];
+  [alert setInformativeText:@"Here's what changed in this update."];
+  [alert addButtonWithTitle:@"Done"];
+
+  NSScrollView *scrollView = [[[NSScrollView alloc]
+      initWithFrame:NSMakeRect(0, 0, 560, 330)] autorelease];
+  [scrollView setBorderType:NSNoBorder];
+  [scrollView setHasVerticalScroller:YES];
+  [scrollView setAutohidesScrollers:YES];
+
+  NSTextView *textView = [[[NSTextView alloc]
+      initWithFrame:[[scrollView contentView] bounds]] autorelease];
+  [textView setEditable:NO];
+  [textView setSelectable:YES];
+  [textView setDrawsBackground:NO];
+  [textView setTextContainerInset:NSMakeSize(4, 8)];
+  [textView setMinSize:NSMakeSize(0, 330)];
+  [textView setMaxSize:NSMakeSize(CGFLOAT_MAX, CGFLOAT_MAX)];
+  [textView setVerticallyResizable:YES];
+  [textView setHorizontallyResizable:NO];
+  [textView setAutoresizingMask:NSViewWidthSizable];
+  [[textView textContainer]
+      setContainerSize:NSMakeSize(560, CGFLOAT_MAX)];
+  [[textView textContainer] setWidthTracksTextView:YES];
+  [[textView textStorage]
+      setAttributedString:SCIMTestRenderedReleaseNotes(markdown)];
+  [scrollView setDocumentView:textView];
+  [alert setAccessoryView:scrollView];
+
+  if ([version length] > 0) {
+    [[NSUserDefaults standardUserDefaults]
+        setObject:version
+          forKey:@"SCIMTestLastPresentedReleaseNotesVersion"];
+  }
+  [alert runModal];
+}
+
 - (void)showHelp:(id)sender {
   NSURL *helpURL = [NSURL URLWithString:
       @"https://github.com/rselbach/scimtest#readme"];
@@ -32,7 +180,9 @@
   for (NSMenuItem *item in items) {
     BOOL isApplicationHelp = [item target] == self &&
         [item action] == @selector(showHelp:);
-    if (!isApplicationHelp) {
+    BOOL isReleaseNotes = [item target] == self &&
+        [item action] == @selector(showReleaseNotes:);
+    if (!isApplicationHelp && !isReleaseNotes) {
       [menu removeItem:item];
     }
   }
@@ -42,6 +192,31 @@
 
 static SCIMTestMenuController *scimtestMenuController;
 static SPUStandardUpdaterController *scimtestUpdaterController;
+
+static void SCIMTestShowReleaseNotesAfterUpdate(void) {
+  NSString *version = [[NSBundle mainBundle]
+      objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
+  if (SCIMTestReleaseNotes() == nil) {
+    return;
+  }
+
+  if ([version length] == 0) {
+    [scimtestMenuController performSelector:@selector(showReleaseNotes:)
+                                 withObject:nil
+                                 afterDelay:0.75];
+    return;
+  }
+
+  NSString *key = @"SCIMTestLastPresentedReleaseNotesVersion";
+  NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+  if ([[defaults stringForKey:key] isEqualToString:version]) {
+    return;
+  }
+
+  [scimtestMenuController performSelector:@selector(showReleaseNotes:)
+                               withObject:nil
+                               afterDelay:0.75];
+}
 
 static BOOL SCIMTestCanStartUpdater(void) {
   NSBundle *bundle = [NSBundle mainBundle];
@@ -107,6 +282,9 @@ void scimtest_install_application_menu(void) {
 
     NSMenu *mainMenu = [[[NSMenu alloc] initWithTitle:@""] autorelease];
     NSMenu *applicationMenu = SCIMTestAddMenu(mainMenu, applicationName);
+    if (scimtestMenuController == nil) {
+      scimtestMenuController = [[SCIMTestMenuController alloc] init];
+    }
     [applicationMenu addItem:SCIMTestMenuItem(
         [@"About " stringByAppendingString:applicationName],
         @selector(orderFrontStandardAboutPanel:), @"", 0)];
@@ -175,9 +353,6 @@ void scimtest_install_application_menu(void) {
         @"Emoji & Symbols", @selector(orderFrontCharacterPalette:), @" ",
         command | NSEventModifierFlagControl)];
 
-    if (scimtestMenuController == nil) {
-      scimtestMenuController = [[SCIMTestMenuController alloc] init];
-    }
     NSMenu *viewMenu = SCIMTestAddMenu(mainMenu, @"View");
     NSMenuItem *reloadItem = SCIMTestMenuItem(
         @"Reload Page", @selector(reloadPage:), @"r", command);
@@ -199,6 +374,12 @@ void scimtest_install_application_menu(void) {
     [application setWindowsMenu:windowMenu];
 
     NSMenu *helpMenu = SCIMTestAddMenu(mainMenu, @"Help");
+    NSMenuItem *releaseNotesItem = SCIMTestMenuItem(
+        @"What's New in scimtest", @selector(showReleaseNotes:), @"", 0);
+    [releaseNotesItem setTarget:scimtestMenuController];
+    [releaseNotesItem setEnabled:SCIMTestReleaseNotes() != nil];
+    [helpMenu addItem:releaseNotesItem];
+    [helpMenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *helpItem = SCIMTestMenuItem(
         @"scimtest Help", @selector(showHelp:), @"?", command);
     [helpItem setTarget:scimtestMenuController];
@@ -206,6 +387,7 @@ void scimtest_install_application_menu(void) {
     [helpMenu setDelegate:scimtestMenuController];
 
     [application setMainMenu:mainMenu];
+    SCIMTestShowReleaseNotesAfterUpdate();
   }
 }
 
@@ -246,6 +428,25 @@ int scimtest_application_menu_has_update_item(void) {
       BOOL isUpdate = [item action] == @selector(checkForUpdates:);
       BOOL hasTitle = [[item title] isEqualToString:@"Check for Updates…"];
       if (isUpdate && hasTitle) {
+        return 1;
+      }
+    }
+    return 0;
+  }
+}
+
+int scimtest_application_menu_has_release_notes_item(void) {
+  @autoreleasepool {
+    NSMenu *mainMenu = [[NSApplication sharedApplication] mainMenu];
+    if ([mainMenu numberOfItems] == 0) {
+      return 0;
+    }
+
+    NSMenu *helpMenu = SCIMTestMenuNamed(mainMenu, @"Help");
+    for (NSMenuItem *item in [helpMenu itemArray]) {
+      BOOL isReleaseNotes = [item action] == @selector(showReleaseNotes:);
+      BOOL hasTitle = [[item title] isEqualToString:@"What's New in scimtest"];
+      if (isReleaseNotes && hasTitle) {
         return 1;
       }
     }
@@ -327,7 +528,11 @@ int scimtest_application_menu_is_standard(void) {
     [helpMenu insertItem:SCIMTestMenuItem(
         @"System Help Item", nil, @"", 0) atIndex:0];
     [[helpMenu delegate] menuWillOpen:helpMenu];
-    BOOL hasHelp = [helpMenu numberOfItems] == 1 && SCIMTestMenuHasItem(
+    BOOL hasHelp = [helpMenu numberOfItems] == 2 &&
+        SCIMTestMenuHasItem(
+            helpMenu, @"What's New in scimtest",
+            @selector(showReleaseNotes:), @"", 0) &&
+        SCIMTestMenuHasItem(
             helpMenu, @"scimtest Help", @selector(showHelp:), @"?", command);
 
     return hasAbout && hasHide && hasHideOthers && hasShowAll && hasServices &&

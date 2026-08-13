@@ -4,7 +4,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 BINARY OUTPUT_DIR VERSION BUILD_VERSION" >&2
+  echo "usage: $0 BINARY OUTPUT_DIR VERSION BUILD_VERSION RELEASE_NOTES" >&2
 }
 
 thin_arm64() {
@@ -16,7 +16,7 @@ thin_arm64() {
 }
 
 main() {
-  if (( $# != 4 )); then
+  if (( $# != 5 )); then
     usage
     return 2
   fi
@@ -28,6 +28,7 @@ main() {
   local executable_name
   local framework_path
   local project_root
+  local release_notes_path
   local script_dir
   local sparkle_path
   local app_path
@@ -39,6 +40,7 @@ main() {
   sparkle_path="${app_path}/Contents/Frameworks/Sparkle.framework"
   executable_name="$(plutil -extract CFBundleExecutable raw \
     "${script_dir}/Info.plist")"
+  release_notes_path="$5"
 
   if [[ ! -f "${binary_path}" ]]; then
     echo "desktop executable does not exist: ${binary_path}" >&2
@@ -50,6 +52,10 @@ main() {
   fi
   if [[ ! -f "${project_root}/build/sparkle/LICENSE" ]]; then
     echo "Sparkle license does not exist" >&2
+    return 1
+  fi
+  if [[ ! -s "${release_notes_path}" ]]; then
+    echo "release notes do not exist or are empty: ${release_notes_path}" >&2
     return 1
   fi
   if [[ ! "${version}" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
@@ -81,6 +87,8 @@ main() {
     "${app_path}/Contents/Resources/AppIcon.icns"
   install -m 0644 "${project_root}/build/sparkle/LICENSE" \
     "${app_path}/Contents/Resources/ThirdPartyLicenses/Sparkle.txt"
+  install -m 0644 "${release_notes_path}" \
+    "${app_path}/Contents/Resources/ReleaseNotes.md"
   ditto "${framework_path}" "${sparkle_path}"
   rm -rf "${sparkle_path}/Versions/B/XPCServices"
   rm -f "${sparkle_path}/XPCServices"
