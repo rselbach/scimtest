@@ -317,12 +317,21 @@ jobs:
         with:
           name: scimtest-desktop-release
           path: ${{ runner.temp }}/desktop-release
+      - name: Generate release notes
+        id: release_notes
+        uses: rselbach/actions/pi-release-notes@pi-release-notes-v1
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        with:
+          project-name: scimtest
+          project-description: Local identity provider and SCIM client for testing OIDC, SAML, and SCIM integrations.
+          output-file: build/release-notes.md
       - name: Publish server release
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean
+          args: release --clean --release-notes ${{ steps.release_notes.outputs.body-path }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish desktop artifacts
