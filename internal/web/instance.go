@@ -24,8 +24,9 @@ const (
 )
 
 type instanceMetadata struct {
-	URL   string `json:"url"`
-	Token string `json:"token"`
+	URL                   string `json:"url"`
+	Token                 string `json:"token"`
+	GitHubAccountRequired bool   `json:"github_account_required,omitempty"`
 }
 
 type instanceLease struct {

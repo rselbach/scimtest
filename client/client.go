@@ -41,17 +41,21 @@ type Config struct {
 
 // Registration identifies the current public tunnel assigned by the server.
 type Registration struct {
-	TunnelID  string
-	PublicURL string
-	ClientIP  string
+	TunnelID     string
+	PublicURL    string
+	ClientIP     string
+	GitHubUserID int64
+	GitHubLogin  string
 }
 
-// Enrollment identifies the browser page where the user can authorize this
-// installation for its first tunnel connection. Show VerificationCode
-// independently so the user can compare it with the authorization page.
+// Enrollment identifies where the user can authorize this installation for
+// its first tunnel connection. Generic clients should open URL and show
+// VerificationCode independently for comparison. Trusted local UIs may open
+// the short-lived, single-use BrowserHandoffURL directly instead.
 type Enrollment struct {
-	URL              string
-	VerificationCode string
+	URL               string
+	BrowserHandoffURL string
+	VerificationCode  string
 }
 
 type Tunnel struct {
@@ -117,7 +121,11 @@ func Start(ctx context.Context, cfg Config) (*Tunnel, error) {
 	var onEnrollmentRequired func(internalclient.Enrollment)
 	if cfg.OnEnrollmentRequired != nil {
 		onEnrollmentRequired = func(enrollment internalclient.Enrollment) {
-			cfg.OnEnrollmentRequired(Enrollment{URL: enrollment.URL, VerificationCode: enrollment.VerificationCode})
+			cfg.OnEnrollmentRequired(Enrollment{
+				URL:               enrollment.URL,
+				BrowserHandoffURL: enrollment.BrowserHandoffURL,
+				VerificationCode:  enrollment.VerificationCode,
+			})
 		}
 	} else {
 		onEnrollmentRequired = func(enrollment internalclient.Enrollment) {
@@ -142,9 +150,11 @@ func Start(ctx context.Context, cfg Config) (*Tunnel, error) {
 		OnEnrollmentRequired:  onEnrollmentRequired,
 		OnRegistered: func(reg internalclient.Registration) {
 			current := Registration{
-				TunnelID:  reg.TunnelID,
-				PublicURL: reg.PublicURL,
-				ClientIP:  reg.ClientIP,
+				TunnelID:     reg.TunnelID,
+				PublicURL:    reg.PublicURL,
+				ClientIP:     reg.ClientIP,
+				GitHubUserID: reg.GitHubUserID,
+				GitHubLogin:  reg.GitHubLogin,
 			}
 			registration.set(current)
 			registeredOnce.Do(func() {

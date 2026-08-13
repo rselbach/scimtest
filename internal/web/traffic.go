@@ -89,6 +89,7 @@ func (a *webApp) handleTraffic(w http.ResponseWriter, r *http.Request) {
 		HasTrace:               a.hasTrace(environmentID),
 		Environments:           globalState.Apps,
 		ActiveEnvironment:      activeEnvironment,
+		GitHubAccount:          a.githubAccountView(),
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplate.ExecuteTemplate(w, "traffic.html", data); err != nil {
@@ -114,6 +115,7 @@ type trafficPageData struct {
 	HasTrace               bool
 	Environments           []app
 	ActiveEnvironment      app
+	GitHubAccount          githubAccountView
 }
 
 func (a *webApp) handleTrafficSettings(w http.ResponseWriter, r *http.Request) {

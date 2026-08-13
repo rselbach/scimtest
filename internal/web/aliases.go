@@ -28,6 +28,7 @@ var (
 	stateFilePath                = core.StateFilePath
 	ensureTunnelInstanceID       = core.EnsureTunnelInstanceID
 	ensureTunnelInstanceKey      = core.EnsureTunnelInstanceKey
+	rotateTunnelInstanceIdentity = core.RotateTunnelInstanceIdentity
 	lastAdminPort                = core.LastAdminPort
 	rememberAdminPort            = core.RememberAdminPort
 	saveGlobalConfig             = core.SaveGlobalConfig

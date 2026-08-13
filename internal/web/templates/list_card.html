@@ -104,59 +104,90 @@
             </tbody>
           </table>
           {{else if eq .Tab "apps"}}
-          <table class="environments-table">
-            <thead>
-              <tr>
-                <th>Environment</th>
-                <th>Protocol</th>
-                <th class="col-actions">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
+          <div class="environments-list">
+            <div class="environments-list-header" aria-hidden="true">
+              <span>Environment</span>
+              <span>Protocol</span>
+              <span>Actions</span>
+            </div>
+            <div role="list">
               {{range .Apps}}
-              <tr>
-                <td><div class="row-title">{{.Name}} {{if .Active}}<span class="status synced">Active</span>{{end}}</div></td>
-                <td>{{if .OIDCStatus.Started}}<span class="status {{if .OIDCStatus.Configured}}synced{{else}}pending{{end}}">OIDC{{if .OIDCStatus.Configured}} ✓{{end}}</span> {{end}}{{if .SAMLStatus.Started}}<span class="status {{if .SAMLStatus.Configured}}synced{{else}}pending{{end}}">SAML{{if .SAMLStatus.Configured}} ✓{{end}}</span> {{end}}{{if .SCIMStatus.Started}}<span class="status {{if .SCIMStatus.Configured}}synced{{else}}pending{{end}}">SCIM{{if .SCIMStatus.Configured}} ✓{{end}}</span>{{end}}{{if not .HasSetup}}<span class="status">Not set up</span>{{end}}</td>
-                <td class="col-actions cell-widget">
-				  <div class="row-actions environment-actions">
-					{{if not .Active}}<a class="btn btn-sm environment-use" href="{{.OpenURL}}" title="Show this environment's directory and sync status">Make active</a>{{end}}
-					{{if .OIDCStatus.Configured}}<span class="environment-action-group">
-					  <span class="environment-action-label">OIDC</span>
-					  <a class="environment-action-link" href="{{.OIDCDiscovery}}" target="_blank" rel="noreferrer" title="Open the OIDC discovery document">Discovery JSON</a>
-					  {{if .OIDCTestURL}}<a class="environment-action-link" href="{{.OIDCTestURL}}" target="_blank" rel="noreferrer">Test sign-in</a>{{end}}
-					  {{if .OIDCPKCETestURL}}<a class="environment-action-link" href="{{.OIDCPKCETestURL}}" data-pkce-test target="_blank" rel="noreferrer" title="Run sign-in with a generated PKCE challenge">Test sign-in</a>{{end}}
-					  {{if .OIDCPlaygroundURL}}<a class="environment-action-link" href="{{.OIDCPlaygroundURL}}" title="Complete a full sign-in against scimtest's built-in relying party and see the tokens">Test with built-in RP</a>{{end}}
-					  {{if .OIDCInspectorURL}}<a class="environment-action-link" href="{{.OIDCInspectorURL}}">Inspect flow</a>{{end}}
-					</span>{{end}}
-					{{if .SAMLStatus.Configured}}<span class="environment-action-group">
-					  <span class="environment-action-label">SAML</span>
-					  <a class="environment-action-link" href="{{.SAMLMetadata}}" target="_blank" rel="noreferrer" title="Open the SAML identity provider metadata">Metadata XML</a>
-					  {{if .SAMLTestURL}}<a class="environment-action-link" href="{{.SAMLTestURL}}" target="_blank" rel="noreferrer">Test sign-in</a>{{end}}
-					  {{if .SAMLInspectorURL}}<a class="environment-action-link" href="{{.SAMLInspectorURL}}">Inspect flow</a>{{end}}
-					</span>{{end}}
-					<a class="btn btn-sm environment-setup" href="{{.EditURL}}" title="Configure this environment">
+              <div class="environment-entry" role="listitem">
+                <div class="environment-summary" data-environment-summary>
+                  <div class="environment-identity">
+                    <button class="environment-disclosure" type="button" aria-expanded="false" aria-controls="environment-details-{{.ID}}" aria-label="Show options for {{.Name}}" data-environment-disclosure data-environment-name="{{.Name}}">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3.5 6 4.5 4.5L12.5 6"/></svg>
+                    </button>
+                    <div class="row-title">{{.Name}}</div>
+                    {{if .Active}}<span class="status synced">Active</span>{{end}}
+                  </div>
+                  <div class="environment-protocols">
+                    {{if .OIDCStatus.Started}}<span class="status {{if .OIDCStatus.Configured}}synced{{else}}pending{{end}}">OIDC{{if .OIDCStatus.Configured}} ✓{{end}}</span>{{end}}
+                    {{if .SAMLStatus.Started}}<span class="status {{if .SAMLStatus.Configured}}synced{{else}}pending{{end}}">SAML{{if .SAMLStatus.Configured}} ✓{{end}}</span>{{end}}
+                    {{if .SCIMStatus.Started}}<span class="status {{if .SCIMStatus.Configured}}synced{{else}}pending{{end}}">SCIM{{if .SCIMStatus.Configured}} ✓{{end}}</span>{{end}}
+                    {{if not .HasSetup}}<span class="status">Not set up</span>{{end}}
+                  </div>
+                  <div class="row-actions environment-actions">
+                    {{if .Active}}
+                    <button class="icon-btn environment-select is-active" type="button" title="{{.Name}} is selected" aria-label="{{.Name}} is selected" disabled>
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="m5.2 8 1.8 1.8 3.8-3.8"/></svg>
+                    </button>
+                    {{else}}
+                    <a class="icon-btn environment-select" href="{{.OpenURL}}" title="Select {{.Name}}" aria-label="Select {{.Name}}">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6"/><path d="m5.2 8 1.8 1.8 3.8-3.8"/></svg>
+                    </a>
+                    {{end}}
+                    <a class="icon-btn environment-edit" href="{{.EditURL}}" title="Edit {{.Name}}" aria-label="Edit {{.Name}}">
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M10 4l2 2"/></svg>
-					  Set up
-					</a>
-					<form data-sync-disable method="post" action="/apps/{{.ID}}/delete">
-					  <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
-					  <button class="icon-btn danger" type="submit" title="Delete environment" aria-label="Delete environment" onclick="return confirm('Delete this environment, its users and groups, and all of its protocol and sync configuration?')">
+                    </a>
+                    <form data-sync-disable method="post" action="/apps/{{.ID}}/delete">
+                      <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
+                      <button class="icon-btn environment-delete danger" type="submit" title="Delete {{.Name}}" aria-label="Delete {{.Name}}" onclick="return confirm('Delete this environment, its users and groups, and all of its protocol and sync configuration?')">
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10"/><path d="M5.5 4.5V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.5"/><path d="M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>
                       </button>
                     </form>
                   </div>
-                </td>
-              </tr>
-              {{else}}
-              <tr><td colspan="3">
-                <div class="card-empty">
-                  <div class="h">No environments yet</div>
-                  <div>Add an environment to configure OIDC, SAML, or SCIM.</div>
                 </div>
-              </td></tr>
+                <div class="environment-details" id="environment-details-{{.ID}}" aria-hidden="true" data-environment-details inert>
+                  <div class="environment-details-inner">
+                    <div class="environment-details-content">
+                      {{if .OIDCStatus.Configured}}
+                      <section class="environment-detail-section" aria-labelledby="environment-oidc-{{.ID}}">
+                        <h3 id="environment-oidc-{{.ID}}">OIDC</h3>
+                        <div class="environment-detail-links">
+                          <a class="btn btn-sm" href="{{.OIDCDiscovery}}" target="_blank" rel="noreferrer" title="Open the OIDC discovery document">Discovery JSON</a>
+                          {{if .OIDCTestURL}}<a class="btn btn-sm" href="{{.OIDCTestURL}}" target="_blank" rel="noreferrer">Test sign-in</a>{{end}}
+                          {{if .OIDCPKCETestURL}}<a class="btn btn-sm" href="{{.OIDCPKCETestURL}}" data-pkce-test target="_blank" rel="noreferrer" title="Run sign-in with a generated PKCE challenge">Test sign-in</a>{{end}}
+                          {{if .OIDCPlaygroundURL}}<a class="btn btn-sm" href="{{.OIDCPlaygroundURL}}" title="Complete a full sign-in against scimtest's built-in relying party and see the tokens">Test with built-in RP</a>{{end}}
+                          {{if .OIDCInspectorURL}}<a class="btn btn-sm" href="{{.OIDCInspectorURL}}">Inspect flow</a>{{end}}
+                        </div>
+                      </section>
+                      {{end}}
+                      {{if .SAMLStatus.Configured}}
+                      <section class="environment-detail-section" aria-labelledby="environment-saml-{{.ID}}">
+                        <h3 id="environment-saml-{{.ID}}">SAML</h3>
+                        <div class="environment-detail-links">
+                          <a class="btn btn-sm" href="{{.SAMLMetadata}}" target="_blank" rel="noreferrer" title="Open the SAML identity provider metadata">Metadata XML</a>
+                          {{if .SAMLTestURL}}<a class="btn btn-sm" href="{{.SAMLTestURL}}" target="_blank" rel="noreferrer">Test sign-in</a>{{end}}
+                          {{if .SAMLInspectorURL}}<a class="btn btn-sm" href="{{.SAMLInspectorURL}}">Inspect flow</a>{{end}}
+                        </div>
+                      </section>
+                      {{end}}
+                      {{if and (not .OIDCStatus.Configured) (not .SAMLStatus.Configured)}}
+                      <p class="environment-details-empty">No protocol test links are available yet.</p>
+                      {{end}}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {{else}}
+              <div class="card-empty">
+                <div class="h">No environments yet</div>
+                <div>Add an environment to configure OIDC, SAML, or SCIM.</div>
+              </div>
               {{end}}
-            </tbody>
-          </table>
+            </div>
+          </div>
           {{else}}
           <table class="users-table">
             <colgroup>
@@ -169,7 +200,7 @@
               <col style="width: 120px">
               <col style="width: 200px">
               {{end}}
-              <col style="width: 124px">
+              <col style="width: 152px">
             </colgroup>
             <thead>
               <tr>

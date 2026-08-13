@@ -28,20 +28,26 @@ type Message struct {
 	TunnelID  string `json:"tunnel_id,omitempty"`
 	PublicURL string `json:"public_url,omitempty"`
 	ClientIP  string `json:"client_ip,omitempty"`
+	// GitHubUserID and GitHubLogin identify the account that enrolled an
+	// installation. They are returned only after the installation key has
+	// authenticated successfully.
+	GitHubUserID int64  `json:"github_user_id,omitempty"`
+	GitHubLogin  string `json:"github_login,omitempty"`
 
-	LocalPort                  int    `json:"local_port,omitempty"`
-	ApplicationProfileID       string `json:"application_profile_id,omitempty"`
-	InstanceID                 string `json:"instance_id,omitempty"`
-	InstancePublicKey          string `json:"instance_public_key,omitempty"`
-	EnrollmentSupported        bool   `json:"enrollment_supported,omitempty"`
-	Challenge                  string `json:"challenge,omitempty"`
-	Signature                  []byte `json:"signature,omitempty"`
-	EnrollmentGrant            string `json:"enrollment_grant,omitempty"`
-	EnrollmentURL              string `json:"enrollment_url,omitempty"`
-	EnrollmentStatusURL        string `json:"enrollment_status_url,omitempty"`
-	EnrollmentDeviceCode       string `json:"enrollment_device_code,omitempty"`
-	EnrollmentVerificationCode string `json:"enrollment_verification_code,omitempty"`
-	EnrollmentPollSeconds      int    `json:"enrollment_poll_seconds,omitempty"`
+	LocalPort                   int    `json:"local_port,omitempty"`
+	ApplicationProfileID        string `json:"application_profile_id,omitempty"`
+	InstanceID                  string `json:"instance_id,omitempty"`
+	InstancePublicKey           string `json:"instance_public_key,omitempty"`
+	EnrollmentSupported         bool   `json:"enrollment_supported,omitempty"`
+	Challenge                   string `json:"challenge,omitempty"`
+	Signature                   []byte `json:"signature,omitempty"`
+	EnrollmentGrant             string `json:"enrollment_grant,omitempty"`
+	EnrollmentURL               string `json:"enrollment_url,omitempty"`
+	EnrollmentBrowserHandoffURL string `json:"enrollment_browser_handoff_url,omitempty"`
+	EnrollmentStatusURL         string `json:"enrollment_status_url,omitempty"`
+	EnrollmentDeviceCode        string `json:"enrollment_device_code,omitempty"`
+	EnrollmentVerificationCode  string `json:"enrollment_verification_code,omitempty"`
+	EnrollmentPollSeconds       int    `json:"enrollment_poll_seconds,omitempty"`
 
 	StreamID uint64      `json:"stream_id,omitempty"`
 	Method   string      `json:"method,omitempty"`

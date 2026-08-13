@@ -18,11 +18,12 @@ credentials, remote IDs, sync state, operation history, and errors.
 Homebrew (recommended — release builds include the automatic public tunnel):
 
 ```sh
-brew install rselbach/tap/scimtest
+brew install --cask rselbach/tap/scimtest-desktop
 ```
 
-Or download an archive from the
-[releases page](https://github.com/rselbach/scimtest/releases).
+Or download the universal macOS 26+ DMG or ZIP from the
+[releases page](https://github.com/rselbach/scimtest/releases). Tagged releases
+no longer distribute the command-line application.
 
 Running from source also works, but source builds have no embedded tunnel
 identity, so the public tunnel is unavailable and OIDC/SAML are served on
@@ -32,10 +33,17 @@ this machine only:
 go run ./cmd/scimtest
 ```
 
+### Desktop app
+
+The native WebView app reuses the same Go server and embedded UI without an
+Electron or JavaScript rewrite. It requires a GitHub account linked in the app
+before the admin UI or local test endpoints unlock. See
+[the desktop documentation](docs/desktop.md) for preview artifacts, local build
+steps, the authentication design, and release packaging details.
+
 ## Quick start
 
-1. Run `scimtest`. The admin UI opens at `http://127.0.0.1:8080` and a
-   first run lands directly on the environment wizard.
+1. Open scimtest. A first run lands directly on the environment wizard.
 2. Name the environment, enable the protocols you need, and save — the
    OIDC and SAML connection values (issuer, discovery, metadata, and
    certificate) appear as you type and can be copied or downloaded.
@@ -111,10 +119,11 @@ one, since only one process runs per state file; launching `scimtest`
 again just opens the existing admin UI. Before schema migrations, a copy
 of the database is written to a `backups/` directory next to it.
 
-**Flags.** `scimtest --help` lists everything; `scimtest --version` prints
-the version. Use `--no-open` to start without opening a browser and
+**Source-only browser runner.** `go run ./cmd/scimtest --help` lists the
+development CLI flags. Use `--no-open` to start without opening a browser and
 `--debug` to print redacted OIDC and SAML interactions to stdout
-(`--debug-secrets` includes raw credentials; its output is sensitive).
+(`--debug-secrets` includes raw credentials; its output is sensitive). This
+runner is not included in tagged releases.
 
 **IDP base URL and tunnel.** Leave the IDP base URL empty when clients can
 reach the current request host; set it when clients need another
@@ -135,6 +144,13 @@ Release builds require the `SCIMTEST_APPLICATION_PROFILE_ID` GitHub
 Actions variable. They contain no tunnel enrollment private key; a new
 installation authorizes its generated installation key through GitHub on its
 first connection.
+
+The macOS release also requires a Developer ID Application certificate and App
+Store Connect API key in the signing secrets documented in
+[docs/desktop.md](docs/desktop.md). The release workflow builds native Intel and
+Apple Silicon executables, combines them into one application, signs and
+notarizes the app and DMG, and publishes both DMG and ZIP artifacts. GoReleaser
+continues to publish `scimtest-server`; it no longer builds the CLI application.
 
 The tunnel server's application profile must allow these routes:
 

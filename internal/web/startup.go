@@ -95,16 +95,17 @@ func listenerURL(listener net.Listener) (string, error) {
 	}).String(), nil
 }
 
-func openBrowser(localURL string) error {
+// OpenBrowser opens targetURL in the operating system's default browser.
+func OpenBrowser(targetURL string) error {
 	var name string
 	var args []string
 	switch runtime.GOOS {
 	case "darwin":
-		name, args = "open", []string{localURL}
+		name, args = "open", []string{targetURL}
 	case "windows":
-		name, args = "rundll32", []string{"url.dll,FileProtocolHandler", localURL}
+		name, args = "rundll32", []string{"url.dll,FileProtocolHandler", targetURL}
 	default:
-		name, args = "xdg-open", []string{localURL}
+		name, args = "xdg-open", []string{targetURL}
 	}
 
 	cmd := exec.Command(name, args...)
@@ -124,7 +125,7 @@ func maybeOpenBrowser(localURL string, disabled bool, opener browserOpener) {
 		return
 	}
 	if opener == nil {
-		opener = openBrowser
+		opener = OpenBrowser
 	}
 	if err := opener(localURL); err != nil {
 		log.Printf("warning: open browser at %s: %v", localURL, err)

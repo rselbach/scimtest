@@ -1663,16 +1663,29 @@ func TestDashboardRendersCriticalFlowAffordances(t *testing.T) {
 	r.Equal(http.StatusOK, rec.Code)
 	body := rec.Body.String()
 	r.NotContains(body, "<th>Client ID</th>")
+	r.Contains(body, `class="environment-summary" data-environment-summary`)
+	r.Contains(body, `class="environment-disclosure"`)
+	r.Contains(body, `aria-controls="environment-details-app-1"`)
+	r.Contains(body, `id="environment-details-app-1" aria-hidden="true" data-environment-details inert`)
 	r.Contains(body, `class="row-actions environment-actions"`)
-	r.Contains(body, `class="environment-action-label">OIDC</span>`)
-	r.Contains(body, `class="environment-action-label">SAML</span>`)
+	r.Contains(body, `class="icon-btn environment-select is-active"`)
+	r.Contains(body, `class="icon-btn environment-edit"`)
+	r.Contains(body, `class="icon-btn environment-delete danger"`)
+	r.Equal(1, strings.Count(body, `class="icon-btn environment-select`))
+	r.Equal(1, strings.Count(body, `class="icon-btn environment-edit`))
+	r.Equal(1, strings.Count(body, `class="icon-btn environment-delete`))
+	r.NotContains(body, "environment-action-group")
+	r.NotContains(body, "environment-action-label")
 	r.Contains(body, ">Discovery JSON</a>")
 	r.Contains(body, ">Metadata XML</a>")
 	r.Contains(body, ">Test sign-in</a>")
 	r.Contains(body, ">Inspect flow</a>")
+	r.NotContains(body, ">Make active</a>")
+	r.NotContains(body, ">Set up</a>")
 	r.NotContains(body, ">Test OIDC</a>")
 	r.NotContains(body, ">Inspect SAML</a>")
 	r.NotContains(body, "Get ready to test")
+	r.Contains(dashboardAsset(t, app, "/assets/app.js"), "setEnvironmentDetails")
 	listRec := httptest.NewRecorder()
 	app.routes().ServeHTTP(listRec, httptest.NewRequest(http.MethodGet, "/?tab=apps&partial=list", nil))
 	r.Equal(http.StatusOK, listRec.Code)
@@ -3364,17 +3377,54 @@ func TestReconcileAsksForConfirmation(t *testing.T) {
 	r.Contains(dashboardAsset(t, app, "/assets/app.js"), "form.dataset.syncConfirm")
 }
 
-func TestGoreleaserInjectsTunnelIdentitySymbols(t *testing.T) {
+func TestReleaseWorkflowInjectsTunnelIdentitySymbols(t *testing.T) {
 	r := require.New(t)
-	data, err := os.ReadFile("../../.goreleaser.yaml")
+	data, err := os.ReadFile("../../.github/workflows/release.yml")
 	r.NoError(err)
 
 	// A mismatched -X package path silently ships release builds with no
 	// tunnel profile, defeating tunnelReleaseProfileRequired.
 	pkg := reflect.TypeOf(webApp{}).PkgPath()
 	for _, symbol := range []string{"tunnelApplicationProfileID", "tunnelReleaseProfileRequired"} {
-		r.Contains(string(data), "-X="+pkg+"."+symbol+"=", "goreleaser must inject %s into %s", symbol, pkg)
+		r.Contains(string(data), "-X="+pkg+"."+symbol+"=", "release workflow must inject %s into %s", symbol, pkg)
 	}
 	r.NotContains(string(data), "PRIVATE_SEED")
 	r.NotContains(string(data), "PrivateSeed")
+}
+
+func TestReleaseWorkflowUsesAppleAccountNotarization(t *testing.T) {
+	r := require.New(t)
+	data, err := os.ReadFile("../../.github/workflows/release.yml")
+	r.NoError(err)
+
+	workflow := string(data)
+	for _, credential := range []string{
+		"APPLE_ID",
+		"APPLE_APP_SPECIFIC_PASSWORD",
+		"APPLE_TEAM_ID",
+	} {
+		r.Contains(workflow, credential)
+	}
+	for _, appStoreCredential := range []string{
+		"APPLE_API_KEY_P8_BASE64",
+		"APPLE_API_KEY_ID",
+		"APPLE_API_ISSUER_ID",
+	} {
+		r.NotContains(workflow, appStoreCredential)
+	}
+}
+
+func TestReleaseWorkflowSupportsNonPublishingPreview(t *testing.T) {
+	r := require.New(t)
+	data, err := os.ReadFile("../../.github/workflows/release.yml")
+	r.NoError(err)
+
+	workflow := string(data)
+	r.Contains(workflow, "workflow_dispatch:")
+	r.Contains(workflow, "RELEASE_VERSION:")
+	r.Contains(workflow, "args: release --snapshot --clean --skip=publish")
+	r.Contains(workflow, "name: scimtest-server-release")
+	r.Contains(workflow, "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
+	r.Contains(workflow, `"$(basename "${dmg_path}")"`)
+	r.Contains(workflow, `"$(basename "${zip_path}")"`)
 }

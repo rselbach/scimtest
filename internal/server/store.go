@@ -358,6 +358,61 @@ func (s *Store) CountApplicationInstancesByGitHubUserID(profileID string, userID
 	return count
 }
 
+// PruneIdleApplicationInstances removes enrolled, non-revoked installations
+// that have not been used since cutoff. Instance IDs in retained are preserved.
+func (s *Store) PruneIdleApplicationInstances(profileID string, cutoff time.Time, retained map[string]bool) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	profile, ok := s.data.ApplicationProfiles[profileID]
+	if !ok {
+		return 0, errors.New("application profile not found")
+	}
+	previous := cloneApplicationProfile(profile)
+	profile = cloneApplicationProfile(profile)
+	pruned := 0
+	for instanceID, instance := range profile.Instances {
+		if retained[instanceID] || instance.Revoked || !instance.Enrolled() || !instance.LastUsedAt.Before(cutoff) {
+			continue
+		}
+		delete(profile.Instances, instanceID)
+		pruned++
+	}
+	if pruned == 0 {
+		return 0, nil
+	}
+	s.data.ApplicationProfiles[profileID] = profile
+	if err := s.saveLocked(); err != nil {
+		s.data.ApplicationProfiles[profileID] = previous
+		return 0, err
+	}
+	return pruned, nil
+}
+
+// RevokeApplicationInstanceForGitHubUser revokes an enrolled installation
+// only when it belongs to userID in the requested application profile.
+func (s *Store) RevokeApplicationInstanceForGitHubUser(profileID, instanceID string, userID int64) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	profile, ok := s.data.ApplicationProfiles[profileID]
+	if !ok {
+		return false, nil
+	}
+	instance, ok := profile.Instances[instanceID]
+	if !ok || !instance.Enrolled() || instance.Revoked || instance.GitHubUserID != userID {
+		return false, nil
+	}
+	previous := cloneApplicationProfile(profile)
+	profile = cloneApplicationProfile(profile)
+	instance.Revoked = true
+	profile.Instances[instanceID] = instance
+	s.data.ApplicationProfiles[profileID] = profile
+	if err := s.saveLocked(); err != nil {
+		s.data.ApplicationProfiles[profileID] = previous
+		return false, err
+	}
+	return true, nil
+}
+
 func (s *Store) SetApplicationInstanceRevoked(profileID, instanceID string, revoked bool) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

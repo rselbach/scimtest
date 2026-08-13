@@ -51,13 +51,16 @@ type webApp struct {
 	traffic              trafficLog
 	localPort            int
 	adminHost            string
+	adminURL             string
 	instanceToken        string
+	requireGitHubAccount bool
 	tunnelStart          tunnelStarter
 	tunnelSupported      bool
 	tunnelMu             sync.Mutex
 	tunnel               *activeTunnel
 	tunnelStarting       *automaticTunnelStart
 	tunnelClosing        bool
+	tunnelResetting      bool
 	tunnelLastError      string
 	tunnelEnrollmentURL  string
 	tunnelEnrollmentCode string
@@ -107,9 +110,11 @@ type importPreviewView struct {
 type tunnelStarter func(context.Context, scimtestclient.Config) (*startedTunnel, error)
 
 type startedTunnel struct {
-	PublicURL string
-	ClientIP  string
-	Tunnel    tunnelCloser
+	PublicURL    string
+	ClientIP     string
+	GitHubUserID int64
+	GitHubLogin  string
+	Tunnel       tunnelCloser
 }
 
 type tunnelCloser interface {
@@ -148,10 +153,12 @@ func (c cancelingTunnelCloser) Close() error {
 }
 
 type activeTunnel struct {
-	PathPrefix string
-	PublicURL  string
-	ClientIP   string
-	Tunnel     tunnelCloser
+	PathPrefix   string
+	PublicURL    string
+	ClientIP     string
+	GitHubUserID int64
+	GitHubLogin  string
+	Tunnel       tunnelCloser
 }
 
 type automaticTunnelStart struct {
@@ -162,6 +169,11 @@ type automaticTunnelStart struct {
 type tunnelView struct {
 	PublicURL string
 	ClientIP  string
+}
+
+type githubAccountView struct {
+	Linked bool
+	Login  string
 }
 
 type tunnelApplicationIdentity struct {
@@ -452,14 +464,18 @@ type pageData struct {
 	FormError              string
 	Environments           []app
 	ActiveEnvironment      app
+	GitHubAccount          githubAccountView
 }
 
 type RunOptions struct {
-	Debug        bool
-	DebugSecrets bool
-	NoOpen       bool
-	Port         string
-	browserOpen  browserOpener
+	Debug                bool
+	DebugSecrets         bool
+	NoOpen               bool
+	Port                 string
+	Context              context.Context
+	OpenURL              func(string) error
+	RequireGitHubAccount bool
+	browserOpen          browserOpener
 }
 
 // ignoredHandoffFlags lists the flags a second launch cannot apply because
@@ -513,6 +529,13 @@ func Run(options ...RunOptions) error {
 	if err != nil {
 		return err
 	}
+	if opts.RequireGitHubAccount && identity == nil {
+		return errors.New("GitHub account sign-in requires a release application profile")
+	}
+	opener := opts.browserOpen
+	if opts.OpenURL != nil {
+		opener = browserOpener(opts.OpenURL)
+	}
 	statePath, err := stateFilePath()
 	if err != nil {
 		return fmt.Errorf("resolve state file for instance lock: %w", err)
@@ -532,6 +555,12 @@ func Run(options ...RunOptions) error {
 			return waitErr
 		}
 		if !tookOver {
+			if opts.RequireGitHubAccount && !metadata.GitHubAccountRequired {
+				if err := lease.Close(); err != nil {
+					return err
+				}
+				return errors.New("scimtest is already running in browser mode; stop it before launching the desktop app")
+			}
 			if err := lease.Close(); err != nil {
 				return err
 			}
@@ -539,7 +568,13 @@ func Run(options ...RunOptions) error {
 			if ignored := ignoredHandoffFlags(opts); len(ignored) > 0 {
 				log.Printf("warning: %s only apply to a new instance and were ignored; stop the running instance first, or set SCIMTEST_STATE_FILE to run a second one", strings.Join(ignored, ", "))
 			}
-			maybeOpenBrowser(metadata.URL, opts.NoOpen, opts.browserOpen)
+			maybeOpenBrowser(metadata.URL, opts.NoOpen, opener)
+			// A desktop handoff opens another native window around the running
+			// server. Keep its Run call alive until that window cancels the
+			// context instead of immediately terminating it.
+			if opts.RequireGitHubAccount && opts.Context != nil {
+				<-opts.Context.Done()
+			}
 			return nil
 		}
 	}
@@ -573,15 +608,16 @@ func Run(options ...RunOptions) error {
 	}
 
 	app := &webApp{
-		signingKey:      key,
-		certDER:         certDER,
-		localPort:       idpAddress.Port,
-		tunnelStart:     startTunnel,
-		tunnelSupported: identity != nil,
-		browserOpen:     opts.browserOpen,
-		noOpen:          opts.NoOpen,
-		authCodes:       make(map[string]authCode),
-		accessTokens:    make(map[string]accessToken),
+		signingKey:           key,
+		certDER:              certDER,
+		localPort:            idpAddress.Port,
+		tunnelStart:          startTunnel,
+		tunnelSupported:      identity != nil,
+		browserOpen:          opener,
+		noOpen:               opts.NoOpen,
+		requireGitHubAccount: opts.RequireGitHubAccount,
+		authCodes:            make(map[string]authCode),
+		accessTokens:         make(map[string]accessToken),
 	}
 	app.debugRP.Store(opts.Debug)
 	app.debugSecrets.Store(opts.DebugSecrets)
@@ -616,13 +652,14 @@ func Run(options ...RunOptions) error {
 		return fmt.Errorf("parse admin listener URL: %w; close admin listener: %v; close tunneled IDP listener: %v", err, adminCloseErr, idpCloseErr)
 	}
 	app.adminHost = parsedLocalURL.Host
+	app.adminURL = localURL
 	if boundPort := parsedLocalURL.Port(); boundPort != port {
 		log.Printf("warning: port %s is in use; scimtest started on port %s instead — issuer and metadata URLs pasted into relying parties now use the new port", port, boundPort)
 	}
 	if err := rememberAdminPort(parsedLocalURL.Port()); err != nil {
 		log.Printf("persist admin port: %v", err)
 	}
-	if err := lease.Publish(instanceMetadata{URL: localURL, Token: app.instanceToken}); err != nil {
+	if err := lease.Publish(instanceMetadata{URL: localURL, Token: app.instanceToken, GitHubAccountRequired: opts.RequireGitHubAccount}); err != nil {
 		adminCloseErr := listener.Close()
 		idpCloseErr := idpListener.Close()
 		return fmt.Errorf("%w; close admin listener: %v; close tunneled IDP listener: %v", err, adminCloseErr, idpCloseErr)
@@ -648,7 +685,11 @@ func Run(options ...RunOptions) error {
 		}
 	}
 
-	signalCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	parentContext := opts.Context
+	if parentContext == nil {
+		parentContext = context.Background()
+	}
+	signalCtx, stopSignals := signal.NotifyContext(parentContext, os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 
 	adminServer := &http.Server{Handler: app.routes(), ReadHeaderTimeout: 10 * time.Second}
@@ -666,7 +707,7 @@ func Run(options ...RunOptions) error {
 	if identity == nil {
 		log.Printf("automatic tunnel disabled: build has no application profile")
 	}
-	maybeOpenBrowser(localURL, opts.NoOpen, opts.browserOpen)
+	maybeOpenBrowser(localURL, opts.NoOpen, opener)
 
 	var result serverError
 	select {
@@ -712,7 +753,11 @@ func (a *webApp) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/", a.adminRoutes())
 	a.registerIDPRoutes(mux)
-	return recoverPanics(mux)
+	handler := http.Handler(mux)
+	if a.requireGitHubAccount {
+		handler = a.githubAccountGate(handler)
+	}
+	return recoverPanics(handler)
 }
 
 // recoverPanics keeps a handler panic from tearing down the connection with
@@ -889,6 +934,13 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /config/save", a.rejectWhileSyncing(a.handleConfigSave))
 	mux.HandleFunc("POST /config/tunnel/retry", a.handleAutomaticTunnelRetry)
 	mux.HandleFunc("GET /config/tunnel/retry", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	})
+	mux.HandleFunc("POST /desktop/auth/start", a.handleDesktopAuthStart)
+	mux.HandleFunc("POST /desktop/auth/retry", a.handleDesktopAuthRetry)
+	mux.HandleFunc("POST /desktop/auth/logout", a.handleDesktopAuthLogout)
+	mux.HandleFunc("GET /desktop/auth/logout", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	})
@@ -1073,6 +1125,7 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		HasSCIMEnvironments:    activeEnvironment.SCIMEnabled,
 		Environments:           globalState.Apps,
 		ActiveEnvironment:      activeEnvironment,
+		GitHubAccount:          a.githubAccountView(),
 	}
 	if !data.SCIMEnabled {
 		data.Errors = nil
@@ -1200,7 +1253,7 @@ func (a *webApp) startAutomaticTunnel(identity tunnelApplicationIdentity) {
 	ctx, cancel := context.WithCancel(context.Background())
 	attempt := &automaticTunnelStart{cancel: cancel, done: make(chan struct{})}
 	a.tunnelMu.Lock()
-	if a.tunnelClosing || a.tunnelStarting != nil || a.tunnel != nil {
+	if a.tunnelClosing || a.tunnelResetting || a.tunnelStarting != nil || a.tunnel != nil {
 		a.tunnelMu.Unlock()
 		cancel()
 		close(attempt.done)
@@ -1274,7 +1327,6 @@ func (a *webApp) startAutomaticTunnel(identity tunnelApplicationIdentity) {
 		log.Printf("start tunnel: %v", err)
 		return
 	}
-
 	publicURL := strings.TrimRight(strings.TrimSpace(started.PublicURL), "/")
 	pathPrefix, err := tunnelPathPrefix(publicURL)
 	if err != nil {
@@ -1288,10 +1340,12 @@ func (a *webApp) startAutomaticTunnel(identity tunnelApplicationIdentity) {
 	}
 
 	entry := &activeTunnel{
-		PathPrefix: pathPrefix,
-		PublicURL:  publicURL,
-		ClientIP:   strings.TrimSpace(started.ClientIP),
-		Tunnel:     started.Tunnel,
+		PathPrefix:   pathPrefix,
+		PublicURL:    publicURL,
+		ClientIP:     strings.TrimSpace(started.ClientIP),
+		GitHubUserID: started.GitHubUserID,
+		GitHubLogin:  strings.TrimSpace(started.GitHubLogin),
+		Tunnel:       started.Tunnel,
 	}
 	a.tunnelMu.Lock()
 	if ctx.Err() != nil {
@@ -1307,6 +1361,9 @@ func (a *webApp) startAutomaticTunnel(identity tunnelApplicationIdentity) {
 	a.tunnelEnrollmentCode = ""
 	a.tunnelMu.Unlock()
 	go a.watchAutomaticTunnel(entry)
+	if a.requireGitHubAccount && a.adminURL != "" {
+		maybeOpenBrowser(a.adminURL, false, a.browserOpen)
+	}
 	log.Printf("tunnel established at %s (chooser restricted to %s)", publicURL, strings.TrimSpace(started.ClientIP))
 }
 
@@ -1354,6 +1411,8 @@ func (a *webApp) updateAutomaticTunnelRegistration(registration scimtestclient.R
 	a.tunnel.PathPrefix = pathPrefix
 	a.tunnel.PublicURL = publicURL
 	a.tunnel.ClientIP = strings.TrimSpace(registration.ClientIP)
+	a.tunnel.GitHubUserID = registration.GitHubUserID
+	a.tunnel.GitHubLogin = strings.TrimSpace(registration.GitHubLogin)
 	a.tunnelLastError = ""
 	a.tunnelEnrollmentURL = ""
 	a.tunnelEnrollmentCode = ""
@@ -1365,10 +1424,21 @@ func (a *webApp) handleTunnelEnrollmentRequired(enrollment scimtestclient.Enroll
 	if value == "" {
 		return
 	}
+	if a.requireGitHubAccount {
+		if handoffURL := strings.TrimSpace(enrollment.BrowserHandoffURL); handoffURL != "" {
+			value = handoffURL
+		} else {
+			value = desktopEnrollmentURL(value)
+		}
+	}
 	a.tunnelMu.Lock()
 	a.tunnelEnrollmentURL = value
 	a.tunnelEnrollmentCode = strings.TrimSpace(enrollment.VerificationCode)
 	a.tunnelMu.Unlock()
+	if a.requireGitHubAccount {
+		log.Printf("GitHub authorization is ready to open in the default browser")
+		return
+	}
 	log.Printf("authorize this scimtest installation in GitHub: %s (verification code %s)", value, enrollment.VerificationCode)
 	maybeOpenBrowser(value, a.noOpen, a.browserOpen)
 }
@@ -1395,10 +1465,13 @@ func startTunnel(ctx context.Context, cfg scimtestclient.Config) (*startedTunnel
 	if err != nil {
 		return nil, err
 	}
+	registration := tunnel.Registration()
 	return &startedTunnel{
-		PublicURL: tunnel.PublicURL,
-		ClientIP:  tunnel.Registration().ClientIP,
-		Tunnel:    tunnel,
+		PublicURL:    tunnel.PublicURL,
+		ClientIP:     registration.ClientIP,
+		GitHubUserID: registration.GitHubUserID,
+		GitHubLogin:  registration.GitHubLogin,
+		Tunnel:       tunnel,
 	}, nil
 }
 

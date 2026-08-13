@@ -114,6 +114,7 @@ type playgroundResult struct {
 	IDTokenClaims string
 	UserinfoBody  string
 	InspectorURL  string
+	GitHubAccount githubAccountView
 }
 
 // handleOIDCPlaygroundCallback completes the built-in RP flow: it exchanges the
@@ -125,7 +126,11 @@ func (a *webApp) handleOIDCPlaygroundCallback(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	result := playgroundResult{App: foundApp, InspectorURL: "/inspect/oidc/" + url.PathEscape(foundApp.Slug)}
+	result := playgroundResult{
+		App:           foundApp,
+		InspectorURL:  "/inspect/oidc/" + url.PathEscape(foundApp.Slug),
+		GitHubAccount: a.githubAccountView(),
+	}
 
 	render := func() {
 		if err := pageTemplate.ExecuteTemplate(w, "oidc-playground.html", result); err != nil {

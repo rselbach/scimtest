@@ -88,7 +88,9 @@ type Server struct {
 	pendingEnrollments map[[32]byte]pendingEnrollment
 	pendingByUserCode  map[string][32]byte
 	pendingByBinding   map[string][32]byte
+	pendingByHandoff   map[[32]byte][32]byte
 	oauthIntents       map[string]oauthIntent
+	replacementIntents map[[32]byte]enrollmentReplacementIntent
 
 	nextStream    atomic.Uint64
 	requestsTotal atomic.Uint64
@@ -172,7 +174,7 @@ func New(cfg Config) (*Server, error) {
 		cfg.MaxTunnelsPerApplication = 5
 	}
 	if cfg.MaxInstallationsPerUser <= 0 {
-		cfg.MaxInstallationsPerUser = 2
+		cfg.MaxInstallationsPerUser = 5
 	}
 
 	store, err := OpenStore(cfg.DataPath)
@@ -190,7 +192,9 @@ func New(cfg Config) (*Server, error) {
 		pendingEnrollments: make(map[[32]byte]pendingEnrollment),
 		pendingByUserCode:  make(map[string][32]byte),
 		pendingByBinding:   make(map[string][32]byte),
+		pendingByHandoff:   make(map[[32]byte][32]byte),
 		oauthIntents:       make(map[string]oauthIntent),
+		replacementIntents: make(map[[32]byte]enrollmentReplacementIntent),
 	}, nil
 }
 
@@ -204,6 +208,8 @@ func (s *Server) Run() error {
 	mux.HandleFunc("/login/github", s.baseHostOnly(s.handleGitHubLogin))
 	mux.HandleFunc("/auth/github/callback", s.baseHostOnly(s.handleGitHubCallback))
 	mux.HandleFunc("/enroll", s.baseHostOnly(s.handleEnrollmentAuthorization))
+	mux.HandleFunc("/enroll/browser", s.baseHostOnly(s.handleEnrollmentBrowserHandoff))
+	mux.HandleFunc("/enroll/replace", s.baseHostOnly(s.requirePost(s.handleEnrollmentReplacement)))
 	mux.HandleFunc("/logout", s.baseHostOnly(s.requirePost(s.handleLogout)))
 	mux.HandleFunc("/dashboard", s.baseHostOnly(s.handleDashboard))
 	mux.HandleFunc("/dashboard/app.js", s.baseHostOnly(s.handleDashboardJS))
@@ -506,12 +512,17 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		t.writeLoop()
 	}()
 
-	t.send <- protocol.Message{
+	registered := protocol.Message{
 		Type:      protocol.TypeTunnelRegistered,
 		TunnelID:  t.id,
 		PublicURL: t.publicURL,
 		ClientIP:  s.clientIP(r),
 	}
+	if instance, ok := s.store.ApplicationInstance(profile.ID, instanceID); ok && instance.Enrolled() {
+		registered.GitHubUserID = instance.GitHubUserID
+		registered.GitHubLogin = instance.GitHubLogin
+	}
+	t.send <- registered
 
 	// The client answers every ping, so a healthy tunnel delivers a message
 	// at least once per ping interval; refreshing the read deadline on each
@@ -1237,6 +1248,8 @@ func validateConnectPath(value string) error {
 		"/login/github":                  true,
 		"/auth/github/callback":          true,
 		"/enroll":                        true,
+		"/enroll/browser":                true,
+		"/enroll/replace":                true,
 		"/logout":                        true,
 		"/dashboard":                     true,
 		"/dashboard/app.js":              true,

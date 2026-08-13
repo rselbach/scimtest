@@ -75,13 +75,19 @@ func (a *webApp) handleOIDCInspector(w http.ResponseWriter, r *http.Request) {
 	entries := append([]oidcInspection(nil), a.oidcInspections[foundApp.Slug]...)
 	a.oidcInspectorMu.Unlock()
 	data := struct {
-		App         app
-		Inspection  oidcInspection
-		Found       bool
-		History     []oidcInspection
-		Events      []flowEvent
-		ArmedFaults string
-	}{App: foundApp, Events: a.flowEvents(foundApp.Slug), ArmedFaults: a.peekArmedFaults(foundApp.Slug).describe()}
+		App           app
+		Inspection    oidcInspection
+		Found         bool
+		History       []oidcInspection
+		Events        []flowEvent
+		ArmedFaults   string
+		GitHubAccount githubAccountView
+	}{
+		App:           foundApp,
+		Events:        a.flowEvents(foundApp.Slug),
+		ArmedFaults:   a.peekArmedFaults(foundApp.Slug).describe(),
+		GitHubAccount: a.githubAccountView(),
+	}
 	if len(entries) > 0 {
 		data.Inspection = entries[0]
 		data.Found = true

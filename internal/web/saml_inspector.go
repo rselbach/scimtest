@@ -48,13 +48,19 @@ func (a *webApp) handleSAMLInspector(w http.ResponseWriter, r *http.Request) {
 	entries := append([]samlInspection(nil), a.samlInspections[foundApp.Slug]...)
 	a.samlInspectorMu.Unlock()
 	data := struct {
-		App         app
-		Inspection  samlInspection
-		Found       bool
-		History     []samlInspection
-		Events      []flowEvent
-		ArmedFaults string
-	}{App: foundApp, Events: a.flowEvents(foundApp.Slug), ArmedFaults: a.peekArmedFaults(foundApp.Slug).describe()}
+		App           app
+		Inspection    samlInspection
+		Found         bool
+		History       []samlInspection
+		Events        []flowEvent
+		ArmedFaults   string
+		GitHubAccount githubAccountView
+	}{
+		App:           foundApp,
+		Events:        a.flowEvents(foundApp.Slug),
+		ArmedFaults:   a.peekArmedFaults(foundApp.Slug).describe(),
+		GitHubAccount: a.githubAccountView(),
+	}
 	if len(entries) > 0 {
 		data.Inspection = entries[0]
 		data.Found = true

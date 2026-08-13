@@ -122,12 +122,13 @@ func TestStartCompletesFirstRunEnrollmentWithInstanceKey(t *testing.T) {
 		if connections.Add(1) == 1 {
 			r.Empty(signed.EnrollmentGrant)
 			r.NoError(conn.WriteJSON(protocol.Message{
-				Type:                       protocol.TypeEnrollmentRequired,
-				EnrollmentURL:              srv.URL + "/enrollment/start",
-				EnrollmentStatusURL:        srv.URL + "/enrollment/status",
-				EnrollmentDeviceCode:       deviceCode,
-				EnrollmentVerificationCode: "study-group",
-				EnrollmentPollSeconds:      1,
+				Type:                        protocol.TypeEnrollmentRequired,
+				EnrollmentURL:               srv.URL + "/enrollment/start",
+				EnrollmentBrowserHandoffURL: srv.URL + "/enrollment/browser?handoff=one-use",
+				EnrollmentStatusURL:         srv.URL + "/enrollment/status",
+				EnrollmentDeviceCode:        deviceCode,
+				EnrollmentVerificationCode:  "study-group",
+				EnrollmentPollSeconds:       1,
 			}))
 			return
 		}
@@ -160,7 +161,11 @@ func TestStartCompletesFirstRunEnrollmentWithInstanceKey(t *testing.T) {
 		},
 	})
 	r.NoError(err)
-	r.Equal(Enrollment{URL: srv.URL + "/enrollment/start", VerificationCode: "study-group"}, <-enrollments)
+	r.Equal(Enrollment{
+		URL:               srv.URL + "/enrollment/start",
+		BrowserHandoffURL: srv.URL + "/enrollment/browser?handoff=one-use",
+		VerificationCode:  "study-group",
+	}, <-enrollments)
 	r.Equal("human-timeline-club", tunnel.ID)
 	r.Equal(int32(2), connections.Load())
 	r.NoError(tunnel.Close())
@@ -350,10 +355,12 @@ func TestTunnelReportsReplacementRegistrationAfterReconnect(t *testing.T) {
 			clientIP = "198.51.100.20"
 		}
 		r.NoError(conn.WriteJSON(protocol.Message{
-			Type:      protocol.TypeTunnelRegistered,
-			TunnelID:  registrationID,
-			PublicURL: "https://example.com/" + registrationID,
-			ClientIP:  clientIP,
+			Type:         protocol.TypeTunnelRegistered,
+			TunnelID:     registrationID,
+			PublicURL:    "https://example.com/" + registrationID,
+			ClientIP:     clientIP,
+			GitHubUserID: 42,
+			GitHubLogin:  "troy-barnes",
 		}))
 		if connection == 1 {
 			return
@@ -381,17 +388,21 @@ func TestTunnelReportsReplacementRegistrationAfterReconnect(t *testing.T) {
 	})
 	r.NoError(err)
 	r.Equal(Registration{
-		TunnelID:  "study-room-a",
-		PublicURL: "https://example.com/study-room-a",
-		ClientIP:  "203.0.113.10",
+		TunnelID:     "study-room-a",
+		PublicURL:    "https://example.com/study-room-a",
+		ClientIP:     "203.0.113.10",
+		GitHubUserID: 42,
+		GitHubLogin:  "troy-barnes",
 	}, <-registrations)
 
 	select {
 	case registration := <-registrations:
 		r.Equal(Registration{
-			TunnelID:  "study-room-f",
-			PublicURL: "https://example.com/study-room-f",
-			ClientIP:  "198.51.100.20",
+			TunnelID:     "study-room-f",
+			PublicURL:    "https://example.com/study-room-f",
+			ClientIP:     "198.51.100.20",
+			GitHubUserID: 42,
+			GitHubLogin:  "troy-barnes",
 		}, registration)
 		r.Equal(registration, tunnel.Registration())
 	case <-ctx.Done():

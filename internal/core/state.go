@@ -218,6 +218,48 @@ func EnsureTunnelInstanceKey() (ed25519.PrivateKey, error) {
 	return ed25519.NewKeyFromSeed(seed), nil
 }
 
+// RotateTunnelInstanceIdentity replaces the credentials that authenticate
+// this installation to the tunnel server. Both values change in one
+// transaction so signing out can never leave half of the old identity behind.
+func RotateTunnelInstanceIdentity() (string, ed25519.PrivateKey, error) {
+	instanceID, err := newUUID()
+	if err != nil {
+		return "", nil, err
+	}
+	seed := make([]byte, ed25519.SeedSize)
+	if _, err := rand.Read(seed); err != nil {
+		return "", nil, fmt.Errorf("generate tunnel instance key: %w", err)
+	}
+
+	db, err := openStateDB()
+	if err != nil {
+		return "", nil, err
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return "", nil, fmt.Errorf("begin tunnel identity rotation: %w", err)
+	}
+	committed := false
+	defer rollbackTx(tx, &committed)
+	entries := map[string]string{
+		"tunnel_instance_id":  instanceID,
+		"tunnel_instance_key": base64.StdEncoding.EncodeToString(seed),
+	}
+	for key, value := range entries {
+		if _, err := tx.Exec(`INSERT INTO config(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value); err != nil {
+			return "", nil, fmt.Errorf("rotate tunnel identity %s: %w", key, err)
+		}
+	}
+	if _, err := tx.Exec(`DELETE FROM config WHERE key = 'rgrok_instance_id'`); err != nil {
+		return "", nil, fmt.Errorf("remove legacy tunnel instance id: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return "", nil, fmt.Errorf("commit tunnel identity rotation: %w", err)
+	}
+	committed = true
+	return instanceID, ed25519.NewKeyFromSeed(seed), nil
+}
+
 func decodeInstanceKeySeed(value string) (ed25519.PrivateKey, bool) {
 	seed, err := base64.StdEncoding.DecodeString(value)
 	if err != nil || len(seed) != ed25519.SeedSize {

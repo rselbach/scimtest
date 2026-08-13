@@ -616,6 +616,38 @@
 	  updateSetupActions(setupSection ? setupSection.value : 'overview');
 	}
 
+	function setEnvironmentDetails(summary, open) {
+	  const disclosure = summary.querySelector('[data-environment-disclosure]');
+	  if (!disclosure) return;
+	  const details = document.getElementById(disclosure.getAttribute('aria-controls'));
+	  if (!details) return;
+	  const name = disclosure.dataset.environmentName || 'environment';
+	  summary.classList.toggle('is-open', open);
+	  details.classList.toggle('is-open', open);
+	  disclosure.setAttribute('aria-expanded', open ? 'true' : 'false');
+	  disclosure.setAttribute('aria-label', (open ? 'Hide' : 'Show') + ' options for ' + name);
+	  details.setAttribute('aria-hidden', open ? 'false' : 'true');
+	  if (open) {
+		details.removeAttribute('inert');
+		return;
+	  }
+	  details.setAttribute('inert', '');
+	}
+
+	document.addEventListener('click', function (event) {
+	  const disclosure = event.target.closest('[data-environment-disclosure]');
+	  if (disclosure) {
+		const summary = disclosure.closest('[data-environment-summary]');
+		if (summary) setEnvironmentDetails(summary, disclosure.getAttribute('aria-expanded') !== 'true');
+		return;
+	  }
+
+	  const summary = event.target.closest('[data-environment-summary]');
+	  if (!summary || event.target.closest('a, button, form, input, select, textarea')) return;
+	  const summaryDisclosure = summary.querySelector('[data-environment-disclosure]');
+	  if (summaryDisclosure) setEnvironmentDetails(summary, summaryDisclosure.getAttribute('aria-expanded') !== 'true');
+	});
+
     function listURLFromForm(form) {
       const url = new URL(form.action, window.location.href);
       const data = new FormData(form);
