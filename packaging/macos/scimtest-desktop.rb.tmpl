@@ -1,0 +1,13 @@
+cask "scimtest-desktop" do
+  version "__VERSION__"
+  sha256 "__SHA256__"
+
+  url "https://github.com/rselbach/scimtest/releases/download/v#{version}/scimtest-desktop_#{version}_universal.dmg"
+  name "scimtest"
+  desc "Desktop SCIM, OIDC, and SAML testing service"
+  homepage "https://github.com/rselbach/scimtest"
+
+  depends_on macos: ">= :tahoe"
+
+  app "scimtest.app"
+end

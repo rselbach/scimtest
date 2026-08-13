@@ -12,6 +12,7 @@ on:
       - internal/protocol/**
       - internal/server/**
       - internal/web/**
+      - packaging/macos/**
       - go.mod
       - go.sum
 
@@ -29,14 +30,17 @@ jobs:
             artifact: scimtest-desktop-linux-amd64
             binary: scimtest-desktop
             windows_ldflags: ""
-          - runner: macos-14
+            macos_deployment_target: ""
+          - runner: macos-26
             artifact: scimtest-desktop-darwin-arm64
             binary: scimtest-desktop
             windows_ldflags: ""
+            macos_deployment_target: "26.0"
           - runner: windows-latest
             artifact: scimtest-desktop-windows-amd64
             binary: scimtest-desktop.exe
             windows_ldflags: -H=windowsgui
+            macos_deployment_target: ""
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
@@ -61,6 +65,7 @@ jobs:
       - name: Build desktop executable
         shell: bash
         env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_deployment_target }}
           SCIMTEST_APPLICATION_PROFILE_ID: ${{ vars.SCIMTEST_APPLICATION_PROFILE_ID }}
           WINDOWS_LDFLAGS: ${{ matrix.windows_ldflags }}
         run: |
@@ -68,10 +73,28 @@ jobs:
           go build -tags desktop -trimpath \
             -ldflags="-s -w ${WINDOWS_LDFLAGS} -X=github.com/rselbach/scimtest/internal/web.tunnelApplicationProfileID=${SCIMTEST_APPLICATION_PROFILE_ID} -X=github.com/rselbach/scimtest/internal/web.tunnelReleaseProfileRequired=true" \
             -o "build/${{ matrix.binary }}" ./cmd/scimtest-desktop
+      - name: Package macOS preview app
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          ./packaging/macos/build-app.sh \
+            build/scimtest-desktop \
+            build \
+            0.0.0 \
+            "${GITHUB_RUN_NUMBER}"
+          codesign --force --options runtime --sign - build/scimtest.app
+          codesign --verify --deep --strict --verbose=2 build/scimtest.app
+          ditto -c -k --keepParent \
+            build/scimtest.app \
+            "dist/${{ matrix.artifact }}.zip"
+      - name: Archive preview executable
+        if: runner.os != 'macOS'
+        shell: bash
+        run: |
           tar -czf "dist/${{ matrix.artifact }}.tar.gz" -C build "${{ matrix.binary }}"
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
-          path: dist/${{ matrix.artifact }}.tar.gz
+          path: dist/${{ matrix.artifact }}.*
           if-no-files-found: error
           retention-days: 14

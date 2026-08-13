@@ -51,6 +51,7 @@ func run() error {
 		cancel()
 		return errors.New("could not create the native WebView window")
 	}
+	installApplicationMenu()
 	window.SetTitle("scimtest")
 	window.SetSize(1280, 820, webview.HintNone)
 	window.Navigate(initialURL)

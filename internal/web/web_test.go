@@ -3377,17 +3377,52 @@ func TestReconcileAsksForConfirmation(t *testing.T) {
 	r.Contains(dashboardAsset(t, app, "/assets/app.js"), "form.dataset.syncConfirm")
 }
 
-func TestGoreleaserInjectsTunnelIdentitySymbols(t *testing.T) {
+func TestReleaseWorkflowInjectsTunnelIdentitySymbols(t *testing.T) {
 	r := require.New(t)
-	data, err := os.ReadFile("../../.goreleaser.yaml")
+	data, err := os.ReadFile("../../.github/workflows/release.yml")
 	r.NoError(err)
 
 	// A mismatched -X package path silently ships release builds with no
 	// tunnel profile, defeating tunnelReleaseProfileRequired.
 	pkg := reflect.TypeOf(webApp{}).PkgPath()
 	for _, symbol := range []string{"tunnelApplicationProfileID", "tunnelReleaseProfileRequired"} {
-		r.Contains(string(data), "-X="+pkg+"."+symbol+"=", "goreleaser must inject %s into %s", symbol, pkg)
+		r.Contains(string(data), "-X="+pkg+"."+symbol+"=", "release workflow must inject %s into %s", symbol, pkg)
 	}
 	r.NotContains(string(data), "PRIVATE_SEED")
 	r.NotContains(string(data), "PrivateSeed")
+}
+
+func TestReleaseWorkflowUsesAppleAccountNotarization(t *testing.T) {
+	r := require.New(t)
+	data, err := os.ReadFile("../../.github/workflows/release.yml")
+	r.NoError(err)
+
+	workflow := string(data)
+	for _, credential := range []string{
+		"APPLE_ID",
+		"APPLE_APP_SPECIFIC_PASSWORD",
+		"APPLE_TEAM_ID",
+	} {
+		r.Contains(workflow, credential)
+	}
+	for _, appStoreCredential := range []string{
+		"APPLE_API_KEY_P8_BASE64",
+		"APPLE_API_KEY_ID",
+		"APPLE_API_ISSUER_ID",
+	} {
+		r.NotContains(workflow, appStoreCredential)
+	}
+}
+
+func TestReleaseWorkflowSupportsNonPublishingPreview(t *testing.T) {
+	r := require.New(t)
+	data, err := os.ReadFile("../../.github/workflows/release.yml")
+	r.NoError(err)
+
+	workflow := string(data)
+	r.Contains(workflow, "workflow_dispatch:")
+	r.Contains(workflow, "RELEASE_VERSION:")
+	r.Contains(workflow, "args: release --snapshot --clean --skip=publish")
+	r.Contains(workflow, "name: scimtest-server-release")
+	r.Contains(workflow, "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
 }

@@ -50,8 +50,9 @@ func TestParseArgs(t *testing.T) {
 	}
 }
 
-func TestGoreleaserInjectsVersion(t *testing.T) {
+func TestGoreleaserExcludesCLI(t *testing.T) {
 	data, err := os.ReadFile("../../.goreleaser.yaml")
 	require.NoError(t, err)
-	require.Contains(t, string(data), "-X=main.version=")
+	require.NotContains(t, string(data), "main: ./cmd/scimtest\n")
+	require.Contains(t, string(data), "main: ./cmd/scimtest-server\n")
 }

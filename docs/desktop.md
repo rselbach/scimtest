@@ -1,4 +1,4 @@
-# Desktop spike
+# Desktop app
 
 The desktop preview wraps scimtest's existing Go HTTP server and embedded,
 server-rendered UI in the operating system's WebView. It does not introduce a
@@ -21,16 +21,18 @@ window and server lifecycle.
 
 ## Try a PR build
 
-The **Desktop spike** workflow attaches unsigned Linux amd64, macOS arm64, and
-Windows amd64 archives to each relevant pull request run for 14 days. Extract
-the archive and run `scimtest-desktop` (`scimtest-desktop.exe` on Windows).
+The **Desktop spike** workflow attaches unsigned Linux amd64 and Windows amd64
+executables plus an ad-hoc-signed macOS arm64 app to each relevant pull request
+run for 14 days. Extract the archive and run `scimtest-desktop`
+(`scimtest-desktop.exe` on Windows), or open `scimtest.app` on macOS.
 
 - Linux builds require GTK 3 and WebKitGTK 4.0 at runtime.
-- macOS builds are raw, unsigned executables rather than `.app` bundles.
+- macOS pull request apps use only an ad-hoc signature and are not notarized.
 - Windows requires the Microsoft Edge WebView2 runtime included with current
   Windows releases.
 
-The operating system may warn before launching an unsigned test build.
+The operating system may warn before launching an unsigned test build. Tagged
+releases instead contain a signed and notarized universal macOS application.
 
 ## Build locally
 
@@ -50,7 +52,50 @@ go build -tags desktop \
 ```
 
 On Windows, add `-H=windowsgui` to `-ldflags`. macOS needs Xcode Command Line
-Tools; Windows needs a CGO-capable C++ toolchain.
+Tools; Windows needs a CGO-capable C++ toolchain. macOS release builds set
+`MACOSX_DEPLOYMENT_TARGET=26.0`.
+
+## macOS releases
+
+Tagged releases build the desktop executable natively on Apple Silicon and
+Intel macOS 26 runners. The release workflow combines both slices with `lipo`,
+assembles `scimtest.app`, signs it with the hardened runtime and a secure
+timestamp, and submits it to Apple's notary service. The accepted ticket is
+stapled before the workflow creates the final ZIP and DMG. The DMG is separately
+signed, notarized, and stapled.
+
+The universal app supports macOS 26 and newer. Releases publish:
+
+- `scimtest-desktop_<version>_universal.dmg`
+- `scimtest-desktop_<version>_universal.zip`
+- `scimtest-desktop_<version>_checksums.txt`
+
+Homebrew installs the DMG through the separate `scimtest-desktop` cask. Tagged
+releases no longer contain the browser-mode CLI; `cmd/scimtest` remains
+available for source-based development. `scimtest-server` remains a separate
+release artifact for tunnel operators. Publishing the first desktop release
+also removes the legacy `scimtest` CLI cask from the tap; historical GitHub
+release assets are not deleted.
+
+The release environment requires these secrets:
+
+- `MACOS_CERTIFICATE_P12_BASE64`: Developer ID Application certificate and
+  private key exported as a base64-encoded PKCS #12 file
+- `MACOS_CERTIFICATE_PASSWORD`: password protecting that file
+- `APPLE_ID`: Apple Account email used for notarization
+- `APPLE_APP_SPECIFIC_PASSWORD`: app-specific password for that Apple Account
+- `APPLE_TEAM_ID`: Apple Developer team containing the Developer ID certificate
+- `TAP_GITHUB_TOKEN`: write access to `rselbach/homebrew-tap`
+
+The release job generates its temporary keychain password and discovers the
+signing identity from the imported certificate. App Store Connect credentials
+are not required; releases use Developer ID distribution outside the Mac App
+Store.
+
+The repository variable `SCIMTEST_APPLICATION_PROFILE_ID` remains required.
+The release workflow loads signing credentials for `v*` tag pushes and the
+explicit `spike/desktop-app` preview trigger. Pull request artifacts never
+receive those secrets and remain unnotarized.
 
 ## GitHub account gate
 
@@ -85,6 +130,6 @@ starting desktop mode so it cannot bypass the desktop account gate.
 - Account switching uses **Log out** followed by a new GitHub authorization.
 - Each launch needs network access long enough to authenticate the installation
   tunnel. The app locks again if that tunnel disconnects.
-- Packaging, code signing, notarization, icons, native menus, auto-update, and
-  protocol/deep-link registration are intentionally outside this spike.
+- Native menu commands beyond Quit, auto-update, and protocol/deep-link
+  registration are not yet implemented.
 - Linux artifacts dynamically depend on the distribution's WebKitGTK runtime.
