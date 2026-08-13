@@ -3,6 +3,14 @@
 
 set -euo pipefail
 
+checkout_dir=""
+
+cleanup() {
+  if [[ -n "${checkout_dir}" && -d "${checkout_dir}" ]]; then
+    rm -rf "${checkout_dir}"
+  fi
+}
+
 usage() {
   echo "usage: $0 VERSION DMG_SHA256" >&2
 }
@@ -16,7 +24,6 @@ main() {
   local version="$1"
   local dmg_sha256="$2"
   local script_dir
-  local checkout_dir
   local cask_path
   local cask_status
   local legacy_cask_path
@@ -36,7 +43,7 @@ main() {
 
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   checkout_dir="$(mktemp -d /tmp/scimtest-homebrew-tap.XXXXXX)"
-  trap 'rm -rf "${checkout_dir}"' EXIT
+  trap cleanup EXIT
   cask_path="${checkout_dir}/Casks/scimtest-desktop.rb"
   legacy_cask_path="${checkout_dir}/Casks/scimtest.rb"
 
