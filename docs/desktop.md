@@ -130,6 +130,5 @@ starting desktop mode so it cannot bypass the desktop account gate.
 - Account switching uses **Log out** followed by a new GitHub authorization.
 - Each launch needs network access long enough to authenticate the installation
   tunnel. The app locks again if that tunnel disconnects.
-- Native menu commands beyond Quit, auto-update, and protocol/deep-link
-  registration are not yet implemented.
+- Auto-update and protocol/deep-link registration are not yet implemented.
 - Linux artifacts dynamically depend on the distribution's WebKitGTK runtime.
