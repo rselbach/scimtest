@@ -291,7 +291,7 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: scimtest-desktop-release
-          path: desktop-release
+          path: ${{ runner.temp }}/desktop-release
       - name: Publish server release
         uses: goreleaser/goreleaser-action@v6
         with:
@@ -303,14 +303,16 @@ jobs:
       - name: Publish desktop artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${GITHUB_REF_NAME}" desktop-release/* --clobber
+        run: >-
+          gh release upload "${GITHUB_REF_NAME}"
+          "${RUNNER_TEMP}"/desktop-release/* --clobber
       - name: Update Homebrew cask
         env:
           GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
-          dmg_path="desktop-release/scimtest-desktop_${version}_universal.dmg"
+          dmg_path="${RUNNER_TEMP}/desktop-release/scimtest-desktop_${version}_universal.dmg"
           dmg_sha256="$(sha256sum "${dmg_path}" | cut -d ' ' -f 1)"
           ./packaging/macos/update-homebrew-cask.sh \
             "${version}" \
