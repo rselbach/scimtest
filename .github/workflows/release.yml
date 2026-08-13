@@ -242,7 +242,12 @@ jobs:
           codesign --verify --verbose=2 "${dmg_path}"
 
           checksum_path="release/scimtest-desktop_${version}_checksums.txt"
-          shasum -a 256 "${dmg_path}" "${zip_path}" >"${checksum_path}"
+          (
+            cd release
+            shasum -a 256 \
+              "$(basename "${dmg_path}")" \
+              "$(basename "${zip_path}")"
+          ) >"${checksum_path}"
       - uses: actions/upload-artifact@v7
         with:
           name: scimtest-desktop-release

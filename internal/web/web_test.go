@@ -3425,4 +3425,6 @@ func TestReleaseWorkflowSupportsNonPublishingPreview(t *testing.T) {
 	r.Contains(workflow, "args: release --snapshot --clean --skip=publish")
 	r.Contains(workflow, "name: scimtest-server-release")
 	r.Contains(workflow, "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
+	r.Contains(workflow, `"$(basename "${dmg_path}")"`)
+	r.Contains(workflow, `"$(basename "${zip_path}")"`)
 }
