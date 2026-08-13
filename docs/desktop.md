@@ -101,9 +101,10 @@ The release workflow loads signing credentials for `v*` tag pushes and the
 explicit `spike/desktop-app` preview trigger. Pull request artifacts never
 receive those secrets and remain unnotarized.
 
-The signed macOS app checks that appcast through Sparkle. Sparkle asks for
-permission to check automatically on the second launch. Users can also choose
-**scimtest > Check for Updates…**. The first release that contains Sparkle must
+The signed macOS app checks that appcast through Sparkle. Scheduled update
+checks are enabled by default; installing an available update still requires
+the user to approve it. Users can also choose **scimtest > Check for Updates…**.
+The first release that contains Sparkle must
 still be installed through Homebrew or a manual download. Later releases can
 replace it in place.
 
