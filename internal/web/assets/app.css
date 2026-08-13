@@ -1114,6 +1114,8 @@
       box-shadow: var(--shadow-lg);
     }
     .modal.wide { width: min(880px, 100%); }
+    .modal.confirm-modal { width: min(440px, 100%); }
+    .confirm-modal .modal-body p { margin: 0; color: var(--text); }
     .modal.environment-modal {
       display: flex;
       flex-direction: column;

@@ -188,7 +188,7 @@
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
           <button class="btn" type="submit" data-sync-submit {{if and .SyncJob .SyncJob.Running}}disabled{{end}} title="Check every user and group on {{.ActiveEnvironment.Name}} and repair any drift">Reconcile</button>
         </form>
-        <form data-sync-disable method="post" action="/import" {{if .ImportPreview}}onsubmit="return confirm('Apply this cached import preview? This replaces the directory in {{.ActiveEnvironment.Name}}.')"{{end}}>
+        <form data-sync-disable method="post" action="/import" {{if .ImportPreview}}data-confirm="Apply this cached import preview? This replaces the directory in {{.ActiveEnvironment.Name}}."{{end}}>
           <input type="hidden" name="tab" value="{{.Tab}}">
 		  <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
@@ -199,7 +199,7 @@
 		  <button class="btn" type="submit">Preview remote import</button>
 		  {{end}}
         </form>
-        <form data-sync-disable method="post" action="/reset" onsubmit="return confirm('Reset sync state for {{.ActiveEnvironment.Name}}? This clears its remote IDs and marks its users and groups dirty.')">
+        <form data-sync-disable method="post" action="/reset" data-confirm="Reset sync state for {{.ActiveEnvironment.Name}}? This clears its remote IDs and marks its users and groups dirty.">
           <input type="hidden" name="tab" value="{{.Tab}}">
 		  <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
           {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
@@ -378,29 +378,29 @@
             <h3>Bulk user actions</h3>
             <p>Apply the same state change to every non-deleted user.</p>
             <div class="tool-actions">
-              <form data-sync-disable method="post" action="/tools/activate-all">
+              <form data-sync-disable method="post" action="/tools/activate-all" data-confirm="Activate all non-deleted users?">
                 <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
                 <input type="hidden" name="tab" value="{{.Tab}}">
                 {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
-                <button class="btn" type="submit" onclick="return confirm('Activate all non-deleted users?')">Activate all</button>
+                <button class="btn" type="submit">Activate all</button>
               </form>
-              <form data-sync-disable method="post" action="/tools/deactivate-all">
+              <form data-sync-disable method="post" action="/tools/deactivate-all" data-confirm="Deactivate all non-deleted users?">
                 <input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
                 <input type="hidden" name="tab" value="{{.Tab}}">
                 {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
-                <button class="btn" type="submit" onclick="return confirm('Deactivate all non-deleted users?')">Deactivate all</button>
+                <button class="btn" type="submit">Deactivate all</button>
               </form>
-			  <form data-sync-disable method="post" action="/tools/delete-all">
+			  <form data-sync-disable method="post" action="/tools/delete-all" data-confirm="{{if .HasSCIMEnvironments}}Delete every user from {{.ActiveEnvironment.Name}}? Each deletion will be queued for its next SCIM sync.{{else}}Permanently delete every user from {{.ActiveEnvironment.Name}} and clear all group memberships? This cannot be undone.{{end}}">
 				<input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
                 <input type="hidden" name="tab" value="{{.Tab}}">
                 {{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
-                <button class="btn btn-danger" type="submit" onclick="return confirm('{{if .HasSCIMEnvironments}}Delete every user from {{.ActiveEnvironment.Name}}? Each deletion will be queued for its next SCIM sync.{{else}}Permanently delete every user from {{.ActiveEnvironment.Name}} and clear all group memberships? This cannot be undone.{{end}}')">Delete all users</button>
+                <button class="btn btn-danger" type="submit">Delete all users</button>
 			  </form>
-			  <form data-sync-disable method="post" action="/tools/clear-users-local">
+			  <form data-sync-disable method="post" action="/tools/clear-users-local" data-confirm="Immediately clear every local user? No SCIM server will be contacted. Group memberships and user history will also be cleared.">
 				<input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
 				<input type="hidden" name="tab" value="{{.Tab}}">
 				{{if .Pagination}}<input type="hidden" name="page" value="{{.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{.Pagination.PageSize}}">{{if .Pagination.SearchQuery}}<input type="hidden" name="q" value="{{.Pagination.SearchQuery}}">{{end}}{{end}}
-				<button class="btn btn-danger" type="submit" onclick="return confirm('Immediately clear every local user? No SCIM server will be contacted. Group memberships and user history will also be cleared.')">Clear local users</button>
+				<button class="btn btn-danger" type="submit">Clear local users</button>
 			  </form>
 			</div>
           </section>
@@ -409,7 +409,7 @@
 			<p>Backups contain client secrets, SCIM bearer tokens, signing keys, users, and operation history. Store them securely.</p>
 			<div class="tool-actions">
 			  <a class="btn" href="/backup?environment={{.ActiveEnvironment.ID}}">Download backup</a>
-			  <form data-sync-disable method="post" action="/restore" enctype="multipart/form-data" onsubmit="return confirm('Replace {{.ActiveEnvironment.Name}} from this backup? A private pre-restore copy will be saved automatically.')">
+			  <form data-sync-disable method="post" action="/restore" enctype="multipart/form-data" data-confirm="Replace {{.ActiveEnvironment.Name}} from this backup? A private pre-restore copy will be saved automatically.">
 				<input type="hidden" name="environment" value="{{.ActiveEnvironment.ID}}">
 				<label class="field">
 				  <span class="label">Backup JSON</span>
@@ -951,6 +951,21 @@
   </div>
 
   {{end}}
+
+  <div class="overlay is-hidden" data-confirm-overlay aria-hidden="true">
+    <div class="modal confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-message">
+      <div class="modal-header">
+        <div class="modal-title" id="confirm-dialog-title">Confirm action</div>
+      </div>
+      <div class="modal-body">
+        <p id="confirm-dialog-message" data-confirm-message></p>
+        <div class="form-actions">
+          <button class="btn btn-ghost" type="button" data-confirm-cancel>Cancel</button>
+          <button class="btn btn-danger" type="button" data-confirm-accept>Continue</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script src="/assets/app.js?v=wizard"></script>
 </body>

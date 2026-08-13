@@ -744,6 +744,35 @@ func TestIndexRendersListPartial(t *testing.T) {
 	r.NotContains(body, `class="topbar"`)
 }
 
+func TestUserDeleteUsesInPageConfirmation(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Users: []user{{
+			ID: "troy", GivenName: "Troy", FamilyName: "Barnes",
+			Username: "troy", Email: "troy@greendale.edu", Active: true,
+		}},
+		Apps:            []app{{ID: "greendale", Name: "Greendale", Slug: "greendale"}},
+		UserOperations:  map[string][]operationLog{},
+		GroupOperations: map[string][]operationLog{},
+	}))
+
+	app := &webApp{}
+	rec := httptest.NewRecorder()
+	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=users&environment=greendale", nil))
+
+	r.Equal(http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	r.Contains(body, `action="/users/troy/delete" data-confirm="`)
+	r.NotContains(body, `aria-label="Delete user" onclick=`)
+	r.Contains(body, `data-confirm-overlay`)
+	r.Contains(body, `id="confirm-dialog-message"`)
+	javascript := dashboardAsset(t, app, "/assets/app.js")
+	r.Contains(javascript, "openConfirmation(message, function ()")
+	r.Contains(javascript, "form.requestSubmit()")
+	r.NotContains(javascript, "window.confirm(")
+}
+
 func TestUserActionPreservesPage(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)

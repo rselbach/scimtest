@@ -166,11 +166,15 @@
 
     function closeActiveOverlay() {
       if (!activeOverlay) return;
-      if (overlayFormDirty && !window.confirm('Discard unsaved changes?')) return;
       const closeLink = activeOverlay.querySelector('a[href]');
-      if (closeLink) {
-        window.location.href = closeLink.href;
+      if (!closeLink) return;
+      if (overlayFormDirty) {
+        openConfirmation('Discard unsaved changes?', function () {
+          window.location.href = closeLink.href;
+        });
+        return;
       }
+      window.location.href = closeLink.href;
     }
 
     if (activeOverlay) {
@@ -755,6 +759,69 @@
       window.open(url, '_blank', 'noreferrer');
     });
 
+    const confirmationOverlay = document.querySelector('[data-confirm-overlay]');
+    const confirmationMessage = confirmationOverlay ? confirmationOverlay.querySelector('[data-confirm-message]') : null;
+    const confirmationCancel = confirmationOverlay ? confirmationOverlay.querySelector('[data-confirm-cancel]') : null;
+    const confirmationAccept = confirmationOverlay ? confirmationOverlay.querySelector('[data-confirm-accept]') : null;
+    const confirmedForms = new WeakSet();
+    let confirmationAction = null;
+    let confirmationTrigger = null;
+    let confirmationInertRegions = [];
+
+    function closeConfirmation() {
+      if (!confirmationOverlay) return;
+      confirmationOverlay.classList.add('is-hidden');
+      confirmationOverlay.setAttribute('aria-hidden', 'true');
+      for (const region of confirmationInertRegions) region.removeAttribute('inert');
+      confirmationInertRegions = [];
+      confirmationAction = null;
+      if (confirmationTrigger && confirmationTrigger.isConnected) confirmationTrigger.focus();
+      confirmationTrigger = null;
+    }
+
+    function openConfirmation(message, action) {
+      if (!confirmationOverlay || !confirmationMessage || !confirmationAccept) return;
+      confirmationAction = action;
+      confirmationTrigger = document.activeElement;
+      confirmationMessage.textContent = message;
+      confirmationOverlay.classList.remove('is-hidden');
+      confirmationOverlay.setAttribute('aria-hidden', 'false');
+      confirmationInertRegions = Array.from(document.querySelectorAll('.topbar, .app, .footer, [data-overlay]:not(.is-hidden), [data-sync-details]:not(.is-hidden)'))
+        .filter(function (region) { return !region.hasAttribute('inert'); });
+      for (const region of confirmationInertRegions) region.setAttribute('inert', '');
+      confirmationAccept.focus();
+    }
+
+    if (confirmationCancel) confirmationCancel.addEventListener('click', closeConfirmation);
+    if (confirmationAccept) {
+      confirmationAccept.addEventListener('click', function () {
+        const action = confirmationAction;
+        closeConfirmation();
+        if (action) action();
+      });
+    }
+    if (confirmationOverlay) {
+      confirmationOverlay.addEventListener('click', function (event) {
+        if (event.target === confirmationOverlay) closeConfirmation();
+      });
+      confirmationOverlay.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          event.stopPropagation();
+          closeConfirmation();
+          return;
+        }
+        if (event.key !== 'Tab' || !confirmationCancel || !confirmationAccept) return;
+        if (event.shiftKey && document.activeElement === confirmationCancel) {
+          event.preventDefault();
+          confirmationAccept.focus();
+        } else if (!event.shiftKey && document.activeElement === confirmationAccept) {
+          event.preventDefault();
+          confirmationCancel.focus();
+        }
+      });
+    }
+
     function bulkNoun() {
       const form = document.querySelector('[data-bulk-delete-form]');
       return form && form.dataset.bulkNoun ? form.dataset.bulkNoun : 'item';
@@ -788,18 +855,29 @@
     });
 
     document.addEventListener('submit', function (event) {
-      const form = event.target.closest('[data-bulk-delete-form]');
-      if (!form) return;
-      const noun = form.dataset.bulkNoun || 'item';
-      const selected = document.querySelectorAll('[data-bulk-selection]:checked').length;
-      const environment = document.body.dataset.environmentName || 'this environment';
-      const message = selected === 1
-        ? 'Delete this ' + noun + ' from ' + environment + '?'
-        : 'Delete ' + String(selected) + ' ' + noun + 's from ' + environment + '?';
-      const scope = document.body.dataset.hasScimEnvironments === 'true'
-        ? ' The deletion will be scheduled for its next SCIM sync.'
-        : ' This permanently deletes the selected ' + noun + 's.';
-      if (!window.confirm(message + scope)) event.preventDefault();
+      const form = event.target.closest('form');
+      if (!form || confirmedForms.delete(form)) return;
+
+      let message = form.dataset.confirm || form.dataset.syncConfirm || '';
+      if (form.matches('[data-bulk-delete-form]')) {
+        const noun = form.dataset.bulkNoun || 'item';
+        const selected = form.closest('[data-list-card]').querySelectorAll('[data-bulk-selection]:checked').length;
+        const environment = document.body.dataset.environmentName || 'this environment';
+        message = selected === 1
+          ? 'Delete this ' + noun + ' from ' + environment + '?'
+          : 'Delete ' + String(selected) + ' ' + noun + 's from ' + environment + '?';
+        message += document.body.dataset.hasScimEnvironments === 'true'
+          ? ' The deletion will be scheduled for its next SCIM sync.'
+          : ' This permanently deletes the selected ' + noun + 's.';
+      }
+      if (!message) return;
+
+      event.preventDefault();
+      openConfirmation(message, function () {
+        if (!form.isConnected) return;
+        confirmedForms.add(form);
+        form.requestSubmit();
+      });
     });
     const initialListCard = document.querySelector('[data-list-card]');
     if (initialListCard) updateBulkSelection(initialListCard);
@@ -1054,7 +1132,6 @@
     for (const form of syncForms) {
       form.addEventListener('submit', async function (event) {
         event.preventDefault();
-        if (form.dataset.syncConfirm && !window.confirm(form.dataset.syncConfirm)) return;
         if (syncPollTimer) clearTimeout(syncPollTimer);
         syncPollTimer = null;
         syncPollFailures = 0;

@@ -81,11 +81,11 @@
                     </form>
                     {{end}}
                     {{else}}
-                    <form data-sync-disable method="post" action="/groups/{{.ID}}/delete">
+                    <form data-sync-disable method="post" action="/groups/{{.ID}}/delete" data-confirm="{{if $.HasSCIMEnvironments}}Delete this group from {{$.ActiveEnvironment.Name}}? The deletion will be scheduled for its next SCIM sync.{{else}}Permanently delete this group from {{$.ActiveEnvironment.Name}}?{{end}}">
                       <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
                       <input type="hidden" name="tab" value="groups">
                       {{if $.Pagination}}<input type="hidden" name="page" value="{{$.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{$.Pagination.PageSize}}">{{if $.Pagination.SearchQuery}}<input type="hidden" name="q" value="{{$.Pagination.SearchQuery}}">{{end}}{{end}}
-					  <button class="icon-btn danger" type="submit" title="Delete group" aria-label="Delete group" onclick="return confirm('{{if $.HasSCIMEnvironments}}Delete this group from {{$.ActiveEnvironment.Name}}? The deletion will be scheduled for its next SCIM sync.{{else}}Permanently delete this group from {{$.ActiveEnvironment.Name}}?{{end}}')">
+					  <button class="icon-btn danger" type="submit" title="Delete group" aria-label="Delete group">
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10"/><path d="M5.5 4.5V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.5"/><path d="M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>
                       </button>
                     </form>
@@ -140,9 +140,9 @@
                     <a class="icon-btn environment-edit" href="{{.EditURL}}" title="Edit {{.Name}}" aria-label="Edit {{.Name}}">
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 2.5l2 2L5 13H3v-2z"/><path d="M10 4l2 2"/></svg>
                     </a>
-                    <form data-sync-disable method="post" action="/apps/{{.ID}}/delete">
+                    <form data-sync-disable method="post" action="/apps/{{.ID}}/delete" data-confirm="Delete this environment, its users and groups, and all of its protocol and sync configuration?">
                       <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
-                      <button class="icon-btn environment-delete danger" type="submit" title="Delete {{.Name}}" aria-label="Delete {{.Name}}" onclick="return confirm('Delete this environment, its users and groups, and all of its protocol and sync configuration?')">
+                      <button class="icon-btn environment-delete danger" type="submit" title="Delete {{.Name}}" aria-label="Delete {{.Name}}">
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10"/><path d="M5.5 4.5V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.5"/><path d="M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>
                       </button>
                     </form>
@@ -277,11 +277,11 @@
                     </form>
                     {{end}}
                     {{else}}
-                    <form data-sync-disable method="post" action="/users/{{.ID}}/delete">
+                    <form data-sync-disable method="post" action="/users/{{.ID}}/delete" data-confirm="{{if $.HasSCIMEnvironments}}Delete this user from {{$.ActiveEnvironment.Name}}? The deletion will be scheduled for its next SCIM sync.{{else}}Permanently delete this user from {{$.ActiveEnvironment.Name}}?{{end}}">
                       <input type="hidden" name="environment" value="{{$.ActiveEnvironment.ID}}">
                       <input type="hidden" name="tab" value="users">
                       {{if $.Pagination}}<input type="hidden" name="page" value="{{$.Pagination.Page}}"><input type="hidden" name="pageSize" value="{{$.Pagination.PageSize}}">{{if $.Pagination.SearchQuery}}<input type="hidden" name="q" value="{{$.Pagination.SearchQuery}}">{{end}}{{end}}
-					  <button class="icon-btn danger" type="submit" title="Delete user" aria-label="Delete user" onclick="return confirm('{{if $.HasSCIMEnvironments}}Delete this user from {{$.ActiveEnvironment.Name}}? The deletion will be scheduled for its next SCIM sync.{{else}}Permanently delete this user from {{$.ActiveEnvironment.Name}}?{{end}}')">
+					  <button class="icon-btn danger" type="submit" title="Delete user" aria-label="Delete user">
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10"/><path d="M5.5 4.5V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.5"/><path d="M4.5 4.5l.7 8a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.7-8"/></svg>
                       </button>
                     </form>
