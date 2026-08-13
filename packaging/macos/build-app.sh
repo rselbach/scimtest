@@ -7,6 +7,14 @@ usage() {
   echo "usage: $0 BINARY OUTPUT_DIR VERSION BUILD_VERSION" >&2
 }
 
+thin_arm64() {
+  local binary_path="$1"
+  local thin_path="${binary_path}.arm64"
+
+  lipo -thin arm64 "${binary_path}" -output "${thin_path}"
+  mv "${thin_path}" "${binary_path}"
+}
+
 main() {
   if (( $# != 4 )); then
     usage
@@ -76,6 +84,10 @@ main() {
   ditto "${framework_path}" "${sparkle_path}"
   rm -rf "${sparkle_path}/Versions/B/XPCServices"
   rm -f "${sparkle_path}/XPCServices"
+  thin_arm64 "${sparkle_path}/Versions/B/Autoupdate"
+  thin_arm64 \
+    "${sparkle_path}/Versions/B/Updater.app/Contents/MacOS/Updater"
+  thin_arm64 "${sparkle_path}/Versions/B/Sparkle"
 
   install_name_tool -add_rpath \
     @executable_path/../Frameworks \

@@ -21,7 +21,7 @@ Homebrew (recommended — release builds include the automatic public tunnel):
 brew install --cask rselbach/tap/scimtest-desktop
 ```
 
-Or download the universal macOS 26+ DMG or ZIP from the
+Or download the Apple silicon macOS 26+ DMG or ZIP from the
 [releases page](https://github.com/rselbach/scimtest/releases). Tagged releases
 no longer distribute the command-line application.
 

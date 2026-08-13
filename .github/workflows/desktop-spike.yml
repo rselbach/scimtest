@@ -21,27 +21,13 @@ permissions:
 
 jobs:
   build:
-    name: ${{ matrix.artifact }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-22.04
-            artifact: scimtest-desktop-linux-amd64
-            binary: scimtest-desktop
-            windows_ldflags: ""
-            macos_deployment_target: ""
-          - runner: macos-26
-            artifact: scimtest-desktop-darwin-arm64
-            binary: scimtest-desktop
-            windows_ldflags: ""
-            macos_deployment_target: "26.0"
-          - runner: windows-latest
-            artifact: scimtest-desktop-windows-amd64
-            binary: scimtest-desktop.exe
-            windows_ldflags: -H=windowsgui
-            macos_deployment_target: ""
-    runs-on: ${{ matrix.runner }}
+    name: scimtest-desktop-darwin-arm64
+    runs-on: macos-26
+    env:
+      CGO_ENABLED: 1
+      GOARCH: arm64
+      MACOSX_DEPLOYMENT_TARGET: "26.0"
+      SCIMTEST_APPLICATION_PROFILE_ID: ${{ vars.SCIMTEST_APPLICATION_PROFILE_ID }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -49,15 +35,9 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Fetch Sparkle
-        if: runner.os == 'macOS'
         run: ./packaging/macos/fetch-sparkle.sh
-      - name: Install Linux WebView headers
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
       - name: Check desktop application profile
         shell: bash
-        env:
-          SCIMTEST_APPLICATION_PROFILE_ID: ${{ vars.SCIMTEST_APPLICATION_PROFILE_ID }}
         run: |
           if [[ ! "${SCIMTEST_APPLICATION_PROFILE_ID}" =~ ^[a-f0-9]{32}$ ]]; then
             echo "::error::Set SCIMTEST_APPLICATION_PROFILE_ID to the application profile ID"
@@ -69,17 +49,12 @@ jobs:
         run: go test -tags desktop ./cmd/scimtest-desktop
       - name: Build desktop executable
         shell: bash
-        env:
-          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_deployment_target }}
-          SCIMTEST_APPLICATION_PROFILE_ID: ${{ vars.SCIMTEST_APPLICATION_PROFILE_ID }}
-          WINDOWS_LDFLAGS: ${{ matrix.windows_ldflags }}
         run: |
           mkdir -p build dist
           go build -tags desktop -trimpath \
-            -ldflags="-s -w ${WINDOWS_LDFLAGS} -X=github.com/rselbach/scimtest/internal/web.tunnelApplicationProfileID=${SCIMTEST_APPLICATION_PROFILE_ID} -X=github.com/rselbach/scimtest/internal/web.tunnelReleaseProfileRequired=true" \
-            -o "build/${{ matrix.binary }}" ./cmd/scimtest-desktop
+            -ldflags="-s -w -X=github.com/rselbach/scimtest/internal/web.tunnelApplicationProfileID=${SCIMTEST_APPLICATION_PROFILE_ID} -X=github.com/rselbach/scimtest/internal/web.tunnelReleaseProfileRequired=true" \
+            -o build/scimtest-desktop ./cmd/scimtest-desktop
       - name: Package macOS preview app
-        if: runner.os == 'macOS'
         shell: bash
         run: |
           ./packaging/macos/build-app.sh \
@@ -91,15 +66,10 @@ jobs:
           codesign --verify --deep --strict --verbose=2 build/scimtest.app
           ditto -c -k --sequesterRsrc --keepParent \
             build/scimtest.app \
-            "dist/${{ matrix.artifact }}.zip"
-      - name: Archive preview executable
-        if: runner.os != 'macOS'
-        shell: bash
-        run: |
-          tar -czf "dist/${{ matrix.artifact }}.tar.gz" -C build "${{ matrix.binary }}"
+            dist/scimtest-desktop-darwin-arm64.zip
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.artifact }}
-          path: dist/${{ matrix.artifact }}.*
+          name: scimtest-desktop-darwin-arm64
+          path: dist/scimtest-desktop-darwin-arm64.zip
           if-no-files-found: error
           retention-days: 14

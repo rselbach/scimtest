@@ -33,19 +33,11 @@ jobs:
       - run: go test ./...
 
   build-desktop:
-    name: Desktop ${{ matrix.arch }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-26
-            arch: arm64
-          - runner: macos-26-intel
-            arch: amd64
-    runs-on: ${{ matrix.runner }}
+    name: Desktop arm64
+    runs-on: macos-26
     env:
       CGO_ENABLED: 1
-      GOARCH: ${{ matrix.arch }}
+      GOARCH: arm64
       MACOSX_DEPLOYMENT_TARGET: "26.0"
       SCIMTEST_APPLICATION_PROFILE_ID: ${{ vars.SCIMTEST_APPLICATION_PROFILE_ID }}
     steps:
@@ -78,7 +70,7 @@ jobs:
           vtool -show-build build/scimtest-desktop
       - uses: actions/upload-artifact@v7
         with:
-          name: scimtest-desktop-${{ matrix.arch }}
+          name: scimtest-desktop-arm64
           path: build/scimtest-desktop
           if-no-files-found: error
           retention-days: 7
@@ -133,10 +125,6 @@ jobs:
         with:
           name: scimtest-desktop-arm64
           path: build/arm64
-      - uses: actions/download-artifact@v7
-        with:
-          name: scimtest-desktop-amd64
-          path: build/amd64
       - name: Install signing credentials
         shell: bash
         run: |
@@ -184,25 +172,25 @@ jobs:
 
           echo "MACOS_KEYCHAIN_PATH=${keychain_path}" >>"${GITHUB_ENV}"
           echo "MACOS_SIGNING_IDENTITY=${signing_identity}" >>"${GITHUB_ENV}"
-      - name: Assemble universal app
+      - name: Assemble arm64 app
         shell: bash
         run: |
           version="${RELEASE_VERSION#v}"
-          mkdir -p build/universal package release notarization
-          lipo -create \
-            build/arm64/scimtest-desktop \
-            build/amd64/scimtest-desktop \
-            -output build/universal/scimtest-desktop
-          lipo build/universal/scimtest-desktop -verify_arch arm64 x86_64
-          vtool -show-build build/universal/scimtest-desktop
-          minos_count="$(vtool -show-build build/universal/scimtest-desktop \
+          mkdir -p package release notarization
+          architectures="$(lipo -archs build/arm64/scimtest-desktop)"
+          if [[ "${architectures}" != "arm64" ]]; then
+            echo "::error::Desktop binary must contain only arm64"
+            exit 1
+          fi
+          vtool -show-build build/arm64/scimtest-desktop
+          minos_count="$(vtool -show-build build/arm64/scimtest-desktop \
             | awk '$1 == "minos" && $2 == "26.0" { count++ } END { print count + 0 }')"
-          if (( minos_count != 2 )); then
-            echo "::error::Both Mach-O slices must target macOS 26.0"
+          if (( minos_count != 1 )); then
+            echo "::error::The arm64 Mach-O slice must target macOS 26.0"
             exit 1
           fi
           ./packaging/macos/build-app.sh \
-            build/universal/scimtest-desktop \
+            build/arm64/scimtest-desktop \
             package \
             "${version}" \
             "${GITHUB_RUN_NUMBER}"
@@ -230,8 +218,8 @@ jobs:
         shell: bash
         run: |
           version="${RELEASE_VERSION#v}"
-          zip_path="release/scimtest-desktop_${version}_universal.zip"
-          dmg_path="release/scimtest-desktop_${version}_universal.dmg"
+          zip_path="release/scimtest-desktop_${version}_arm64.zip"
+          dmg_path="release/scimtest-desktop_${version}_arm64.dmg"
 
           ditto -c -k --sequesterRsrc --keepParent \
             package/scimtest.app \
@@ -268,7 +256,7 @@ jobs:
           fi
 
           version="${RELEASE_VERSION#v}"
-          archive_name="scimtest-desktop_${version}_universal.zip"
+          archive_name="scimtest-desktop_${version}_arm64.zip"
           mkdir -p appcast-input appcast-site
           cp "release/${archive_name}" appcast-input/
           printf '%s' "${SPARKLE_EDDSA_PRIVATE_KEY}" \
@@ -349,7 +337,7 @@ jobs:
         shell: bash
         run: |
           version="${GITHUB_REF_NAME#v}"
-          dmg_path="${RUNNER_TEMP}/desktop-release/scimtest-desktop_${version}_universal.dmg"
+          dmg_path="${RUNNER_TEMP}/desktop-release/scimtest-desktop_${version}_arm64.dmg"
           dmg_sha256="$(sha256sum "${dmg_path}" | cut -d ' ' -f 1)"
           ./packaging/macos/update-homebrew-cask.sh \
             "${version}" \

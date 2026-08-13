@@ -21,29 +21,19 @@ window and server lifecycle.
 
 ## Try a PR build
 
-The **Desktop spike** workflow attaches unsigned Linux amd64 and Windows amd64
-executables plus an ad-hoc-signed macOS arm64 app to each relevant pull request
-run for 14 days. Extract the archive and run `scimtest-desktop`
-(`scimtest-desktop.exe` on Windows), or open `scimtest.app` on macOS.
+The **Desktop spike** workflow attaches an ad-hoc-signed macOS arm64 app to
+each relevant pull request run for 14 days. Extract the archive and open
+`scimtest.app` on an Apple silicon Mac.
 
-- Linux builds require GTK 3 and WebKitGTK 4.0 at runtime.
 - macOS pull request apps use only an ad-hoc signature and are not notarized.
-- Windows requires the Microsoft Edge WebView2 runtime included with current
-  Windows releases.
 
-The operating system may warn before launching an unsigned test build. Tagged
-releases instead contain a signed and notarized universal macOS application.
+The operating system may warn before launching an ad-hoc-signed test build.
+Tagged releases contain a signed and notarized macOS arm64 application.
 
 ## Build locally
 
-Desktop builds use CGO and must be built on the target operating system. On
-Debian or Ubuntu, install the native headers first:
-
-```sh
-sudo apt-get install build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.0-dev
-```
-
-On macOS, fetch the pinned Sparkle framework first:
+Desktop builds use CGO and require an Apple silicon Mac with Xcode Command Line
+Tools. Fetch the pinned Sparkle framework first:
 
 ```sh
 just fetch-sparkle
@@ -57,9 +47,7 @@ go build -tags desktop \
   -o scimtest-desktop ./cmd/scimtest-desktop
 ```
 
-On Windows, add `-H=windowsgui` to `-ldflags`. macOS needs Xcode Command Line
-Tools; Windows needs a CGO-capable C++ toolchain. macOS release builds set
-`MACOSX_DEPLOYMENT_TARGET=26.0`.
+Release builds set `MACOSX_DEPLOYMENT_TARGET=26.0`.
 
 Run the macOS desktop tests with Sparkle on the dynamic library search path:
 
@@ -70,17 +58,17 @@ DYLD_FRAMEWORK_PATH="$PWD/build/sparkle" \
 
 ## macOS releases
 
-Tagged releases build the desktop executable natively on Apple Silicon and
-Intel macOS 26 runners. The release workflow combines both slices with `lipo`,
-assembles `scimtest.app`, signs it with the hardened runtime and a secure
-timestamp, and submits it to Apple's notary service. The accepted ticket is
-stapled before the workflow creates the final ZIP and DMG. The DMG is separately
-signed, notarized, and stapled.
+Tagged releases build the arm64 desktop executable on an Apple silicon macOS 26
+runner. The release workflow assembles `scimtest.app`, signs it with the
+hardened runtime and a secure timestamp, and submits it to Apple's notary
+service. The accepted ticket is stapled before the workflow creates the final
+ZIP and DMG. The DMG is separately signed, notarized, and stapled.
 
-The universal app supports macOS 26 and newer. Releases publish:
+The app supports Apple silicon Macs running macOS 26 and newer. Releases
+publish:
 
-- `scimtest-desktop_<version>_universal.dmg`
-- `scimtest-desktop_<version>_universal.zip`
+- `scimtest-desktop_<version>_arm64.dmg`
+- `scimtest-desktop_<version>_arm64.zip`
 - `scimtest-desktop_<version>_checksums.txt`
 
 Homebrew installs the DMG through the separate `scimtest-desktop` cask. Tagged
