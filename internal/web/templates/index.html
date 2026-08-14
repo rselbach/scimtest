@@ -48,7 +48,7 @@
           <span class="icon" aria-hidden="true">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5 13 3.5v3.8c0 3.1-2 5.7-5 7.2-3-1.5-5-4.1-5-7.2V3.5z"/><path d="m8.8 4.7-2.6 3h2.2l-1.2 3.6 2.8-4H7.8z"/></svg>
           </span>
-          Resilience
+          Fault Injection
           {{if .ResilienceActive}}<span class="badge dirty">Armed</span>{{end}}
         </a>{{end}}
         <a class="side-item" href="{{.EnvironmentSettingsURL}}">
@@ -157,7 +157,7 @@
           {{end}}
         </div>
         <div class="page-header-text">
-          <h1>{{if eq .Tab "groups"}}Groups{{else if eq .Tab "apps"}}Environments{{else if eq .Tab "resilience"}}Resilience{{else}}Users{{end}}</h1>
+          <h1>{{if eq .Tab "groups"}}Groups{{else if eq .Tab "apps"}}Environments{{else if eq .Tab "resilience"}}Fault Injection{{else}}Users{{end}}</h1>
           <p class="lede">{{if eq .Tab "groups"}}{{if .ActiveEnvironment.ID}}Groups in {{.ActiveEnvironment.Name}}.{{else}}Create an environment before adding groups.{{end}}{{else if eq .Tab "apps"}}Each environment is one app you are testing. Use Test sign-in to run a flow, Inspect flow to debug it, or Set up to find connection values.{{else if eq .Tab "resilience"}}{{if .ActiveEnvironment.ID}}Test how {{.ActiveEnvironment.Name}} handles identity infrastructure failures.{{else}}Select an environment to run failure scenarios.{{end}}{{else}}{{if .ActiveEnvironment.ID}}Users in {{.ActiveEnvironment.Name}}.{{else}}Create an environment before adding users.{{end}}{{end}}</p>
         </div>
         <div class="actions">
@@ -241,7 +241,7 @@
       {{end}}
 
       {{if eq .Tab "resilience"}}
-        {{if .Resilience}}{{template "resilience-panel" .Resilience}}{{else}}<section class="card card-empty"><div class="h">OIDC or SAML is required</div><p>Set up an identity protocol for this environment before running resilience scenarios.</p></section>{{end}}
+        {{if .Resilience}}{{template "resilience-panel" .Resilience}}{{else}}<section class="card card-empty"><div class="h">OIDC or SAML is required</div><p>Set up an identity protocol for this environment before running fault injection scenarios.</p></section>{{end}}
       {{else}}
         {{template "list-card.html" .}}
       {{end}}

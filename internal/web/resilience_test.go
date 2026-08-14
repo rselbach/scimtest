@@ -116,7 +116,7 @@ func TestResilienceDashboardShowsProtocolPresets(t *testing.T) {
 	r.Equal(http.StatusOK, response.Code)
 	r.Contains(response.Body.String(), `class="side-item active" href="/?environment=app-1&amp;tab=resilience"`)
 	r.Contains(response.Body.String(), `<input type="hidden" name="tab" value="resilience">`)
-	r.Contains(response.Body.String(), `<h1>Resilience</h1>`)
+	r.Contains(response.Body.String(), `<h1>Fault Injection</h1>`)
 	r.Contains(response.Body.String(), `id="app-shell"`)
 	r.NotContains(response.Body.String(), "Provision to")
 	r.NotContains(response.Body.String(), ">Add user</a>")
@@ -347,7 +347,7 @@ func TestResilienceRejectsConcurrentRun(t *testing.T) {
 	_, err := svc.armResilienceRun("greendale", "slow-token", 0, now)
 	r.NoError(err)
 	_, err = svc.armResilienceRun("greendale", "expired-token", 0, now)
-	r.EqualError(err, "a resilience scenario is already active")
+	r.EqualError(err, "a fault injection scenario is already active")
 }
 
 func TestResiliencePresetsMatchApplicationProtocols(t *testing.T) {

@@ -187,7 +187,7 @@ func (r resilienceRun) progress() string {
 func (a *webApp) armResilienceRun(slug, presetID string, count int, now time.Time) (resilienceRun, error) {
 	preset, ok := resiliencePresetByID(strings.TrimSpace(presetID))
 	if !ok {
-		return resilienceRun{}, errors.New("unknown resilience scenario")
+		return resilienceRun{}, errors.New("unknown fault injection scenario")
 	}
 	if !preset.AllowCount || count == 0 {
 		count = preset.DefaultCount
@@ -220,7 +220,7 @@ func (a *webApp) armResilienceRun(slug, presetID string, count int, now time.Tim
 	}
 	if current, found := a.resilienceRuns[slug]; found && current.active() {
 		if now.Before(current.ExpiresAt) {
-			return resilienceRun{}, errors.New("a resilience scenario is already active")
+			return resilienceRun{}, errors.New("a fault injection scenario is already active")
 		}
 		current.expire(now)
 		a.resilienceRuns[slug] = current
@@ -328,11 +328,11 @@ func (a *webApp) writeResilienceEndpointFailure(w http.ResponseWriter, slug, pro
 	if action.OAuthError != "" {
 		detail = action.OAuthError + ": injected " + detail
 		a.recordFlowEvent(slug, protocol, phase, "failed", "", detail)
-		writeOAuthError(w, action.Status, action.OAuthError, "injected resilience scenario")
+		writeOAuthError(w, action.Status, action.OAuthError, "fault injected by scimtest")
 		return
 	}
 	a.recordFlowEvent(slug, protocol, phase, "failed", "", "Injected "+detail)
-	http.Error(w, "injected resilience scenario", action.Status)
+	http.Error(w, "fault injected by scimtest", action.Status)
 }
 
 func waitForResilienceDelay(ctx context.Context, delay time.Duration) bool {
