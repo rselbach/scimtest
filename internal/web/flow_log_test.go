@@ -44,6 +44,10 @@ func TestFailedTokenExchangeAppearsInInspector(t *testing.T) {
 	r.Equal(http.StatusOK, inspectorRec.Code)
 	r.Contains(inspectorRec.Body.String(), "invalid_grant: authorization code is invalid or expired")
 	r.Contains(inspectorRec.Body.String(), "Recent activity")
+	r.Contains(inspectorRec.Body.String(), "data-flow-activity-row")
+	r.Contains(inspectorRec.Body.String(), `aria-controls="flow-activity-detail-0"`)
+	r.Contains(inspectorRec.Body.String(), `id="flow-activity-detail-0" aria-hidden="true"`)
+	r.Contains(inspectorRec.Body.String(), `/assets/flow_activity.js?v=1`)
 }
 
 func TestFlowEventRingIsBoundedAndNewestFirst(t *testing.T) {

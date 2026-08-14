@@ -279,6 +279,55 @@
     .flow-activity tr.flow-failed td { background: var(--danger-soft); }
     .flow-activity tr.flow-failed td:nth-child(3) { color: var(--danger); font-weight: 600; }
     .flow-activity tr.flow-ok td:nth-child(3) { color: var(--success); }
+    .flow-activity [data-flow-activity-row] { cursor: pointer; }
+    .flow-activity [data-flow-activity-row]:hover td { filter: brightness(0.98); }
+    .flow-activity-detail { max-width: 260px; }
+    .flow-activity-detail button {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+    .flow-activity-detail button span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .flow-activity-detail button svg {
+      flex: 0 0 auto;
+      width: 13px;
+      height: 13px;
+      transition: transform 160ms ease;
+    }
+    .flow-activity [data-flow-activity-row].is-open .flow-activity-detail button svg { transform: rotate(180deg); }
+    .flow-activity-expanded td { padding: 0; border-bottom: 0; }
+    .flow-activity-expanded > td > div {
+      display: grid;
+      grid-template-rows: 0fr;
+      visibility: hidden;
+      transition: grid-template-rows 180ms ease, visibility 0s linear 180ms;
+    }
+    .flow-activity-expanded p {
+      min-height: 0;
+      margin: 0;
+      padding: 0 10px;
+      overflow: hidden;
+      overflow-wrap: anywhere;
+    }
+    .flow-activity-expanded.is-open > td > div {
+      grid-template-rows: 1fr;
+      visibility: visible;
+      transition-delay: 0s;
+    }
+    .flow-activity-expanded.is-open p { padding-block: 10px; }
     .resilience-dashboard { display: grid; align-content: start; gap: 20px; }
     .resilience-section-heading,
     .resilience-run-heading,
@@ -483,7 +532,8 @@
     @media (prefers-reduced-motion: reduce) {
       .flash, .flash.is-leaving { animation: none; }
       .desktop-auth-spinner { animation: none; }
-      .environment-details, .environment-disclosure svg { transition: none; }
+      .environment-details, .environment-disclosure svg,
+      .flow-activity-expanded > td > div, .flow-activity-detail button svg { transition: none; }
     }
     .errors {
       margin-bottom: 14px;

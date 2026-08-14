@@ -2,17 +2,25 @@
 {{if .}}
 <section class="card inspector-card" aria-labelledby="flow-activity-heading">
   <h2 id="flow-activity-heading">Recent activity</h2>
-  <p class="hint">Every flow hop for this environment, including failures. Newest first; the last {{len .}} entries are kept.</p>
+  <p class="hint">Every flow hop for this environment, including failures. Newest first; the last {{len .}} entries are kept. Select an entry to show its full detail.</p>
   <table class="flow-activity">
     <thead><tr><th>Time</th><th>Step</th><th>Outcome</th><th>User</th><th>Detail</th></tr></thead>
     <tbody>
-      {{range .}}
-      <tr class="{{if .Failed}}flow-failed{{else}}flow-ok{{end}}">
+      {{range $index, $event := .}}
+      <tr class="{{if .Failed}}flow-failed{{else}}flow-ok{{end}}" data-flow-activity-row>
         <td class="mono">{{.Time}}</td>
         <td class="mono">{{.Protocol}} {{.Stage}}</td>
         <td>{{if .Failed}}Failed{{else}}OK{{end}}</td>
         <td>{{.User}}</td>
-        <td>{{.Detail}}</td>
+        <td class="flow-activity-detail">
+          <button type="button" aria-expanded="false" aria-controls="flow-activity-detail-{{$index}}" data-flow-activity-disclosure>
+            <span>{{.Detail}}</span>
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
+          </button>
+        </td>
+      </tr>
+      <tr class="flow-activity-expanded {{if .Failed}}flow-failed{{else}}flow-ok{{end}}" id="flow-activity-detail-{{$index}}" aria-hidden="true">
+        <td colspan="5"><div><p>{{.Detail}}</p></div></td>
       </tr>
       {{end}}
     </tbody>
