@@ -280,6 +280,9 @@ func (a *webApp) disarmResilienceRun(slug string, now time.Time) bool {
 		return false
 	}
 	run.State = resilienceRunDisarmed
+	// Reserved endpoint actions have not been delivered yet. Disarming makes
+	// their later completion a no-op and leaves progress unchanged.
+	run.InFlight = 0
 	run.addDecision("scenario", "disarmed", "Disarmed by the developer", now)
 	a.resilienceRuns[slug] = run
 	return true
@@ -357,6 +360,7 @@ func (r *resilienceRun) addDecision(phase, outcome, detail string, now time.Time
 
 func (r *resilienceRun) expire(now time.Time) {
 	r.State = resilienceRunExpired
+	r.InFlight = 0
 	r.addDecision("scenario", "expired", "No matching flow arrived before the safety timeout", now)
 }
 
@@ -390,17 +394,18 @@ type resilienceRunView struct {
 }
 
 type resiliencePageData struct {
-	App           app
-	Presets       []resiliencePresetView
-	Run           *resilienceRunView
-	CanChoose     bool
-	Error         string
-	OIDC          bool
-	SAML          bool
-	OIDCInspector string
-	SAMLInspector string
-	PlaygroundURL string
-	GitHubAccount githubAccountView
+	App             app
+	Presets         []resiliencePresetView
+	Run             *resilienceRunView
+	CanChoose       bool
+	Error           string
+	OIDC            bool
+	SAML            bool
+	OIDCInspector   string
+	SAMLInspector   string
+	PlaygroundURL   string
+	PlaygroundReady bool
+	SetupURL        string
 }
 
 func (a *webApp) handleResilience(w http.ResponseWriter, r *http.Request) {
@@ -408,6 +413,10 @@ func (a *webApp) handleResilience(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	http.Redirect(w, r, resilienceDashboardURL(foundApp, nil), http.StatusSeeOther)
+}
+
+func (a *webApp) buildResiliencePageData(foundApp app, pageError string) *resiliencePageData {
 	presets := resiliencePresetsForApp(foundApp)
 	presetViews := make([]resiliencePresetView, 0, len(presets))
 	for _, preset := range presets {
@@ -422,25 +431,28 @@ func (a *webApp) handleResilience(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	slug := url.PathEscape(foundApp.Slug)
-	data := resiliencePageData{
+	data := &resiliencePageData{
 		App:           foundApp,
 		Presets:       presetViews,
-		Error:         strings.TrimSpace(r.URL.Query().Get("error")),
+		Error:         strings.TrimSpace(pageError),
 		OIDC:          supportsOIDC(foundApp),
 		SAML:          supportsSAML(foundApp),
 		OIDCInspector: "/inspect/oidc/" + slug,
 		SAMLInspector: "/inspect/saml/" + slug,
 		PlaygroundURL: "/inspect/oidc/" + slug + "/playground",
-		GitHubAccount: a.githubAccountView(),
+		PlaygroundReady: supportsOIDC(foundApp) && strings.TrimSpace(foundApp.OIDCClientID) != "" &&
+			(foundApp.OIDCPublicClient || strings.TrimSpace(foundApp.OIDCClientSecret) != ""),
+		SetupURL: dashboardURL("apps", map[string]string{
+			"environment": foundApp.ID,
+			"id":          foundApp.ID,
+			"modal":       "app",
+		}),
 	}
 	if run, found := a.resilienceRun(foundApp.Slug, time.Now()); found {
 		data.Run = newResilienceRunView(run)
 	}
 	data.CanChoose = data.Run == nil || !data.Run.Active
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := pageTemplate.ExecuteTemplate(w, "resilience.html", data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	return data
 }
 
 func (a *webApp) handleResilienceArm(w http.ResponseWriter, r *http.Request) {
@@ -449,32 +461,32 @@ func (a *webApp) handleResilienceArm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := r.ParseForm(); err != nil {
-		redirectResilienceError(w, r, foundApp.Slug, err)
+		redirectResilienceError(w, r, foundApp, err)
 		return
 	}
 	presetID := strings.TrimSpace(r.FormValue("preset"))
 	if !resiliencePresetAvailable(foundApp, presetID) {
-		redirectResilienceError(w, r, foundApp.Slug, errors.New("scenario is not available for this environment"))
+		redirectResilienceError(w, r, foundApp, errors.New("scenario is not available for this environment"))
 		return
 	}
 	count := 0
 	if raw := strings.TrimSpace(r.FormValue("count")); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil {
-			redirectResilienceError(w, r, foundApp.Slug, errors.New("failure count must be a number"))
+			redirectResilienceError(w, r, foundApp, errors.New("failure count must be a number"))
 			return
 		}
 		count = parsed
 	}
 	run, err := a.armResilienceRun(foundApp.Slug, presetID, count, time.Now())
 	if err != nil {
-		redirectResilienceError(w, r, foundApp.Slug, err)
+		redirectResilienceError(w, r, foundApp, err)
 		return
 	}
 	// A scenario and a quick fault must never compete for the next flow.
 	a.disarmFaults(foundApp.Slug)
 	a.recordFlowEvent(foundApp.Slug, "fault", "scenario", "ok", "", "Armed: "+run.Name)
-	http.Redirect(w, r, resilienceURL(foundApp.Slug), http.StatusSeeOther)
+	http.Redirect(w, r, resilienceDashboardURL(foundApp, nil), http.StatusSeeOther)
 }
 
 func (a *webApp) handleResilienceDisarm(w http.ResponseWriter, r *http.Request) {
@@ -485,7 +497,7 @@ func (a *webApp) handleResilienceDisarm(w http.ResponseWriter, r *http.Request) 
 	if a.disarmResilienceRun(foundApp.Slug, time.Now()) {
 		a.recordFlowEvent(foundApp.Slug, "fault", "scenario", "ok", "", "Disarmed")
 	}
-	http.Redirect(w, r, resilienceURL(foundApp.Slug), http.StatusSeeOther)
+	http.Redirect(w, r, resilienceDashboardURL(foundApp, nil), http.StatusSeeOther)
 }
 
 func resiliencePresetAvailable(foundApp app, presetID string) bool {
@@ -497,13 +509,16 @@ func resiliencePresetAvailable(foundApp app, presetID string) bool {
 	return false
 }
 
-func resilienceURL(slug string) string {
-	return "/inspect/resilience/" + url.PathEscape(slug)
+func resilienceDashboardURL(foundApp app, extra map[string]string) string {
+	values := map[string]string{"environment": foundApp.ID}
+	for key, value := range extra {
+		values[key] = value
+	}
+	return dashboardURL("resilience", values)
 }
 
-func redirectResilienceError(w http.ResponseWriter, r *http.Request, slug string, err error) {
-	query := url.Values{"error": {err.Error()}}
-	http.Redirect(w, r, resilienceURL(slug)+"?"+query.Encode(), http.StatusSeeOther)
+func redirectResilienceError(w http.ResponseWriter, r *http.Request, foundApp app, err error) {
+	http.Redirect(w, r, resilienceDashboardURL(foundApp, map[string]string{"error": err.Error()}), http.StatusSeeOther)
 }
 
 func newResilienceRunView(run resilienceRun) *resilienceRunView {

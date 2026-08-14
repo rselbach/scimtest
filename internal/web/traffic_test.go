@@ -60,6 +60,7 @@ func TestTrafficRecordingTogglesAtRuntime(t *testing.T) {
 	r.Contains(body, "openid-configuration")
 	r.Contains(body, `class="app"`)
 	r.Contains(body, `class="side-item active" href="/traffic" aria-current="page"`)
+	r.Contains(body, `href="/?environment=app-1&amp;tab=resilience"`)
 	r.Contains(body, "SCIM Control Surface")
 	r.Contains(body, "Recent exchanges")
 }

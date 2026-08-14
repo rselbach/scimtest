@@ -1710,7 +1710,7 @@ func TestDashboardRendersCriticalFlowAffordances(t *testing.T) {
 	r.Contains(body, ">Test sign-in</a>")
 	r.Contains(body, ">Inspect flow</a>")
 	r.Contains(body, ">Failure testing</h3>")
-	r.Contains(body, `href="/inspect/resilience/greendale"`)
+	r.Contains(body, `href="/?environment=app-1&amp;tab=resilience"`)
 	r.Equal(1, strings.Count(body, ">Resilience</a>"))
 	r.NotContains(body, ">Make active</a>")
 	r.NotContains(body, ">Set up</a>")

@@ -102,18 +102,67 @@ func TestResilienceDelayStopsWhenRequestIsCanceled(t *testing.T) {
 	require.False(t, waitForResilienceDelay(ctx, time.Minute))
 }
 
-func TestResiliencePageShowsProtocolPresets(t *testing.T) {
+func TestResilienceDashboardShowsProtocolPresets(t *testing.T) {
 	r := require.New(t)
 	svc := oidcFaultTestApp(t)
+	legacy := httptest.NewRecorder()
+	svc.routes().ServeHTTP(legacy, httptest.NewRequest(http.MethodGet, "/inspect/resilience/example", nil))
+	r.Equal(http.StatusSeeOther, legacy.Code)
+	r.Equal("/?environment=app-1&tab=resilience", legacy.Header().Get("Location"))
+
 	response := httptest.NewRecorder()
-	svc.routes().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/inspect/resilience/example", nil))
+	svc.routes().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/?tab=resilience&environment=app-1", nil))
 
 	r.Equal(http.StatusOK, response.Code)
+	r.Contains(response.Body.String(), `class="side-item active" href="/?environment=app-1&amp;tab=resilience"`)
+	r.Contains(response.Body.String(), `<input type="hidden" name="tab" value="resilience">`)
+	r.Contains(response.Body.String(), `<h1>Resilience</h1>`)
+	r.Contains(response.Body.String(), `id="app-shell"`)
+	r.NotContains(response.Body.String(), "Provision to")
+	r.NotContains(response.Body.String(), ">Add user</a>")
 	r.Contains(response.Body.String(), "Token endpoint outage")
 	r.Contains(response.Body.String(), "Expired ID token")
 	r.NotContains(response.Body.String(), "SAML authentication failure")
 	r.Contains(response.Body.String(), "</html>")
 	r.NotContains(response.Body.String(), "nil pointer")
+}
+
+func TestResilienceDashboardMatchesEnvironmentSetup(t *testing.T) {
+	tests := map[string]struct {
+		app       app
+		arm       string
+		want      string
+		doNotWant string
+	}{
+		"unfinished OIDC": {
+			app:       app{ID: "app-1", Name: "Greendale Portal", Slug: "greendale", Protocol: "oidc"},
+			arm:       "slow-token",
+			want:      "Finish OIDC setup",
+			doNotWant: "Open built-in RP",
+		},
+		"SAML": {
+			app:       app{ID: "app-1", Name: "Greendale Portal", Slug: "greendale", Protocol: "saml", SAMLACSURL: "https://client.test/saml/acs"},
+			want:      "SAML authentication failure",
+			doNotWant: "Token endpoint outage",
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			setTestStateFile(t)
+			svc := newTestIDPApp(t)
+			require.NoError(t, saveState(appState{Apps: []app{tc.app}}))
+			if tc.arm != "" {
+				_, err := svc.armResilienceRun(tc.app.Slug, tc.arm, 0, time.Now())
+				require.NoError(t, err)
+			}
+			response := httptest.NewRecorder()
+			svc.routes().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/?tab=resilience&environment=app-1", nil))
+
+			require.Equal(t, http.StatusOK, response.Code)
+			require.Contains(t, response.Body.String(), tc.want)
+			require.NotContains(t, response.Body.String(), tc.doNotWant)
+		})
+	}
 }
 
 func TestInvalidTokenRequestsDoNotConsumeScenario(t *testing.T) {
@@ -196,17 +245,19 @@ func TestResiliencePageArmsAndDisarmsScenario(t *testing.T) {
 	armRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	svc.routes().ServeHTTP(arm, armRequest)
 	r.Equal(http.StatusSeeOther, arm.Code)
-	r.Equal("/inspect/resilience/example", arm.Header().Get("Location"))
+	r.Equal("/?environment=app-1&tab=resilience", arm.Header().Get("Location"))
 
 	page := httptest.NewRecorder()
-	svc.routes().ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/inspect/resilience/example", nil))
+	svc.routes().ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/?tab=resilience&environment=app-1", nil))
 	r.Contains(page.Body.String(), "Active scenario")
 	r.Contains(page.Body.String(), "0 of 3 injections applied")
 	r.NotContains(page.Body.String(), "Choose a failure")
+	r.Contains(page.Body.String(), `<span class="badge dirty">Armed</span>`)
 
 	disarm := httptest.NewRecorder()
 	svc.routes().ServeHTTP(disarm, httptest.NewRequest(http.MethodPost, "/inspect/resilience/example/disarm", nil))
 	r.Equal(http.StatusSeeOther, disarm.Code)
+	r.Equal("/?environment=app-1&tab=resilience", disarm.Header().Get("Location"))
 	run, ok := svc.resilienceRun("example", time.Now())
 	r.True(ok)
 	r.Equal(resilienceRunDisarmed, run.State)
@@ -247,11 +298,33 @@ func TestResilienceRunExpires(t *testing.T) {
 
 	_, err := svc.armResilienceRun("greendale", "slow-token", 0, now)
 	r.NoError(err)
+	action, ok := svc.reserveResilienceEndpointAction("greendale", "token", now)
+	r.True(ok)
 	run, ok := svc.resilienceRun("greendale", now.Add(resilienceRunLifetime))
 	r.True(ok)
 	r.Equal(resilienceRunExpired, run.State)
 	r.False(run.active())
+	r.Zero(run.InFlight)
 	r.Len(run.Decisions, 1)
+	r.False(svc.completeResilienceEndpointAction("greendale", "token", action, now.Add(resilienceRunLifetime)))
+}
+
+func TestDisarmingResilienceRunCancelsReservedAction(t *testing.T) {
+	r := require.New(t)
+	svc := &webApp{}
+	now := time.Date(2026, time.August, 14, 10, 0, 0, 0, time.UTC)
+
+	_, err := svc.armResilienceRun("greendale", "slow-token", 0, now)
+	r.NoError(err)
+	action, ok := svc.reserveResilienceEndpointAction("greendale", "token", now)
+	r.True(ok)
+	r.True(svc.disarmResilienceRun("greendale", now.Add(time.Second)))
+	r.False(svc.completeResilienceEndpointAction("greendale", "token", action, now.Add(3*time.Second)))
+	run, ok := svc.resilienceRun("greendale", now.Add(3*time.Second))
+	r.True(ok)
+	r.Equal(resilienceRunDisarmed, run.State)
+	r.Zero(run.InFlight)
+	r.Equal("0 of 1 injections applied", run.progress())
 }
 
 func TestExpiredResilienceRunCanBeReplaced(t *testing.T) {

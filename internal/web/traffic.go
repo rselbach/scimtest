@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"sync"
+	"time"
 )
 
 const maxTrafficEntries = 100
@@ -81,6 +82,7 @@ func (a *webApp) handleTraffic(w http.ResponseWriter, r *http.Request) {
 		SCIMEnabled:            activeEnvironment.SCIMEnabled,
 		UsersURL:               addEnvironmentToURL(dashboardURL("users", nil), environmentID),
 		GroupsURL:              addEnvironmentToURL(dashboardURL("groups", nil), environmentID),
+		ResilienceURL:          addEnvironmentToURL(dashboardURL("resilience", nil), environmentID),
 		AppsURL:                addEnvironmentToURL(dashboardURL("apps", nil), environmentID),
 		EnvironmentSettingsURL: addEnvironmentToURL(dashboardURL("apps", map[string]string{"modal": "app", "id": environmentID}), environmentID),
 		ConfigURL:              addEnvironmentToURL(dashboardURL("apps", map[string]string{"modal": "config"}), environmentID),
@@ -89,7 +91,11 @@ func (a *webApp) handleTraffic(w http.ResponseWriter, r *http.Request) {
 		HasTrace:               a.hasTrace(environmentID),
 		Environments:           globalState.Apps,
 		ActiveEnvironment:      activeEnvironment,
+		HasIDP:                 supportsAnyIDP(activeEnvironment),
 		GitHubAccount:          a.githubAccountView(),
+	}
+	if run, found := a.resilienceRun(activeEnvironment.Slug, time.Now()); found {
+		data.ResilienceActive = run.active()
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTemplate.ExecuteTemplate(w, "traffic.html", data); err != nil {
@@ -107,6 +113,7 @@ type trafficPageData struct {
 	SCIMEnabled            bool
 	UsersURL               string
 	GroupsURL              string
+	ResilienceURL          string
 	AppsURL                string
 	EnvironmentSettingsURL string
 	ConfigURL              string
@@ -115,6 +122,8 @@ type trafficPageData struct {
 	HasTrace               bool
 	Environments           []app
 	ActiveEnvironment      app
+	HasIDP                 bool
+	ResilienceActive       bool
 	GitHubAccount          githubAccountView
 }
 

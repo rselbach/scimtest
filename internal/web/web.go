@@ -439,6 +439,7 @@ type pageData struct {
 	UsersURL               string
 	GroupsURL              string
 	AppsURL                string
+	ResilienceURL          string
 	EnvironmentSettingsURL string
 	NewUserURL             string
 	NewGroupURL            string
@@ -463,6 +464,9 @@ type pageData struct {
 	ShowSetupGuide         bool
 	HasLocalUsers          bool
 	HasApps                bool
+	HasIDP                 bool
+	ResilienceActive       bool
+	Resilience             *resiliencePageData
 	HasSCIMEnvironments    bool
 	FormError              string
 	Environments           []app
@@ -1112,6 +1116,7 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		UsersURL:               dashboardURL("users", nil),
 		GroupsURL:              dashboardURL("groups", nil),
 		AppsURL:                dashboardURL("apps", nil),
+		ResilienceURL:          dashboardURL("resilience", nil),
 		EnvironmentSettingsURL: dashboardURL("apps", map[string]string{"modal": "app", "id": environmentID}),
 		NewUserURL:             dashboardURLWithDirectory("users", page, pageSize, search, statusFilter, sortOrder, map[string]string{"modal": "user"}),
 		NewGroupURL:            dashboardURLWithDirectory("groups", page, pageSize, search, statusFilter, sortOrder, map[string]string{"modal": "group"}),
@@ -1125,18 +1130,28 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		TraceContent:           a.traceContent(environmentID),
 		SyncJob:                a.currentSyncJob(environmentID),
 		ImportPreview:          a.importPreviewView(environmentID),
-		ShowSetupGuide:         len(state.Users) == 0 || len(globalState.Apps) == 0,
+		ShowSetupGuide:         tab != "resilience" && (len(state.Users) == 0 || len(globalState.Apps) == 0),
 		HasLocalUsers:          len(state.Users) > 0,
 		HasApps:                len(globalState.Apps) > 0,
+		HasIDP:                 activeEnvironment.ID != "" && supportsAnyIDP(activeEnvironment),
 		HasSCIMEnvironments:    activeEnvironment.SCIMEnabled,
 		Environments:           globalState.Apps,
 		ActiveEnvironment:      activeEnvironment,
 		GitHubAccount:          a.githubAccountView(),
 	}
+	if run, found := a.resilienceRun(activeEnvironment.Slug, time.Now()); found {
+		data.ResilienceActive = run.active()
+	}
+	if tab == "resilience" && data.HasIDP {
+		data.Resilience = a.buildResiliencePageData(activeEnvironment, strings.TrimSpace(r.URL.Query().Get("error")))
+	}
 	if !data.SCIMEnabled {
 		data.Errors = nil
 		data.ShowTrace = false
 		data.HasTrace = false
+	}
+	if tab == "resilience" {
+		data.Errors = nil
 	}
 	if data.SCIMEnabled {
 		plan := planSync(state)
@@ -2360,7 +2375,7 @@ func buildAppRows(state appState, environmentID string, base string) []appRowVie
 			row.SAMLInspectorURL = "/inspect/saml/" + url.PathEscape(app.Slug)
 		}
 		if row.OIDCStatus.Configured || row.SAMLStatus.Configured {
-			row.ResilienceURL = resilienceURL(app.Slug)
+			row.ResilienceURL = dashboardURL("resilience", map[string]string{"environment": app.ID})
 		}
 		rows = append(rows, row)
 	}
@@ -2846,6 +2861,8 @@ func normalizedTab(tab string) string {
 		return "groups"
 	case "apps":
 		return "apps"
+	case "resilience":
+		return "resilience"
 	}
 
 	return "users"
@@ -3084,6 +3101,7 @@ func scopePageDataURLs(data *pageData, environmentID string) {
 		&data.UsersURL,
 		&data.GroupsURL,
 		&data.AppsURL,
+		&data.ResilienceURL,
 		&data.EnvironmentSettingsURL,
 		&data.NewUserURL,
 		&data.NewGroupURL,
