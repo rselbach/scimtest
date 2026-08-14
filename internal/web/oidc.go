@@ -29,6 +29,7 @@ type authCode struct {
 	CodeChallenge string
 	ExpiresAt     time.Time
 	Faults        faultOptions
+	Redeeming     bool
 }
 
 type accessToken struct {
@@ -192,9 +193,6 @@ func (a *webApp) issueOIDCCode(w http.ResponseWriter, r *http.Request, state app
 func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
-	a.oidcMu.Lock()
-	defer a.oidcMu.Unlock()
-
 	state, app, ok := appForProtocol(w, r, supportsOIDC)
 	if !ok {
 		return
@@ -216,31 +214,75 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		a.failOAuth(w, app, "token", http.StatusUnauthorized, "invalid_client", "client authentication failed")
 		return
 	}
+
+	a.oidcMu.Lock()
 	now := time.Now()
 	a.pruneExpiredOIDCCredentials(now)
 
 	codeValue := r.FormValue("code")
 	code, ok := a.authCodes[codeValue]
-	if !ok {
+	if !ok || code.Redeeming {
+		a.oidcMu.Unlock()
 		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "authorization code is invalid or expired")
 		return
 	}
-	delete(a.authCodes, codeValue)
 
 	if code.AppSlug != app.Slug || code.ClientID != app.OIDCClientID || code.RedirectURI != r.FormValue("redirect_uri") {
+		a.oidcMu.Unlock()
 		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "authorization code does not match this request")
 		return
 	}
 	if code.CodeChallenge != "" && !validPKCEVerifier(code.CodeChallenge, r.FormValue("code_verifier")) {
+		a.oidcMu.Unlock()
 		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "PKCE code verifier is invalid")
 		return
 	}
 	// OAuth 2.0 Security BCP: a verifier for a code issued without a
 	// challenge signals a confused or attacked client - reject it.
 	if code.CodeChallenge == "" && r.FormValue("code_verifier") != "" {
+		a.oidcMu.Unlock()
 		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "code_verifier provided but the authorization request used no code_challenge")
 		return
 	}
+	action, inject := a.reserveResilienceEndpointAction(app.Slug, "token", time.Now())
+	injectionCompleted := false
+	if inject && action.Delay > 0 {
+		code.Redeeming = true
+		a.authCodes[codeValue] = code
+		a.oidcMu.Unlock()
+		if !waitForResilienceDelay(r.Context(), action.Delay) {
+			a.oidcMu.Lock()
+			if current, found := a.authCodes[codeValue]; found && current.Redeeming {
+				current.Redeeming = false
+				a.authCodes[codeValue] = current
+			}
+			a.oidcMu.Unlock()
+			a.cancelResilienceEndpointAction(app.Slug, "token", action, time.Now())
+			return
+		}
+		injectionCompleted = a.completeResilienceEndpointAction(app.Slug, "token", action, time.Now())
+		if injectionCompleted {
+			a.recordFlowEvent(app.Slug, "oidc", "token", "ok", "", "Injected "+action.describe())
+		}
+		a.oidcMu.Lock()
+		current, found := a.authCodes[codeValue]
+		if !found || !current.Redeeming {
+			a.oidcMu.Unlock()
+			a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "authorization code is invalid or expired")
+			return
+		}
+		code = current
+	}
+	if inject && action.Delay == 0 {
+		injectionCompleted = a.completeResilienceEndpointAction(app.Slug, "token", action, time.Now())
+	}
+	if injectionCompleted && action.Status != 0 {
+		a.oidcMu.Unlock()
+		a.writeResilienceEndpointFailure(w, app.Slug, "oidc", "token", action)
+		return
+	}
+	delete(a.authCodes, codeValue)
+	defer a.oidcMu.Unlock()
 	// Fault injection: fail the exchange on demand before doing any work.
 	if code.Faults.TokenError != "" {
 		a.failOAuth(w, app, "token", http.StatusBadRequest, code.Faults.TokenError, "injected token error")

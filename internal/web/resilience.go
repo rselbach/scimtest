@@ -27,6 +27,7 @@ const (
 )
 
 type resilienceAction struct {
+	RunID      string
 	Faults     faultOptions
 	Status     int
 	OAuthError string
@@ -168,6 +169,7 @@ type resilienceRun struct {
 	Action    resilienceAction
 	Total     int
 	Remaining int
+	InFlight  int
 	ArmedAt   time.Time
 	ExpiresAt time.Time
 	Decisions []resilienceDecision
@@ -255,21 +257,19 @@ func (a *webApp) takeResilienceFlowFaults(slug string, now time.Time) faultOptio
 	return run.Action.Faults
 }
 
-func (a *webApp) takeResilienceEndpointAction(slug, phase string, now time.Time) (resilienceAction, bool) {
+func (a *webApp) reserveResilienceEndpointAction(slug, phase string, now time.Time) (resilienceAction, bool) {
 	a.resilienceMu.Lock()
 	defer a.resilienceMu.Unlock()
 	run, ok := a.resilienceRuns[slug]
-	if !ok || !run.active() || run.Phase != phase || !now.Before(run.ExpiresAt) {
+	if !ok || !run.active() || run.Phase != phase || !now.Before(run.ExpiresAt) || run.Remaining-run.InFlight < 1 {
 		return resilienceAction{}, false
 	}
 	run.State = resilienceRunRunning
-	run.Remaining--
-	run.addDecision(phase, "injected", run.Action.describe(), now)
-	if run.Remaining == 0 {
-		run.State = resilienceRunCompleted
-	}
+	run.InFlight++
 	a.resilienceRuns[slug] = run
-	return run.Action, true
+	action := run.Action
+	action.RunID = run.ID
+	return action, true
 }
 
 func (a *webApp) disarmResilienceRun(slug string, now time.Time) bool {
@@ -285,37 +285,51 @@ func (a *webApp) disarmResilienceRun(slug string, now time.Time) bool {
 	return true
 }
 
-func (a *webApp) resilienceEndpoint(protocol, phase string, next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		slug := r.PathValue("slug")
-		action, ok := a.takeResilienceEndpointAction(slug, phase, time.Now())
-		if !ok {
-			next(w, r)
-			return
-		}
-		if action.Delay > 0 {
-			a.recordFlowEvent(slug, protocol, phase, "ok", "", "Injected "+action.describe())
-			if !waitForResilienceDelay(r.Context(), action.Delay) {
-				return
-			}
-		}
-		if action.Status == 0 {
-			next(w, r)
-			return
-		}
-		if action.RetryAfter != "" {
-			w.Header().Set("Retry-After", action.RetryAfter)
-		}
-		detail := action.describe()
-		if action.OAuthError != "" {
-			detail = action.OAuthError + ": injected " + detail
-			a.recordFlowEvent(slug, protocol, phase, "failed", "", detail)
-			writeOAuthError(w, action.Status, action.OAuthError, "injected resilience scenario")
-			return
-		}
-		a.recordFlowEvent(slug, protocol, phase, "failed", "", "Injected "+detail)
-		http.Error(w, "injected resilience scenario", action.Status)
+func (a *webApp) completeResilienceEndpointAction(slug, phase string, action resilienceAction, now time.Time) bool {
+	a.resilienceMu.Lock()
+	defer a.resilienceMu.Unlock()
+	run, ok := a.resilienceRuns[slug]
+	if !ok || !run.active() || run.ID != action.RunID || run.InFlight < 1 || run.Remaining < 1 {
+		return false
 	}
+	run.InFlight--
+	run.Remaining--
+	run.addDecision(phase, "injected", action.describe(), now)
+	if run.Remaining == 0 && run.InFlight == 0 {
+		run.State = resilienceRunCompleted
+	}
+	a.resilienceRuns[slug] = run
+	return true
+}
+
+func (a *webApp) cancelResilienceEndpointAction(slug, phase string, action resilienceAction, now time.Time) {
+	a.resilienceMu.Lock()
+	defer a.resilienceMu.Unlock()
+	run, ok := a.resilienceRuns[slug]
+	if !ok || run.ID != action.RunID || run.InFlight < 1 {
+		return
+	}
+	run.InFlight--
+	if run.Remaining == run.Total && run.InFlight == 0 {
+		run.State = resilienceRunArmed
+	}
+	run.addDecision(phase, "canceled", "Request ended before the fault was delivered", now)
+	a.resilienceRuns[slug] = run
+}
+
+func (a *webApp) writeResilienceEndpointFailure(w http.ResponseWriter, slug, protocol, phase string, action resilienceAction) {
+	if action.RetryAfter != "" {
+		w.Header().Set("Retry-After", action.RetryAfter)
+	}
+	detail := action.describe()
+	if action.OAuthError != "" {
+		detail = action.OAuthError + ": injected " + detail
+		a.recordFlowEvent(slug, protocol, phase, "failed", "", detail)
+		writeOAuthError(w, action.Status, action.OAuthError, "injected resilience scenario")
+		return
+	}
+	a.recordFlowEvent(slug, protocol, phase, "failed", "", "Injected "+detail)
+	http.Error(w, "injected resilience scenario", action.Status)
 }
 
 func waitForResilienceDelay(ctx context.Context, delay time.Duration) bool {

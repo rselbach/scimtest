@@ -23,11 +23,12 @@ func TestResilienceEndpointRunAppliesConfiguredCount(t *testing.T) {
 	r.Equal(resilienceRunArmed, run.State)
 
 	for range 2 {
-		action, ok := svc.takeResilienceEndpointAction("greendale", "token", now)
+		action, ok := svc.reserveResilienceEndpointAction("greendale", "token", now)
 		r.True(ok)
 		r.Equal(503, action.Status)
+		svc.completeResilienceEndpointAction("greendale", "token", action, now)
 	}
-	_, ok := svc.takeResilienceEndpointAction("greendale", "token", now)
+	_, ok := svc.reserveResilienceEndpointAction("greendale", "token", now)
 	r.False(ok)
 
 	run, ok = svc.resilienceRun("greendale", now)
@@ -48,6 +49,8 @@ func TestTokenOutageRecoversWithoutConsumingAuthorizationCode(t *testing.T) {
 		response := redeemToken(t, svc, code)
 		r.Equal(http.StatusServiceUnavailable, response.Code)
 		r.Equal("5", response.Header().Get("Retry-After"))
+		r.Equal("no-store", response.Header().Get("Cache-Control"))
+		r.Equal("no-cache", response.Header().Get("Pragma"))
 		var body map[string]any
 		r.NoError(json.Unmarshal(response.Body.Bytes(), &body))
 		r.Equal("temporarily_unavailable", body["error"])
@@ -109,6 +112,76 @@ func TestResiliencePageShowsProtocolPresets(t *testing.T) {
 	r.Contains(response.Body.String(), "Token endpoint outage")
 	r.Contains(response.Body.String(), "Expired ID token")
 	r.NotContains(response.Body.String(), "SAML authentication failure")
+	r.Contains(response.Body.String(), "</html>")
+	r.NotContains(response.Body.String(), "nil pointer")
+}
+
+func TestInvalidTokenRequestsDoNotConsumeScenario(t *testing.T) {
+	r := require.New(t)
+	svc := oidcFaultTestApp(t)
+	_, err := svc.armResilienceRun("example", "token-outage", 2, time.Now())
+	r.NoError(err)
+	code := authorizeForCode(t, svc, nil)
+
+	tests := map[string]struct {
+		code       string
+		grantType  string
+		secret     string
+		wantStatus int
+	}{
+		"bad client credentials": {code: code, grantType: "authorization_code", secret: "wrong", wantStatus: http.StatusUnauthorized},
+		"unsupported grant":      {code: code, grantType: "client_credentials", secret: "secret", wantStatus: http.StatusBadRequest},
+		"unknown code":           {code: "unknown", grantType: "authorization_code", secret: "secret", wantStatus: http.StatusBadRequest},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			form := url.Values{
+				"grant_type":   {tc.grantType},
+				"code":         {tc.code},
+				"redirect_uri": {"http://client.test/callback"},
+			}
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/oidc/example/token", strings.NewReader(form.Encode()))
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			request.SetBasicAuth("example-client", tc.secret)
+			svc.routes().ServeHTTP(response, request)
+			require.Equal(t, tc.wantStatus, response.Code)
+		})
+	}
+	run, ok := svc.resilienceRun("example", time.Now())
+	r.True(ok)
+	r.Equal("0 of 2 injections applied", run.progress())
+}
+
+func TestCanceledTokenDelayRemainsArmed(t *testing.T) {
+	r := require.New(t)
+	svc := oidcFaultTestApp(t)
+	_, err := svc.armResilienceRun("example", "slow-token", 0, time.Now())
+	r.NoError(err)
+	code := authorizeForCode(t, svc, nil)
+	form := url.Values{
+		"grant_type":   {"authorization_code"},
+		"code":         {code},
+		"redirect_uri": {"http://client.test/callback"},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	request := httptest.NewRequest(http.MethodPost, "/oidc/example/token", strings.NewReader(form.Encode())).WithContext(ctx)
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.SetBasicAuth("example-client", "secret")
+	response := httptest.NewRecorder()
+	svc.routes().ServeHTTP(response, request)
+
+	run, ok := svc.resilienceRun("example", time.Now())
+	r.True(ok)
+	r.Equal(resilienceRunArmed, run.State)
+	r.Equal("0 of 1 injections applied", run.progress())
+	r.Len(run.Decisions, 1)
+	r.Equal("canceled", run.Decisions[0].Outcome)
+	svc.oidcMu.Lock()
+	stored := svc.authCodes[code]
+	svc.oidcMu.Unlock()
+	r.False(stored.Redeeming)
 }
 
 func TestResiliencePageArmsAndDisarmsScenario(t *testing.T) {

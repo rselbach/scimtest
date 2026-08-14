@@ -110,14 +110,14 @@
       <span>The protocol inspectors still provide one-shot clock skew, claim, signature, and error controls.</span>
     </section>
   </main>
-  {{if .Run.Active}}
+  {{if .Run}}{{if .Run.Active}}
   <script>
     setTimeout(function refreshRun() {
       if (!document.hidden) window.location.reload();
       setTimeout(refreshRun, 2500);
     }, 2500);
   </script>
-  {{end}}
+  {{end}}{{end}}
 </body>
 </html>
 {{end}}
