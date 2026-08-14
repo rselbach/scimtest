@@ -74,11 +74,13 @@ steps, the authentication design, and release packaging details.
   exchange, recorded by default into a bounded in-memory ring, with
   optional raw-secret capture. `--debug` additionally prints transcripts
   to stdout.
-- **Fault injection.** Arm faults for the next flow from the inspector —
-  expired tokens, clock skew, broken signatures, dropped claims, token
-  endpoint errors, SAML failure statuses — and they apply once even to
-  SP-initiated flows. The same effects exist as one-shot `fault_*` URL
-  parameters.
+- **Fault injection.** Open **Resilience** from an OIDC or SAML inspector to
+  arm a preset such as a temporary token outage, a slow token endpoint, an
+  expired token, a broken signature, a missing claim, or a SAML failure. The
+  page waits for RP-initiated and SP-initiated flows, records each injection,
+  and disarms active scenarios after 15 minutes. Inspector controls still
+  provide one-shot clock skew, claim, signature, and error faults. The same
+  one-shot effects are available as `fault_*` URL parameters.
 - **SCIM sync.** Push the directory to your app's SCIM endpoint, reconcile
   drift, import an existing remote directory with a preview, and inspect
   every request in the sync trace and per-resource history.
