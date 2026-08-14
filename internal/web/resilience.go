@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -267,6 +268,50 @@ func (a *webApp) takeResilienceEndpointAction(slug, phase string, now time.Time)
 	}
 	a.resilienceRuns[slug] = run
 	return run.Action, true
+}
+
+func (a *webApp) resilienceEndpoint(protocol, phase string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		action, ok := a.takeResilienceEndpointAction(slug, phase, time.Now())
+		if !ok {
+			next(w, r)
+			return
+		}
+		if action.Delay > 0 {
+			a.recordFlowEvent(slug, protocol, phase, "ok", "", "Injected "+action.describe())
+			if !waitForResilienceDelay(r.Context(), action.Delay) {
+				return
+			}
+		}
+		if action.Status == 0 {
+			next(w, r)
+			return
+		}
+		if action.RetryAfter != "" {
+			w.Header().Set("Retry-After", action.RetryAfter)
+		}
+		detail := action.describe()
+		if action.OAuthError != "" {
+			detail = action.OAuthError + ": injected " + detail
+			a.recordFlowEvent(slug, protocol, phase, "failed", "", detail)
+			writeOAuthError(w, action.Status, action.OAuthError, "injected resilience scenario")
+			return
+		}
+		a.recordFlowEvent(slug, protocol, phase, "failed", "", "Injected "+detail)
+		http.Error(w, "injected resilience scenario", action.Status)
+	}
+}
+
+func waitForResilienceDelay(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func (r *resilienceRun) addDecision(phase, outcome, detail string, now time.Time) {

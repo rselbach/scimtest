@@ -143,7 +143,11 @@ func (a *webApp) flowFaults(slug string, values url.Values) faultOptions {
 	if faults.active() {
 		return faults
 	}
-	return a.takeArmedFaults(slug)
+	faults = a.takeArmedFaults(slug)
+	if faults.active() {
+		return faults
+	}
+	return a.takeResilienceFlowFaults(slug, time.Now())
 }
 
 func supportsAnyIDP(foundApp app) bool { return supportsOIDC(foundApp) || supportsSAML(foundApp) }
@@ -189,9 +193,7 @@ func (a *webApp) handleFaultDisarm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f faultOptions) applyToClaims(claims map[string]any, issued time.Time) {
-	for _, claim := range f.DropClaims {
-		delete(claims, claim)
-	}
+	f.dropClaims(claims)
 	if f.ClockSkew != 0 {
 		claims["iat"] = issued.Add(f.ClockSkew).Unix()
 	}
@@ -200,6 +202,12 @@ func (f faultOptions) applyToClaims(claims map[string]any, issued time.Time) {
 		ttl = f.IDTokenTTL
 	}
 	claims["exp"] = issued.Add(f.ClockSkew).Add(ttl).Unix()
+}
+
+func (f faultOptions) dropClaims(claims map[string]any) {
+	for _, claim := range f.DropClaims {
+		delete(claims, claim)
+	}
 }
 
 // corruptJWTSignature flips the signature segment of a compact JWS so the

@@ -36,6 +36,7 @@ type accessToken struct {
 	UserID    string
 	Scope     string
 	ExpiresAt time.Time
+	Faults    faultOptions
 }
 
 func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
@@ -282,6 +283,7 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		UserID:    user.ID,
 		Scope:     code.Scope,
 		ExpiresAt: now.Add(time.Hour),
+		Faults:    code.Faults,
 	}
 	tokenDetail := "ID and access tokens issued to " + app.OIDCClientID
 	if code.Faults.active() {
@@ -317,8 +319,10 @@ func (a *webApp) handleOIDCUserinfo(w http.ResponseWriter, r *http.Request) {
 		a.failOAuth(w, app, "userinfo", http.StatusUnauthorized, "invalid_token", "user is inactive or missing")
 		return
 	}
+	claims := userClaims(state, app, user, token.Scope)
+	token.Faults.dropClaims(claims)
 	a.recordFlowEvent(app.Slug, "oidc", "userinfo", "ok", userLabel(user), "Userinfo claims served")
-	writeJSON(w, userClaims(state, app, user, token.Scope))
+	writeJSON(w, claims)
 }
 
 func (a *webApp) pruneExpiredOIDCCredentials(now time.Time) {
