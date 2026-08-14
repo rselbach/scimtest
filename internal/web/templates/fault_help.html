@@ -4,6 +4,7 @@
   <div class="inline-error" role="alert">
     Faults armed for the next flow: {{.ArmedFaults}}
     <form method="post" action="/inspect/faults/{{.App.Slug}}/disarm" style="display:inline">
+      <input type="hidden" name="return_tab" value="{{.ReturnTab}}">
       <button class="btn btn-sm" type="submit">Disarm</button>
     </form>
   </div>
@@ -12,10 +13,16 @@
     <summary><strong>Simulate a failure</strong></summary>
     <p class="hint">Arm faults for the next sign-in, wherever it starts — including SP-initiated flows. They apply to one flow and disarm automatically. Explicit fault_* URL parameters still override them.</p>
     <form method="post" action="/inspect/faults/{{.App.Slug}}/arm" class="form-grid">
+      <input type="hidden" name="return_tab" value="{{.ReturnTab}}">
+      {{if or (eq .App.Protocol "oidc") (eq .App.Protocol "both")}}
       <label class="field"><span class="label">ID token TTL</span><input name="fault_id_token_ttl" placeholder="-1m" autocomplete="off"><span class="hint">Negative issues an already-expired token</span></label>
+      {{end}}
       <label class="field"><span class="label">Clock skew</span><input name="fault_clock_skew" placeholder="10m" autocomplete="off"><span class="hint">Offsets iat/exp and SAML instants</span></label>
+      {{if or (eq .App.Protocol "oidc") (eq .App.Protocol "both")}}
       <label class="field"><span class="label">Drop claims</span><input name="fault_drop_claims" placeholder="email,groups" autocomplete="off"></label>
       <label class="field"><span class="label">Token endpoint error</span><input name="fault_token_error" placeholder="invalid_grant" autocomplete="off"></label>
+      {{end}}
+      {{if or (eq .App.Protocol "saml") (eq .App.Protocol "both")}}
       <label class="field"><span class="label">SAML status</span>
         <select name="fault_saml_status">
           <option value="">Success</option>
@@ -23,6 +30,7 @@
           <option value="authnfailed">AuthnFailed</option>
         </select>
       </label>
+      {{end}}
       <label class="field"><span class="label">Signature</span><span class="checkbox-row"><input type="checkbox" name="fault_break_signature" value="1"> Corrupt the token or assertion signature</span></label>
       <div class="form-actions"><button class="btn btn-primary" type="submit">Arm for next flow</button></div>
     </form>

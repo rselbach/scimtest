@@ -153,8 +153,20 @@ func (a *webApp) flowFaults(slug string, values url.Values) faultOptions {
 func supportsAnyIDP(foundApp app) bool { return supportsOIDC(foundApp) || supportsSAML(foundApp) }
 
 func inspectorReturnPath(r *http.Request, foundApp app) string {
-	if ref, err := url.Parse(r.Referer()); err == nil && strings.HasPrefix(ref.Path, "/inspect/") {
-		return ref.Path
+	switch r.FormValue("return_tab") {
+	case "oidc-inspector":
+		return dashboardURL("oidc-inspector", map[string]string{"environment": foundApp.ID})
+	case "saml-inspector":
+		return dashboardURL("saml-inspector", map[string]string{"environment": foundApp.ID})
+	}
+	if ref, err := url.Parse(r.Referer()); err == nil {
+		tab := normalizedTab(ref.Query().Get("tab"))
+		if ref.Path == "/" && (tab == "oidc-inspector" || tab == "saml-inspector") {
+			return dashboardURL(tab, map[string]string{"environment": foundApp.ID})
+		}
+		if strings.HasPrefix(ref.Path, "/inspect/") {
+			return ref.Path
+		}
 	}
 	if supportsOIDC(foundApp) {
 		return "/inspect/oidc/" + url.PathEscape(foundApp.Slug)

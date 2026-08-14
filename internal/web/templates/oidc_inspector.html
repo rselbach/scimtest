@@ -1,78 +1,50 @@
-{{define "oidc-inspector.html"}}
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OIDC inspector · {{.App.Name}} · scimtest</title>
-  <link rel="stylesheet" href="/assets/app.css?v=wizard">
-  <link rel="stylesheet" href="/assets/macos.css?v=1">
-</head>
-<body>
-  <header class="topbar">
-    <a class="brand" href="/?tab=apps"><img class="brand-glyph" src="/assets/app-icon.png" alt="">scimtest</a>
-    {{template "github-account" .GitHubAccount}}
-  </header>
-  <main class="content inspector-page">
-    <div class="page-heading">
-      <div>
-        <h1>OIDC flow inspector</h1>
-        <p>{{.App.Name}}</p>
-      </div>
-      <div>
-        <a class="btn" href="/?tab=resilience&amp;environment={{.App.ID}}">Fault Injection</a>
-        <a class="btn" href="/inspect/oidc/{{.App.Slug}}/playground">Test with built-in RP</a>
-        <a class="btn" href="/?tab=apps">Back to environments</a>
-      </div>
-    </div>
-    {{if .Found}}
-    <section class="card inspector-card" aria-labelledby="flow-stage">
-      <h2 id="flow-stage">{{.Inspection.Stage}}</h2>
+{{define "oidc-inspector-panel"}}
+<div class="inspector-dashboard">
+  {{if .Found}}
+  <section class="card inspector-card" aria-labelledby="flow-stage">
+    <h2 id="flow-stage">{{.Inspection.Stage}}</h2>
+    <dl class="inspector-details">
+      <div><dt>Updated</dt><dd>{{.Inspection.UpdatedAt}}</dd></div>
+      <div><dt>Client ID</dt><dd class="mono">{{.Inspection.ClientID}}</dd></div>
+      <div><dt>User</dt><dd>{{.Inspection.User}}</dd></div>
+      <div><dt>Redirect URI</dt><dd class="mono">{{.Inspection.RedirectURI}}</dd></div>
+      <div><dt>Scope</dt><dd class="mono">{{.Inspection.Scope}}</dd></div>
+      <div><dt>PKCE</dt><dd>{{if .Inspection.PKCE}}Used{{else}}Not used{{end}}</dd></div>
+      {{if .Inspection.Faults}}<div><dt>Faults applied</dt><dd>{{.Inspection.Faults}}</dd></div>{{end}}
+    </dl>
+    {{if .Inspection.Claims}}
+    <h3>Decoded ID token claims</h3>
+    <pre class="inspector-payload">{{.Inspection.Claims}}</pre>
+    {{end}}
+    {{if .Inspection.IDToken}}
+    <h3>Raw ID token</h3>
+    <pre class="inspector-payload">{{.Inspection.IDToken}}</pre>
+    {{end}}
+  </section>
+  {{if .History}}
+  <section class="card inspector-card">
+    <h2>Previous flows</h2>
+    {{range .History}}
+    <details>
+      <summary>{{.UpdatedAt}} — {{.Stage}} — {{.User}}</summary>
       <dl class="inspector-details">
-        <div><dt>Updated</dt><dd>{{.Inspection.UpdatedAt}}</dd></div>
-        <div><dt>Client ID</dt><dd class="mono">{{.Inspection.ClientID}}</dd></div>
-        <div><dt>User</dt><dd>{{.Inspection.User}}</dd></div>
-        <div><dt>Redirect URI</dt><dd class="mono">{{.Inspection.RedirectURI}}</dd></div>
-        <div><dt>Scope</dt><dd class="mono">{{.Inspection.Scope}}</dd></div>
-        <div><dt>PKCE</dt><dd>{{if .Inspection.PKCE}}Used{{else}}Not used{{end}}</dd></div>
-        {{if .Inspection.Faults}}<div><dt>Faults applied</dt><dd>{{.Inspection.Faults}}</dd></div>{{end}}
+        <div><dt>Client ID</dt><dd class="mono">{{.ClientID}}</dd></div>
+        <div><dt>Redirect URI</dt><dd class="mono">{{.RedirectURI}}</dd></div>
+        <div><dt>Scope</dt><dd class="mono">{{.Scope}}</dd></div>
+        <div><dt>PKCE</dt><dd>{{if .PKCE}}Used{{else}}Not used{{end}}</dd></div>
       </dl>
-      {{if .Inspection.Claims}}
-      <h3>Decoded ID token claims</h3>
-      <pre class="inspector-payload">{{.Inspection.Claims}}</pre>
-      {{end}}
-      {{if .Inspection.IDToken}}
-      <h3>Raw ID token</h3>
-      <pre class="inspector-payload">{{.Inspection.IDToken}}</pre>
-      {{end}}
-    </section>
-    {{if .History}}
-    <section class="card inspector-card">
-      <h2>Previous flows</h2>
-      {{range .History}}
-      <details>
-        <summary>{{.UpdatedAt}} — {{.Stage}} — {{.User}}</summary>
-        <dl class="inspector-details">
-          <div><dt>Client ID</dt><dd class="mono">{{.ClientID}}</dd></div>
-          <div><dt>Redirect URI</dt><dd class="mono">{{.RedirectURI}}</dd></div>
-          <div><dt>Scope</dt><dd class="mono">{{.Scope}}</dd></div>
-          <div><dt>PKCE</dt><dd>{{if .PKCE}}Used{{else}}Not used{{end}}</dd></div>
-        </dl>
-        {{if .Claims}}<pre class="inspector-payload">{{.Claims}}</pre>{{end}}
-      </details>
-      {{end}}
-    </section>
+      {{if .Claims}}<pre class="inspector-payload">{{.Claims}}</pre>{{end}}
+    </details>
     {{end}}
-    {{else}}
-    <section class="card card-empty">
-      <div class="h">No OIDC flow recorded</div>
-      <p>Run Test OIDC for this environment, then return here to inspect the latest flow.</p>
-    </section>
-    {{end}}
-    {{template "flow-activity" .Events}}
-    {{template "fault-help" .}}
-  </main>
-  <script src="/assets/flow_activity.js?v=1"></script>
-</body>
-</html>
+  </section>
+  {{end}}
+  {{else}}
+  <section class="card card-empty">
+    <div class="h">No OIDC flow recorded</div>
+    <p>Run an OIDC sign-in for this environment, then return here to inspect the latest flow.</p>
+  </section>
+  {{end}}
+  {{template "flow-activity" .Events}}
+  {{template "fault-help" .}}
+</div>
 {{end}}

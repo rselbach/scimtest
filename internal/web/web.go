@@ -440,6 +440,8 @@ type pageData struct {
 	GroupsURL              string
 	AppsURL                string
 	ResilienceURL          string
+	OIDCInspectorURL       string
+	SAMLInspectorURL       string
 	EnvironmentSettingsURL string
 	NewUserURL             string
 	NewGroupURL            string
@@ -465,8 +467,12 @@ type pageData struct {
 	HasLocalUsers          bool
 	HasApps                bool
 	HasIDP                 bool
+	HasOIDC                bool
+	HasSAML                bool
 	ResilienceActive       bool
 	Resilience             *resiliencePageData
+	OIDCInspector          *oidcInspectorPageData
+	SAMLInspector          *samlInspectorPageData
 	HasSCIMEnvironments    bool
 	FormError              string
 	Environments           []app
@@ -1117,6 +1123,8 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		GroupsURL:              dashboardURL("groups", nil),
 		AppsURL:                dashboardURL("apps", nil),
 		ResilienceURL:          dashboardURL("resilience", nil),
+		OIDCInspectorURL:       dashboardURL("oidc-inspector", nil),
+		SAMLInspectorURL:       dashboardURL("saml-inspector", nil),
 		EnvironmentSettingsURL: dashboardURL("apps", map[string]string{"modal": "app", "id": environmentID}),
 		NewUserURL:             dashboardURLWithDirectory("users", page, pageSize, search, statusFilter, sortOrder, map[string]string{"modal": "user"}),
 		NewGroupURL:            dashboardURLWithDirectory("groups", page, pageSize, search, statusFilter, sortOrder, map[string]string{"modal": "group"}),
@@ -1130,10 +1138,12 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		TraceContent:           a.traceContent(environmentID),
 		SyncJob:                a.currentSyncJob(environmentID),
 		ImportPreview:          a.importPreviewView(environmentID),
-		ShowSetupGuide:         tab != "resilience" && (len(state.Users) == 0 || len(globalState.Apps) == 0),
+		ShowSetupGuide:         tab != "resilience" && tab != "oidc-inspector" && tab != "saml-inspector" && (len(state.Users) == 0 || len(globalState.Apps) == 0),
 		HasLocalUsers:          len(state.Users) > 0,
 		HasApps:                len(globalState.Apps) > 0,
 		HasIDP:                 activeEnvironment.ID != "" && supportsAnyIDP(activeEnvironment),
+		HasOIDC:                activeEnvironment.ID != "" && supportsOIDC(activeEnvironment),
+		HasSAML:                activeEnvironment.ID != "" && supportsSAML(activeEnvironment),
 		HasSCIMEnvironments:    activeEnvironment.SCIMEnabled,
 		Environments:           globalState.Apps,
 		ActiveEnvironment:      activeEnvironment,
@@ -1145,12 +1155,18 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if tab == "resilience" && data.HasIDP {
 		data.Resilience = a.buildResiliencePageData(activeEnvironment, strings.TrimSpace(r.URL.Query().Get("error")))
 	}
+	if tab == "oidc-inspector" && data.HasOIDC {
+		data.OIDCInspector = a.buildOIDCInspectorPageData(activeEnvironment)
+	}
+	if tab == "saml-inspector" && data.HasSAML {
+		data.SAMLInspector = a.buildSAMLInspectorPageData(activeEnvironment)
+	}
 	if !data.SCIMEnabled {
 		data.Errors = nil
 		data.ShowTrace = false
 		data.HasTrace = false
 	}
-	if tab == "resilience" {
+	if tab == "resilience" || tab == "oidc-inspector" || tab == "saml-inspector" {
 		data.Errors = nil
 	}
 	if data.SCIMEnabled {
@@ -2336,7 +2352,7 @@ func buildAppRows(state appState, environmentID string, base string) []appRowVie
 		}
 		if row.OIDCStatus.Configured {
 			row.OIDCDiscovery = base + "/oidc/" + app.Slug + "/.well-known/openid-configuration"
-			row.OIDCInspectorURL = "/inspect/oidc/" + url.PathEscape(app.Slug)
+			row.OIDCInspectorURL = dashboardURL("oidc-inspector", map[string]string{"environment": app.ID})
 			row.OIDCPlaygroundURL = "/inspect/oidc/" + url.PathEscape(app.Slug) + "/playground"
 			if len(app.OIDCRedirectURIs) > 0 {
 				query := url.Values{
@@ -2365,7 +2381,7 @@ func buildAppRows(state appState, environmentID string, base string) []appRowVie
 		if row.SAMLStatus.Configured {
 			row.SAMLMetadata = base + "/saml/" + app.Slug + "/metadata"
 			row.SAMLTestURL = base + "/saml/" + app.Slug + "/sso"
-			row.SAMLInspectorURL = "/inspect/saml/" + url.PathEscape(app.Slug)
+			row.SAMLInspectorURL = dashboardURL("saml-inspector", map[string]string{"environment": app.ID})
 		}
 		if row.OIDCStatus.Configured || row.SAMLStatus.Configured {
 			row.ResilienceURL = dashboardURL("resilience", map[string]string{"environment": app.ID})
@@ -2856,6 +2872,10 @@ func normalizedTab(tab string) string {
 		return "apps"
 	case "resilience":
 		return "resilience"
+	case "oidc-inspector":
+		return "oidc-inspector"
+	case "saml-inspector":
+		return "saml-inspector"
 	}
 
 	return "users"
@@ -3095,6 +3115,8 @@ func scopePageDataURLs(data *pageData, environmentID string) {
 		&data.GroupsURL,
 		&data.AppsURL,
 		&data.ResilienceURL,
+		&data.OIDCInspectorURL,
+		&data.SAMLInspectorURL,
 		&data.EnvironmentSettingsURL,
 		&data.NewUserURL,
 		&data.NewGroupURL,

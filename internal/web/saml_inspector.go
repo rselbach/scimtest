@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -13,6 +14,16 @@ type samlInspection struct {
 	EncodedResponse string
 	Faults          string
 	UpdatedAt       string
+}
+
+type samlInspectorPageData struct {
+	App         app
+	Inspection  samlInspection
+	Found       bool
+	History     []samlInspection
+	Events      []flowEvent
+	ArmedFaults string
+	ReturnTab   string
 }
 
 func (a *webApp) rememberSAMLInspection(app app, user user, context samlResponseContext, response string, encoded string, faults faultOptions, now time.Time) {
@@ -43,30 +54,28 @@ func (a *webApp) handleSAMLInspector(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	request := r.Clone(r.Context())
+	request.URL = &url.URL{Path: "/", RawQuery: url.Values{
+		"environment": {foundApp.ID},
+		"tab":         {"saml-inspector"},
+	}.Encode()}
+	a.handleIndex(w, request)
+}
 
+func (a *webApp) buildSAMLInspectorPageData(foundApp app) *samlInspectorPageData {
 	a.samlInspectorMu.Lock()
 	entries := append([]samlInspection(nil), a.samlInspections[foundApp.Slug]...)
 	a.samlInspectorMu.Unlock()
-	data := struct {
-		App           app
-		Inspection    samlInspection
-		Found         bool
-		History       []samlInspection
-		Events        []flowEvent
-		ArmedFaults   string
-		GitHubAccount githubAccountView
-	}{
-		App:           foundApp,
-		Events:        a.flowEvents(foundApp.Slug),
-		ArmedFaults:   a.peekArmedFaults(foundApp.Slug).describe(),
-		GitHubAccount: a.githubAccountView(),
+	data := &samlInspectorPageData{
+		App:         foundApp,
+		Events:      a.flowEvents(foundApp.Slug),
+		ArmedFaults: a.peekArmedFaults(foundApp.Slug).describe(),
+		ReturnTab:   "saml-inspector",
 	}
 	if len(entries) > 0 {
 		data.Inspection = entries[0]
 		data.Found = true
 		data.History = entries[1:]
 	}
-	if err := pageTemplate.ExecuteTemplate(w, "saml-inspector.html", data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	return data
 }

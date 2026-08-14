@@ -44,6 +44,18 @@
           Groups
           <span class="badge {{if and .SCIMEnabled .Stats.DirtyGroups}}dirty{{end}}">{{.Stats.Groups}}{{if and .SCIMEnabled .Stats.DirtyGroups}}·{{.Stats.DirtyGroups}}{{end}}</span>
         </a>
+        {{if .HasOIDC}}<a class="side-item {{if eq .Tab "oidc-inspector"}}active{{end}}" href="{{.OIDCInspectorURL}}" {{if eq .Tab "oidc-inspector"}}aria-current="page"{{end}}>
+          <span class="icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5h11v7h-11z"/><path d="M5 7h6M5 9h4"/></svg>
+          </span>
+          OIDC Inspector
+        </a>{{end}}
+        {{if .HasSAML}}<a class="side-item {{if eq .Tab "saml-inspector"}}active{{end}}" href="{{.SAMLInspectorURL}}" {{if eq .Tab "saml-inspector"}}aria-current="page"{{end}}>
+          <span class="icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.5h7l3 3v8H3z"/><path d="M9.5 2.5V6H13M5.5 9h5M5.5 11h3.5"/></svg>
+          </span>
+          SAML Inspector
+        </a>{{end}}
         {{if .HasIDP}}<a class="side-item {{if eq .Tab "resilience"}}active{{end}}" href="{{.ResilienceURL}}" {{if eq .Tab "resilience"}}aria-current="page"{{end}}>
           <span class="icon" aria-hidden="true">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5 13 3.5v3.8c0 3.1-2 5.7-5 7.2-3-1.5-5-4.1-5-7.2V3.5z"/><path d="m8.8 4.7-2.6 3h2.2l-1.2 3.6 2.8-4H7.8z"/></svg>
@@ -152,13 +164,17 @@
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="M7 8h6M7 11h6"/></svg>
           {{else if eq .Tab "resilience"}}
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2 16 4.4V9c0 3.8-2.4 7-6 9-3.6-2-6-5.2-6-9V4.4z"/><path d="m11 6-3 3.5h2.5L9 14l3.5-5H10z"/></svg>
+          {{else if eq .Tab "oidc-inspector"}}
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="14" height="10" rx="2"/><path d="M6.5 9h7M6.5 12h4.5"/></svg>
+          {{else if eq .Tab "saml-inspector"}}
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3h8l4 4v10H4z"/><path d="M12 3v4h4M7 11h6M7 14h4"/></svg>
           {{else}}
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="7" r="3.4"/><path d="M3.5 17c0-3.1 2.9-5.2 6.5-5.2s6.5 2.1 6.5 5.2"/></svg>
           {{end}}
         </div>
         <div class="page-header-text">
-          <h1>{{if eq .Tab "groups"}}Groups{{else if eq .Tab "apps"}}Environments{{else if eq .Tab "resilience"}}Fault Injection{{else}}Users{{end}}</h1>
-          <p class="lede">{{if eq .Tab "groups"}}{{if .ActiveEnvironment.ID}}Groups in {{.ActiveEnvironment.Name}}.{{else}}Create an environment before adding groups.{{end}}{{else if eq .Tab "apps"}}Each environment is one app you are testing. Use Test sign-in to run a flow, Inspect flow to debug it, or Set up to find connection values.{{else if eq .Tab "resilience"}}{{if .ActiveEnvironment.ID}}Test how {{.ActiveEnvironment.Name}} handles identity infrastructure failures.{{else}}Select an environment to run failure scenarios.{{end}}{{else}}{{if .ActiveEnvironment.ID}}Users in {{.ActiveEnvironment.Name}}.{{else}}Create an environment before adding users.{{end}}{{end}}</p>
+          <h1>{{if eq .Tab "groups"}}Groups{{else if eq .Tab "apps"}}Environments{{else if eq .Tab "resilience"}}Fault Injection{{else if eq .Tab "oidc-inspector"}}OIDC Inspector{{else if eq .Tab "saml-inspector"}}SAML Inspector{{else}}Users{{end}}</h1>
+          <p class="lede">{{if eq .Tab "groups"}}{{if .ActiveEnvironment.ID}}Groups in {{.ActiveEnvironment.Name}}.{{else}}Create an environment before adding groups.{{end}}{{else if eq .Tab "apps"}}Each environment is one app you are testing. Use Test sign-in to run a flow, Inspect flow to debug it, or Set up to find connection values.{{else if eq .Tab "resilience"}}{{if .ActiveEnvironment.ID}}Test how {{.ActiveEnvironment.Name}} handles identity infrastructure failures.{{else}}Select an environment to run failure scenarios.{{end}}{{else if eq .Tab "oidc-inspector"}}{{if .HasOIDC}}Authorization, token, and userinfo activity for {{.ActiveEnvironment.Name}}.{{else}}OIDC is not set up for {{.ActiveEnvironment.Name}}.{{end}}{{else if eq .Tab "saml-inspector"}}{{if .HasSAML}}Assertions and sign-in activity for {{.ActiveEnvironment.Name}}.{{else}}SAML is not set up for {{.ActiveEnvironment.Name}}.{{end}}{{else}}{{if .ActiveEnvironment.ID}}Users in {{.ActiveEnvironment.Name}}.{{else}}Create an environment before adding users.{{end}}{{end}}</p>
         </div>
         <div class="actions">
           {{if and (eq .Tab "groups") .ActiveEnvironment.ID}}
@@ -167,6 +183,11 @@
           <a class="btn btn-primary" href="{{.NewAppURL}}"><span class="plus">+</span> Add environment</a>
           {{else if and (eq .Tab "users") .ActiveEnvironment.ID}}
           <a class="btn btn-primary" href="{{.NewUserURL}}"><span class="plus">+</span> Add user</a>
+          {{else if and (eq .Tab "oidc-inspector") .HasOIDC}}
+          <a class="btn btn-primary" href="/inspect/oidc/{{.ActiveEnvironment.Slug}}/playground">Test with built-in RP</a>
+          <a class="btn" href="{{.ResilienceURL}}">Fault Injection</a>
+          {{else if and (eq .Tab "saml-inspector") .HasSAML}}
+          <a class="btn" href="{{.ResilienceURL}}">Fault Injection</a>
           {{end}}
         </div>
       </header>
@@ -242,6 +263,10 @@
 
       {{if eq .Tab "resilience"}}
         {{if .Resilience}}{{template "resilience-panel" .Resilience}}{{else}}<section class="card card-empty"><div class="h">OIDC or SAML is required</div><p>Set up an identity protocol for this environment before running fault injection scenarios.</p></section>{{end}}
+      {{else if eq .Tab "oidc-inspector"}}
+        {{if .OIDCInspector}}{{template "oidc-inspector-panel" .OIDCInspector}}{{else}}<section class="card card-empty"><div class="h">OIDC is required</div><p>Set up OIDC for this environment before inspecting sign-in flows.</p></section>{{end}}
+      {{else if eq .Tab "saml-inspector"}}
+        {{if .SAMLInspector}}{{template "saml-inspector-panel" .SAMLInspector}}{{else}}<section class="card card-empty"><div class="h">SAML is required</div><p>Set up SAML for this environment before inspecting sign-in flows.</p></section>{{end}}
       {{else}}
         {{template "list-card.html" .}}
       {{end}}
@@ -981,6 +1006,7 @@
   </div>
 
   <script src="/assets/app.js?v=wizard"></script>
+  {{if or (eq .Tab "oidc-inspector") (eq .Tab "saml-inspector")}}<script src="/assets/flow_activity.js?v=1"></script>{{end}}
 </body>
 </html>
 {{end}}

@@ -265,6 +265,7 @@
       width: 100%;
     }
     .inspector-page { margin: 0 auto; }
+    .inspector-dashboard { display: grid; gap: 16px; }
     .inspector-card { padding: 20px; }
     .inspector-card h2, .inspector-card h3 { margin: 0 0 14px; }
     .inspector-card h3 { margin-top: 22px; }
@@ -273,7 +274,8 @@
     .inspector-details dt { color: var(--muted); font-weight: 600; }
     .inspector-details dd { margin: 0; overflow-wrap: anywhere; }
     .inspector-payload { margin: 0; padding: 14px; overflow: auto; border-radius: var(--radius); background: var(--bg-soft); font: 12px/1.55 var(--mono); }
-    .flow-activity { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .flow-activity-wrap { overflow-x: auto; }
+    .flow-activity { width: 100%; min-width: 720px; border-collapse: collapse; font-size: 13px; }
     .flow-activity th, .flow-activity td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
     .flow-activity th { color: var(--muted); font-weight: 600; }
     .flow-activity tr.flow-failed td { background: var(--danger-soft); }

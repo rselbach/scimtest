@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -21,6 +22,16 @@ type oidcInspection struct {
 	IDToken     string
 	Faults      string
 	UpdatedAt   string
+}
+
+type oidcInspectorPageData struct {
+	App         app
+	Inspection  oidcInspection
+	Found       bool
+	History     []oidcInspection
+	Events      []flowEvent
+	ArmedFaults string
+	ReturnTab   string
 }
 
 func (a *webApp) rememberOIDCInspection(app app, user user, code authCode, stage string, claims map[string]any, idToken string, now time.Time) error {
@@ -70,30 +81,28 @@ func (a *webApp) handleOIDCInspector(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	request := r.Clone(r.Context())
+	request.URL = &url.URL{Path: "/", RawQuery: url.Values{
+		"environment": {foundApp.ID},
+		"tab":         {"oidc-inspector"},
+	}.Encode()}
+	a.handleIndex(w, request)
+}
 
+func (a *webApp) buildOIDCInspectorPageData(foundApp app) *oidcInspectorPageData {
 	a.oidcInspectorMu.Lock()
 	entries := append([]oidcInspection(nil), a.oidcInspections[foundApp.Slug]...)
 	a.oidcInspectorMu.Unlock()
-	data := struct {
-		App           app
-		Inspection    oidcInspection
-		Found         bool
-		History       []oidcInspection
-		Events        []flowEvent
-		ArmedFaults   string
-		GitHubAccount githubAccountView
-	}{
-		App:           foundApp,
-		Events:        a.flowEvents(foundApp.Slug),
-		ArmedFaults:   a.peekArmedFaults(foundApp.Slug).describe(),
-		GitHubAccount: a.githubAccountView(),
+	data := &oidcInspectorPageData{
+		App:         foundApp,
+		Events:      a.flowEvents(foundApp.Slug),
+		ArmedFaults: a.peekArmedFaults(foundApp.Slug).describe(),
+		ReturnTab:   "oidc-inspector",
 	}
 	if len(entries) > 0 {
 		data.Inspection = entries[0]
 		data.Found = true
 		data.History = entries[1:]
 	}
-	if err := pageTemplate.ExecuteTemplate(w, "oidc-inspector.html", data); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	return data
 }

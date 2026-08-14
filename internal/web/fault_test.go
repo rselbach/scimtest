@@ -164,6 +164,24 @@ func TestArmedFaultsApplyOnceWithoutURLParams(t *testing.T) {
 	r.Equal(http.StatusOK, rec.Code)
 }
 
+func TestInspectorReturnPathPreservesDashboardInspector(t *testing.T) {
+	tests := map[string]string{
+		"OIDC": "/?environment=app-1&tab=oidc-inspector",
+		"SAML": "/?environment=app-1&tab=saml-inspector",
+	}
+	for name, referer := range tests {
+		t.Run(name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/inspect/faults/example/arm", nil)
+			request.Header.Set("Referer", "http://admin.test"+referer)
+
+			require.Equal(t, referer, inspectorReturnPath(request, app{ID: "app-1", Protocol: "both"}))
+		})
+	}
+	request := httptest.NewRequest(http.MethodPost, "/inspect/faults/example/arm", strings.NewReader("return_tab=saml-inspector"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	require.Equal(t, "/?environment=app-1&tab=saml-inspector", inspectorReturnPath(request, app{ID: "app-1", Protocol: "both"}))
+}
+
 func TestFaultDisarmEndpoint(t *testing.T) {
 	r := require.New(t)
 	svc := oidcFaultTestApp(t)
