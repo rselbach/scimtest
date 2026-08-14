@@ -173,6 +173,14 @@
                         </div>
                       </section>
                       {{end}}
+                      {{if .ResilienceURL}}
+                      <section class="environment-detail-section" aria-labelledby="environment-resilience-{{.ID}}">
+                        <h3 id="environment-resilience-{{.ID}}">Failure testing</h3>
+                        <div class="environment-detail-links">
+                          <a class="btn btn-sm" href="{{.ResilienceURL}}" title="Test how this application handles identity infrastructure failures">Resilience</a>
+                        </div>
+                      </section>
+                      {{end}}
                       {{if and (not .OIDCStatus.Configured) (not .SAMLStatus.Configured)}}
                       <p class="environment-details-empty">No protocol test links are available yet.</p>
                       {{end}}

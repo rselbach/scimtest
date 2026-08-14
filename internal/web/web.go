@@ -291,6 +291,7 @@ type appRowView struct {
 	OIDCPlaygroundURL string
 	OIDCInspectorURL  string
 	SAMLInspectorURL  string
+	ResilienceURL     string
 	// OIDCPKCETestURL is an authorize URL missing its code_challenge; the
 	// page script generates a PKCE pair on click and appends the challenge.
 	OIDCPKCETestURL string
@@ -2357,6 +2358,9 @@ func buildAppRows(state appState, environmentID string, base string) []appRowVie
 			row.SAMLMetadata = base + "/saml/" + app.Slug + "/metadata"
 			row.SAMLTestURL = base + "/saml/" + app.Slug + "/sso"
 			row.SAMLInspectorURL = "/inspect/saml/" + url.PathEscape(app.Slug)
+		}
+		if row.OIDCStatus.Configured || row.SAMLStatus.Configured {
+			row.ResilienceURL = resilienceURL(app.Slug)
 		}
 		rows = append(rows, row)
 	}
