@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,6 +97,63 @@ func TestResilienceDelayStopsWhenRequestIsCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	require.False(t, waitForResilienceDelay(ctx, time.Minute))
+}
+
+func TestResiliencePageShowsProtocolPresets(t *testing.T) {
+	r := require.New(t)
+	svc := oidcFaultTestApp(t)
+	response := httptest.NewRecorder()
+	svc.routes().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/inspect/resilience/example", nil))
+
+	r.Equal(http.StatusOK, response.Code)
+	r.Contains(response.Body.String(), "Token endpoint outage")
+	r.Contains(response.Body.String(), "Expired ID token")
+	r.NotContains(response.Body.String(), "SAML authentication failure")
+}
+
+func TestResiliencePageArmsAndDisarmsScenario(t *testing.T) {
+	r := require.New(t)
+	svc := oidcFaultTestApp(t)
+
+	arm := httptest.NewRecorder()
+	armRequest := httptest.NewRequest(http.MethodPost, "/inspect/resilience/example/arm", strings.NewReader(url.Values{
+		"preset": {"token-outage"},
+		"count":  {"3"},
+	}.Encode()))
+	armRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	svc.routes().ServeHTTP(arm, armRequest)
+	r.Equal(http.StatusSeeOther, arm.Code)
+	r.Equal("/inspect/resilience/example", arm.Header().Get("Location"))
+
+	page := httptest.NewRecorder()
+	svc.routes().ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/inspect/resilience/example", nil))
+	r.Contains(page.Body.String(), "Active scenario")
+	r.Contains(page.Body.String(), "0 of 3 injections applied")
+	r.NotContains(page.Body.String(), "Choose a failure")
+
+	disarm := httptest.NewRecorder()
+	svc.routes().ServeHTTP(disarm, httptest.NewRequest(http.MethodPost, "/inspect/resilience/example/disarm", nil))
+	r.Equal(http.StatusSeeOther, disarm.Code)
+	run, ok := svc.resilienceRun("example", time.Now())
+	r.True(ok)
+	r.Equal(resilienceRunDisarmed, run.State)
+	r.Equal("0 of 3 injections applied", run.progress())
+}
+
+func TestResiliencePageRejectsUnavailablePreset(t *testing.T) {
+	r := require.New(t)
+	svc := oidcFaultTestApp(t)
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/inspect/resilience/example/arm", strings.NewReader(url.Values{
+		"preset": {"saml-auth-failed"},
+	}.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	svc.routes().ServeHTTP(response, request)
+
+	r.Equal(http.StatusSeeOther, response.Code)
+	r.Contains(response.Header().Get("Location"), "scenario+is+not+available")
+	_, ok := svc.resilienceRun("example", time.Now())
+	r.False(ok)
 }
 
 func TestResilienceFlowFaultAppliesOnce(t *testing.T) {

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -270,6 +272,19 @@ func (a *webApp) takeResilienceEndpointAction(slug, phase string, now time.Time)
 	return run.Action, true
 }
 
+func (a *webApp) disarmResilienceRun(slug string, now time.Time) bool {
+	a.resilienceMu.Lock()
+	defer a.resilienceMu.Unlock()
+	run, ok := a.resilienceRuns[slug]
+	if !ok || !run.active() {
+		return false
+	}
+	run.State = resilienceRunDisarmed
+	run.addDecision("scenario", "disarmed", "Disarmed by the developer", now)
+	a.resilienceRuns[slug] = run
+	return true
+}
+
 func (a *webApp) resilienceEndpoint(protocol, phase string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slug := r.PathValue("slug")
@@ -328,7 +343,6 @@ func (r *resilienceRun) addDecision(phase, outcome, detail string, now time.Time
 
 func (r *resilienceRun) expire(now time.Time) {
 	r.State = resilienceRunExpired
-	r.Remaining = 0
 	r.addDecision("scenario", "expired", "No matching flow arrived before the safety timeout", now)
 }
 
@@ -336,4 +350,173 @@ func cloneResilienceRun(run resilienceRun) resilienceRun {
 	run.Decisions = append([]resilienceDecision(nil), run.Decisions...)
 	run.Action.Faults.DropClaims = append([]string(nil), run.Action.Faults.DropClaims...)
 	return run
+}
+
+type resiliencePresetView struct {
+	ID         string
+	Name       string
+	Summary    string
+	Protocol   string
+	Behavior   string
+	Count      int
+	AllowCount bool
+}
+
+type resilienceRunView struct {
+	Name        string
+	Summary     string
+	State       string
+	StatusClass string
+	Active      bool
+	Progress    string
+	Behavior    string
+	ArmedAt     string
+	ExpiresAt   string
+	Decisions   []resilienceDecision
+}
+
+type resiliencePageData struct {
+	App           app
+	Presets       []resiliencePresetView
+	Run           *resilienceRunView
+	CanChoose     bool
+	Error         string
+	OIDC          bool
+	SAML          bool
+	OIDCInspector string
+	SAMLInspector string
+	PlaygroundURL string
+	GitHubAccount githubAccountView
+}
+
+func (a *webApp) handleResilience(w http.ResponseWriter, r *http.Request) {
+	_, foundApp, ok := appForProtocol(w, r, supportsAnyIDP)
+	if !ok {
+		return
+	}
+	presets := resiliencePresetsForApp(foundApp)
+	presetViews := make([]resiliencePresetView, 0, len(presets))
+	for _, preset := range presets {
+		presetViews = append(presetViews, resiliencePresetView{
+			ID:         preset.ID,
+			Name:       preset.Name,
+			Summary:    preset.Summary,
+			Protocol:   strings.ToUpper(preset.Protocol),
+			Behavior:   preset.Action.describe(),
+			Count:      preset.DefaultCount,
+			AllowCount: preset.AllowCount,
+		})
+	}
+	slug := url.PathEscape(foundApp.Slug)
+	data := resiliencePageData{
+		App:           foundApp,
+		Presets:       presetViews,
+		Error:         strings.TrimSpace(r.URL.Query().Get("error")),
+		OIDC:          supportsOIDC(foundApp),
+		SAML:          supportsSAML(foundApp),
+		OIDCInspector: "/inspect/oidc/" + slug,
+		SAMLInspector: "/inspect/saml/" + slug,
+		PlaygroundURL: "/inspect/oidc/" + slug + "/playground",
+		GitHubAccount: a.githubAccountView(),
+	}
+	if run, found := a.resilienceRun(foundApp.Slug, time.Now()); found {
+		data.Run = newResilienceRunView(run)
+	}
+	data.CanChoose = data.Run == nil || !data.Run.Active
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := pageTemplate.ExecuteTemplate(w, "resilience.html", data); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func (a *webApp) handleResilienceArm(w http.ResponseWriter, r *http.Request) {
+	_, foundApp, ok := appForProtocol(w, r, supportsAnyIDP)
+	if !ok {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		redirectResilienceError(w, r, foundApp.Slug, err)
+		return
+	}
+	presetID := strings.TrimSpace(r.FormValue("preset"))
+	if !resiliencePresetAvailable(foundApp, presetID) {
+		redirectResilienceError(w, r, foundApp.Slug, errors.New("scenario is not available for this environment"))
+		return
+	}
+	count := 0
+	if raw := strings.TrimSpace(r.FormValue("count")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			redirectResilienceError(w, r, foundApp.Slug, errors.New("failure count must be a number"))
+			return
+		}
+		count = parsed
+	}
+	run, err := a.armResilienceRun(foundApp.Slug, presetID, count, time.Now())
+	if err != nil {
+		redirectResilienceError(w, r, foundApp.Slug, err)
+		return
+	}
+	// A scenario and a quick fault must never compete for the next flow.
+	a.disarmFaults(foundApp.Slug)
+	a.recordFlowEvent(foundApp.Slug, "fault", "scenario", "ok", "", "Armed: "+run.Name)
+	http.Redirect(w, r, resilienceURL(foundApp.Slug), http.StatusSeeOther)
+}
+
+func (a *webApp) handleResilienceDisarm(w http.ResponseWriter, r *http.Request) {
+	_, foundApp, ok := appForProtocol(w, r, supportsAnyIDP)
+	if !ok {
+		return
+	}
+	if a.disarmResilienceRun(foundApp.Slug, time.Now()) {
+		a.recordFlowEvent(foundApp.Slug, "fault", "scenario", "ok", "", "Disarmed")
+	}
+	http.Redirect(w, r, resilienceURL(foundApp.Slug), http.StatusSeeOther)
+}
+
+func resiliencePresetAvailable(foundApp app, presetID string) bool {
+	for _, preset := range resiliencePresetsForApp(foundApp) {
+		if preset.ID == presetID {
+			return true
+		}
+	}
+	return false
+}
+
+func resilienceURL(slug string) string {
+	return "/inspect/resilience/" + url.PathEscape(slug)
+}
+
+func redirectResilienceError(w http.ResponseWriter, r *http.Request, slug string, err error) {
+	query := url.Values{"error": {err.Error()}}
+	http.Redirect(w, r, resilienceURL(slug)+"?"+query.Encode(), http.StatusSeeOther)
+}
+
+func newResilienceRunView(run resilienceRun) *resilienceRunView {
+	state := string(run.State)
+	statusClass := "deleted"
+	switch run.State {
+	case resilienceRunArmed, resilienceRunRunning:
+		statusClass = "pending"
+	case resilienceRunCompleted:
+		statusClass = "synced"
+	case resilienceRunExpired, resilienceRunDisarmed:
+		statusClass = "deleted"
+	}
+	decisions := make([]resilienceDecision, len(run.Decisions))
+	for i, decision := range run.Decisions {
+		decisions[len(run.Decisions)-1-i] = decision
+	}
+	return &resilienceRunView{
+		Name:        run.Name,
+		Summary:     run.Summary,
+		State:       state,
+		StatusClass: statusClass,
+		Active:      run.active(),
+		Progress:    run.progress(),
+		Behavior:    run.Action.describe(),
+		ArmedAt:     run.ArmedAt.Format(time.RFC3339),
+		ExpiresAt:   run.ExpiresAt.Format(time.RFC3339),
+		Decisions:   decisions,
+	}
 }

@@ -19,7 +19,10 @@
         <h1>SAML assertion inspector</h1>
         <p>{{.App.Name}}</p>
       </div>
-      <a class="btn" href="/?tab=apps">Back to environments</a>
+      <div>
+        <a class="btn" href="/inspect/resilience/{{.App.Slug}}">Resilience</a>
+        <a class="btn" href="/?tab=apps">Back to environments</a>
+      </div>
     </div>
     {{if .Found}}
     <section class="card inspector-card" aria-labelledby="assertion-heading">
