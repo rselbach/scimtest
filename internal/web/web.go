@@ -952,7 +952,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	})
 	mux.HandleFunc("POST /tools/delete-all", a.rejectWhileSyncing(a.handleToolsDeleteAll))
-	mux.HandleFunc("POST /tools/clear-users-local", a.rejectWhileSyncing(a.handleToolsClearUsersLocal))
+	mux.HandleFunc("POST /tools/clear-directory-local", a.rejectWhileSyncing(a.handleToolsClearDirectoryLocal))
 	mux.HandleFunc("POST /tools/deactivate-all", a.rejectWhileSyncing(a.handleToolsDeactivateAll))
 	mux.HandleFunc("POST /tools/activate-all", a.rejectWhileSyncing(a.handleToolsActivateAll))
 	mux.HandleFunc("POST /tools/create-users", a.rejectWhileSyncing(a.handleToolsCreateUsers))
@@ -1830,7 +1830,7 @@ func (a *webApp) handleToolsDeleteAll(w http.ResponseWriter, r *http.Request) {
 	redirectWithFlash(w, r, dashboardURL("users", nil), flashMessage{Kind: "success", Message: message})
 }
 
-func (a *webApp) handleToolsClearUsersLocal(w http.ResponseWriter, r *http.Request) {
+func (a *webApp) handleToolsClearDirectoryLocal(w http.ResponseWriter, r *http.Request) {
 	tab := normalizedTab(r.FormValue("tab"))
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -1841,26 +1841,19 @@ func (a *webApp) handleToolsClearUsersLocal(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	clearedUsers := len(state.Users)
-	affectedGroups := 0
+	clearedGroups := len(state.Groups)
 	state.Users = nil
+	state.Groups = nil
 	state.UserOperations = make(map[string][]operationLog)
+	state.GroupOperations = make(map[string][]operationLog)
 	state.UserSync = nil
-	for i := range state.Groups {
-		if len(state.Groups[i].MemberIDs) == 0 {
-			continue
-		}
-		state.Groups[i].MemberIDs = nil
-		state.Groups[i].Dirty = true
-		state.Groups[i].LastError = ""
-		markGroupDirty(&state, state.Groups[i].ID, false)
-		affectedGroups++
-	}
+	state.GroupSync = nil
 	if err := saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
 
-	message := fmt.Sprintf("cleared %d local users without syncing; updated %d groups", clearedUsers, affectedGroups)
+	message := fmt.Sprintf("cleared %d local users and %d local groups without syncing", clearedUsers, clearedGroups)
 	redirectWithFlash(w, r, dashboardURL("users", nil), flashMessage{Kind: "success", Message: message})
 }
 

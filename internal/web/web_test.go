@@ -1201,7 +1201,7 @@ func TestToolsDeleteAll(t *testing.T) {
 	})
 }
 
-func TestToolsClearUsersLocalNeverContactsSCIM(t *testing.T) {
+func TestToolsClearDirectoryLocalNeverContactsSCIM(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	requests := 0
@@ -1222,11 +1222,19 @@ func TestToolsClearUsersLocalNeverContactsSCIM(t *testing.T) {
 		UserOperations: map[string][]operationLog{
 			"u1": {{Kind: "sync", Summary: "Created"}},
 		},
-		GroupOperations: map[string][]operationLog{},
+		GroupOperations: map[string][]operationLog{
+			"g1": {{Kind: "sync", Summary: "Created"}},
+		},
 	}))
 	app := &webApp{}
+	tools := httptest.NewRecorder()
+	app.routes().ServeHTTP(tools, httptest.NewRequest(http.MethodGet, "/?tab=users&modal=tools", nil))
+	r.Equal(http.StatusOK, tools.Code)
+	r.Contains(tools.Body.String(), `action="/tools/clear-directory-local"`)
+	r.Contains(tools.Body.String(), ">Clear local directory</button>")
+
 	form := url.Values{"tab": {"users"}}
-	req := httptest.NewRequest(http.MethodPost, "/tools/clear-users-local", strings.NewReader(form.Encode()))
+	req := httptest.NewRequest(http.MethodPost, "/tools/clear-directory-local", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := httptest.NewRecorder()
 
@@ -1237,12 +1245,11 @@ func TestToolsClearUsersLocalNeverContactsSCIM(t *testing.T) {
 	updated, err := loadState()
 	r.NoError(err)
 	r.Empty(updated.Users)
+	r.Empty(updated.Groups)
 	r.Empty(updated.UserOperations)
-	r.Empty(updated.Groups[0].MemberIDs)
-	r.False(updated.Groups[0].Dirty)
-	r.True(updated.GroupSync["app_legacy_scim"]["g1"].Dirty)
-	r.Empty(updated.Groups[0].LastError)
-	r.False(updated.Groups[1].Dirty)
+	r.Empty(updated.GroupOperations)
+	r.Empty(updated.UserSync)
+	r.Empty(updated.GroupSync)
 	r.Contains(rec.Header().Get("Set-Cookie"), "cleared")
 }
 
