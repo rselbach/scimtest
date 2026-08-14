@@ -68,6 +68,8 @@ type webApp struct {
 	noOpen               bool
 	faultMu              sync.Mutex
 	armedFaults          map[string]faultOptions
+	resilienceMu         sync.Mutex
+	resilienceRuns       map[string]resilienceRun
 	syncJobMu            sync.Mutex
 	syncJobs             map[string]*syncJobSnapshot
 	syncCancels          map[string]context.CancelFunc
