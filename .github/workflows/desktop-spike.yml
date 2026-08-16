@@ -175,6 +175,8 @@ jobs:
             xorg-server-xvfb \
             xorg-xauth
       - uses: actions/checkout@v7
+      - name: Trust container checkout
+        run: git config --global --add safe.directory "$(pwd)"
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
