@@ -87,7 +87,7 @@ main() {
     cat "${test_dir}/desktop.log" >&2
     return 1
   fi
-  xdotool windowclose "${window_ids[0]}"
+  kill "${app_pid}"
 
   for _ in {1..100}; do
     if ! kill -0 "${app_pid}" 2>/dev/null; then
@@ -100,14 +100,14 @@ main() {
       if (( exit_code == 0 )); then
         return 0
       fi
-      echo "desktop process exit status after window close: ${exit_code}" >&2
+      echo "desktop process exit status after shutdown: ${exit_code}" >&2
       cat "${test_dir}/desktop.log" >&2
       return 1
     fi
     sleep 0.1
   done
 
-  echo "desktop process did not stop after its window closed" >&2
+  echo "desktop process did not stop after shutdown" >&2
   cat "${test_dir}/desktop.log" >&2
   return 1
 }
