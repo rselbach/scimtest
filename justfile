@@ -9,11 +9,22 @@ default:
 build:
   go build ./...
 
+build-desktop-linux application_profile_id:
+  mkdir -p ./bin
+  PKG_CONFIG="${PWD}/packaging/linux/pkg-config-webkit2gtk-4.1.sh" \
+    go build -tags desktop \
+    -ldflags="-X=github.com/rselbach/scimtest/internal/web.tunnelApplicationProfileID={{application_profile_id}} -X=github.com/rselbach/scimtest/internal/web.tunnelReleaseProfileRequired=true" \
+    -o ./bin/scimtest-desktop ./cmd/scimtest-desktop
+
 fetch-sparkle:
   ./packaging/macos/fetch-sparkle.sh
 
 test:
   go test ./...
+
+test-desktop-linux:
+  PKG_CONFIG="${PWD}/packaging/linux/pkg-config-webkit2gtk-4.1.sh" \
+    go test -tags desktop ./cmd/scimtest-desktop
 
 run:
   go run ./cmd/scimtest

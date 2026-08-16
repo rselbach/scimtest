@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=scimtest
+Comment=Test SCIM, OIDC, and SAML integrations
+Exec=scimtest-desktop
+Icon=scimtest
+Terminal=false
+Categories=Development;
+StartupWMClass=scimtest-desktop

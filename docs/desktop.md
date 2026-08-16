@@ -21,16 +21,23 @@ window and server lifecycle.
 
 ## Try a PR build
 
-The **Desktop spike** workflow attaches an ad-hoc-signed macOS arm64 app to
-each relevant pull request run for 14 days. Extract the archive and open
-`scimtest.app` on an Apple silicon Mac.
+The **Desktop spike** workflow attaches four packages to each relevant pull
+request run for 14 days:
+
+- an ad-hoc-signed macOS arm64 ZIP
+- an Ubuntu 24.04 amd64 `.deb` package
+- a Fedora 44 x86_64 `.rpm` package
+- an Arch Linux x86_64 `.pkg.tar.zst` package
+
+Extract the ZIP and open `scimtest.app` on an Apple silicon Mac. Install the
+Linux packages with `apt`, `dnf`, or `pacman -U`, respectively.
 
 - macOS pull request apps use only an ad-hoc signature and are not notarized.
 
 The operating system may warn before launching an ad-hoc-signed test build.
 Tagged releases contain a signed and notarized macOS arm64 application.
 
-## Build locally
+## Build locally on macOS
 
 Desktop builds use CGO and require an Apple silicon Mac with Xcode Command Line
 Tools. Fetch the pinned Sparkle framework first:
@@ -56,6 +63,33 @@ DYLD_FRAMEWORK_PATH="$PWD/build/sparkle" \
   go test -tags desktop ./cmd/scimtest-desktop
 ```
 
+## Build locally on Linux
+
+Linux desktop builds use GTK 3 and WebKitGTK 4.1. On Ubuntu 24.04, install the
+compiler and development packages:
+
+```sh
+sudo apt install g++ libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
+```
+
+The pinned `webview_go` binding requests the old `webkit2gtk-4.0` pkg-config
+name. The Linux build adapter changes that request to `webkit2gtk-4.1`; it does
+not change compiler or linker flags from the installed package.
+
+Run the Linux desktop tests:
+
+```sh
+just test-desktop-linux
+```
+
+Build with the release application profile:
+
+```sh
+just build-desktop-linux "$SCIMTEST_APPLICATION_PROFILE_ID"
+```
+
+The executable is written to `bin/scimtest-desktop`.
+
 ## macOS releases
 
 Tagged releases build the arm64 desktop executable on an Apple silicon macOS 26
@@ -77,6 +111,26 @@ available for source-based development. `scimtest-server` remains a separate
 release artifact for tunnel operators. Publishing the first desktop release
 also removes the legacy `scimtest` CLI cask from the tap; historical GitHub
 release assets are not deleted.
+
+## Linux releases
+
+Tagged releases publish native packages for Ubuntu 24.04, Fedora 44, and Arch
+Linux on amd64/x86_64:
+
+- `scimtest-desktop_<version>_linux_amd64.deb`
+- `scimtest-desktop_<version>_linux_x86_64.rpm`
+- `scimtest-desktop_<version>_linux_x86_64.pkg.tar.zst`
+
+Each package installs the executable, desktop entry, icon, and license. It uses
+the distribution's GTK and WebKitGTK libraries rather than bundling them.
+
+The release workflow compiles each executable inside its target distribution,
+installs the finished package, and runs it under Xvfb. It verifies that the
+native window opens, loads the GitHub account gate from the local server, and
+shuts down when the window closes.
+
+Linux releases do not include an automatic updater. Install a newer `.deb`
+package to update the app.
 
 The release environment requires these secrets:
 
@@ -141,5 +195,6 @@ starting desktop mode so it cannot bypass the desktop account gate.
 - Account switching uses **Log out** followed by a new GitHub authorization.
 - Each launch needs network access long enough to authenticate the installation
   tunnel. The app locks again if that tunnel disconnects.
-- Auto-update and protocol/deep-link registration are not yet implemented.
-- Linux artifacts dynamically depend on the distribution's WebKitGTK runtime.
+- Linux auto-update and protocol/deep-link registration are not yet implemented.
+- Linux releases currently support Ubuntu 24.04, Fedora 44, and Arch on
+  amd64/x86_64.

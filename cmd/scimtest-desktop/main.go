@@ -25,6 +25,10 @@ func main() {
 }
 
 func run() error {
+	if err := initializeDesktopWindowing(); err != nil {
+		return err
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -46,7 +50,7 @@ func run() error {
 	}
 
 	window := webview.New(false)
-	if window == nil || window.Window() == nil {
+	if !hasNativeWindow(window) {
 		close(stopped)
 		cancel()
 		return errors.New("could not create the native WebView window")

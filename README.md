@@ -15,15 +15,35 @@ credentials, remote IDs, sync state, operation history, and errors.
 
 ## Install
 
-Homebrew (recommended — release builds include the automatic public tunnel):
+On macOS, install the signed app with Homebrew:
 
 ```sh
 brew install --cask rselbach/tap/scimtest-desktop
 ```
 
-Or download the Apple silicon macOS 26+ DMG or ZIP from the
-[releases page](https://github.com/rselbach/scimtest/releases). Tagged releases
-no longer distribute the command-line application.
+On Linux amd64, download the package for your distribution from the
+[releases page](https://github.com/rselbach/scimtest/releases), then install it.
+
+Ubuntu 24.04:
+
+```sh
+sudo apt install ./scimtest-desktop_<version>_linux_amd64.deb
+```
+
+Fedora 44:
+
+```sh
+sudo dnf install ./scimtest-desktop_<version>_linux_x86_64.rpm
+```
+
+Arch Linux:
+
+```sh
+sudo pacman -U ./scimtest-desktop_<version>_linux_x86_64.pkg.tar.zst
+```
+
+The releases page also provides an Apple silicon macOS 26+ DMG and ZIP. Tagged
+releases no longer distribute the command-line application.
 
 The signed macOS app uses Sparkle for updates. After installing a
 Sparkle-enabled release, choose **scimtest > Check for Updates…** or allow
@@ -151,12 +171,11 @@ Actions variable. They contain no tunnel enrollment private key; a new
 installation authorizes its generated installation key through GitHub on its
 first connection.
 
-The macOS release also requires a Developer ID Application certificate and App
-Store Connect API key in the signing secrets documented in
-[docs/desktop.md](docs/desktop.md). The release workflow builds native Intel and
-Apple Silicon executables, combines them into one application, signs and
-notarizes the app and DMG, and publishes both DMG and ZIP artifacts. GoReleaser
-continues to publish `scimtest-server`; it no longer builds the CLI application.
+The macOS release also requires the Apple signing credentials documented in
+[docs/desktop.md](docs/desktop.md). The release workflow signs and notarizes the
+Apple silicon app and DMG. Native Ubuntu 24.04, Fedora 44, and Arch jobs build,
+install, and test each Linux package. GoReleaser continues to publish
+`scimtest-server`; it no longer builds the CLI application.
 
 The tunnel server's application profile must allow these routes:
 
