@@ -21,6 +21,7 @@ import (
 
 const (
 	samlHTTPPostBinding = "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+	samlProtocolXMLNS   = "urn:oasis:names:tc:SAML:2.0:protocol"
 	maxSAMLRequestBytes = 1 << 20
 )
 
@@ -95,10 +96,20 @@ func (a *webApp) serveSAMLSSO(w http.ResponseWriter, r *http.Request, post bool)
 			a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
 			return
 		}
-		values = r.Form
+		values = cloneURLValues(r.Form)
+		// A chooser POST retains the original Redirect-binding query. Do not
+		// allow hidden or attacker-supplied body fields to replace signed input.
+		query := r.URL.Query()
+		if query.Get("SAMLRequest") != "" {
+			values.Set("SAMLRequest", query.Get("SAMLRequest"))
+			values.Del("RelayState")
+			if query.Has("RelayState") {
+				values.Set("RelayState", query.Get("RelayState"))
+			}
+		}
 	}
 	baseURL := a.effectiveIDPBaseURL(r, state)
-	responseContext, err := resolveSAMLResponseContext(values, app, baseURL)
+	responseContext, err := resolveSAMLResponseContext(r, values, app, baseURL)
 	if err != nil {
 		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
 		return
@@ -161,7 +172,7 @@ func (a *webApp) denySAML(w http.ResponseWriter, r *http.Request, app app, baseU
 	})
 }
 
-func resolveSAMLResponseContext(values url.Values, app app, baseURL string) (samlResponseContext, error) {
+func resolveSAMLResponseContext(r *http.Request, values url.Values, app app, baseURL string) (samlResponseContext, error) {
 	// Every response ends up posted to the configured ACS URL, so its
 	// absence fails here - before the user is shown a chooser - rather
 	// than after account selection.
@@ -177,8 +188,11 @@ func resolveSAMLResponseContext(values url.Values, app app, baseURL string) (sam
 	context := samlResponseContext{ACSURL: configuredACS}
 	encodedRequest := strings.TrimSpace(values.Get("SAMLRequest"))
 	if encodedRequest != "" {
-		// This test IDP has no SP certificates, so request signatures are accepted
-		// as opaque input while the request's configured endpoints are validated.
+		if app.SAMLVerifyRequests {
+			if err := validateSAMLAuthnRequestSignature(r, encodedRequest, app.SAMLRequestCertPEM); err != nil {
+				return samlResponseContext{}, err
+			}
+		}
 		request, err := parseSAMLAuthnRequest(encodedRequest)
 		if err != nil {
 			return samlResponseContext{}, err
@@ -210,7 +224,7 @@ func parseSAMLAuthnRequest(encodedRequest string) (samlAuthnRequest, error) {
 		return samlAuthnRequest{}, err
 	}
 	root := doc.Root()
-	if elementLocalName(root) != "AuthnRequest" {
+	if elementLocalName(root) != "AuthnRequest" || root.NamespaceURI() != samlProtocolXMLNS {
 		return samlAuthnRequest{}, fmt.Errorf("SAMLRequest must contain an AuthnRequest")
 	}
 	return samlAuthnRequest{
@@ -250,6 +264,9 @@ func parseSAMLRequestDocument(encodedRequest string) (*etree.Document, error) {
 	if inflateErr != nil || len(requestXML) == 0 {
 		requestXML = decoded
 	}
+	if len(requestXML) > maxSAMLRequestBytes {
+		return nil, errSAMLRequestTooLarge
+	}
 
 	doc := etree.NewDocument()
 	if err := doc.ReadFromString(string(requestXML)); err != nil {
@@ -259,6 +276,14 @@ func parseSAMLRequestDocument(encodedRequest string) (*etree.Document, error) {
 		return nil, fmt.Errorf("parse SAMLRequest XML: root element is required")
 	}
 	return doc, nil
+}
+
+func cloneURLValues(values url.Values) url.Values {
+	cloned := make(url.Values, len(values))
+	for key, entries := range values {
+		cloned[key] = append([]string(nil), entries...)
+	}
+	return cloned
 }
 
 func inflateRawDeflate(data []byte) ([]byte, error) {

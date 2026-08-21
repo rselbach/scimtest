@@ -130,6 +130,12 @@ The OIDC flow signs RS256 ID tokens. SAML responses include a signed
 assertion. Signing material is generated on first run and stored in the
 SQLite state database.
 
+SAML environments can also require signed AuthnRequests. Enable request
+verification in the SAML setup and pin the service provider's RSA X.509
+certificate. scimtest validates HTTP-Redirect query signatures and enveloped
+HTTP-POST XML signatures with SHA-256, SHA-384, or SHA-512. Unsigned requests,
+SHA-1 signatures, and signatures from any other certificate are rejected.
+
 ## Configuration
 
 **Ports.** scimtest binds `127.0.0.1` and prefers, in order: `--port`,

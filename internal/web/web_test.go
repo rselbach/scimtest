@@ -2897,6 +2897,9 @@ func TestAppFormShowsOIDCSetupPanel(t *testing.T) {
 	r.Contains(body, `name="protocol_switches_present" value="true"`)
 	r.Contains(body, `name="oidc_enabled" data-protocol-toggle="oidc"`)
 	r.Contains(body, `name="saml_enabled" data-protocol-toggle="saml"`)
+	r.Contains(body, `name="saml_verify_requests" data-saml-request-verification`)
+	r.Contains(body, `name="saml_request_certificate_pem"`)
+	r.Contains(body, "AuthnRequest signatures")
 	r.Contains(body, `name="scim_enabled" data-protocol-toggle="scim"`)
 	r.Contains(body, `data-protocol-fields="oidc"`)
 	r.NotContains(body, `name="protocol"`)
@@ -2909,6 +2912,43 @@ func TestAppFormShowsOIDCSetupPanel(t *testing.T) {
 	r.Contains(body, "generated-secret")
 	r.Contains(body, "http://idp.test/saml/example/sso")
 	r.Contains(body, "-----BEGIN CERTIFICATE-----")
+}
+
+func TestAppSavePersistsSAMLRequestCertificatePin(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+	appService := newTestIDPApp(t)
+	certPEM := certificatePEM(appService.certDER)
+	form := url.Values{
+		"tab":                          {"apps"},
+		"name":                         {"Greendale Portal"},
+		"slug":                         {"greendale"},
+		"protocol_switches_present":    {"true"},
+		"saml_enabled":                 {"on"},
+		"saml_entity_id":               {"urn:greendale:sp"},
+		"saml_acs_url":                 {"https://greendale.test/saml/acs"},
+		"saml_verify_requests":         {"on"},
+		"saml_request_certificate_pem": {certPEM},
+		"saml_name_id_field":           {"email"},
+		"saml_email_attribute_name":    {defaultSAMLEmailAttributeName},
+		"saml_attribute_username":      {"username"},
+		"saml_attribute_given_name":    {"first_name"},
+		"saml_attribute_family_name":   {"last_name"},
+		"saml_attribute_groups":        {"groups"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/apps/save", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	appService.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	state, err := loadState()
+	r.NoError(err)
+	r.Len(state.Apps, 1)
+	r.True(state.Apps[0].SAMLVerifyRequests)
+	r.Equal(strings.TrimSpace(certPEM), state.Apps[0].SAMLRequestCertPEM)
 }
 
 func TestDisabledProtocolSwitchesClearSettingsAndSkipValidation(t *testing.T) {

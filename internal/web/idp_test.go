@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"compress/flate"
+	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -886,6 +887,146 @@ func TestSAMLAuthnRequestValidation(t *testing.T) {
 			r.Contains(rec.Body.String(), tc.want)
 		})
 	}
+}
+
+func TestSAMLRedirectAuthnRequestSignatureVerification(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	svc := newTestIDPApp(t)
+	state := signedRequestTestState(svc)
+	r.NoError(saveState(state))
+
+	requestXML := `<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_request-annie" Destination="http://idp.test/saml/greendale/sso" AssertionConsumerServiceURL="https://sp.greendale.test/acs" ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"><saml:Issuer>urn:greendale:sp</saml:Issuer></samlp:AuthnRequest>`
+	encodedRequest := encodeRedirectSAMLRequest(t, requestXML)
+	query := signedRedirectSAMLQuery(t, svc.signingKey, encodedRequest, "study-room")
+
+	tests := map[string]struct {
+		query      string
+		wantStatus int
+		want       string
+	}{
+		"valid": {
+			query:      query + "&user_id=usr-annie",
+			wantStatus: http.StatusOK,
+			want:       `action="https://sp.greendale.test/acs"`,
+		},
+		"unsigned": {
+			query:      "SAMLRequest=" + url.QueryEscape(encodedRequest) + "&user_id=usr-annie",
+			wantStatus: http.StatusBadRequest,
+			want:       "requires SigAlg",
+		},
+		"tampered relay state": {
+			query:      strings.Replace(query, "study-room", "city-college", 1) + "&user_id=usr-annie",
+			wantStatus: http.StatusBadRequest,
+			want:       "invalid SAML AuthnRequest signature",
+		},
+		"encoded duplicate parameter name": {
+			query:      "%53AMLRequest=tampered&" + query + "&user_id=usr-annie",
+			wantStatus: http.StatusBadRequest,
+			want:       "must not be percent-encoded",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/saml/greendale/sso?"+tc.query, nil)
+			svc.routes().ServeHTTP(rec, req)
+			require.Equal(t, tc.wantStatus, rec.Code)
+			require.Contains(t, rec.Body.String(), tc.want)
+		})
+	}
+}
+
+func TestSAMLPOSTAuthnRequestSignatureVerification(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	svc := newTestIDPApp(t)
+	r.NoError(saveState(signedRequestTestState(svc)))
+
+	requestXML := `<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_request-annie" Destination="http://idp.test/saml/greendale/sso" AssertionConsumerServiceURL="https://sp.greendale.test/acs" ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"><saml:Issuer>urn:greendale:sp</saml:Issuer></samlp:AuthnRequest>`
+	doc := etree.NewDocument()
+	r.NoError(doc.ReadFromString(requestXML))
+	ctx, err := dsig.NewSigningContext(svc.signingKey, [][]byte{svc.certDER})
+	r.NoError(err)
+	ctx.Canonicalizer = dsig.MakeC14N10ExclusiveCanonicalizerWithPrefixList("")
+	signed, err := ctx.SignEnveloped(doc.Root())
+	r.NoError(err)
+	signedDoc := etree.NewDocument()
+	signedDoc.SetRoot(signed)
+	signedXML, err := signedDoc.WriteToString()
+	r.NoError(err)
+
+	tests := map[string]struct {
+		xml        string
+		wantStatus int
+		want       string
+	}{
+		"valid": {
+			xml:        signedXML,
+			wantStatus: http.StatusOK,
+			want:       `action="https://sp.greendale.test/acs"`,
+		},
+		"unsigned": {
+			xml:        requestXML,
+			wantStatus: http.StatusBadRequest,
+			want:       "signature is required",
+		},
+		"tampered": {
+			xml:        strings.Replace(signedXML, "urn:greendale:sp", "urn:city-college:sp", 1),
+			wantStatus: http.StatusBadRequest,
+			want:       "invalid SAML AuthnRequest signature",
+		},
+		"nested signature": {
+			xml: strings.Replace(
+				strings.Replace(signedXML, "<ds:Signature", "<Wrapper><ds:Signature", 1),
+				"</ds:Signature>", "</ds:Signature></Wrapper>", 1,
+			),
+			wantStatus: http.StatusBadRequest,
+			want:       "one direct XMLDSIG signature",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			form := url.Values{
+				"SAMLRequest": {base64.StdEncoding.EncodeToString([]byte(tc.xml))},
+				"user_id":     {"usr-annie"},
+			}
+			req := httptest.NewRequest(http.MethodPost, "/saml/greendale/sso", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			rec := httptest.NewRecorder()
+			svc.routes().ServeHTTP(rec, req)
+			require.Equal(t, tc.wantStatus, rec.Code)
+			require.Contains(t, rec.Body.String(), tc.want)
+		})
+	}
+}
+
+func signedRequestTestState(svc *webApp) appState {
+	return appState{
+		Config: config{IDPBaseURL: "http://idp.test"},
+		Users: []user{{
+			ID: "usr-annie", GivenName: "Annie", FamilyName: "Edison",
+			Email: "annie@greendale.edu", Username: "acedison", Active: true,
+		}},
+		Apps: []app{{
+			ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "saml",
+			SAMLEntityID: "urn:greendale:sp", SAMLACSURL: "https://sp.greendale.test/acs",
+			SAMLVerifyRequests: true, SAMLRequestCertPEM: certificatePEM(svc.certDER),
+		}},
+	}
+}
+
+func signedRedirectSAMLQuery(t *testing.T, key *rsa.PrivateKey, encodedRequest string, relayState string) string {
+	t.Helper()
+	signed := "SAMLRequest=" + url.QueryEscape(encodedRequest) +
+		"&RelayState=" + url.QueryEscape(relayState) +
+		"&SigAlg=" + url.QueryEscape(rsaSHA256SignatureMethod)
+	digest := sha256.Sum256([]byte(signed))
+	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
+	require.NoError(t, err)
+	return signed + "&Signature=" + url.QueryEscape(base64.StdEncoding.EncodeToString(signature))
 }
 
 func TestParseSAMLRequestRejectsOversizedInflatedPayload(t *testing.T) {

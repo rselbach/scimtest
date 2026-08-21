@@ -320,13 +320,17 @@
 	  const acsURL = setupFieldValue('saml_acs_url');
 	  if (!acsURL) return {enabled: true, started: true, configured: false, detail: 'ACS URL is missing', error: 'Enter an ACS URL to finish SAML setup.', field: 'saml_acs_url'};
 	  if (!setupHTTPURLValid(acsURL)) return {enabled: true, started: true, configured: false, detail: 'ACS URL is invalid', error: 'The ACS URL must be an absolute HTTP(S) URL without a fragment.', field: 'saml_acs_url'};
+	  const verifyRequests = setupFieldChecked('saml_verify_requests');
+	  const requestCertificate = setupFieldValue('saml_request_certificate_pem');
+	  if (verifyRequests && !requestCertificate) return {enabled: true, started: true, configured: false, detail: 'Request certificate is missing', error: 'Paste the service provider request-signing certificate to require signed AuthnRequests.', field: 'saml_request_certificate_pem'};
+	  if (verifyRequests && (!requestCertificate.startsWith('-----BEGIN CERTIFICATE-----') || !requestCertificate.endsWith('-----END CERTIFICATE-----'))) return {enabled: true, started: true, configured: false, detail: 'Request certificate is invalid', error: 'The request-signing certificate must be one complete X.509 CERTIFICATE PEM block.', field: 'saml_request_certificate_pem'};
 	  const mappingError = setupMappingError(
 		['saml_attribute_given_name', 'saml_attribute_family_name', 'saml_attribute_username', 'saml_email_attribute_name', 'saml_attribute_groups'],
 		[],
 		'SAML attribute'
 	  );
 	  if (mappingError) return {enabled: true, started: true, configured: false, detail: 'Attribute mappings are invalid', error: mappingError.message, field: mappingError.field};
-	  return {enabled: true, started: true, configured: true, detail: acsURL, error: ''};
+	  return {enabled: true, started: true, configured: true, detail: verifyRequests ? 'Signed requests required' : acsURL, error: ''};
 	}
 
 	function scimSetupState() {
@@ -400,10 +404,19 @@
 	function updateSetupState() {
 	  if (!environmentForm || !setupReview) return null;
 	  updateProtocolEnabledState();
+	  updateSAMLRequestTrust();
 	  const states = protocolSetupStates();
 	  for (const protocol of ['oidc', 'saml', 'scim']) updateProtocolStatus(protocol, states[protocol]);
 	  if (setupSection && setupSection.value === 'review') updateSetupReview(states);
 	  return states;
+	}
+
+	function updateSAMLRequestTrust() {
+	  const toggle = environmentForm ? environmentForm.querySelector('[data-saml-request-verification]') : null;
+	  const certificate = document.querySelector('[data-saml-request-certificate]');
+	  if (!toggle || !certificate) return;
+	  certificate.classList.toggle('is-hidden', !toggle.checked);
+	  toggle.setAttribute('aria-expanded', toggle.checked ? 'true' : 'false');
 	}
 
 	function updateOIDCSetupURLs() {

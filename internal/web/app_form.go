@@ -78,6 +78,8 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		SAMLAudience:           strings.TrimSpace(r.FormValue("saml_audience")),
 		SAMLNameIDField:        normalizeSAMLNameIDField(r.FormValue("saml_name_id_field")),
 		SAMLEmailAttributeName: strings.TrimSpace(r.FormValue("saml_email_attribute_name")),
+		SAMLVerifyRequests:     r.FormValue("saml_verify_requests") == "on",
+		SAMLRequestCertPEM:     strings.TrimSpace(r.FormValue("saml_request_certificate_pem")),
 		IncludeGroupsClaim:     r.FormValue("include_groups_claim") == "on",
 		ChooserMode:            normalizeChooserMode(r.FormValue("chooser_mode")),
 		OIDCClaimMappings: oidcClaimMappings{
@@ -202,6 +204,8 @@ func clearAppProtocol(app *app, protocol string) {
 		app.SAMLEntityID = ""
 		app.SAMLACSURL = ""
 		app.SAMLAudience = ""
+		app.SAMLVerifyRequests = false
+		app.SAMLRequestCertPEM = ""
 	case "scim":
 		app.SCIMBaseURL = ""
 		app.SCIMBearerToken = ""

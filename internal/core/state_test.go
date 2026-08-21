@@ -68,6 +68,8 @@ func TestSaveAndLoadState(t *testing.T) {
 			SAMLNameIDField:        "username",
 			SAMLNameIDFormat:       SAMLNameIDFormatUnspecified,
 			SAMLEmailAttributeName: DefaultSAMLEmailAttributeName,
+			SAMLVerifyRequests:     true,
+			SAMLRequestCertPEM:     "pinned certificate",
 			SCIMEnabled:            true,
 			SCIMBaseURL:            "https://example.com/scim/v2",
 			SCIMBearerToken:        "secret",

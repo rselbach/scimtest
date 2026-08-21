@@ -2057,6 +2057,8 @@ func applyFormDraft(data *pageData, draft formDraft) {
 		data.AppForm.App.SAMLAudience = values.Get("saml_audience")
 		data.AppForm.App.SAMLNameIDField = values.Get("saml_name_id_field")
 		data.AppForm.App.SAMLEmailAttributeName = values.Get("saml_email_attribute_name")
+		data.AppForm.App.SAMLVerifyRequests = values.Get("saml_verify_requests") == "on"
+		data.AppForm.App.SAMLRequestCertPEM = values.Get("saml_request_certificate_pem")
 		data.AppForm.App.OIDCClaimMappings = oidcClaimMappings{
 			Name: values.Get("oidc_claim_name"), GivenName: values.Get("oidc_claim_given_name"),
 			FamilyName: values.Get("oidc_claim_family_name"), Username: values.Get("oidc_claim_username"),
