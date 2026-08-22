@@ -94,13 +94,14 @@ type webApp struct {
 }
 
 type importPreview struct {
-	State     appState
-	Traces    []syncTraceEntry
-	Status    string
-	Added     int
-	Updated   int
-	Removed   int
-	CreatedAt time.Time
+	State          appState
+	Traces         []syncTraceEntry
+	Status         string
+	Added          int
+	Updated        int
+	Removed        int
+	BaselineDigest [32]byte
+	CreatedAt      time.Time
 }
 
 type importPreviewView struct {
