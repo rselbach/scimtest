@@ -138,6 +138,40 @@ func TestSaveAndLoadState(t *testing.T) {
 	r.NotZero(info.Size())
 }
 
+func TestSaveEnvironmentStatePreservesGlobalConfig(t *testing.T) {
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r := require.New(t)
+	r.NoError(SaveState(AppState{Apps: []App{{
+		ID: "study-app", Name: "Study App", Slug: "study-app", Protocol: "oidc",
+	}}}))
+
+	want := Config{
+		IDPBaseURL:            "https://idp.greendale.edu",
+		TrustForwardedHeaders: true,
+		TunnelInstanceID:      "current-instance",
+		SigningPrivateKeyPEM:  "current-private-key",
+		SigningCertificatePEM: "current-certificate",
+	}
+	r.NoError(SaveGlobalConfig(want))
+
+	stale, err := LoadStateForApp("study-app")
+	r.NoError(err)
+	stale.Config.IDPBaseURL = "https://old-idp.greendale.edu"
+	stale.Config.TrustForwardedHeaders = false
+	stale.Config.TunnelInstanceID = "old-instance"
+	stale.Config.SigningPrivateKeyPEM = "old-private-key"
+	stale.Config.SigningCertificatePEM = "old-certificate"
+	r.NoError(SaveEnvironmentState(stale))
+
+	got, err := LoadStateForApp("study-app")
+	r.NoError(err)
+	r.Equal(want.IDPBaseURL, got.Config.IDPBaseURL)
+	r.Equal(want.TrustForwardedHeaders, got.Config.TrustForwardedHeaders)
+	r.Equal(want.TunnelInstanceID, got.Config.TunnelInstanceID)
+	r.Equal(want.SigningPrivateKeyPEM, got.Config.SigningPrivateKeyPEM)
+	r.Equal(want.SigningCertificatePEM, got.Config.SigningCertificatePEM)
+}
+
 func TestEnsureTunnelInstanceIDGeneratesAndReusesUUID(t *testing.T) {
 	r := require.New(t)
 	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))

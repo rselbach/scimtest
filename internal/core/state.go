@@ -1622,23 +1622,25 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 		}
 	}
 
-	configStmt, err := tx.Prepare(`INSERT INTO config(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
-	if err != nil {
-		return fmt.Errorf("prepare sqlite config insert: %w", err)
-	}
-	defer closeStmt(configStmt)
+	if global {
+		configStmt, err := tx.Prepare(`INSERT INTO config(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+		if err != nil {
+			return fmt.Errorf("prepare sqlite config insert: %w", err)
+		}
+		defer closeStmt(configStmt)
 
-	configEntries := map[string]string{
-		"app_scim_migrated":       "1",
-		"idp_base_url":            state.Config.IDPBaseURL,
-		"trust_forwarded_headers": BoolString(state.Config.TrustForwardedHeaders),
-		"tunnel_instance_id":      state.Config.TunnelInstanceID,
-		"signing_private_key_pem": state.Config.SigningPrivateKeyPEM,
-		"signing_certificate_pem": state.Config.SigningCertificatePEM,
-	}
-	for key, value := range configEntries {
-		if _, err := configStmt.Exec(key, value); err != nil {
-			return fmt.Errorf("insert sqlite config %s: %w", key, err)
+		configEntries := map[string]string{
+			"app_scim_migrated":       "1",
+			"idp_base_url":            state.Config.IDPBaseURL,
+			"trust_forwarded_headers": BoolString(state.Config.TrustForwardedHeaders),
+			"tunnel_instance_id":      state.Config.TunnelInstanceID,
+			"signing_private_key_pem": state.Config.SigningPrivateKeyPEM,
+			"signing_certificate_pem": state.Config.SigningCertificatePEM,
+		}
+		for key, value := range configEntries {
+			if _, err := configStmt.Exec(key, value); err != nil {
+				return fmt.Errorf("insert sqlite config %s: %w", key, err)
+			}
 		}
 	}
 	if !global {
