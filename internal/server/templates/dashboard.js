@@ -1,4 +1,4 @@
-// Dashboard behaviors shared by the initial page and htmx tunnel refreshes.
+// Dashboard behaviors shared by the initial page and tunnel refreshes.
 (function () {
   "use strict";
 
@@ -45,11 +45,39 @@
     form.appendChild(confirmation);
   });
 
-  document.body.addEventListener("htmx:beforeRequest", function (event) {
-    if (event.detail.elt.id === "tunnel-list" && document.querySelector("#tunnel-list .confirm")) {
-      event.preventDefault();
+  var refreshingTunnels = false;
+
+  function refreshTunnels() {
+    var list = document.getElementById("tunnel-list");
+    if (!list || list.querySelector(".confirm") || refreshingTunnels) {
+      return;
     }
-  });
+    refreshingTunnels = true;
+    fetch("/dashboard/tunnels", { credentials: "same-origin" })
+      .then(function (response) {
+        if (!response.ok) {
+          throw new Error("tunnel refresh failed");
+        }
+        return response.text();
+      })
+      .then(function (html) {
+        var template = document.createElement("template");
+        template.innerHTML = html;
+        template.content.querySelectorAll("[data-dashboard-count]").forEach(function (count) {
+          var current = document.getElementById(count.id);
+          if (current) {
+            current.textContent = count.textContent;
+          }
+          count.remove();
+        });
+        list.replaceChildren(template.content);
+        tick();
+      })
+      .catch(function () {})
+      .finally(function () {
+        refreshingTunnels = false;
+      });
+  }
 
   function tick() {
     var now = Math.floor(Date.now() / 1000);
@@ -70,4 +98,5 @@
 
   tick();
   setInterval(tick, 1000);
+  setInterval(refreshTunnels, 5000);
 })();

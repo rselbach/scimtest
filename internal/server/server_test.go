@@ -505,6 +505,13 @@ func TestTemplatesParse(t *testing.T) {
 	r.NotNil(tunnelTablePartial)
 }
 
+func TestDashboardUsesOnlyEmbeddedScripts(t *testing.T) {
+	r := require.New(t)
+	r.NotContains(dashboardHTML, "https://")
+	r.NotContains(dashboardHTML, "hx-")
+	r.Contains(string(dashboardJS), `fetch("/dashboard/tunnels"`)
+}
+
 func TestHealthReadyAndMetrics(t *testing.T) {
 	r := require.New(t)
 	s := &Server{

@@ -115,7 +115,7 @@ summary { color: var(--accent); cursor: pointer; }
       <h2>Active tunnels</h2>
       <small>Refreshes every 5 seconds</small>
     </div>
-    <div id="tunnel-list" class="list" hx-get="/dashboard/tunnels" hx-trigger="every 5s" hx-swap="innerHTML">
+    <div id="tunnel-list" class="list">
       {{if .Tunnels}}
       {{range .Tunnels}}
       <div class="tunnel">
@@ -250,7 +250,6 @@ summary { color: var(--accent); cursor: pointer; }
     </div>
   </section>
 </main>
-<script src="https://unpkg.com/htmx.org@2"></script>
 <script src="/dashboard/app.js" defer></script>
 </body>
 </html>
