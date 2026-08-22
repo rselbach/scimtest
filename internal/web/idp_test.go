@@ -121,6 +121,43 @@ func TestOIDCAuthorizationCodeFlowUsesEnvironmentDirectory(t *testing.T) {
 	r.NotContains(body, "secret")
 }
 
+func TestOIDCUserinfoRequiresBearerScheme(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{
+		Users: []user{{
+			ID: "troy", GivenName: "Troy", FamilyName: "Barnes",
+			Email: "troy@greendale.edu", Username: "troy", Active: true,
+		}},
+		Apps: []app{{ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "oidc"}},
+	}))
+	svc := newTestIDPApp(t)
+	svc.accessTokens["paintball-token"] = accessToken{
+		AppSlug: "greendale", UserID: "troy", Scope: "openid profile",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+
+	tests := map[string]struct {
+		authorization string
+		want          int
+	}{
+		"standard scheme":      {authorization: "Bearer paintball-token", want: http.StatusOK},
+		"case-insensitive":     {authorization: "bearer paintball-token", want: http.StatusOK},
+		"missing scheme":       {authorization: "paintball-token", want: http.StatusUnauthorized},
+		"wrong scheme":         {authorization: "Basic paintball-token", want: http.StatusUnauthorized},
+		"multiple credentials": {authorization: "Bearer paintball-token extra", want: http.StatusUnauthorized},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/oidc/greendale/userinfo", nil)
+			req.Header.Set("Authorization", tc.authorization)
+			rec := httptest.NewRecorder()
+			svc.routes().ServeHTTP(rec, req)
+			require.Equal(t, tc.want, rec.Code)
+		})
+	}
+}
+
 func TestOIDCFlowProceedsWhileStateLockHeld(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)

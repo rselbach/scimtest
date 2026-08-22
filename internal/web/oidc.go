@@ -350,7 +350,11 @@ func (a *webApp) handleOIDCUserinfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.pruneExpiredOIDCCredentials(time.Now())
-	tokenValue := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	tokenValue, ok := oidcBearerToken(r.Header.Get("Authorization"))
+	if !ok {
+		a.failOAuth(w, app, "userinfo", http.StatusUnauthorized, "invalid_token", "access token is invalid or expired")
+		return
+	}
 	token, ok := a.accessTokens[tokenValue]
 	if !ok || token.AppSlug != app.Slug {
 		a.failOAuth(w, app, "userinfo", http.StatusUnauthorized, "invalid_token", "access token is invalid or expired")
@@ -365,6 +369,14 @@ func (a *webApp) handleOIDCUserinfo(w http.ResponseWriter, r *http.Request) {
 	token.Faults.dropClaims(claims)
 	a.recordFlowEvent(app.Slug, "oidc", "userinfo", "ok", userLabel(user), "Userinfo claims served")
 	writeJSON(w, claims)
+}
+
+func oidcBearerToken(value string) (string, bool) {
+	scheme, token, found := strings.Cut(strings.TrimSpace(value), " ")
+	if !found || !strings.EqualFold(scheme, "Bearer") || token == "" || strings.ContainsAny(token, " \t\r\n") {
+		return "", false
+	}
+	return token, true
 }
 
 func (a *webApp) pruneExpiredOIDCCredentials(now time.Time) {
