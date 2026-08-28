@@ -2,9 +2,15 @@ package core
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"database/sql"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
@@ -70,6 +76,7 @@ func TestSaveAndLoadState(t *testing.T) {
 			SAMLEmailAttributeName: DefaultSAMLEmailAttributeName,
 			SAMLVerifyRequests:     true,
 			SAMLRequestCertPEM:     "pinned certificate",
+			SAMLEncryptionCertPEM:  "encryption certificate",
 			SCIMEnabled:            true,
 			SCIMBaseURL:            "https://example.com/scim/v2",
 			SCIMBearerToken:        "secret",
@@ -136,6 +143,40 @@ func TestSaveAndLoadState(t *testing.T) {
 	info, err := os.Stat(path)
 	r.NoError(err)
 	r.NotZero(info.Size())
+}
+
+func TestSaveEnvironmentStatePreservesGlobalConfig(t *testing.T) {
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r := require.New(t)
+	r.NoError(SaveState(AppState{Apps: []App{{
+		ID: "study-app", Name: "Study App", Slug: "study-app", Protocol: "oidc",
+	}}}))
+
+	want := Config{
+		IDPBaseURL:            "https://idp.greendale.edu",
+		TrustForwardedHeaders: true,
+		TunnelInstanceID:      "current-instance",
+		SigningPrivateKeyPEM:  "current-private-key",
+		SigningCertificatePEM: "current-certificate",
+	}
+	r.NoError(SaveGlobalConfig(want))
+
+	stale, err := LoadStateForApp("study-app")
+	r.NoError(err)
+	stale.Config.IDPBaseURL = "https://old-idp.greendale.edu"
+	stale.Config.TrustForwardedHeaders = false
+	stale.Config.TunnelInstanceID = "old-instance"
+	stale.Config.SigningPrivateKeyPEM = "old-private-key"
+	stale.Config.SigningCertificatePEM = "old-certificate"
+	r.NoError(SaveEnvironmentState(stale))
+
+	got, err := LoadStateForApp("study-app")
+	r.NoError(err)
+	r.Equal(want.IDPBaseURL, got.Config.IDPBaseURL)
+	r.Equal(want.TrustForwardedHeaders, got.Config.TrustForwardedHeaders)
+	r.Equal(want.TunnelInstanceID, got.Config.TunnelInstanceID)
+	r.Equal(want.SigningPrivateKeyPEM, got.Config.SigningPrivateKeyPEM)
+	r.Equal(want.SigningCertificatePEM, got.Config.SigningCertificatePEM)
 }
 
 func TestEnsureTunnelInstanceIDGeneratesAndReusesUUID(t *testing.T) {
@@ -1170,6 +1211,16 @@ func TestProtocolSetupStatus(t *testing.T) {
 			want:     SetupStatusConfigured,
 			protocol: "saml",
 		},
+		"SAML encryption incomplete": {
+			app: App{
+				Protocol:              "none",
+				SAMLACSURL:            "https://greendale.test/saml/acs",
+				SAMLEncryptionCertPEM: "not-a-cert",
+			},
+			status:   SAMLSetupStatus,
+			want:     SetupStatusIncomplete,
+			protocol: "saml",
+		},
 		"SCIM incomplete": {
 			app:      App{Protocol: "none", SCIMBaseURL: "https://greendale.test/scim/v2"},
 			status:   SCIMSetupStatus,
@@ -1373,4 +1424,99 @@ func TestPlanSync(t *testing.T) {
 		{ResourceType: "group", ResourceID: "g1", Label: "Study Group", Operation: "create"},
 	}
 	require.Equal(t, want, plan)
+}
+
+func TestParseSAMLEncryptionCertificate(t *testing.T) {
+	now := currentTime()
+	validPEM := testRSAPEMCertificate(t, now.Add(-time.Hour), now.AddDate(1, 0, 0))
+	expiredPEM := testRSAPEMCertificate(t, now.Add(-48*time.Hour), now.Add(-time.Hour))
+
+	tests := map[string]struct {
+		value   string
+		wantErr string
+		wantNil bool
+	}{
+		"empty":      {value: "", wantNil: true},
+		"whitespace": {value: " \n\t", wantNil: true},
+		"valid":      {value: validPEM},
+		"garbage":    {value: "not-a-cert", wantErr: "SAML encryption certificate is invalid"},
+		"expired":    {value: expiredPEM, wantErr: "SAML encryption certificate is invalid"},
+		"extra block": {
+			value:   validPEM + validPEM,
+			wantErr: "SAML encryption certificate is invalid",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			cert, err := ParseSAMLEncryptionCertificate(tc.value)
+			if tc.wantErr != "" {
+				r.ErrorContains(err, tc.wantErr)
+				r.Nil(cert)
+				return
+			}
+			r.NoError(err)
+			if tc.wantNil {
+				r.Nil(cert)
+				return
+			}
+			r.NotNil(cert)
+			_, ok := cert.PublicKey.(*rsa.PublicKey)
+			r.True(ok)
+		})
+	}
+}
+
+func TestSAMLEncryptionCertificateDoesNotInferProtocol(t *testing.T) {
+	r := require.New(t)
+	app := App{SAMLEncryptionCertPEM: testRSAPEMCertificate(t, currentTime().Add(-time.Hour), currentTime().AddDate(1, 0, 0))}
+	r.Equal(SetupStatusNotSetUp, SAMLSetupStatus(app))
+	r.Equal("none", InferAppProtocol(app))
+}
+
+func TestSAMLSetupStatusConfiguredWithValidEncryptionCertificate(t *testing.T) {
+	r := require.New(t)
+	app := App{
+		SAMLACSURL:            "https://greendale.test/saml/acs",
+		SAMLEncryptionCertPEM: testRSAPEMCertificate(t, currentTime().Add(-time.Hour), currentTime().AddDate(1, 0, 0)),
+	}
+	r.Equal(SetupStatusConfigured, SAMLSetupStatus(app))
+}
+
+func TestValidateAppRejectsInvalidSAMLEncryptionCertificate(t *testing.T) {
+	r := require.New(t)
+	err := ValidateApp(App{
+		ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "saml",
+		SAMLACSURL:            "https://sp.greendale.test/acs",
+		SAMLEncryptionCertPEM: "not-a-cert",
+	}, nil)
+	r.ErrorContains(err, "SAML encryption certificate is invalid")
+}
+
+func TestValidateAppAcceptsValidSAMLEncryptionCertificate(t *testing.T) {
+	r := require.New(t)
+	err := ValidateApp(App{
+		ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "saml",
+		SAMLACSURL:            "https://sp.greendale.test/acs",
+		SAMLEncryptionCertPEM: testRSAPEMCertificate(t, currentTime().Add(-time.Hour), currentTime().AddDate(1, 0, 0)),
+	}, nil)
+	r.NoError(err)
+}
+
+func testRSAPEMCertificate(t *testing.T, notBefore, notAfter time.Time) string {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: "greendale-sp"},
+		NotBefore:    notBefore,
+		NotAfter:     notAfter,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 }

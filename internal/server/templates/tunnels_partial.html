@@ -26,5 +26,5 @@
 {{else}}
 <div class="empty">No application tunnels are connected.</div>
 {{end}}
-<strong id="tunnel-count" hx-swap-oob="innerHTML">{{len .Tunnels}}</strong>
-<strong id="request-count" hx-swap-oob="innerHTML">{{.TotalRequests}}</strong>
+<strong id="tunnel-count" data-dashboard-count hidden>{{len .Tunnels}}</strong>
+<strong id="request-count" data-dashboard-count hidden>{{.TotalRequests}}</strong>

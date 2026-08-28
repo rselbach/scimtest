@@ -2,6 +2,8 @@ package web
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"slices"
@@ -524,6 +526,11 @@ func (a *webApp) previewImport(w http.ResponseWriter, r *http.Request, tab strin
 		a.redirectError(w, r, tab, err)
 		return
 	}
+	baselineDigest, err := importPreviewBaselineDigest(projected, appID)
+	if err != nil {
+		a.redirectError(w, r, tab, err)
+		return
+	}
 	result := importStateFromSCIM(projected)
 	a.rememberTrace(appID, result.Traces)
 	if result.Fatal != nil {
@@ -534,7 +541,7 @@ func (a *webApp) previewImport(w http.ResponseWriter, r *http.Request, tab strin
 		return
 	}
 	added, updated, removed := importChangeCounts(projected, result.State)
-	a.storeImportPreview(appID, importPreview{State: result.State, Traces: result.Traces, Status: result.Status, Added: added, Updated: updated, Removed: removed, CreatedAt: time.Now()})
+	a.storeImportPreview(appID, importPreview{State: result.State, Traces: result.Traces, Status: result.Status, Added: added, Updated: updated, Removed: removed, BaselineDigest: baselineDigest, CreatedAt: time.Now()})
 	message := fmt.Sprintf("import preview: %d added, %d updated, %d removed", added, updated, removed)
 	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: message})
 }
@@ -558,6 +565,21 @@ func (a *webApp) applyImport(w http.ResponseWriter, r *http.Request, tab string)
 		a.redirectError(w, r, tab, fmt.Errorf("import preview expired; preview the directory again"))
 		return
 	}
+	projected, err := stateForApp(state, appID)
+	if err != nil {
+		a.redirectError(w, r, tab, err)
+		return
+	}
+	baselineDigest, err := importPreviewBaselineDigest(projected, appID)
+	if err != nil {
+		a.redirectError(w, r, tab, err)
+		return
+	}
+	if baselineDigest != preview.BaselineDigest {
+		a.deleteImportPreview(appID)
+		a.redirectError(w, r, tab, fmt.Errorf("directory changed since the import preview; preview it again"))
+		return
+	}
 	if _, err := writeSafetyBackup(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
@@ -575,6 +597,29 @@ func (a *webApp) applyImport(w http.ResponseWriter, r *http.Request, tab string)
 		setShowTraceCookie(w)
 	}
 	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: preview.Status + "; undo snapshot saved"})
+}
+
+func importPreviewBaselineDigest(state appState, appID string) ([sha256.Size]byte, error) {
+	selected, ok := appByID(state.Apps, appID)
+	if !ok {
+		return [sha256.Size]byte{}, fmt.Errorf("app %q not found", appID)
+	}
+	baseline := struct {
+		Config config
+		App    app
+		Users  []user
+		Groups []group
+	}{
+		Config: state.Config,
+		App:    selected,
+		Users:  state.Users,
+		Groups: state.Groups,
+	}
+	encoded, err := json.Marshal(baseline)
+	if err != nil {
+		return [sha256.Size]byte{}, fmt.Errorf("encode import preview baseline: %w", err)
+	}
+	return sha256.Sum256(encoded), nil
 }
 
 func importChangeCounts(current appState, imported appState) (int, int, int) {

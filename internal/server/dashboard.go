@@ -206,7 +206,7 @@ func (s *Server) renderDashboard(w http.ResponseWriter, session StoredSession) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' https://unpkg.com; style-src 'self' 'unsafe-inline'")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'")
 	if err := dashboardTemplate.Execute(w, data); err != nil {
 		s.cfg.Logger.Error("dashboard render failed", "err", err)
 	}

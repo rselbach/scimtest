@@ -852,6 +852,11 @@
                 <span class="hint">Paste one RSA X.509 certificate in PEM format. Redirect query signatures and POST XML signatures are checked. SHA-1 is rejected.</span>
               </label>
               <label class="field full">
+                <span class="label">SP encryption certificate</span>
+                <textarea name="saml_encryption_certificate_pem" rows="7" spellcheck="false" autocomplete="off" placeholder="-----BEGIN CERTIFICATE-----&#10;MIIC...&#10;-----END CERTIFICATE-----">{{.AppForm.App.SAMLEncryptionCertPEM}}</textarea>
+                <span class="hint">Paste one RSA X.509 certificate in PEM format. When present, scimtest encrypts the signed assertion to this key. Leave empty to post plaintext assertions.</span>
+              </label>
+              <label class="field full">
                 <span class="label">Email attribute assertion name</span>
                 <input name="saml_email_attribute_name" value="{{.AppForm.App.SAMLAttributeMappings.Email}}" autocomplete="off">
                 <span class="hint">Use the value expected by the relying party.</span>

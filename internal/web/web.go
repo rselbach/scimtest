@@ -94,13 +94,14 @@ type webApp struct {
 }
 
 type importPreview struct {
-	State     appState
-	Traces    []syncTraceEntry
-	Status    string
-	Added     int
-	Updated   int
-	Removed   int
-	CreatedAt time.Time
+	State          appState
+	Traces         []syncTraceEntry
+	Status         string
+	Added          int
+	Updated        int
+	Removed        int
+	BaselineDigest [32]byte
+	CreatedAt      time.Time
 }
 
 type importPreviewView struct {
@@ -2059,6 +2060,7 @@ func applyFormDraft(data *pageData, draft formDraft) {
 		data.AppForm.App.SAMLEmailAttributeName = values.Get("saml_email_attribute_name")
 		data.AppForm.App.SAMLVerifyRequests = values.Get("saml_verify_requests") == "on"
 		data.AppForm.App.SAMLRequestCertPEM = values.Get("saml_request_certificate_pem")
+		data.AppForm.App.SAMLEncryptionCertPEM = values.Get("saml_encryption_certificate_pem")
 		data.AppForm.App.OIDCClaimMappings = oidcClaimMappings{
 			Name: values.Get("oidc_claim_name"), GivenName: values.Get("oidc_claim_given_name"),
 			FamilyName: values.Get("oidc_claim_family_name"), Username: values.Get("oidc_claim_username"),

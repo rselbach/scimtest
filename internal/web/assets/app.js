@@ -324,6 +324,8 @@
 	  const requestCertificate = setupFieldValue('saml_request_certificate_pem');
 	  if (verifyRequests && !requestCertificate) return {enabled: true, started: true, configured: false, detail: 'Request certificate is missing', error: 'Paste the service provider request-signing certificate to require signed AuthnRequests.', field: 'saml_request_certificate_pem'};
 	  if (verifyRequests && (!requestCertificate.startsWith('-----BEGIN CERTIFICATE-----') || !requestCertificate.endsWith('-----END CERTIFICATE-----'))) return {enabled: true, started: true, configured: false, detail: 'Request certificate is invalid', error: 'The request-signing certificate must be one complete X.509 CERTIFICATE PEM block.', field: 'saml_request_certificate_pem'};
+	  const encryptionCertificate = setupFieldValue('saml_encryption_certificate_pem');
+	  if (encryptionCertificate && (!encryptionCertificate.startsWith('-----BEGIN CERTIFICATE-----') || !encryptionCertificate.endsWith('-----END CERTIFICATE-----'))) return {enabled: true, started: true, configured: false, detail: 'Encryption certificate is invalid', error: 'The encryption certificate must be one complete X.509 CERTIFICATE PEM block.', field: 'saml_encryption_certificate_pem'};
 	  const mappingError = setupMappingError(
 		['saml_attribute_given_name', 'saml_attribute_family_name', 'saml_attribute_username', 'saml_email_attribute_name', 'saml_attribute_groups'],
 		[],

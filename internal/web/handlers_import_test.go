@@ -62,3 +62,47 @@ func TestImportPreviewAppliesCachedStateAndCreatesUndoSnapshot(t *testing.T) {
 	r.NoError(err)
 	r.Len(matches, 1)
 }
+
+func TestImportPreviewRejectsChangedDirectory(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/scim+json")
+		_, err := fmt.Fprint(w, `{"totalResults":0,"startIndex":1,"itemsPerPage":0,"Resources":[]}`)
+		r.NoError(err)
+	}))
+	defer server.Close()
+	r.NoError(saveState(appState{Apps: []app{{
+		ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "scim",
+		SCIMEnabled: true, SCIMBaseURL: server.URL, SCIMBearerToken: "chang-secret",
+	}}}))
+	app := newTestIDPApp(t)
+	form := url.Values{"tab": {"users"}, "environment": {"app-1"}}
+	preview := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/import", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	app.routes().ServeHTTP(preview, req)
+	r.Equal(http.StatusSeeOther, preview.Code)
+
+	state, err := loadStateForApp("app-1")
+	r.NoError(err)
+	state.Users = append(state.Users, user{
+		ID: "troy", GivenName: "Troy", FamilyName: "Barnes",
+		Email: "troy@greendale.edu", Username: "troy", Active: true,
+	})
+	r.NoError(saveEnvironmentState(state))
+
+	form.Set("apply", "on")
+	apply := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/import", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	app.routes().ServeHTTP(apply, req)
+	r.Equal(http.StatusSeeOther, apply.Code)
+	r.Nil(app.cachedImportPreview("app-1"))
+
+	state, err = loadStateForApp("app-1")
+	r.NoError(err)
+	r.Len(state.Users, 1)
+	r.Equal("troy", state.Users[0].ID)
+	r.False(state.Users[0].Deleted)
+}
