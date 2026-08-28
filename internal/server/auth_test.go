@@ -509,6 +509,59 @@ func TestEnrollmentReplacementDeactivatesSelectedInstallationAndApprovesNewOne(t
 	r.Equal(http.StatusGone, replayResponse.Code)
 }
 
+func TestEnrollmentReplacementAcceptsLoopbackOrigin(t *testing.T) {
+	r := require.New(t)
+	store, profile, _ := newEnrollmentProfile(t)
+	s, _ := newEnrollmentTestServer(t, store)
+	s.cfg.MaxInstallationsPerUser = 1
+	user := auth.GitHubUser{ID: 47, Login: "troy-barnes"}
+	r.NoError(store.EnrollApplicationInstance(
+		profile.ID,
+		"old-installation",
+		"old-public-key",
+		enrollmentActor{GitHubUserID: user.ID, GitHubLogin: user.Login},
+	))
+	_, publicKey, instanceID := testInstanceKey(t)
+	required, err := s.beginEnrollment(profile.ID, instanceID, publicKey, "", "192.0.2.27")
+	r.NoError(err)
+	deviceHash := sha256.Sum256([]byte(required.EnrollmentDeviceCode))
+	r.ErrorIs(s.approveEnrollment(deviceHash, user), errInstallationLimitReached)
+
+	pageResponse := httptest.NewRecorder()
+	r.NoError(s.renderEnrollmentReplacement(pageResponse, deviceHash, user, ""))
+	replacementCookie := cookieNamed(
+		t,
+		pageResponse.Result().Cookies(),
+		s.cookieName(enrollmentReplacementCookieName),
+	)
+	tokenHash := sha256.Sum256([]byte(replacementCookie.Value))
+	s.enrollMu.Lock()
+	intent := s.replacementIntents[tokenHash]
+	s.enrollMu.Unlock()
+	form := url.Values{
+		"csrf_token":  {intent.csrfToken},
+		"instance_id": {"old-installation"},
+	}
+
+	missingOrigin := httptest.NewRequest(http.MethodPost, "/enroll/replace", strings.NewReader(form.Encode()))
+	missingOrigin.Host = "127.0.0.1:7000"
+	missingOrigin.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	missingOrigin.AddCookie(replacementCookie)
+	missingOriginResponse := httptest.NewRecorder()
+	s.handleEnrollmentReplacement(missingOriginResponse, missingOrigin)
+	r.Equal(http.StatusForbidden, missingOriginResponse.Code)
+
+	replaceRequest := httptest.NewRequest(http.MethodPost, "/enroll/replace", strings.NewReader(form.Encode()))
+	replaceRequest.Host = "127.0.0.1:7000"
+	replaceRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	replaceRequest.Header.Set("Origin", "http://127.0.0.1:7000")
+	replaceRequest.AddCookie(replacementCookie)
+	replaceResponse := httptest.NewRecorder()
+	s.handleEnrollmentReplacement(replaceResponse, replaceRequest)
+	r.Equal(http.StatusOK, replaceResponse.Code)
+	r.Contains(replaceResponse.Body.String(), "Installation authorized")
+}
+
 func TestEnrollmentReplacementRejectsAnotherAccountsInstallation(t *testing.T) {
 	r := require.New(t)
 	store, profile, _ := newEnrollmentProfile(t)
