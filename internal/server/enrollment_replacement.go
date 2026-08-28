@@ -343,7 +343,7 @@ func (s *Server) createEnrollmentReplacementIntent(deviceHash [32]byte, user aut
 }
 
 func (s *Server) handleEnrollmentReplacement(w http.ResponseWriter, r *http.Request) {
-	if !s.dashboardOriginMatches(r.Header.Get("Origin")) {
+	if !s.allowedDashboardMutation(r) {
 		http.Error(w, "invalid replacement origin", http.StatusForbidden)
 		return
 	}

@@ -123,6 +123,66 @@ func TestBaseHostOnlyAllowsLoopbackManagement(t *testing.T) {
 	}
 }
 
+func TestAllowedDashboardMutation(t *testing.T) {
+	s := &Server{
+		cfg: Config{
+			Domain:          "scimtest.example.com",
+			DashboardDomain: "admin.example.com",
+			PublicScheme:    "https",
+		},
+	}
+	tests := map[string]struct {
+		host   string
+		origin string
+		site   string
+		want   bool
+	}{
+		"configured origin": {
+			host: "admin.example.com", origin: "https://admin.example.com", want: true,
+		},
+		"evil origin": {
+			host: "admin.example.com", origin: "https://evil.example", want: false,
+		},
+		"loopback origin matches host": {
+			host: "127.0.0.1:7000", origin: "http://127.0.0.1:7000", want: true,
+		},
+		"loopback origin port mismatch": {
+			host: "127.0.0.1:7000", origin: "http://127.0.0.1:7001", want: false,
+		},
+		"localhost origin matches host": {
+			host: "localhost:7000", origin: "http://localhost:7000", want: true,
+		},
+		"missing origin same-origin fetch": {
+			host: "admin.example.com", site: "same-origin", want: true,
+		},
+		"missing origin": {
+			host: "admin.example.com", want: false,
+		},
+		"missing origin cross-site": {
+			host: "admin.example.com", site: "cross-site", want: false,
+		},
+		"null origin": {
+			host: "admin.example.com", origin: "null", site: "same-origin", want: false,
+		},
+		"loopback origin against dashboard host": {
+			host: "admin.example.com", origin: "http://127.0.0.1:7000", want: false,
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "http://"+tc.host+"/enroll/replace", nil)
+			request.Host = tc.host
+			if tc.origin != "" {
+				request.Header.Set("Origin", tc.origin)
+			}
+			if tc.site != "" {
+				request.Header.Set("Sec-Fetch-Site", tc.site)
+			}
+			require.Equal(t, tc.want, s.allowedDashboardMutation(request))
+		})
+	}
+}
+
 func TestDashboardRequiresAuthentication(t *testing.T) {
 	r := require.New(t)
 	store, err := OpenStore(t.TempDir() + "/test.json")

@@ -530,7 +530,7 @@ func (s *Server) renderEnrollmentAuthorization(w http.ResponseWriter, r *http.Re
 }
 
 func (s *Server) startEnrollmentAuthorization(w http.ResponseWriter, r *http.Request) {
-	if !s.dashboardOriginMatches(r.Header.Get("Origin")) {
+	if !s.allowedDashboardMutation(r) {
 		http.Error(w, "invalid confirmation origin", http.StatusForbidden)
 		return
 	}
@@ -883,11 +883,53 @@ func (s *Server) dashboardOriginMatches(value string) bool {
 		originPort(origin) == originPort(expected)
 }
 
+// allowedDashboardMutation accepts a dashboard POST if it is same-origin with
+// this request. The configured dashboard origin is the usual case. Loopback
+// management hosts are also allowed when Host and Origin match, because
+// baseHostOnly already admits them. Missing Origin is allowed only when the
+// browser labels the request same-origin.
+func (s *Server) allowedDashboardMutation(r *http.Request) bool {
+	originValue := strings.TrimSpace(r.Header.Get("Origin"))
+	if s.dashboardOriginMatches(originValue) {
+		return true
+	}
+	if !s.isDashboardHost(r.Host) {
+		return false
+	}
+	if originValue == "" {
+		return r.Header.Get("Sec-Fetch-Site") == "same-origin"
+	}
+	if strings.EqualFold(originValue, "null") {
+		return false
+	}
+	origin, err := url.Parse(originValue)
+	if err != nil || origin.User != nil || strings.Trim(origin.Path, "/") != "" || origin.RawQuery != "" || origin.Fragment != "" {
+		return false
+	}
+	if origin.Scheme != "http" && origin.Scheme != "https" {
+		return false
+	}
+	if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+		return false
+	}
+	return sameHost(origin.Host, r.Host) && originPort(origin) == hostPort(r.Host, origin.Scheme)
+}
+
 func originPort(value *url.URL) string {
 	if port := value.Port(); port != "" {
 		return port
 	}
 	if value.Scheme == "https" {
+		return "443"
+	}
+	return "80"
+}
+
+func hostPort(host, scheme string) string {
+	if _, port, err := net.SplitHostPort(host); err == nil {
+		return port
+	}
+	if scheme == "https" {
 		return "443"
 	}
 	return "80"
