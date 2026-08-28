@@ -277,7 +277,7 @@ func (s *Server) renderEnrollmentReplacement(w http.ResponseWriter, deviceHash [
 	})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Referrer-Policy", "strict-origin")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'")
 	return enrollmentReplacementTemplate.Execute(w, enrollmentReplacementPageData{
 		ApplicationName:     profile.Name,

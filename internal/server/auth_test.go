@@ -439,6 +439,7 @@ func TestEnrollmentReplacementDeactivatesSelectedInstallationAndApprovesNewOne(t
 
 	pageResponse := httptest.NewRecorder()
 	r.NoError(s.renderEnrollmentReplacement(pageResponse, deviceHash, user, ""))
+	r.Equal("strict-origin", pageResponse.Header().Get("Referrer-Policy"))
 	body := pageResponse.Body.String()
 	r.Contains(body, "dreamatorium")
 	r.Contains(body, "study-room-f")
