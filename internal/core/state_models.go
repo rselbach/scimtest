@@ -163,6 +163,7 @@ type App struct {
 	SAMLEmailAttributeName string                `json:"saml_email_attribute_name,omitempty"`
 	SAMLVerifyRequests     bool                  `json:"saml_verify_requests,omitempty"`
 	SAMLRequestCertPEM     string                `json:"saml_request_certificate_pem,omitempty"`
+	SAMLEncryptionCertPEM  string                `json:"saml_encryption_certificate_pem,omitempty"`
 	IncludeGroupsClaim     bool                  `json:"include_groups_claim"`
 	OIDCClaimMappings      OIDCClaimMappings     `json:"oidc_claim_mappings,omitempty"`
 	SAMLAttributeMappings  SAMLAttributeMappings `json:"saml_attribute_mappings,omitempty"`

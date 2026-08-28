@@ -74,6 +74,8 @@ func TestSAMLMetadataDownloadAndCertificate(t *testing.T) {
 	r.Equal(http.StatusOK, rec.Code)
 	r.Contains(rec.Header().Get("Content-Disposition"), "scimtest-greendale-idp-metadata.xml")
 	r.Contains(rec.Body.String(), "EntityDescriptor")
+	r.Contains(rec.Body.String(), `use="signing"`)
+	r.NotContains(rec.Body.String(), `use="encryption"`)
 
 	rec = httptest.NewRecorder()
 	svc.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/saml/greendale/metadata", nil))

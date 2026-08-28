@@ -130,6 +130,11 @@ The OIDC flow signs RS256 ID tokens. SAML responses include a signed
 assertion. Signing material is generated on first run and stored in the
 SQLite state database.
 
+Paste the service provider's RSA encryption certificate into SAML setup to
+wrap that signed assertion in `EncryptedAssertion` (AES-256-GCM, RSA-OAEP).
+Leave the field empty to post the signed assertion in the clear. The SAML
+inspector still shows the signed assertion this IDP produced.
+
 SAML environments can also require signed AuthnRequests. Enable request
 verification in the SAML setup and pin the service provider's RSA X.509
 certificate. scimtest validates HTTP-Redirect query signatures and enveloped

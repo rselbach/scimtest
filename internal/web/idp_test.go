@@ -1106,15 +1106,17 @@ func TestSignedSAMLResponseUsesEnvironmentGroups(t *testing.T) {
 		}},
 	}
 
-	response, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], state.Users[0], samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL}, faultOptions{})
+	posted, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], state.Users[0], samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL}, nil, faultOptions{})
 	r.NoError(err)
-	r.Contains(response, "<ds:Signature")
-	r.Contains(response, `Name="groups"`)
-	r.Contains(response, "Engineering")
-	r.Contains(response, `Name="http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress"`)
+	r.Contains(posted.XML, "<ds:Signature")
+	r.Contains(posted.XML, `Name="groups"`)
+	r.Contains(posted.XML, "Engineering")
+	r.Contains(posted.XML, `Name="http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress"`)
+	r.Empty(posted.SignedAssertion)
+	r.NotContains(posted.XML, "EncryptedAssertion")
 
 	doc := etree.NewDocument()
-	r.NoError(doc.ReadFromString(response))
+	r.NoError(doc.ReadFromString(posted.XML))
 	assertion := findElementByLocalName(doc.Root(), "Assertion")
 	r.NotNil(assertion)
 	children := assertion.ChildElements()
@@ -1160,12 +1162,13 @@ func TestSignedSAMLResponseUsesConfiguredNameIDField(t *testing.T) {
 		}},
 	}
 
-	response, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], state.Users[0], samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL}, faultOptions{})
+	posted, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], state.Users[0], samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL}, nil, faultOptions{})
 	r.NoError(err)
-	r.Contains(response, `<saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">tbarnes</saml:NameID>`)
-	r.Contains(response, `<saml:Attribute Name="mail"><saml:AttributeValue>troy@example.test</saml:AttributeValue></saml:Attribute>`)
-	r.Contains(response, `<saml:Attribute Name="login"><saml:AttributeValue>tbarnes</saml:AttributeValue></saml:Attribute>`)
-	r.NotContains(response, `Name="username"`)
+	r.Contains(posted.XML, `<saml:NameID Format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified">tbarnes</saml:NameID>`)
+	r.Contains(posted.XML, `<saml:Attribute Name="mail"><saml:AttributeValue>troy@example.test</saml:AttributeValue></saml:Attribute>`)
+	r.Contains(posted.XML, `<saml:Attribute Name="login"><saml:AttributeValue>tbarnes</saml:AttributeValue></saml:Attribute>`)
+	r.NotContains(posted.XML, `Name="username"`)
+	r.Empty(posted.SignedAssertion)
 }
 
 func newTestIDPApp(t *testing.T) *webApp {

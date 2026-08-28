@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"compress/flate"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/xml"
 	"errors"
@@ -18,6 +19,13 @@ import (
 	"github.com/beevik/etree"
 	dsig "github.com/russellhaering/goxmldsig"
 )
+
+// samlPostedResponse is what successful SSO posts, plus the plaintext signed
+// Assertion when encryption ran. Status-only builders do not use this type.
+type samlPostedResponse struct {
+	XML             string
+	SignedAssertion string
+}
 
 const (
 	samlHTTPPostBinding = "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
@@ -137,14 +145,19 @@ func (a *webApp) completeSAMLSSO(w http.ResponseWriter, r *http.Request, state a
 		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, "active user is required")
 		return
 	}
+	dest, err := parseSAMLEncryptionCertificate(app.SAMLEncryptionCertPEM)
+	if err != nil {
+		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
+		return
+	}
 	faults := a.flowFaults(app.Slug, values)
-	response, err := a.buildSignedSAMLResponse(state, baseURL, app, user, responseContext, faults)
+	posted, err := a.buildSignedSAMLResponse(state, baseURL, app, user, responseContext, dest, faults)
 	if err != nil {
 		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
 		return
 	}
-	encodedResponse := base64.StdEncoding.EncodeToString([]byte(response))
-	a.rememberSAMLInspection(app, user, responseContext, response, encodedResponse, faults, time.Now())
+	encodedResponse := base64.StdEncoding.EncodeToString([]byte(posted.XML))
+	a.rememberSAMLInspection(app, user, responseContext, posted, encodedResponse, faults, time.Now())
 	ssoDetail := "Signed response posted to " + responseContext.ACSURL
 	if faults.active() {
 		ssoDetail = "Response posted to " + responseContext.ACSURL + " (faults injected)"
@@ -322,50 +335,66 @@ func firstElementTextByLocalName(el *etree.Element, localName string) string {
 	return ""
 }
 
-func (a *webApp) buildSignedSAMLResponse(state appState, baseURL string, app app, user user, responseContext samlResponseContext, faults faultOptions) (string, error) {
-	// A non-success status carries no assertion, so there is nothing to sign.
+func (a *webApp) buildSignedSAMLResponse(state appState, baseURL string, app app, user user, responseContext samlResponseContext, dest *x509.Certificate, faults faultOptions) (samlPostedResponse, error) {
 	if faults.SAMLStatus != "" {
-		return buildSAMLStatusResponse(baseURL, app, responseContext, faults)
+		responseXML, err := buildSAMLStatusResponse(baseURL, app, responseContext, faults)
+		return samlPostedResponse{XML: responseXML}, err
 	}
 	response, err := buildSAMLResponse(state, baseURL, app, user, responseContext, faults)
 	if err != nil {
-		return "", err
+		return samlPostedResponse{}, err
 	}
 	doc := etree.NewDocument()
 	if err := doc.ReadFromString(response); err != nil {
-		return "", fmt.Errorf("parse SAML response for signing: %w", err)
+		return samlPostedResponse{}, fmt.Errorf("parse SAML response for signing: %w", err)
 	}
 	assertion := findElementByLocalName(doc.Root(), "Assertion")
 	if assertion == nil {
-		return "", fmt.Errorf("SAML assertion not found")
+		return samlPostedResponse{}, fmt.Errorf("SAML assertion not found")
 	}
 	ctx, err := dsig.NewSigningContext(a.signingKey, [][]byte{a.certDER})
 	if err != nil {
-		return "", fmt.Errorf("create SAML signing context: %w", err)
+		return samlPostedResponse{}, fmt.Errorf("create SAML signing context: %w", err)
 	}
 	ctx.Canonicalizer = dsig.MakeC14N10ExclusiveCanonicalizerWithPrefixList("")
 	signature, err := ctx.ConstructSignature(assertion, true)
 	if err != nil {
-		return "", fmt.Errorf("sign SAML assertion: %w", err)
+		return samlPostedResponse{}, fmt.Errorf("sign SAML assertion: %w", err)
 	}
 	signedAssertion := assertion.Copy()
 	if err := placeSAMLAssertionSignature(signedAssertion, signature); err != nil {
-		return "", err
+		return samlPostedResponse{}, err
 	}
 	parent := assertion.Parent()
 	if parent == nil {
-		return "", fmt.Errorf("SAML assertion has no parent")
+		return samlPostedResponse{}, fmt.Errorf("SAML assertion has no parent")
 	}
 	parent.RemoveChild(assertion)
 	parent.AddChild(signedAssertion)
-	signed, err := doc.WriteToString()
-	if err != nil {
-		return "", fmt.Errorf("serialize signed SAML response: %w", err)
-	}
+
 	if faults.BreakSignature {
-		signed = corruptSAMLSignature(signed)
+		corruptSAMLSignatureValue(signedAssertion)
 	}
-	return signed, nil
+
+	var signedXML string
+	if dest != nil {
+		signedXML, err = serializeElement(signedAssertion)
+		if err != nil {
+			return samlPostedResponse{}, err
+		}
+		encrypted, err := encryptSAMLAssertion(signedAssertion, dest)
+		if err != nil {
+			return samlPostedResponse{}, fmt.Errorf("encrypt SAML assertion: %w", err)
+		}
+		parent.RemoveChild(signedAssertion)
+		parent.AddChild(encrypted)
+	}
+
+	responseXML, err := doc.WriteToString()
+	if err != nil {
+		return samlPostedResponse{}, fmt.Errorf("serialize signed SAML response: %w", err)
+	}
+	return samlPostedResponse{XML: responseXML, SignedAssertion: signedXML}, nil
 }
 
 // buildSAMLStatusResponse produces an unsigned non-success SAML Response so an
@@ -390,16 +419,10 @@ func buildSAMLStatusResponse(baseURL string, app app, responseContext samlRespon
 		xmlEscape(issuer), xmlEscape(faults.SAMLStatus)), nil
 }
 
-// corruptSAMLSignature flips the first character of the assertion's
-// SignatureValue so the SP sees a tampered signature.
-func corruptSAMLSignature(response string) string {
-	doc := etree.NewDocument()
-	if err := doc.ReadFromString(response); err != nil {
-		return response
-	}
-	value := findElementByLocalName(doc.Root(), "SignatureValue")
+func corruptSAMLSignatureValue(assertion *etree.Element) {
+	value := findElementByLocalName(assertion, "SignatureValue")
 	if value == nil || value.Text() == "" {
-		return response
+		return
 	}
 	text := value.Text()
 	replacement := "A"
@@ -407,11 +430,18 @@ func corruptSAMLSignature(response string) string {
 		replacement = "B"
 	}
 	value.SetText(replacement + text[1:])
-	corrupted, err := doc.WriteToString()
-	if err != nil {
-		return response
+}
+
+func childElementByLocalName(parent *etree.Element, localName string) *etree.Element {
+	if parent == nil {
+		return nil
 	}
-	return corrupted
+	for _, child := range parent.ChildElements() {
+		if elementLocalName(child) == localName {
+			return child
+		}
+	}
+	return nil
 }
 
 func placeSAMLAssertionSignature(assertion *etree.Element, signature *etree.Element) error {
