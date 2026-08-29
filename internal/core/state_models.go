@@ -145,36 +145,37 @@ type Group struct {
 }
 
 type App struct {
-	EnvironmentName        string                `json:"-"`
-	ID                     string                `json:"id"`
-	Name                   string                `json:"name"`
-	Slug                   string                `json:"slug"`
-	Protocol               string                `json:"protocol"`
-	OIDCClientID           string                `json:"oidc_client_id,omitempty"`
-	OIDCClientSecret       string                `json:"oidc_client_secret,omitempty"`
-	OIDCPublicClient       bool                  `json:"oidc_public_client,omitempty"`
-	OIDCRedirectURIs       []string              `json:"oidc_redirect_uris,omitempty"`
-	AllowAnyOIDCRedirect   bool                  `json:"allow_any_oidc_redirect,omitempty"`
-	SAMLEntityID           string                `json:"saml_entity_id,omitempty"`
-	SAMLACSURL             string                `json:"saml_acs_url,omitempty"`
-	SAMLAudience           string                `json:"saml_audience,omitempty"`
-	SAMLNameIDField        string                `json:"saml_name_id_field,omitempty"`
-	SAMLNameIDFormat       string                `json:"saml_name_id_format,omitempty"`
-	SAMLEmailAttributeName string                `json:"saml_email_attribute_name,omitempty"`
-	SAMLVerifyRequests     bool                  `json:"saml_verify_requests,omitempty"`
-	SAMLRequestCertPEM     string                `json:"saml_request_certificate_pem,omitempty"`
-	SAMLEncryptionCertPEM  string                `json:"saml_encryption_certificate_pem,omitempty"`
-	IncludeGroupsClaim     bool                  `json:"include_groups_claim"`
-	OIDCClaimMappings      OIDCClaimMappings     `json:"oidc_claim_mappings,omitempty"`
-	SAMLAttributeMappings  SAMLAttributeMappings `json:"saml_attribute_mappings,omitempty"`
-	ChooserMode            string                `json:"chooser_mode,omitempty"`
-	SCIMEnabled            bool                  `json:"scim_enabled,omitempty"`
-	SCIMBaseURL            string                `json:"scim_base_url,omitempty"`
-	SCIMBearerToken        string                `json:"scim_bearer_token,omitempty"`
-	SCIMAutoOpenTrace      bool                  `json:"scim_auto_open_trace,omitempty"`
-	SCIMCapabilitiesKnown  bool                  `json:"scim_capabilities_known,omitempty"`
-	SCIMPatchSupported     bool                  `json:"scim_patch_supported,omitempty"`
-	SCIMFilterSupported    bool                  `json:"scim_filter_supported,omitempty"`
+	EnvironmentName         string                `json:"-"`
+	ID                      string                `json:"id"`
+	Name                    string                `json:"name"`
+	Slug                    string                `json:"slug"`
+	Protocol                string                `json:"protocol"`
+	OIDCClientID            string                `json:"oidc_client_id,omitempty"`
+	OIDCClientSecret        string                `json:"oidc_client_secret,omitempty"`
+	OIDCPublicClient        bool                  `json:"oidc_public_client,omitempty"`
+	OIDCRedirectURIs        []string              `json:"oidc_redirect_uris,omitempty"`
+	AllowAnyOIDCRedirect    bool                  `json:"allow_any_oidc_redirect,omitempty"`
+	SAMLEntityID            string                `json:"saml_entity_id,omitempty"`
+	SAMLACSURL              string                `json:"saml_acs_url,omitempty"`
+	SAMLAudience            string                `json:"saml_audience,omitempty"`
+	SAMLNameIDField         string                `json:"saml_name_id_field,omitempty"`
+	SAMLNameIDFormat        string                `json:"saml_name_id_format,omitempty"`
+	SAMLEmailAttributeName  string                `json:"saml_email_attribute_name,omitempty"`
+	SAMLVerifyRequests      bool                  `json:"saml_verify_requests,omitempty"`
+	SAMLRequestCertPEM      string                `json:"saml_request_certificate_pem,omitempty"`
+	SAMLEncryptionCertPEM   string                `json:"saml_encryption_certificate_pem,omitempty"`
+	SAMLEncryptionAlgorithm string                `json:"saml_encryption_algorithm,omitempty"`
+	IncludeGroupsClaim      bool                  `json:"include_groups_claim"`
+	OIDCClaimMappings       OIDCClaimMappings     `json:"oidc_claim_mappings,omitempty"`
+	SAMLAttributeMappings   SAMLAttributeMappings `json:"saml_attribute_mappings,omitempty"`
+	ChooserMode             string                `json:"chooser_mode,omitempty"`
+	SCIMEnabled             bool                  `json:"scim_enabled,omitempty"`
+	SCIMBaseURL             string                `json:"scim_base_url,omitempty"`
+	SCIMBearerToken         string                `json:"scim_bearer_token,omitempty"`
+	SCIMAutoOpenTrace       bool                  `json:"scim_auto_open_trace,omitempty"`
+	SCIMCapabilitiesKnown   bool                  `json:"scim_capabilities_known,omitempty"`
+	SCIMPatchSupported      bool                  `json:"scim_patch_supported,omitempty"`
+	SCIMFilterSupported     bool                  `json:"scim_filter_supported,omitempty"`
 }
 
 const (

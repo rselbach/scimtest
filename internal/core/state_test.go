@@ -1399,6 +1399,35 @@ func TestSchemaMigrationWritesPreMigrationCopy(t *testing.T) {
 	r.Contains(entries[0].Name(), "pre-migrate-v000-")
 }
 
+func TestSchemaMigrationDefaultsSAMLEncryptionAlgorithm(t *testing.T) {
+	r := require.New(t)
+	path := filepath.Join(t.TempDir(), "state.db")
+	t.Setenv("SCIMTEST_STATE_FILE", path)
+	r.NoError(SaveState(AppState{Apps: []App{{
+		ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "saml",
+		SAMLACSURL: "https://greendale.test/saml/acs",
+	}}}))
+
+	db, err := openStateDB()
+	r.NoError(err)
+	_, err = db.Exec(`ALTER TABLE apps DROP COLUMN saml_encryption_algorithm`)
+	r.NoError(err)
+	_, err = db.Exec(`PRAGMA user_version = 1`)
+	r.NoError(err)
+	r.NoError(resetStateDBCache())
+
+	state, err := LoadState()
+	r.NoError(err)
+	r.Len(state.Apps, 1)
+	r.Equal(DefaultSAMLEncryptionAlgorithm, state.Apps[0].SAMLEncryptionAlgorithm)
+
+	db, err = openStateDB()
+	r.NoError(err)
+	version, err := schemaVersion(db)
+	r.NoError(err)
+	r.Equal(currentSchemaVersion, version)
+}
+
 func TestPlanSync(t *testing.T) {
 	state := AppState{
 		Users: []User{
@@ -1468,6 +1497,82 @@ func TestParseSAMLEncryptionCertificate(t *testing.T) {
 	}
 }
 
+func TestValidateSAMLEncryptionAlgorithm(t *testing.T) {
+	tests := map[string]struct {
+		value   string
+		wantErr string
+	}{
+		"empty defaults": {},
+		"AES-128-GCM":    {value: SAMLEncryptionAlgorithmAES128GCM},
+		"AES-192-GCM":    {value: SAMLEncryptionAlgorithmAES192GCM},
+		"AES-256-GCM":    {value: SAMLEncryptionAlgorithmAES256GCM},
+		"trimmed":        {value: "  aes128-gcm  "},
+		"unknown": {
+			value:   "aes512-gcm",
+			wantErr: "SAML encryption algorithm must be AES-128-GCM, AES-192-GCM, or AES-256-GCM",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := ValidateSAMLEncryptionAlgorithm(tc.value)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.EqualError(t, err, tc.wantErr)
+		})
+	}
+}
+
+func TestNormalizeStateDefaultsSAMLEncryptionAlgorithm(t *testing.T) {
+	tests := map[string]struct {
+		app           App
+		wantAlgorithm string
+		wantProtocol  string
+	}{
+		"legacy SAML protocol": {
+			app: App{
+				ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "saml",
+				SAMLACSURL: "https://greendale.test/saml/acs",
+			},
+			wantAlgorithm: DefaultSAMLEncryptionAlgorithm,
+			wantProtocol:  "saml",
+		},
+		"legacy SAML fields": {
+			app: App{
+				ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "none",
+				SAMLACSURL: "https://greendale.test/saml/acs",
+			},
+			wantAlgorithm: DefaultSAMLEncryptionAlgorithm,
+			wantProtocol:  "saml",
+		},
+		"certificate alone": {
+			app: App{
+				ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "none",
+				SAMLEncryptionCertPEM: testRSAPEMCertificate(t, currentTime().Add(-time.Hour), currentTime().AddDate(1, 0, 0)),
+			},
+			wantAlgorithm: DefaultSAMLEncryptionAlgorithm,
+			wantProtocol:  "none",
+		},
+		"no SAML setup": {
+			app:          App{ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "none"},
+			wantProtocol: "none",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			state := AppState{Apps: []App{tc.app}}
+
+			NormalizeState(&state)
+
+			require.Equal(t, tc.wantAlgorithm, state.Apps[0].SAMLEncryptionAlgorithm)
+			require.Equal(t, tc.wantProtocol, state.Apps[0].Protocol)
+		})
+	}
+}
+
 func TestSAMLEncryptionCertificateDoesNotInferProtocol(t *testing.T) {
 	r := require.New(t)
 	app := App{SAMLEncryptionCertPEM: testRSAPEMCertificate(t, currentTime().Add(-time.Hour), currentTime().AddDate(1, 0, 0))}
@@ -1492,6 +1597,20 @@ func TestValidateAppRejectsInvalidSAMLEncryptionCertificate(t *testing.T) {
 		SAMLEncryptionCertPEM: "not-a-cert",
 	}, nil)
 	r.ErrorContains(err, "SAML encryption certificate is invalid")
+}
+
+func TestValidateAppRejectsInvalidSAMLEncryptionAlgorithm(t *testing.T) {
+	r := require.New(t)
+	app := App{
+		ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "none",
+		SAMLEncryptionAlgorithm: "aes512-gcm",
+	}
+
+	err := ValidateApp(app, nil)
+
+	r.Equal(SetupStatusNotSetUp, SAMLSetupStatus(app))
+	r.Equal("none", InferAppProtocol(app))
+	r.ErrorContains(err, "SAML encryption algorithm must be AES-128-GCM, AES-192-GCM, or AES-256-GCM")
 }
 
 func TestValidateAppAcceptsValidSAMLEncryptionCertificate(t *testing.T) {

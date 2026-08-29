@@ -19,32 +19,85 @@ const (
 	xmlenc11NS = "http://www.w3.org/2009/xmlenc11#"
 	dsigNS     = "http://www.w3.org/2000/09/xmldsig#"
 
-	algAES256GCM      = xmlenc11NS + "aes256-gcm"
 	algRSAOAEP        = xmlencNS + "rsa-oaep-mgf1p"
 	xmlencElementType = xmlencNS + "Element"
 	samlAssertionNS   = "urn:oasis:names:tc:SAML:2.0:assertion"
 )
 
-// encryptSAMLAssertion returns a saml:EncryptedAssertion that wraps
-// signedAssertion. dest must be a parsed RSA certificate. The function
-// does not mutate signedAssertion or its parent.
-//
-// Algorithms are fixed. AES-256-GCM over exclusive C14N 1.0 octets of the
-// Assertion, RSA-OAEP with SHA-1 MGF1 wrapping a 32-byte document key.
-// Data CipherValue is base64(iv || ciphertext || tag), 12-byte IV, 16-byte tag.
-func encryptSAMLAssertion(signedAssertion *etree.Element, dest *x509.Certificate) (*etree.Element, error) {
-	if signedAssertion == nil || dest == nil {
-		return nil, fmt.Errorf("signed assertion and encryption certificate are required")
-	}
-	pub, ok := dest.PublicKey.(*rsa.PublicKey)
+type samlAssertionEncryption struct {
+	destination *x509.Certificate
+	algorithm   samlEncryptionAlgorithmSpec
+}
+
+type samlEncryptionAlgorithmSpec struct {
+	label    string
+	xmlURI   string
+	keyBytes int
+}
+
+var samlEncryptionAlgorithmSpecs = map[string]samlEncryptionAlgorithmSpec{
+	samlEncryptionAlgorithmAES128GCM: {
+		label:    "AES-128-GCM",
+		xmlURI:   xmlenc11NS + "aes128-gcm",
+		keyBytes: 16,
+	},
+	samlEncryptionAlgorithmAES192GCM: {
+		label:    "AES-192-GCM",
+		xmlURI:   xmlenc11NS + "aes192-gcm",
+		keyBytes: 24,
+	},
+	samlEncryptionAlgorithmAES256GCM: {
+		label:    "AES-256-GCM",
+		xmlURI:   xmlenc11NS + "aes256-gcm",
+		keyBytes: 32,
+	},
+}
+
+var samlEncryptionAlgorithmOrder = []string{
+	samlEncryptionAlgorithmAES128GCM,
+	samlEncryptionAlgorithmAES192GCM,
+	samlEncryptionAlgorithmAES256GCM,
+}
+
+func samlEncryptionAlgorithmSpecFor(value string) (samlEncryptionAlgorithmSpec, error) {
+	value = normalizeSAMLEncryptionAlgorithm(value)
+	spec, ok := samlEncryptionAlgorithmSpecs[value]
 	if !ok {
-		return nil, fmt.Errorf("certificate public key must be RSA")
+		return samlEncryptionAlgorithmSpec{}, fmt.Errorf("SAML encryption algorithm must be AES-128-GCM, AES-192-GCM, or AES-256-GCM")
 	}
-	encryptedData, err := encryptElement(signedAssertion, pub)
+	return spec, nil
+}
+
+func samlAssertionEncryptionForApp(app app) (*samlAssertionEncryption, error) {
+	dest, err := parseSAMLEncryptionCertificate(app.SAMLEncryptionCertPEM)
 	if err != nil {
 		return nil, err
 	}
-	if err := attachRecipientCertificate(encryptedData, dest); err != nil {
+	if dest == nil {
+		return nil, nil
+	}
+	algorithm, err := samlEncryptionAlgorithmSpecFor(app.SAMLEncryptionAlgorithm)
+	if err != nil {
+		return nil, err
+	}
+	return &samlAssertionEncryption{destination: dest, algorithm: algorithm}, nil
+}
+
+// The data CipherValue is base64(iv || ciphertext || tag), 12-byte IV,
+// 16-byte tag.
+func encryptSAMLAssertion(signedAssertion *etree.Element, encryption samlAssertionEncryption) (*etree.Element, error) {
+	if signedAssertion == nil || encryption.destination == nil {
+		return nil, fmt.Errorf("signed assertion and encryption certificate are required")
+	}
+	pub, ok := encryption.destination.PublicKey.(*rsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("certificate public key must be RSA")
+	}
+	encryptedData, err := encryptElement(signedAssertion, pub, encryption.algorithm)
+	if err != nil {
+		return nil, err
+	}
+	if err := attachRecipientCertificate(encryptedData, encryption.destination); err != nil {
 		return nil, err
 	}
 	wrapper := etree.NewElement("saml:EncryptedAssertion")
@@ -53,7 +106,7 @@ func encryptSAMLAssertion(signedAssertion *etree.Element, dest *x509.Certificate
 	return wrapper, nil
 }
 
-func encryptElement(el *etree.Element, pub *rsa.PublicKey) (*etree.Element, error) {
+func encryptElement(el *etree.Element, pub *rsa.PublicKey, algorithm samlEncryptionAlgorithmSpec) (*etree.Element, error) {
 	if el == nil || pub == nil {
 		return nil, fmt.Errorf("element and RSA public key are required")
 	}
@@ -61,11 +114,11 @@ func encryptElement(el *etree.Element, pub *rsa.PublicKey) (*etree.Element, erro
 	if err != nil {
 		return nil, err
 	}
-	aesKey := make([]byte, 32)
+	aesKey := make([]byte, algorithm.keyBytes)
 	if _, err := rand.Read(aesKey); err != nil {
 		return nil, fmt.Errorf("generate AES key: %w", err)
 	}
-	dataCipher, err := encryptAES256GCM(aesKey, plaintext)
+	dataCipher, err := encryptAESGCM(aesKey, plaintext)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +133,7 @@ func encryptElement(el *etree.Element, pub *rsa.PublicKey) (*etree.Element, erro
 	encryptedData.CreateAttr("Type", xmlencElementType)
 
 	dataMethod := encryptedData.CreateElement("xenc:EncryptionMethod")
-	dataMethod.CreateAttr("Algorithm", algAES256GCM)
+	dataMethod.CreateAttr("Algorithm", algorithm.xmlURI)
 
 	keyInfo := encryptedData.CreateElement("ds:KeyInfo")
 	encryptedKey := keyInfo.CreateElement("xenc:EncryptedKey")
@@ -120,7 +173,7 @@ func exclusiveC14N(el *etree.Element) ([]byte, error) {
 	return octets, nil
 }
 
-func encryptAES256GCM(key, plaintext []byte) ([]byte, error) {
+func encryptAESGCM(key, plaintext []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("create AES cipher: %w", err)

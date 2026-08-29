@@ -3,7 +3,6 @@ package web
 import (
 	"bytes"
 	"compress/flate"
-	"crypto/x509"
 	"encoding/base64"
 	"encoding/xml"
 	"errors"
@@ -145,13 +144,13 @@ func (a *webApp) completeSAMLSSO(w http.ResponseWriter, r *http.Request, state a
 		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, "active user is required")
 		return
 	}
-	dest, err := parseSAMLEncryptionCertificate(app.SAMLEncryptionCertPEM)
+	encryption, err := samlAssertionEncryptionForApp(app)
 	if err != nil {
 		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
 		return
 	}
 	faults := a.flowFaults(app.Slug, values)
-	posted, err := a.buildSignedSAMLResponse(state, baseURL, app, user, responseContext, dest, faults)
+	posted, err := a.buildSignedSAMLResponse(state, baseURL, app, user, responseContext, encryption, faults)
 	if err != nil {
 		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
 		return
@@ -335,7 +334,7 @@ func firstElementTextByLocalName(el *etree.Element, localName string) string {
 	return ""
 }
 
-func (a *webApp) buildSignedSAMLResponse(state appState, baseURL string, app app, user user, responseContext samlResponseContext, dest *x509.Certificate, faults faultOptions) (samlPostedResponse, error) {
+func (a *webApp) buildSignedSAMLResponse(state appState, baseURL string, app app, user user, responseContext samlResponseContext, encryption *samlAssertionEncryption, faults faultOptions) (samlPostedResponse, error) {
 	if faults.SAMLStatus != "" {
 		responseXML, err := buildSAMLStatusResponse(baseURL, app, responseContext, faults)
 		return samlPostedResponse{XML: responseXML}, err
@@ -377,12 +376,12 @@ func (a *webApp) buildSignedSAMLResponse(state appState, baseURL string, app app
 	}
 
 	var signedXML string
-	if dest != nil {
+	if encryption != nil {
 		signedXML, err = serializeElement(signedAssertion)
 		if err != nil {
 			return samlPostedResponse{}, err
 		}
-		encrypted, err := encryptSAMLAssertion(signedAssertion, dest)
+		encrypted, err := encryptSAMLAssertion(signedAssertion, *encryption)
 		if err != nil {
 			return samlPostedResponse{}, fmt.Errorf("encrypt SAML assertion: %w", err)
 		}

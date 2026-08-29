@@ -131,7 +131,8 @@ assertion. Signing material is generated on first run and stored in the
 SQLite state database.
 
 Paste the service provider's RSA encryption certificate into SAML setup to
-wrap that signed assertion in `EncryptedAssertion` (AES-256-GCM, RSA-OAEP).
+wrap that signed assertion in `EncryptedAssertion` (AES-128-GCM, AES-192-GCM,
+or AES-256-GCM, RSA-OAEP). AES-256-GCM is the default.
 Leave the field empty to post the signed assertion in the clear. The SAML
 inspector still shows the signed assertion this IDP produced.
 

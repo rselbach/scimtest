@@ -64,25 +64,26 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	app := app{
-		ID:                     id,
-		Name:                   strings.TrimSpace(r.FormValue("name")),
-		Slug:                   slugify(r.FormValue("slug")),
-		Protocol:               existingProtocol,
-		OIDCClientID:           strings.TrimSpace(r.FormValue("oidc_client_id")),
-		OIDCClientSecret:       oidcClientSecret,
-		OIDCPublicClient:       r.FormValue("oidc_public_client") == "on",
-		OIDCRedirectURIs:       lines(r.FormValue("oidc_redirect_uris")),
-		AllowAnyOIDCRedirect:   r.FormValue("allow_any_oidc_redirect") == "on",
-		SAMLEntityID:           strings.TrimSpace(r.FormValue("saml_entity_id")),
-		SAMLACSURL:             strings.TrimSpace(r.FormValue("saml_acs_url")),
-		SAMLAudience:           strings.TrimSpace(r.FormValue("saml_audience")),
-		SAMLNameIDField:        normalizeSAMLNameIDField(r.FormValue("saml_name_id_field")),
-		SAMLEmailAttributeName: strings.TrimSpace(r.FormValue("saml_email_attribute_name")),
-		SAMLVerifyRequests:     r.FormValue("saml_verify_requests") == "on",
-		SAMLRequestCertPEM:     strings.TrimSpace(r.FormValue("saml_request_certificate_pem")),
-		SAMLEncryptionCertPEM:  strings.TrimSpace(r.FormValue("saml_encryption_certificate_pem")),
-		IncludeGroupsClaim:     r.FormValue("include_groups_claim") == "on",
-		ChooserMode:            normalizeChooserMode(r.FormValue("chooser_mode")),
+		ID:                      id,
+		Name:                    strings.TrimSpace(r.FormValue("name")),
+		Slug:                    slugify(r.FormValue("slug")),
+		Protocol:                existingProtocol,
+		OIDCClientID:            strings.TrimSpace(r.FormValue("oidc_client_id")),
+		OIDCClientSecret:        oidcClientSecret,
+		OIDCPublicClient:        r.FormValue("oidc_public_client") == "on",
+		OIDCRedirectURIs:        lines(r.FormValue("oidc_redirect_uris")),
+		AllowAnyOIDCRedirect:    r.FormValue("allow_any_oidc_redirect") == "on",
+		SAMLEntityID:            strings.TrimSpace(r.FormValue("saml_entity_id")),
+		SAMLACSURL:              strings.TrimSpace(r.FormValue("saml_acs_url")),
+		SAMLAudience:            strings.TrimSpace(r.FormValue("saml_audience")),
+		SAMLNameIDField:         normalizeSAMLNameIDField(r.FormValue("saml_name_id_field")),
+		SAMLEmailAttributeName:  strings.TrimSpace(r.FormValue("saml_email_attribute_name")),
+		SAMLVerifyRequests:      r.FormValue("saml_verify_requests") == "on",
+		SAMLRequestCertPEM:      strings.TrimSpace(r.FormValue("saml_request_certificate_pem")),
+		SAMLEncryptionCertPEM:   strings.TrimSpace(r.FormValue("saml_encryption_certificate_pem")),
+		SAMLEncryptionAlgorithm: strings.TrimSpace(r.FormValue("saml_encryption_algorithm")),
+		IncludeGroupsClaim:      r.FormValue("include_groups_claim") == "on",
+		ChooserMode:             normalizeChooserMode(r.FormValue("chooser_mode")),
 		OIDCClaimMappings: oidcClaimMappings{
 			Name: strings.TrimSpace(r.FormValue("oidc_claim_name")), GivenName: strings.TrimSpace(r.FormValue("oidc_claim_given_name")),
 			FamilyName: strings.TrimSpace(r.FormValue("oidc_claim_family_name")), Username: strings.TrimSpace(r.FormValue("oidc_claim_username")),
@@ -137,6 +138,7 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		if app.SAMLEmailAttributeName == "" {
 			app.SAMLEmailAttributeName = defaultSAMLEmailAttributeName
 		}
+		app.SAMLEncryptionAlgorithm = normalizeSAMLEncryptionAlgorithm(app.SAMLEncryptionAlgorithm)
 	}
 	if err := validateHTTPBaseURL("SCIM base URL", app.SCIMBaseURL, false); err != nil {
 		a.redirectFormError(w, r, tab, "app", err)
@@ -208,6 +210,7 @@ func clearAppProtocol(app *app, protocol string) {
 		app.SAMLVerifyRequests = false
 		app.SAMLRequestCertPEM = ""
 		app.SAMLEncryptionCertPEM = ""
+		app.SAMLEncryptionAlgorithm = ""
 	case "scim":
 		app.SCIMBaseURL = ""
 		app.SCIMBearerToken = ""

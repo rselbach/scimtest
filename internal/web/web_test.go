@@ -2900,6 +2900,10 @@ func TestAppFormShowsOIDCSetupPanel(t *testing.T) {
 	r.Contains(body, `name="saml_verify_requests" data-saml-request-verification`)
 	r.Contains(body, `name="saml_request_certificate_pem"`)
 	r.Contains(body, `name="saml_encryption_certificate_pem"`)
+	r.Contains(body, `name="saml_encryption_algorithm"`)
+	r.Contains(body, `value="aes128-gcm" >AES-128-GCM</option>`)
+	r.Contains(body, `value="aes192-gcm" >AES-192-GCM</option>`)
+	r.Contains(body, `value="aes256-gcm" selected>AES-256-GCM</option>`)
 	r.Contains(body, "SP encryption certificate")
 	r.Contains(body, "AuthnRequest signatures")
 	r.Contains(body, `name="scim_enabled" data-protocol-toggle="scim"`)
@@ -2953,39 +2957,57 @@ func TestAppSavePersistsSAMLRequestCertificatePin(t *testing.T) {
 	r.Equal(strings.TrimSpace(certPEM), state.Apps[0].SAMLRequestCertPEM)
 }
 
-func TestAppSavePersistsSAMLEncryptionCertificate(t *testing.T) {
-	r := require.New(t)
-	setTestStateFile(t)
-	r.NoError(saveState(appState{}))
-	appService := newTestIDPApp(t)
-	_, _, certPEM := newSPEncryptionMaterial(t)
-	form := url.Values{
-		"tab":                             {"apps"},
-		"name":                            {"Greendale Portal"},
-		"slug":                            {"greendale"},
-		"protocol_switches_present":       {"true"},
-		"saml_enabled":                    {"on"},
-		"saml_entity_id":                  {"urn:greendale:sp"},
-		"saml_acs_url":                    {"https://greendale.test/saml/acs"},
-		"saml_encryption_certificate_pem": {certPEM},
-		"saml_name_id_field":              {"email"},
-		"saml_email_attribute_name":       {defaultSAMLEmailAttributeName},
-		"saml_attribute_username":         {"username"},
-		"saml_attribute_given_name":       {"first_name"},
-		"saml_attribute_family_name":      {"last_name"},
-		"saml_attribute_groups":           {"groups"},
+func TestAppSavePersistsSAMLEncryptionAlgorithms(t *testing.T) {
+	tests := map[string]string{
+		"AES-128-GCM": samlEncryptionAlgorithmAES128GCM,
+		"AES-192-GCM": samlEncryptionAlgorithmAES192GCM,
+		"AES-256-GCM": samlEncryptionAlgorithmAES256GCM,
 	}
-	req := httptest.NewRequest(http.MethodPost, "/apps/save", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	rec := httptest.NewRecorder()
 
-	appService.routes().ServeHTTP(rec, req)
+	for name, algorithm := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			setTestStateFile(t)
+			r.NoError(saveState(appState{}))
+			appService := newTestIDPApp(t)
+			_, _, certPEM := newSPEncryptionMaterial(t)
+			form := url.Values{
+				"tab":                             {"apps"},
+				"name":                            {"Greendale Portal"},
+				"slug":                            {"greendale"},
+				"protocol_switches_present":       {"true"},
+				"saml_enabled":                    {"on"},
+				"saml_entity_id":                  {"urn:greendale:sp"},
+				"saml_acs_url":                    {"https://greendale.test/saml/acs"},
+				"saml_encryption_certificate_pem": {certPEM},
+				"saml_encryption_algorithm":       {algorithm},
+				"saml_name_id_field":              {"email"},
+				"saml_email_attribute_name":       {defaultSAMLEmailAttributeName},
+				"saml_attribute_username":         {"username"},
+				"saml_attribute_given_name":       {"first_name"},
+				"saml_attribute_family_name":      {"last_name"},
+				"saml_attribute_groups":           {"groups"},
+			}
+			req := httptest.NewRequest(http.MethodPost, "/apps/save", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			rec := httptest.NewRecorder()
 
-	r.Equal(http.StatusSeeOther, rec.Code)
-	state, err := loadState()
-	r.NoError(err)
-	r.Len(state.Apps, 1)
-	r.Equal(strings.TrimSpace(certPEM), state.Apps[0].SAMLEncryptionCertPEM)
+			appService.routes().ServeHTTP(rec, req)
+
+			r.Equal(http.StatusSeeOther, rec.Code)
+			state, err := loadState()
+			r.NoError(err)
+			r.Len(state.Apps, 1)
+			r.Equal(strings.TrimSpace(certPEM), state.Apps[0].SAMLEncryptionCertPEM)
+			r.Equal(algorithm, state.Apps[0].SAMLEncryptionAlgorithm)
+
+			formRec := httptest.NewRecorder()
+			formURL := "/?tab=apps&modal=app&id=" + url.QueryEscape(state.Apps[0].ID)
+			appService.routes().ServeHTTP(formRec, httptest.NewRequest(http.MethodGet, formURL, nil))
+			r.Equal(http.StatusOK, formRec.Code)
+			r.Contains(formRec.Body.String(), `value="`+algorithm+`" selected>`+name+`</option>`)
+		})
+	}
 }
 
 func TestAppSaveRejectsInvalidSAMLEncryptionCertificate(t *testing.T) {
@@ -3002,6 +3024,7 @@ func TestAppSaveRejectsInvalidSAMLEncryptionCertificate(t *testing.T) {
 		"saml_entity_id":                  {"urn:greendale:sp"},
 		"saml_acs_url":                    {"https://greendale.test/saml/acs"},
 		"saml_encryption_certificate_pem": {"not-a-cert"},
+		"saml_encryption_algorithm":       {samlEncryptionAlgorithmAES192GCM},
 		"saml_name_id_field":              {"email"},
 		"saml_email_attribute_name":       {defaultSAMLEmailAttributeName},
 		"saml_attribute_username":         {"username"},
@@ -3028,6 +3051,42 @@ func TestAppSaveRejectsInvalidSAMLEncryptionCertificate(t *testing.T) {
 	r.Equal(http.StatusOK, getRec.Code)
 	r.Contains(getRec.Body.String(), "SAML encryption certificate is invalid")
 	r.Contains(getRec.Body.String(), "not-a-cert")
+	r.Contains(getRec.Body.String(), `value="aes192-gcm" selected>AES-192-GCM</option>`)
+}
+
+func TestAppSaveRejectsUnknownSAMLEncryptionAlgorithm(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+	appService := newTestIDPApp(t)
+	form := url.Values{
+		"tab":                       {"apps"},
+		"name":                      {"Greendale Portal"},
+		"slug":                      {"greendale"},
+		"protocol_switches_present": {"true"},
+		"saml_enabled":              {"on"},
+		"saml_acs_url":              {"https://greendale.test/saml/acs"},
+		"saml_encryption_algorithm": {"aes512-gcm"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/apps/save", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	appService.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	state, err := loadState()
+	r.NoError(err)
+	r.Empty(state.Apps)
+
+	get := httptest.NewRequest(http.MethodGet, rec.Header().Get("Location"), nil)
+	for _, cookie := range rec.Result().Cookies() {
+		get.AddCookie(cookie)
+	}
+	getRec := httptest.NewRecorder()
+	appService.routes().ServeHTTP(getRec, get)
+	r.Equal(http.StatusOK, getRec.Code)
+	r.Contains(getRec.Body.String(), "SAML encryption algorithm must be AES-128-GCM, AES-192-GCM, or AES-256-GCM")
 }
 
 func TestDisabledProtocolSwitchesClearSettingsAndSkipValidation(t *testing.T) {

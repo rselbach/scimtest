@@ -38,12 +38,13 @@ func TestSignedSAMLResponseEncryptsAssertionToSPCertificate(t *testing.T) {
 	svc := newTestIDPApp(t)
 	spKey, dest, pem := newSPEncryptionMaterial(t)
 	state, troy := troyGreendaleSAMLState(pem)
+	encryption := samlTestEncryption(t, dest, defaultSAMLEncryptionAlgorithm)
 
-	posted, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], troy, samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL}, dest, faultOptions{})
+	posted, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], troy, samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL}, encryption, faultOptions{})
 	r.NoError(err)
 	r.Contains(posted.XML, "EncryptedAssertion")
 	r.Contains(posted.XML, "EncryptedData")
-	r.Contains(posted.XML, algAES256GCM)
+	r.Contains(posted.XML, xmlenc11NS+"aes256-gcm")
 	r.Contains(posted.XML, algRSAOAEP)
 	r.NotContains(posted.XML, "<saml:Assertion")
 	r.NotContains(posted.XML, "troy@greendale.edu")
@@ -76,8 +77,9 @@ func TestEncryptSAMLAssertionRoundTripValidatesSignature(t *testing.T) {
 	svc := newTestIDPApp(t)
 	spKey, dest, pem := newSPEncryptionMaterial(t)
 	state, troy := troyGreendaleSAMLState(pem)
+	encryption := samlTestEncryption(t, dest, defaultSAMLEncryptionAlgorithm)
 
-	posted, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], troy, samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL}, dest, faultOptions{})
+	posted, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], troy, samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL}, encryption, faultOptions{})
 	r.NoError(err)
 
 	recovered := decryptPostedAssertion(t, posted.XML, spKey)
@@ -90,13 +92,59 @@ func TestEncryptSAMLAssertionRoundTripValidatesSignature(t *testing.T) {
 	r.NoError(err)
 }
 
+func TestSignedSAMLResponseEncryptsWithConfiguredAlgorithm(t *testing.T) {
+	tests := map[string]struct {
+		value    string
+		xmlURI   string
+		keyBytes int
+	}{
+		"AES-128-GCM": {
+			value:    samlEncryptionAlgorithmAES128GCM,
+			xmlURI:   xmlenc11NS + "aes128-gcm",
+			keyBytes: 16,
+		},
+		"AES-192-GCM": {
+			value:    samlEncryptionAlgorithmAES192GCM,
+			xmlURI:   xmlenc11NS + "aes192-gcm",
+			keyBytes: 24,
+		},
+		"AES-256-GCM": {
+			value:    samlEncryptionAlgorithmAES256GCM,
+			xmlURI:   xmlenc11NS + "aes256-gcm",
+			keyBytes: 32,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			svc := newTestIDPApp(t)
+			spKey, _, pem := newSPEncryptionMaterial(t)
+			state, troy := troyGreendaleSAMLState(pem)
+			state.Apps[0].SAMLEncryptionAlgorithm = tc.value
+			encryption, err := samlAssertionEncryptionForApp(state.Apps[0])
+			r.NoError(err)
+
+			posted, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], troy, samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL}, encryption, faultOptions{})
+			r.NoError(err)
+
+			decrypted := decryptPostedAssertionDetails(t, posted.XML, spKey)
+			r.Equal(tc.xmlURI, decrypted.Algorithm)
+			r.Equal(tc.keyBytes, decrypted.KeyBytes)
+			r.Equal("troy@greendale.edu", firstElementTextByLocalName(decrypted.Assertion, "NameID"))
+			validateSAMLAssertionSignature(t, svc.certDER, decrypted.Assertion)
+		})
+	}
+}
+
 func TestSignedSAMLResponseBreakSignatureThenEncrypts(t *testing.T) {
 	r := require.New(t)
 	svc := newTestIDPApp(t)
 	spKey, dest, pem := newSPEncryptionMaterial(t)
 	state, troy := troyGreendaleSAMLState(pem)
+	encryption := samlTestEncryption(t, dest, defaultSAMLEncryptionAlgorithm)
 
-	posted, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], troy, samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL}, dest, faultOptions{BreakSignature: true})
+	posted, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], troy, samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL}, encryption, faultOptions{BreakSignature: true})
 	r.NoError(err)
 
 	signedValue := findElementByLocalName(mustParseXML(t, posted.SignedAssertion).Root(), "SignatureValue")
@@ -121,8 +169,9 @@ func TestSignedSAMLResponseStatusDoesNotEncrypt(t *testing.T) {
 	svc := newTestIDPApp(t)
 	_, dest, pem := newSPEncryptionMaterial(t)
 	state, troy := troyGreendaleSAMLState(pem)
+	encryption := samlTestEncryption(t, dest, defaultSAMLEncryptionAlgorithm)
 
-	posted, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], troy, samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL}, dest, faultOptions{
+	posted, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], troy, samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL}, encryption, faultOptions{
 		SAMLStatus: "urn:oasis:names:tc:SAML:2.0:status:AuthnFailed",
 	})
 	r.NoError(err)
@@ -206,19 +255,22 @@ func TestSAMLDenyDoesNotEncrypt(t *testing.T) {
 	r.NotContains(string(responseXML), "Assertion")
 }
 
-func TestClearAppProtocolClearsSAMLEncryptionCertPEM(t *testing.T) {
+func TestClearAppProtocolClearsSAMLEncryptionSettings(t *testing.T) {
 	r := require.New(t)
 	app := app{
-		SAMLEntityID:          "urn:greendale:sp",
-		SAMLACSURL:            "https://sp.greendale.test/acs",
-		SAMLRequestCertPEM:    "request-cert",
-		SAMLEncryptionCertPEM: "encryption-cert",
+		SAMLEntityID:            "urn:greendale:sp",
+		SAMLACSURL:              "https://sp.greendale.test/acs",
+		SAMLRequestCertPEM:      "request-cert",
+		SAMLEncryptionCertPEM:   "encryption-cert",
+		SAMLEncryptionAlgorithm: samlEncryptionAlgorithmAES192GCM,
 	}
 	clearAppProtocol(&app, "saml")
 	r.Empty(app.SAMLEntityID)
 	r.Empty(app.SAMLACSURL)
 	r.Empty(app.SAMLRequestCertPEM)
 	r.Empty(app.SAMLEncryptionCertPEM)
+	r.Empty(app.SAMLEncryptionAlgorithm)
+	r.Equal("none", inferAppProtocol(app))
 }
 
 func troyGreendaleSAMLState(encryptionPEM string) (appState, user) {
@@ -256,7 +308,25 @@ func newSPEncryptionMaterial(t *testing.T) (*rsa.PrivateKey, *x509.Certificate, 
 	return key, cert, certificatePEM(der)
 }
 
+func samlTestEncryption(t *testing.T, dest *x509.Certificate, algorithm string) *samlAssertionEncryption {
+	t.Helper()
+	spec, err := samlEncryptionAlgorithmSpecFor(algorithm)
+	require.NoError(t, err)
+	return &samlAssertionEncryption{destination: dest, algorithm: spec}
+}
+
+type decryptedSAMLAssertion struct {
+	Assertion *etree.Element
+	Algorithm string
+	KeyBytes  int
+}
+
 func decryptPostedAssertion(t *testing.T, responseXML string, key *rsa.PrivateKey) *etree.Element {
+	t.Helper()
+	return decryptPostedAssertionDetails(t, responseXML, key).Assertion
+}
+
+func decryptPostedAssertionDetails(t *testing.T, responseXML string, key *rsa.PrivateKey) decryptedSAMLAssertion {
 	t.Helper()
 	r := require.New(t)
 	doc := mustParseXML(t, responseXML)
@@ -264,6 +334,9 @@ func decryptPostedAssertion(t *testing.T, responseXML string, key *rsa.PrivateKe
 	r.NotNil(encryptedAssertion)
 	encryptedData := childElementByLocalName(encryptedAssertion, "EncryptedData")
 	r.NotNil(encryptedData)
+	dataMethod := childElementByLocalName(encryptedData, "EncryptionMethod")
+	r.NotNil(dataMethod)
+	algorithm := dataMethod.SelectAttrValue("Algorithm", "")
 	keyInfo := childElementByLocalName(encryptedData, "KeyInfo")
 	encryptedKey := childElementByLocalName(keyInfo, "EncryptedKey")
 	r.NotNil(encryptedKey)
@@ -285,7 +358,18 @@ func decryptPostedAssertion(t *testing.T, responseXML string, key *rsa.PrivateKe
 	assertion := assertionDoc.Root()
 	r.NotNil(assertion)
 	r.Equal("Assertion", elementLocalName(assertion))
-	return assertion
+	return decryptedSAMLAssertion{Assertion: assertion, Algorithm: algorithm, KeyBytes: len(aesKey)}
+}
+
+func validateSAMLAssertionSignature(t *testing.T, certificateDER []byte, assertion *etree.Element) {
+	t.Helper()
+	idpCert, err := x509.ParseCertificate(certificateDER)
+	require.NoError(t, err)
+	validator := dsig.NewDefaultValidationContext(&dsig.MemoryX509CertificateStore{
+		Roots: []*x509.Certificate{idpCert},
+	})
+	_, err = validator.Validate(assertion)
+	require.NoError(t, err)
 }
 
 func mustParseXML(t *testing.T, value string) *etree.Document {
