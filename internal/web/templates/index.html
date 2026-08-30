@@ -723,7 +723,7 @@
 				<span class="hint">Unsafe when the IDP is reachable publicly.</span>
 				{{end}}
 			  </label>
-			  <details class="field full claim-mappings">
+			  <details class="field full form-disclosure">
 			  <summary>OIDC claim mappings</summary>
 			  <div class="form-grid">
 			  <label class="field"><span class="label">Full name</span><input name="oidc_claim_name" value="{{.AppForm.App.OIDCClaimMappings.Name}}" autocomplete="off"></label>
@@ -838,6 +838,9 @@
                 </select>
                 <span class="hint">NameID format is inferred from this value.</span>
               </label>
+              <details class="field full form-disclosure">
+              <summary>Signing and Encryption</summary>
+              <div class="form-grid">
               <label class="field full">
                 <span class="label">SP request-signing certificate</span>
                 <textarea name="saml_request_certificate_pem" rows="7" spellcheck="false" autocomplete="off" placeholder="-----BEGIN CERTIFICATE-----&#10;MIIC...&#10;-----END CERTIFICATE-----">{{.AppForm.App.SAMLRequestCertPEM}}</textarea>
@@ -857,12 +860,14 @@
                 </select>
                 <span class="hint">Used when an SP encryption certificate is present.</span>
               </label>
+              </div>
+              </details>
               <label class="field full">
                 <span class="label">Email attribute assertion name</span>
                 <input name="saml_email_attribute_name" value="{{.AppForm.App.SAMLAttributeMappings.Email}}" autocomplete="off">
                 <span class="hint">Use the value expected by the relying party.</span>
               </label>
-              <details class="field full claim-mappings">
+              <details class="field full form-disclosure">
               <summary>SAML attribute mappings</summary>
               <div class="form-grid">
               <label class="field"><span class="label">Username</span><input name="saml_attribute_username" value="{{.AppForm.App.SAMLAttributeMappings.Username}}" autocomplete="off"></label>

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -2900,6 +2901,9 @@ func TestAppFormShowsOIDCSetupPanel(t *testing.T) {
 	r.Contains(body, `name="saml_request_certificate_pem"`)
 	r.Contains(body, `name="saml_encryption_certificate_pem"`)
 	r.Contains(body, `name="saml_encryption_algorithm"`)
+	signingDisclosure := regexp.MustCompile(`<details\b([^>]*)>\s*<summary>Signing and Encryption</summary>`).FindStringSubmatch(body)
+	r.Len(signingDisclosure, 2)
+	r.NotRegexp(`(?:^|\s)open(?:\s|=|$)`, signingDisclosure[1])
 	r.Contains(body, `value="aes128-gcm" >AES-128-GCM</option>`)
 	r.Contains(body, `value="aes192-gcm" >AES-192-GCM</option>`)
 	r.Contains(body, `value="aes256-gcm" selected>AES-256-GCM</option>`)
