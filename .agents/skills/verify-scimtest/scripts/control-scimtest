@@ -1,0 +1,476 @@
+#!/usr/bin/env bash
+# Launch and inspect disposable scimtest instances for browser verification.
+
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+skill_dir="$(cd "${script_dir}/.." && pwd)"
+repo_root="$(cd "${skill_dir}/../../.." && pwd)"
+verification_root="/tmp/scimtest-verification/scimtest"
+runs_root="${verification_root}/runs"
+artifacts_root="${verification_root}/artifacts"
+
+usage() {
+  cat <<'EOF' >&2
+Usage: control-scimtest <command> [args]
+
+  launch [RUN_ID]                 start an isolated source instance
+  doctor RUN_ID                   verify that the instance is ours and ready
+  meta RUN_ID                     print run metadata
+  artifact-path RUN_ID RELPATH    create and print an artifact destination
+  stop RUN_ID                     stop the owned instance and delete run state
+EOF
+}
+
+validate_run_id() {
+  local run_id="$1"
+  if [[ -z "${run_id}" || "${run_id}" == "." || "${run_id}" == ".." ]]; then
+    echo "run ID must not be empty, . or .." >&2
+    return 1
+  fi
+  if [[ ! "${run_id}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "run ID may contain only letters, numbers, dots, underscores, and hyphens" >&2
+    return 1
+  fi
+}
+
+run_dir_for() {
+  local run_id="$1"
+  validate_run_id "${run_id}"
+  printf '%s/%s\n' "${runs_root}" "${run_id}"
+}
+
+require_run() {
+  local run_id="$1"
+  local run_dir
+  run_dir="$(run_dir_for "${run_id}")"
+  if [[ ! -d "${run_dir}" || ! -f "${run_dir}/pid" ]]; then
+    echo "verification run ${run_id} does not exist" >&2
+    return 1
+  fi
+}
+
+read_meta() {
+  local run_id="$1"
+  local key="$2"
+  local run_dir
+  run_dir="$(run_dir_for "${run_id}")"
+  case "${key}" in
+    pid|port|url|state-file|binary|tmux-socket|tmux-session)
+      ;;
+    *)
+      echo "unknown metadata key ${key}" >&2
+      return 1
+      ;;
+  esac
+  if [[ ! -f "${run_dir}/${key}" ]]; then
+    echo "missing ${key} metadata for run ${run_id}" >&2
+    return 1
+  fi
+  sed -n '1p' "${run_dir}/${key}"
+}
+
+pid_alive() {
+  local pid="$1"
+  [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null
+}
+
+owned_process() {
+  local pid="$1"
+  local binary="$2"
+  local command
+  if ! pid_alive "${pid}"; then
+    return 1
+  fi
+  command="$(ps -p "${pid}" -o command= 2>/dev/null || true)"
+  [[ "${command}" == "${binary}"* ]]
+}
+
+require_tool() {
+  local tool="$1"
+  if ! command -v "${tool}" >/dev/null 2>&1; then
+    echo "required command not found: ${tool}" >&2
+    return 1
+  fi
+}
+
+find_port() {
+  local port
+  for ((port = 18765; port <= 18865; port++)); do
+    if ! lsof -nP -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1; then
+      printf '%s\n' "${port}"
+      return 0
+    fi
+  done
+  echo "no free loopback port from 18765 through 18865" >&2
+  return 1
+}
+
+write_meta() {
+  local run_dir="$1"
+  local pid="$2"
+  local port="$3"
+  local url="$4"
+  local state_file="$5"
+  local binary="$6"
+  local tmux_socket="$7"
+  local tmux_session="$8"
+  printf '%s\n' "${pid}" >"${run_dir}/pid"
+  printf '%s\n' "${port}" >"${run_dir}/port"
+  printf '%s\n' "${url}" >"${run_dir}/url"
+  printf '%s\n' "${state_file}" >"${run_dir}/state-file"
+  printf '%s\n' "${binary}" >"${run_dir}/binary"
+  printf '%s\n' "${tmux_socket}" >"${run_dir}/tmux-socket"
+  printf '%s\n' "${tmux_session}" >"${run_dir}/tmux-session"
+}
+
+cmd_launch() {
+  local run_id
+  if [[ $# -gt 0 ]]; then
+    run_id="$1"
+  else
+    run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+  fi
+  validate_run_id "${run_id}"
+
+  local run_dir
+  local artifact_dir
+  local binary
+  local state_file
+  local log_file
+  run_dir="$(run_dir_for "${run_id}")"
+  artifact_dir="${artifacts_root}/${run_id}"
+  binary="${run_dir}/scimtest"
+  state_file="${run_dir}/state.db"
+  log_file="${run_dir}/server.log"
+
+  if [[ -e "${run_dir}" ]]; then
+    echo "verification run ${run_id} already exists" >&2
+    return 1
+  fi
+
+  local tool
+  for tool in curl go lsof ps sed tmux; do
+    require_tool "${tool}"
+  done
+
+  mkdir -p "${run_dir}" "${artifact_dir}"
+  echo "building scimtest for run ${run_id}"
+  if ! (
+    cd "${repo_root}"
+    go build -o "${binary}" ./cmd/scimtest
+  ); then
+    rm -rf -- "${run_dir}"
+    return 1
+  fi
+
+  local port
+  if ! port="$(find_port)"; then
+    rm -rf -- "${run_dir}"
+    return 1
+  fi
+  local url="http://127.0.0.1:${port}"
+
+  local tmux_socket_dir
+  local tmux_socket
+  local tmux_session="verify-scimtest-${run_id}"
+  local tmux_target="${tmux_session}:0.0"
+  tmux_socket_dir="${CLAUDE_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/claude-tmux-sockets}"
+  tmux_socket="${tmux_socket_dir}/claude.sock"
+  mkdir -p "${tmux_socket_dir}"
+  if tmux -S "${tmux_socket}" has-session -t "${tmux_session}" 2>/dev/null; then
+    echo "tmux session ${tmux_session} already exists" >&2
+    rm -rf -- "${run_dir}"
+    return 1
+  fi
+  tmux -S "${tmux_socket}" -f /dev/null new-session -d \
+    -s "${tmux_session}" -n server
+  tmux -S "${tmux_socket}" set-option -t "${tmux_session}" \
+    remain-on-exit on >/dev/null
+  tmux -S "${tmux_socket}" pipe-pane -o -t "${tmux_target}" \
+    "cat >> '${log_file}'"
+
+  local server_command
+  printf -v server_command 'exec %q --no-open --port %q --state-file %q' \
+    "${binary}" "${port}" "${state_file}"
+  tmux -S "${tmux_socket}" send-keys -t "${tmux_target}" -l -- \
+    "${server_command}"
+  tmux -S "${tmux_socket}" send-keys -t "${tmux_target}" Enter
+
+  local pid
+  pid="$(tmux -S "${tmux_socket}" display-message -p -t "${tmux_target}" \
+    '#{pane_pid}')"
+  write_meta "${run_dir}" "${pid}" "${port}" "${url}" "${state_file}" \
+    "${binary}" "${tmux_socket}" "${tmux_session}"
+
+  local attempts=0
+  while ((attempts < 150)); do
+    if ! tmux -S "${tmux_socket}" has-session -t "${tmux_session}" \
+      2>/dev/null; then
+      echo "scimtest exited during launch" >&2
+      sed -n '1,200p' "${log_file}" >&2
+      rm -rf -- "${run_dir}"
+      return 1
+    fi
+    if grep -q "scimtest is running" "${log_file}"; then
+      if ! cmd_doctor "${run_id}"; then
+        cmd_stop "${run_id}" || true
+        return 1
+      fi
+      cmd_meta "${run_id}"
+      return 0
+    fi
+    sleep 0.1
+    attempts=$((attempts + 1))
+  done
+
+  echo "timed out waiting for scimtest to start" >&2
+  sed -n '1,200p' "${log_file}" >&2
+  cmd_stop "${run_id}" || true
+  return 1
+}
+
+cmd_doctor() {
+  local run_id="$1"
+  require_run "${run_id}"
+
+  local run_dir
+  local pid
+  local port
+  local url
+  local state_file
+  local binary
+  local tmux_socket
+  local tmux_session
+  local failed=0
+  run_dir="$(run_dir_for "${run_id}")"
+  pid="$(read_meta "${run_id}" pid)"
+  port="$(read_meta "${run_id}" port)"
+  url="$(read_meta "${run_id}" url)"
+  state_file="$(read_meta "${run_id}" state-file)"
+  binary="$(read_meta "${run_id}" binary)"
+  tmux_socket="$(read_meta "${run_id}" tmux-socket)"
+  tmux_session="$(read_meta "${run_id}" tmux-session)"
+
+  if tmux -S "${tmux_socket}" has-session -t "${tmux_session}" 2>/dev/null && \
+    [[ "$(tmux -S "${tmux_socket}" display-message -p \
+      -t "${tmux_session}:0.0" '#{pane_dead}')" == "0" ]]; then
+    echo "doctor: tmux session ${tmux_session} is running"
+  else
+    echo "doctor: tmux session ${tmux_session} is absent or stopped" >&2
+    failed=1
+  fi
+
+  if owned_process "${pid}" "${binary}"; then
+    echo "doctor: pid ${pid} is the run binary"
+  else
+    echo "doctor: pid ${pid} is absent or belongs to another command" >&2
+    failed=1
+  fi
+
+  case "${state_file}" in
+    "${run_dir}"/*)
+      echo "doctor: state file is isolated"
+      ;;
+    *)
+      echo "doctor: state file is outside ${run_dir}: ${state_file}" >&2
+      failed=1
+      ;;
+  esac
+
+  if [[ "${url}" == "http://127.0.0.1:${port}" ]]; then
+    echo "doctor: url ${url}"
+  else
+    echo "doctor: url ${url} does not match port ${port}" >&2
+    failed=1
+  fi
+
+  local listener
+  listener="$(lsof -nP -a -p "${pid}" -iTCP:"${port}" -sTCP:LISTEN \
+    2>/dev/null || true)"
+  if [[ -n "${listener}" ]]; then
+    echo "doctor: pid owns port ${port}"
+  else
+    echo "doctor: pid ${pid} does not own port ${port}" >&2
+    failed=1
+  fi
+
+  local lock_file="${state_file}.lock"
+  local token=""
+  if [[ -f "${lock_file}" ]]; then
+    token="$(sed -n 's/.*"token":"\([^"]*\)".*/\1/p' "${lock_file}")"
+  fi
+  if [[ -z "${token}" ]]; then
+    echo "doctor: instance token is missing" >&2
+    failed=1
+  else
+    local ready_status=""
+    if ! ready_status="$(curl --silent --show-error --output /dev/null \
+      --write-out '%{http_code}' \
+      --header "X-Scimtest-Instance-Token: ${token}" \
+      "${url}/-/ready")"; then
+      echo "doctor: readiness request failed" >&2
+      failed=1
+    elif [[ "${ready_status}" == "204" ]]; then
+      echo "doctor: GET /-/ready 204"
+    else
+      echo "doctor: GET /-/ready returned ${ready_status}, want 204" >&2
+      failed=1
+    fi
+  fi
+
+  local page_status=""
+  if ! page_status="$(curl --silent --show-error --location \
+    --output "${run_dir}/doctor.body" --write-out '%{http_code}' "${url}/")"; then
+    echo "doctor: GET / failed" >&2
+    failed=1
+  elif [[ "${page_status}" == "200" ]]; then
+    echo "doctor: GET / 200 after redirects"
+  else
+    echo "doctor: GET / returned ${page_status}, want 200 after redirects" >&2
+    failed=1
+  fi
+
+  if ! grep -q "scimtest" "${run_dir}/doctor.body" 2>/dev/null; then
+    echo "doctor: admin page does not identify scimtest" >&2
+    failed=1
+  fi
+  if grep -q "Continue with GitHub" "${run_dir}/doctor.body" 2>/dev/null; then
+    echo "doctor: desktop GitHub account gate is present" >&2
+    failed=1
+  fi
+
+  if ((failed != 0)); then
+    echo "doctor: failed" >&2
+    return 1
+  fi
+  echo "doctor: ok"
+}
+
+cmd_meta() {
+  local run_id="$1"
+  require_run "${run_id}"
+
+  local run_dir
+  run_dir="$(run_dir_for "${run_id}")"
+  printf 'RUN_ID=%s\n' "${run_id}"
+  printf 'PID=%s\n' "$(read_meta "${run_id}" pid)"
+  printf 'PORT=%s\n' "$(read_meta "${run_id}" port)"
+  printf 'URL=%s\n' "$(read_meta "${run_id}" url)"
+  printf 'STATE_FILE=%s\n' "$(read_meta "${run_id}" state-file)"
+  printf 'LOG_FILE=%s/server.log\n' "${run_dir}"
+  printf 'ARTIFACT_DIR=%s/%s\n' "${artifacts_root}" "${run_id}"
+  printf 'TMUX_SOCKET=%s\n' "$(read_meta "${run_id}" tmux-socket)"
+  printf 'TMUX_SESSION=%s\n' "$(read_meta "${run_id}" tmux-session)"
+  printf 'MONITOR=tmux -S %s attach -t %s\n' \
+    "$(read_meta "${run_id}" tmux-socket)" \
+    "$(read_meta "${run_id}" tmux-session)"
+}
+
+cmd_artifact_path() {
+  local run_id="$1"
+  local relative_path="$2"
+  require_run "${run_id}"
+
+  if [[ -z "${relative_path}" || "${relative_path}" == /* || \
+    "${relative_path}" == ".." || "${relative_path}" == ../* || \
+    "${relative_path}" == */../* || "${relative_path}" == */.. ]]; then
+    echo "artifact path must stay below the run artifact directory" >&2
+    return 1
+  fi
+
+  local destination="${artifacts_root}/${run_id}/${relative_path}"
+  local parent
+  parent="$(dirname "${destination}")"
+  mkdir -p "${parent}"
+  printf '%s\n' "${destination}"
+}
+
+cmd_stop() {
+  local run_id="$1"
+  require_run "${run_id}"
+
+  local run_dir
+  local pid
+  local binary
+  local tmux_socket
+  local tmux_session
+  run_dir="$(run_dir_for "${run_id}")"
+  pid="$(read_meta "${run_id}" pid)"
+  binary="$(read_meta "${run_id}" binary)"
+  tmux_socket="$(read_meta "${run_id}" tmux-socket)"
+  tmux_session="$(read_meta "${run_id}" tmux-session)"
+
+  if pid_alive "${pid}" && ! owned_process "${pid}" "${binary}"; then
+    echo "refusing to stop pid ${pid}; it no longer belongs to ${binary}" >&2
+    return 1
+  fi
+
+  if tmux -S "${tmux_socket}" has-session -t "${tmux_session}" 2>/dev/null; then
+    tmux -S "${tmux_socket}" kill-session -t "${tmux_session}"
+  fi
+
+  local attempts=0
+  while ((attempts < 50)); do
+    if ! pid_alive "${pid}"; then
+      break
+    fi
+    sleep 0.1
+    attempts=$((attempts + 1))
+  done
+  if owned_process "${pid}" "${binary}"; then
+    kill "${pid}"
+    sleep 0.2
+  fi
+  if owned_process "${pid}" "${binary}"; then
+    kill -KILL "${pid}"
+  fi
+  echo "stopped pid=${pid} tmux_session=${tmux_session}"
+
+  rm -rf -- "${run_dir}"
+  echo "removed ${run_dir}"
+  echo "kept ${artifacts_root}/${run_id}"
+}
+
+main() {
+  if [[ $# -lt 1 ]]; then
+    usage
+    return 2
+  fi
+
+  local command_name="$1"
+  shift
+  case "${command_name}" in
+    launch)
+      if [[ $# -gt 1 ]]; then
+        usage
+        return 2
+      fi
+      cmd_launch "$@"
+      ;;
+    doctor|meta|stop)
+      if [[ $# -ne 1 ]]; then
+        usage
+        return 2
+      fi
+      "cmd_${command_name}" "$1"
+      ;;
+    artifact-path)
+      if [[ $# -ne 2 ]]; then
+        usage
+        return 2
+      fi
+      cmd_artifact_path "$1" "$2"
+      ;;
+    -h|--help|help)
+      usage
+      ;;
+    *)
+      echo "unknown command ${command_name}" >&2
+      usage
+      return 2
+      ;;
+  esac
+}
+
+main "$@"

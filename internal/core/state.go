@@ -1391,7 +1391,7 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 		var app App
 		var redirectURIs string
 		var includeGroups int
-		var verifySAMLRequests int
+		var legacyVerifySAMLRequests int
 		var allowAnyRedirect int
 		var publicClient int
 		var scimEnabled int
@@ -1401,12 +1401,11 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 		var scimFilterSupported int
 		var oidcClaimMappings string
 		var samlAttributeMappings string
-		if err := appRows.Scan(&app.ID, &app.Name, &app.Slug, &app.Protocol, &app.OIDCClientID, &app.OIDCClientSecret, &publicClient, &redirectURIs, &app.SAMLEntityID, &app.SAMLACSURL, &app.SAMLAudience, &app.SAMLNameIDField, &app.SAMLNameIDFormat, &app.SAMLEmailAttributeName, &verifySAMLRequests, &app.SAMLRequestCertPEM, &app.SAMLEncryptionCertPEM, &app.SAMLEncryptionAlgorithm, &includeGroups, &allowAnyRedirect, &scimEnabled, &app.SCIMBaseURL, &app.SCIMBearerToken, &scimAutoOpenTrace, &scimCapabilitiesKnown, &scimPatchSupported, &scimFilterSupported, &oidcClaimMappings, &samlAttributeMappings, &app.ChooserMode); err != nil {
+		if err := appRows.Scan(&app.ID, &app.Name, &app.Slug, &app.Protocol, &app.OIDCClientID, &app.OIDCClientSecret, &publicClient, &redirectURIs, &app.SAMLEntityID, &app.SAMLACSURL, &app.SAMLAudience, &app.SAMLNameIDField, &app.SAMLNameIDFormat, &app.SAMLEmailAttributeName, &legacyVerifySAMLRequests, &app.SAMLRequestCertPEM, &app.SAMLEncryptionCertPEM, &app.SAMLEncryptionAlgorithm, &includeGroups, &allowAnyRedirect, &scimEnabled, &app.SCIMBaseURL, &app.SCIMBearerToken, &scimAutoOpenTrace, &scimCapabilitiesKnown, &scimPatchSupported, &scimFilterSupported, &oidcClaimMappings, &samlAttributeMappings, &app.ChooserMode); err != nil {
 			return AppState{}, fmt.Errorf("scan sqlite app row: %w", err)
 		}
 		app.OIDCRedirectURIs = Lines(redirectURIs)
 		app.IncludeGroupsClaim = includeGroups != 0
-		app.SAMLVerifyRequests = verifySAMLRequests != 0
 		app.AllowAnyOIDCRedirect = allowAnyRedirect != 0
 		app.OIDCPublicClient = publicClient != 0
 		app.SCIMEnabled = scimEnabled != 0
@@ -1761,7 +1760,8 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 		if err != nil {
 			return fmt.Errorf("encode SAML attribute mappings for app %s: %w", app.ID, err)
 		}
-		if _, err := appStmt.Exec(app.ID, environmentID, app.Name, app.Slug, app.Protocol, app.OIDCClientID, app.OIDCClientSecret, boolToInt(app.OIDCPublicClient), JoinLines(app.OIDCRedirectURIs), app.SAMLEntityID, app.SAMLACSURL, app.SAMLAudience, app.SAMLNameIDField, app.SAMLNameIDFormat, app.SAMLEmailAttributeName, boolToInt(app.SAMLVerifyRequests), app.SAMLRequestCertPEM, app.SAMLEncryptionCertPEM, app.SAMLEncryptionAlgorithm, boolToInt(app.IncludeGroupsClaim), boolToInt(app.AllowAnyOIDCRedirect), boolToInt(app.SCIMEnabled), app.SCIMBaseURL, app.SCIMBearerToken, boolToInt(app.SCIMAutoOpenTrace), boolToInt(app.SCIMCapabilitiesKnown), boolToInt(app.SCIMPatchSupported), boolToInt(app.SCIMFilterSupported), string(oidcClaimMappings), string(samlAttributeMappings), app.ChooserMode); err != nil {
+		verifySAMLRequests := strings.TrimSpace(app.SAMLRequestCertPEM) != ""
+		if _, err := appStmt.Exec(app.ID, environmentID, app.Name, app.Slug, app.Protocol, app.OIDCClientID, app.OIDCClientSecret, boolToInt(app.OIDCPublicClient), JoinLines(app.OIDCRedirectURIs), app.SAMLEntityID, app.SAMLACSURL, app.SAMLAudience, app.SAMLNameIDField, app.SAMLNameIDFormat, app.SAMLEmailAttributeName, boolToInt(verifySAMLRequests), app.SAMLRequestCertPEM, app.SAMLEncryptionCertPEM, app.SAMLEncryptionAlgorithm, boolToInt(app.IncludeGroupsClaim), boolToInt(app.AllowAnyOIDCRedirect), boolToInt(app.SCIMEnabled), app.SCIMBaseURL, app.SCIMBearerToken, boolToInt(app.SCIMAutoOpenTrace), boolToInt(app.SCIMCapabilitiesKnown), boolToInt(app.SCIMPatchSupported), boolToInt(app.SCIMFilterSupported), string(oidcClaimMappings), string(samlAttributeMappings), app.ChooserMode); err != nil {
 			return fmt.Errorf("insert sqlite app %s: %w", app.ID, err)
 		}
 	}
@@ -2230,13 +2230,8 @@ func ValidateApp(app App, apps []App) error {
 		if err := validateMappedNames("SAML attribute", []string{mappings.GivenName, mappings.FamilyName, mappings.Username, mappings.Email, mappings.Groups}); err != nil {
 			return err
 		}
-		if app.SAMLVerifyRequests {
-			if strings.TrimSpace(app.SAMLRequestCertPEM) == "" {
-				return fmt.Errorf("SAML request-signing certificate is required when signature verification is enabled")
-			}
-			if _, err := parseSAMLRequestCertificate(app.SAMLRequestCertPEM); err != nil {
-				return fmt.Errorf("SAML request-signing certificate is invalid: %w", err)
-			}
+		if _, err := ParseSAMLRequestCertificate(app.SAMLRequestCertPEM); err != nil {
+			return err
 		}
 		if _, err := ParseSAMLEncryptionCertificate(app.SAMLEncryptionCertPEM); err != nil {
 			return err
@@ -2291,13 +2286,8 @@ func SAMLSetupStatus(app App) string {
 	if strings.TrimSpace(app.SAMLNameIDField) != "" && NormalizeSAMLNameIDField(app.SAMLNameIDField) != app.SAMLNameIDField {
 		return SetupStatusIncomplete
 	}
-	if app.SAMLVerifyRequests {
-		if strings.TrimSpace(app.SAMLRequestCertPEM) == "" {
-			return SetupStatusIncomplete
-		}
-		if _, err := parseSAMLRequestCertificate(app.SAMLRequestCertPEM); err != nil {
-			return SetupStatusIncomplete
-		}
+	if _, err := ParseSAMLRequestCertificate(app.SAMLRequestCertPEM); err != nil {
+		return SetupStatusIncomplete
 	}
 	if _, err := ParseSAMLEncryptionCertificate(app.SAMLEncryptionCertPEM); err != nil {
 		return SetupStatusIncomplete
@@ -2344,7 +2334,7 @@ func hasOIDCSetup(app App) bool {
 }
 
 func hasSAMLSetup(app App) bool {
-	return SupportsSAML(app) || strings.TrimSpace(app.SAMLEntityID) != "" || strings.TrimSpace(app.SAMLACSURL) != "" || strings.TrimSpace(app.SAMLAudience) != "" || app.SAMLVerifyRequests
+	return SupportsSAML(app) || strings.TrimSpace(app.SAMLEntityID) != "" || strings.TrimSpace(app.SAMLACSURL) != "" || strings.TrimSpace(app.SAMLAudience) != ""
 }
 
 func parseSAMLCertificate(value string) (*x509.Certificate, error) {
@@ -2372,8 +2362,20 @@ func parseSAMLCertificate(value string) (*x509.Certificate, error) {
 	return cert, nil
 }
 
-func parseSAMLRequestCertificate(value string) (*x509.Certificate, error) {
-	return parseSAMLCertificate(value)
+// ParseSAMLRequestCertificate is the AuthnRequest signature-verification
+// on-switch.
+//
+// Whitespace-only PEM accepts unsigned requests. A currently valid RSA
+// CERTIFICATE requires signatures from that key. Anything else is an error.
+func ParseSAMLRequestCertificate(value string) (*x509.Certificate, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	cert, err := parseSAMLCertificate(value)
+	if err != nil {
+		return nil, fmt.Errorf("SAML request-signing certificate is invalid: %w", err)
+	}
+	return cert, nil
 }
 
 // ParseSAMLEncryptionCertificate is the assertion-encryption on-switch.

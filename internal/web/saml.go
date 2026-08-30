@@ -200,8 +200,12 @@ func resolveSAMLResponseContext(r *http.Request, values url.Values, app app, bas
 	context := samlResponseContext{ACSURL: configuredACS}
 	encodedRequest := strings.TrimSpace(values.Get("SAMLRequest"))
 	if encodedRequest != "" {
-		if app.SAMLVerifyRequests {
-			if err := validateSAMLAuthnRequestSignature(r, encodedRequest, app.SAMLRequestCertPEM); err != nil {
+		requestCertificate, err := parseSAMLRequestCertificate(app.SAMLRequestCertPEM)
+		if err != nil {
+			return samlResponseContext{}, err
+		}
+		if requestCertificate != nil {
+			if err := validateSAMLAuthnRequestSignature(r, encodedRequest, requestCertificate); err != nil {
 				return samlResponseContext{}, err
 			}
 		}

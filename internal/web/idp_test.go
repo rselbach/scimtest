@@ -1050,8 +1050,40 @@ func signedRequestTestState(svc *webApp) appState {
 		Apps: []app{{
 			ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "saml",
 			SAMLEntityID: "urn:greendale:sp", SAMLACSURL: "https://sp.greendale.test/acs",
-			SAMLVerifyRequests: true, SAMLRequestCertPEM: certificatePEM(svc.certDER),
+			SAMLRequestCertPEM: certificatePEM(svc.certDER),
 		}},
+	}
+}
+
+func TestUnsignedSAMLAuthnRequestsAcceptedWithoutCertificate(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	svc := newTestIDPApp(t)
+	state := signedRequestTestState(svc)
+	state.Apps[0].SAMLRequestCertPEM = " \n\t"
+	r.NoError(saveState(state))
+
+	requestXML := `<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_request-annie" Destination="http://idp.test/saml/greendale/sso" AssertionConsumerServiceURL="https://sp.greendale.test/acs" ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"><saml:Issuer>urn:greendale:sp</saml:Issuer></samlp:AuthnRequest>`
+	redirectRequest := encodeRedirectSAMLRequest(t, requestXML)
+	postRequest := base64.StdEncoding.EncodeToString([]byte(requestXML))
+
+	tests := map[string]*http.Request{
+		"Redirect": httptest.NewRequest(http.MethodGet, "/saml/greendale/sso?SAMLRequest="+url.QueryEscape(redirectRequest)+"&user_id=usr-annie", nil),
+		"POST": func() *http.Request {
+			form := url.Values{"SAMLRequest": {postRequest}, "user_id": {"usr-annie"}}
+			req := httptest.NewRequest(http.MethodPost, "/saml/greendale/sso", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			return req
+		}(),
+	}
+
+	for name, req := range tests {
+		t.Run(name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			svc.routes().ServeHTTP(rec, req)
+			r.Equal(http.StatusOK, rec.Code)
+			r.Contains(rec.Body.String(), `action="https://sp.greendale.test/acs"`)
+		})
 	}
 }
 

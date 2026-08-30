@@ -161,7 +161,6 @@ type App struct {
 	SAMLNameIDField         string                `json:"saml_name_id_field,omitempty"`
 	SAMLNameIDFormat        string                `json:"saml_name_id_format,omitempty"`
 	SAMLEmailAttributeName  string                `json:"saml_email_attribute_name,omitempty"`
-	SAMLVerifyRequests      bool                  `json:"saml_verify_requests,omitempty"`
 	SAMLRequestCertPEM      string                `json:"saml_request_certificate_pem,omitempty"`
 	SAMLEncryptionCertPEM   string                `json:"saml_encryption_certificate_pem,omitempty"`
 	SAMLEncryptionAlgorithm string                `json:"saml_encryption_algorithm,omitempty"`

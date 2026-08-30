@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/beevik/etree"
 	dsig "github.com/russellhaering/goxmldsig"
@@ -24,19 +23,7 @@ const (
 	xmlDSIGNamespace         = "http://www.w3.org/2000/09/xmldsig#"
 )
 
-func validateSAMLAuthnRequestSignature(r *http.Request, encodedRequest string, certificatePEM string) error {
-	certDER, err := parseCertificatePEM(certificatePEM)
-	if err != nil {
-		return fmt.Errorf("parse pinned SAML request certificate: %w", err)
-	}
-	cert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		return fmt.Errorf("parse pinned SAML request certificate: %w", err)
-	}
-	if now := time.Now(); now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
-		return fmt.Errorf("pinned SAML request certificate is not currently valid")
-	}
-
+func validateSAMLAuthnRequestSignature(r *http.Request, encodedRequest string, cert *x509.Certificate) error {
 	if r.URL.Query().Get("SAMLRequest") != "" {
 		return validateRedirectSAMLSignature(r.URL.RawQuery, cert)
 	}

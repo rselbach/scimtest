@@ -74,7 +74,6 @@ func TestSaveAndLoadState(t *testing.T) {
 			SAMLNameIDField:        "username",
 			SAMLNameIDFormat:       SAMLNameIDFormatUnspecified,
 			SAMLEmailAttributeName: DefaultSAMLEmailAttributeName,
-			SAMLVerifyRequests:     true,
 			SAMLRequestCertPEM:     "pinned certificate",
 			SAMLEncryptionCertPEM:  "encryption certificate",
 			SCIMEnabled:            true,
@@ -143,6 +142,50 @@ func TestSaveAndLoadState(t *testing.T) {
 	info, err := os.Stat(path)
 	r.NoError(err)
 	r.NotZero(info.Size())
+}
+
+func TestSAMLRequestVerificationSQLiteMirrorFollowsCertificatePresence(t *testing.T) {
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r := require.New(t)
+	certificate := testRSAPEMCertificate(t, currentTime().Add(-time.Hour), currentTime().AddDate(1, 0, 0))
+	state := AppState{Apps: []App{
+		{ID: "app-signed", Name: "Greendale", Slug: "greendale", SAMLRequestCertPEM: certificate},
+		{ID: "app-unsigned", Name: "City College", Slug: "city-college"},
+	}}
+	r.NoError(SaveState(state))
+
+	db, err := openStateDB()
+	r.NoError(err)
+	var signedMirror int
+	var unsignedMirror int
+	r.NoError(db.QueryRow(`SELECT saml_verify_requests FROM apps WHERE id = ?`, "app-signed").Scan(&signedMirror))
+	r.NoError(db.QueryRow(`SELECT saml_verify_requests FROM apps WHERE id = ?`, "app-unsigned").Scan(&unsignedMirror))
+	r.Equal(1, signedMirror)
+	r.Equal(0, unsignedMirror)
+
+	_, err = db.Exec(`UPDATE apps SET saml_verify_requests = CASE id WHEN 'app-signed' THEN 0 ELSE 1 END`)
+	r.NoError(err)
+	loaded, err := LoadState()
+	r.NoError(err)
+	r.Len(loaded.Apps, 2)
+	r.NotEmpty(loaded.Apps[0].SAMLRequestCertPEM)
+	r.Empty(loaded.Apps[1].SAMLRequestCertPEM)
+
+	r.NoError(SaveState(loaded))
+	r.NoError(db.QueryRow(`SELECT saml_verify_requests FROM apps WHERE id = ?`, "app-signed").Scan(&signedMirror))
+	r.NoError(db.QueryRow(`SELECT saml_verify_requests FROM apps WHERE id = ?`, "app-unsigned").Scan(&unsignedMirror))
+	r.Equal(1, signedMirror)
+	r.Equal(0, unsignedMirror)
+}
+
+func TestLegacySAMLRequestVerificationJSONIsIgnored(t *testing.T) {
+	r := require.New(t)
+	var app App
+	r.NoError(json.Unmarshal([]byte(`{"id":"app-1","saml_verify_requests":true}`), &app))
+
+	data, err := json.Marshal(app)
+	r.NoError(err)
+	r.NotContains(string(data), "saml_verify_requests")
 }
 
 func TestSaveEnvironmentStatePreservesGlobalConfig(t *testing.T) {
@@ -1497,6 +1540,48 @@ func TestParseSAMLEncryptionCertificate(t *testing.T) {
 	}
 }
 
+func TestParseSAMLRequestCertificate(t *testing.T) {
+	now := currentTime()
+	validPEM := testRSAPEMCertificate(t, now.Add(-time.Hour), now.AddDate(1, 0, 0))
+	expiredPEM := testRSAPEMCertificate(t, now.Add(-48*time.Hour), now.Add(-time.Hour))
+
+	tests := map[string]struct {
+		value   string
+		wantErr string
+		wantNil bool
+	}{
+		"empty":      {value: "", wantNil: true},
+		"whitespace": {value: " \n\t", wantNil: true},
+		"valid":      {value: validPEM},
+		"garbage":    {value: "not-a-cert", wantErr: "SAML request-signing certificate is invalid"},
+		"expired":    {value: expiredPEM, wantErr: "SAML request-signing certificate is invalid"},
+		"extra block": {
+			value:   validPEM + validPEM,
+			wantErr: "SAML request-signing certificate is invalid",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			cert, err := ParseSAMLRequestCertificate(tc.value)
+			if tc.wantErr != "" {
+				r.ErrorContains(err, tc.wantErr)
+				r.Nil(cert)
+				return
+			}
+			r.NoError(err)
+			if tc.wantNil {
+				r.Nil(cert)
+				return
+			}
+			r.NotNil(cert)
+			_, ok := cert.PublicKey.(*rsa.PublicKey)
+			r.True(ok)
+		})
+	}
+}
+
 func TestValidateSAMLEncryptionAlgorithm(t *testing.T) {
 	tests := map[string]struct {
 		value   string
@@ -1580,6 +1665,13 @@ func TestSAMLEncryptionCertificateDoesNotInferProtocol(t *testing.T) {
 	r.Equal("none", InferAppProtocol(app))
 }
 
+func TestSAMLRequestCertificateDoesNotInferProtocol(t *testing.T) {
+	r := require.New(t)
+	app := App{SAMLRequestCertPEM: testRSAPEMCertificate(t, currentTime().Add(-time.Hour), currentTime().AddDate(1, 0, 0))}
+	r.Equal(SetupStatusNotSetUp, SAMLSetupStatus(app))
+	r.Equal("none", InferAppProtocol(app))
+}
+
 func TestSAMLSetupStatusConfiguredWithValidEncryptionCertificate(t *testing.T) {
 	r := require.New(t)
 	app := App{
@@ -1597,6 +1689,19 @@ func TestValidateAppRejectsInvalidSAMLEncryptionCertificate(t *testing.T) {
 		SAMLEncryptionCertPEM: "not-a-cert",
 	}, nil)
 	r.ErrorContains(err, "SAML encryption certificate is invalid")
+}
+
+func TestValidateAppRejectsInvalidSAMLRequestCertificate(t *testing.T) {
+	r := require.New(t)
+	app := App{
+		ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "saml",
+		SAMLRequestCertPEM: "not-a-cert",
+	}
+
+	err := ValidateApp(app, nil)
+
+	r.Equal(SetupStatusIncomplete, SAMLSetupStatus(app))
+	r.ErrorContains(err, "SAML request-signing certificate is invalid")
 }
 
 func TestValidateAppRejectsInvalidSAMLEncryptionAlgorithm(t *testing.T) {

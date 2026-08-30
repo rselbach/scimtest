@@ -23,3 +23,7 @@ scimtest-server.json.tmp
 .DS_Store
 .idea/
 .vscode/
+
+# verify-scimtest run state and captured proof
+.cursor/skills/verify-scimtest/runs/
+.cursor/skills/verify-scimtest/artifacts/

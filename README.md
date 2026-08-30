@@ -136,11 +136,12 @@ or AES-256-GCM, RSA-OAEP). AES-256-GCM is the default.
 Leave the field empty to post the signed assertion in the clear. The SAML
 inspector still shows the signed assertion this IDP produced.
 
-SAML environments can also require signed AuthnRequests. Enable request
-verification in the SAML setup and pin the service provider's RSA X.509
-certificate. scimtest validates HTTP-Redirect query signatures and enveloped
-HTTP-POST XML signatures with SHA-256, SHA-384, or SHA-512. Unsigned requests,
-SHA-1 signatures, and signatures from any other certificate are rejected.
+To require signed AuthnRequests, paste the service provider's RSA X.509
+certificate into the request-signing certificate field. Leave the field empty
+to accept unsigned AuthnRequests. scimtest validates HTTP-Redirect query
+signatures and enveloped HTTP-POST XML signatures with SHA-256, SHA-384, or
+SHA-512. When a certificate is present, scimtest rejects unsigned requests,
+SHA-1 signatures, and signatures from any other certificate.
 
 ## Configuration
 

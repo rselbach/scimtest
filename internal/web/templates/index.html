@@ -838,18 +838,10 @@
                 </select>
                 <span class="hint">NameID format is inferred from this value.</span>
               </label>
-              <div class="field full">
-                <span class="label">AuthnRequest signatures</span>
-                <label class="checkbox-row">
-                  <input type="checkbox" name="saml_verify_requests" data-saml-request-verification aria-controls="saml-request-certificate" aria-expanded="{{if .AppForm.App.SAMLVerifyRequests}}true{{else}}false{{end}}" {{if .AppForm.App.SAMLVerifyRequests}}checked{{end}}>
-                  Require signed AuthnRequests
-                </label>
-                <span class="hint">Validate requests against a pinned service provider certificate.</span>
-              </div>
-              <label id="saml-request-certificate" class="field full {{if not .AppForm.App.SAMLVerifyRequests}}is-hidden{{end}}" data-saml-request-certificate>
+              <label class="field full">
                 <span class="label">SP request-signing certificate</span>
                 <textarea name="saml_request_certificate_pem" rows="7" spellcheck="false" autocomplete="off" placeholder="-----BEGIN CERTIFICATE-----&#10;MIIC...&#10;-----END CERTIFICATE-----">{{.AppForm.App.SAMLRequestCertPEM}}</textarea>
-                <span class="hint">Paste one RSA X.509 certificate in PEM format. Redirect query signatures and POST XML signatures are checked. SHA-1 is rejected.</span>
+                <span class="hint">When present, scimtest requires signed AuthnRequests and checks Redirect query signatures and POST XML signatures. Leave empty to accept unsigned requests. SHA-1 is rejected.</span>
               </label>
               <label class="field full">
                 <span class="label">SP encryption certificate</span>

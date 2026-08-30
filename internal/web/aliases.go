@@ -56,6 +56,7 @@ var (
 	supportsSAML                     = core.SupportsSAML
 	oidcSetupStatus                  = core.OIDCSetupStatus
 	samlSetupStatus                  = core.SAMLSetupStatus
+	parseSAMLRequestCertificate      = core.ParseSAMLRequestCertificate
 	parseSAMLEncryptionCertificate   = core.ParseSAMLEncryptionCertificate
 	scimSetupStatus                  = core.SCIMSetupStatus
 	inferAppProtocol                 = core.InferAppProtocol

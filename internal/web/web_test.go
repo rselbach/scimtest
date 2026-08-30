@@ -2897,7 +2897,6 @@ func TestAppFormShowsOIDCSetupPanel(t *testing.T) {
 	r.Contains(body, `name="protocol_switches_present" value="true"`)
 	r.Contains(body, `name="oidc_enabled" data-protocol-toggle="oidc"`)
 	r.Contains(body, `name="saml_enabled" data-protocol-toggle="saml"`)
-	r.Contains(body, `name="saml_verify_requests" data-saml-request-verification`)
 	r.Contains(body, `name="saml_request_certificate_pem"`)
 	r.Contains(body, `name="saml_encryption_certificate_pem"`)
 	r.Contains(body, `name="saml_encryption_algorithm"`)
@@ -2905,7 +2904,7 @@ func TestAppFormShowsOIDCSetupPanel(t *testing.T) {
 	r.Contains(body, `value="aes192-gcm" >AES-192-GCM</option>`)
 	r.Contains(body, `value="aes256-gcm" selected>AES-256-GCM</option>`)
 	r.Contains(body, "SP encryption certificate")
-	r.Contains(body, "AuthnRequest signatures")
+	r.Contains(body, "SP request-signing certificate")
 	r.Contains(body, `name="scim_enabled" data-protocol-toggle="scim"`)
 	r.Contains(body, `data-protocol-fields="oidc"`)
 	r.NotContains(body, `name="protocol"`)
@@ -2918,9 +2917,11 @@ func TestAppFormShowsOIDCSetupPanel(t *testing.T) {
 	r.Contains(body, "generated-secret")
 	r.Contains(body, "http://idp.test/saml/example/sso")
 	r.Contains(body, "-----BEGIN CERTIFICATE-----")
+	javascript := dashboardAsset(t, appService, "/assets/app.js")
+	r.Contains(javascript, "requestCertificate ? 'Signed requests required' : acsURL")
 }
 
-func TestAppSavePersistsSAMLRequestCertificatePin(t *testing.T) {
+func TestAppSavePersistsSAMLRequestCertificateWithoutCheckbox(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{}))
@@ -2934,7 +2935,6 @@ func TestAppSavePersistsSAMLRequestCertificatePin(t *testing.T) {
 		"saml_enabled":                 {"on"},
 		"saml_entity_id":               {"urn:greendale:sp"},
 		"saml_acs_url":                 {"https://greendale.test/saml/acs"},
-		"saml_verify_requests":         {"on"},
 		"saml_request_certificate_pem": {certPEM},
 		"saml_name_id_field":           {"email"},
 		"saml_email_attribute_name":    {defaultSAMLEmailAttributeName},
@@ -2953,8 +2953,49 @@ func TestAppSavePersistsSAMLRequestCertificatePin(t *testing.T) {
 	state, err := loadState()
 	r.NoError(err)
 	r.Len(state.Apps, 1)
-	r.True(state.Apps[0].SAMLVerifyRequests)
 	r.Equal(strings.TrimSpace(certPEM), state.Apps[0].SAMLRequestCertPEM)
+}
+
+func TestAppSaveRejectsInvalidSAMLRequestCertificate(t *testing.T) {
+	r := require.New(t)
+	setTestStateFile(t)
+	r.NoError(saveState(appState{}))
+	appService := newTestIDPApp(t)
+	form := url.Values{
+		"tab":                          {"apps"},
+		"name":                         {"Greendale Portal"},
+		"slug":                         {"greendale"},
+		"protocol_switches_present":    {"true"},
+		"saml_enabled":                 {"on"},
+		"saml_entity_id":               {"urn:greendale:sp"},
+		"saml_acs_url":                 {"https://greendale.test/saml/acs"},
+		"saml_request_certificate_pem": {"not-a-cert"},
+		"saml_name_id_field":           {"email"},
+		"saml_email_attribute_name":    {defaultSAMLEmailAttributeName},
+		"saml_attribute_username":      {"username"},
+		"saml_attribute_given_name":    {"first_name"},
+		"saml_attribute_family_name":   {"last_name"},
+		"saml_attribute_groups":        {"groups"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/apps/save", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	appService.routes().ServeHTTP(rec, req)
+
+	r.Equal(http.StatusSeeOther, rec.Code)
+	state, err := loadState()
+	r.NoError(err)
+	r.Empty(state.Apps)
+
+	get := httptest.NewRequest(http.MethodGet, rec.Header().Get("Location"), nil)
+	for _, cookie := range rec.Result().Cookies() {
+		get.AddCookie(cookie)
+	}
+	getRec := httptest.NewRecorder()
+	appService.routes().ServeHTTP(getRec, get)
+	r.Equal(http.StatusOK, getRec.Code)
+	r.Contains(getRec.Body.String(), "SAML request-signing certificate is invalid")
+	r.Contains(getRec.Body.String(), "not-a-cert")
 }
 
 func TestAppSavePersistsSAMLEncryptionAlgorithms(t *testing.T) {
