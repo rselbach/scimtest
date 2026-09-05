@@ -498,6 +498,8 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.RememberAuthenticatedApplicationTunnel(profile.ID, instanceID, id); err != nil {
 		s.unregisterTunnel(t)
 		s.profileMu.RUnlock()
+		s.logger().Error("remember application tunnel failed",
+			"profile_id", profile.ID, "instance_id", instanceID, "tunnel_id", id, "err", err)
 		s.writeClose(conn, websocket.CloseInternalServerErr, "could not remember application tunnel")
 		return
 	}

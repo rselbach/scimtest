@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -191,6 +192,34 @@ func TestEnrolledInstallationReconnectsWithoutGrant(t *testing.T) {
 	r.Equal(protocol.TypeTunnelRegistered, registered.Type)
 	r.Equal(firstTunnelID, registered.TunnelID)
 	r.NoError(conn.Close())
+}
+
+func TestTunnelRegistrationLogsPersistenceFailure(t *testing.T) {
+	r := require.New(t)
+	store, profile, _ := newEnrollmentProfile(t)
+	instanceKey, instancePublicKey, fingerprint := testInstanceKey(t)
+	r.NoError(store.EnrollApplicationInstance(profile.ID, fingerprint, instancePublicKey,
+		enrollmentActor{GitHubUserID: 101, GitHubLogin: "troy-barnes"}))
+	store.path = t.TempDir()
+	s, wsURL := newEnrollmentTestServer(t, store)
+	var logs bytes.Buffer
+	s.cfg.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+
+	conn, _, err := dialInstallation(t, wsURL, profile.ID, instancePublicKey, instanceKey, enrollmentOptions{})
+	r.NoError(conn.Close())
+	var closeErr *websocket.CloseError
+	r.ErrorAs(err, &closeErr)
+	r.Equal(websocket.CloseInternalServerErr, closeErr.Code)
+	r.Equal("could not remember application tunnel", closeErr.Text)
+	r.Contains(logs.String(), "remember application tunnel failed")
+	r.Contains(logs.String(), "profile_id="+profile.ID)
+	r.Contains(logs.String(), "instance_id="+fingerprint)
+	r.Contains(logs.String(), "err=")
+	r.Contains(logs.String(), store.path)
+	r.Empty(store.ApplicationTunnelID(profile.ID, fingerprint))
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	r.Empty(s.tunnels)
 }
 
 func TestActorlessEnrolledInstallationRequiresGitHubAuthorization(t *testing.T) {
