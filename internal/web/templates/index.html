@@ -854,9 +854,9 @@
               <label class="field">
                 <span class="label">Assertion encryption algorithm</span>
                 <select name="saml_encryption_algorithm">
-                  {{range .AppForm.SAMLEncryptionAlgorithmOptions}}
-                  <option value="{{.Value}}" {{if .Selected}}selected{{end}}>{{.Label}}</option>
-                  {{end}}
+                  <option value="aes128-gcm" {{if eq .AppForm.App.SAMLEncryptionAlgorithm "aes128-gcm"}}selected{{end}}>AES-128-GCM</option>
+                  <option value="aes192-gcm" {{if eq .AppForm.App.SAMLEncryptionAlgorithm "aes192-gcm"}}selected{{end}}>AES-192-GCM</option>
+                  <option value="aes256-gcm" {{if eq .AppForm.App.SAMLEncryptionAlgorithm "aes256-gcm"}}selected{{end}}>AES-256-GCM</option>
                 </select>
                 <span class="hint">Used when an SP encryption certificate is present.</span>
               </label>

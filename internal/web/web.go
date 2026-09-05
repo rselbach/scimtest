@@ -385,24 +385,23 @@ type groupFormView struct {
 }
 
 type appFormView struct {
-	Title                          string
-	App                            app
-	OIDCRedirectURIs               string
-	OIDCIssuer                     string
-	OIDCDiscoveryURL               string
-	OIDCAuthorizeURL               string
-	OIDCTokenURL                   string
-	OIDCJWKSURL                    string
-	SAMLCertificatePEM             string
-	SAMLIDPEntityID                string
-	SAMLIDPSSO                     string
-	SAMLEncryptionAlgorithmOptions []directoryOptionView
-	Close                          string
-	AllowAnyOIDCRedirectDisabled   bool
-	Section                        string
-	OIDCStatus                     setupStatusView
-	SAMLStatus                     setupStatusView
-	SCIMStatus                     setupStatusView
+	Title                        string
+	App                          app
+	OIDCRedirectURIs             string
+	OIDCIssuer                   string
+	OIDCDiscoveryURL             string
+	OIDCAuthorizeURL             string
+	OIDCTokenURL                 string
+	OIDCJWKSURL                  string
+	SAMLCertificatePEM           string
+	SAMLIDPEntityID              string
+	SAMLIDPSSO                   string
+	Close                        string
+	AllowAnyOIDCRedirectDisabled bool
+	Section                      string
+	OIDCStatus                   setupStatusView
+	SAMLStatus                   setupStatusView
+	SCIMStatus                   setupStatusView
 }
 
 type configFormView struct {
@@ -2612,15 +2611,14 @@ func buildAppFormView(state appState, tab string, id string, baseURL string, cer
 		Title:   "Add environment",
 		Section: "overview",
 		App: app{
-			Protocol:                "none",
-			SAMLNameIDField:         defaultSAMLNameIDField,
-			SAMLNameIDFormat:        samlNameIDFormatForField(defaultSAMLNameIDField),
-			SAMLEmailAttributeName:  defaultSAMLEmailAttributeName,
-			SAMLEncryptionAlgorithm: defaultSAMLEncryptionAlgorithm,
-			IncludeGroupsClaim:      true,
-			ChooserMode:             chooserModeList,
-			OIDCClaimMappings:       defaultOIDCClaimMappings(),
-			SAMLAttributeMappings:   defaultSAMLAttributeMappings(),
+			Protocol:               "none",
+			SAMLNameIDField:        defaultSAMLNameIDField,
+			SAMLNameIDFormat:       samlNameIDFormatForField(defaultSAMLNameIDField),
+			SAMLEmailAttributeName: defaultSAMLEmailAttributeName,
+			IncludeGroupsClaim:     true,
+			ChooserMode:            chooserModeList,
+			OIDCClaimMappings:      defaultOIDCClaimMappings(),
+			SAMLAttributeMappings:  defaultSAMLAttributeMappings(),
 		},
 		SAMLCertificatePEM: certPEM,
 		Close:              dashboardURL(tab, nil),
@@ -2639,7 +2637,6 @@ func buildAppFormView(state appState, tab string, id string, baseURL string, cer
 	form.App.SAMLAttributeMappings = samlAttributeMappingsForApp(form.App)
 	form.App.SAMLNameIDField = normalizeSAMLNameIDField(form.App.SAMLNameIDField)
 	form.App.SAMLNameIDFormat = samlNameIDFormatForField(form.App.SAMLNameIDField)
-	form.App.SAMLEncryptionAlgorithm = normalizeSAMLEncryptionAlgorithm(form.App.SAMLEncryptionAlgorithm)
 	form.OIDCRedirectURIs = joinLines(form.App.OIDCRedirectURIs)
 	if form.App.Slug != "" {
 		form.SAMLIDPEntityID = baseURL + "/saml/" + form.App.Slug + "/metadata"
@@ -2655,25 +2652,11 @@ func buildAppFormView(state appState, tab string, id string, baseURL string, cer
 }
 
 func populateAppFormStatuses(form *appFormView) {
+	form.App.SAMLEncryptionAlgorithm = normalizeSAMLEncryptionAlgorithm(form.App.SAMLEncryptionAlgorithm)
 	form.OIDCStatus = newSetupStatusView(oidcSetupStatus(form.App))
 	form.SAMLStatus = newSetupStatusView(samlSetupStatus(form.App))
 	form.SCIMStatus = newSetupStatusView(scimSetupStatus(form.App))
-	form.SAMLEncryptionAlgorithmOptions = buildSAMLEncryptionAlgorithmOptions(form.App.SAMLEncryptionAlgorithm)
 	form.Section = normalizeSetupSection(form.Section)
-}
-
-func buildSAMLEncryptionAlgorithmOptions(selected string) []directoryOptionView {
-	selected = normalizeSAMLEncryptionAlgorithm(selected)
-	views := make([]directoryOptionView, 0, len(samlEncryptionAlgorithmOrder))
-	for _, value := range samlEncryptionAlgorithmOrder {
-		spec := samlEncryptionAlgorithmSpecs[value]
-		views = append(views, directoryOptionView{
-			Value:    value,
-			Label:    spec.label,
-			Selected: value == selected,
-		})
-	}
-	return views
 }
 
 func newSetupStatusView(status string) setupStatusView {

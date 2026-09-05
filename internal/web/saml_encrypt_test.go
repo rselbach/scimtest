@@ -46,6 +46,14 @@ func TestSignedSAMLResponseEncryptsAssertionToSPCertificate(t *testing.T) {
 	r.Contains(posted.XML, "EncryptedData")
 	r.Contains(posted.XML, xmlenc11NS+"aes256-gcm")
 	r.Contains(posted.XML, algRSAOAEP)
+	encryptedKey := findElementByLocalName(mustParseXML(t, posted.XML).Root(), "EncryptedKey")
+	r.NotNil(encryptedKey)
+	keyChildren := encryptedKey.ChildElements()
+	r.Len(keyChildren, 3)
+	r.Equal("EncryptionMethod", elementLocalName(keyChildren[0]))
+	r.Equal("KeyInfo", elementLocalName(keyChildren[1]))
+	r.Equal("CipherData", elementLocalName(keyChildren[2]))
+	r.Equal(base64.StdEncoding.EncodeToString(dest.Raw), firstElementTextByLocalName(keyChildren[1], "X509Certificate"))
 	r.NotContains(posted.XML, "<saml:Assertion")
 	r.NotContains(posted.XML, "troy@greendale.edu")
 	r.NotContains(posted.XML, "troy.barnes@greendale.edu")
@@ -70,26 +78,6 @@ func TestSignedSAMLResponseEncryptsAssertionToSPCertificate(t *testing.T) {
 	_, err = validator.Validate(recovered)
 	r.NoError(err)
 	r.Equal("troy@greendale.edu", firstElementTextByLocalName(recovered, "NameID"))
-}
-
-func TestEncryptSAMLAssertionRoundTripValidatesSignature(t *testing.T) {
-	r := require.New(t)
-	svc := newTestIDPApp(t)
-	spKey, dest, pem := newSPEncryptionMaterial(t)
-	state, troy := troyGreendaleSAMLState(pem)
-	encryption := samlTestEncryption(t, dest, defaultSAMLEncryptionAlgorithm)
-
-	posted, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], troy, samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL}, encryption, faultOptions{})
-	r.NoError(err)
-
-	recovered := decryptPostedAssertion(t, posted.XML, spKey)
-	idpCert, err := x509.ParseCertificate(svc.certDER)
-	r.NoError(err)
-	validator := dsig.NewDefaultValidationContext(&dsig.MemoryX509CertificateStore{
-		Roots: []*x509.Certificate{idpCert},
-	})
-	_, err = validator.Validate(recovered)
-	r.NoError(err)
 }
 
 func TestSignedSAMLResponseEncryptsWithConfiguredAlgorithm(t *testing.T) {
