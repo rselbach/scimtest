@@ -1108,10 +1108,12 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		page = 1
 	}
 
+	stats := buildStats(state)
+	stats.Apps = len(globalState.Apps)
 	data := pageData{
 		Tab:                    tab,
 		Flash:                  flash,
-		Stats:                  buildStats(state),
+		Stats:                  stats,
 		Users:                  users,
 		Groups:                 groups,
 		Apps:                   buildAppRows(globalState, environmentID, a.effectiveIDPBaseURL(r, state)),
