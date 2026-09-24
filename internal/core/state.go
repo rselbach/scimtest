@@ -2522,10 +2522,6 @@ func UserGroups(state AppState, userID string) []string {
 	return names
 }
 
-func UserDisplayName(u User) string {
-	return UserLabel(u)
-}
-
 func Slugify(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	var b strings.Builder

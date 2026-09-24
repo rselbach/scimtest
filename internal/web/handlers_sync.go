@@ -225,7 +225,7 @@ func (a *webApp) startSyncJob(appID string, environmentName string, kind string,
 	}
 
 	job := &syncJobSnapshot{
-		ID:              strconvFormatInt(time.Now().UnixNano()),
+		ID:              strconv.FormatInt(time.Now().UnixNano(), 10),
 		EnvironmentName: environmentName,
 		Running:         true,
 		Message:         "Starting " + kind + " for " + environmentName,

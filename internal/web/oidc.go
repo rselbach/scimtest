@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 )
@@ -408,7 +409,7 @@ func validateAuthorizeClient(app app, values url.Values, tunneled bool, extraAll
 		return err
 	}
 	allowAny := app.AllowAnyOIDCRedirect && !tunneled
-	if !allowAny && !stringIn(app.OIDCRedirectURIs, redirectURI) && !stringIn(extraAllowed, redirectURI) {
+	if !allowAny && !slices.Contains(app.OIDCRedirectURIs, redirectURI) && !slices.Contains(extraAllowed, redirectURI) {
 		return fmt.Errorf("redirect_uri %q is not registered for this app; registered: %v", redirectURI, app.OIDCRedirectURIs)
 	}
 	return nil
@@ -559,7 +560,7 @@ func oidcClaimsSupported(app app) []string {
 }
 
 func hasOIDCScope(scope string, target string) bool {
-	return stringIn(strings.Fields(scope), target)
+	return slices.Contains(strings.Fields(scope), target)
 }
 
 func (a *webApp) signJWT(claims map[string]any) (string, error) {
@@ -600,13 +601,4 @@ func writeOAuthError(w http.ResponseWriter, status int, code string, description
 	if err := json.NewEncoder(w).Encode(map[string]string{"error": code, "error_description": description}); err != nil {
 		log.Printf("write OAuth error response: %v", err)
 	}
-}
-
-func stringIn(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
 }

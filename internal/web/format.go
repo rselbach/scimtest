@@ -71,20 +71,6 @@ func summarizeActiveToggle(active bool) string {
 	return "Deactivated"
 }
 
-func stringSlicesEqual(left []string, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-
-	for i := range left {
-		if left[i] != right[i] {
-			return false
-		}
-	}
-
-	return true
-}
-
 func formatHistoryTimestamp(raw string) string {
 	if raw == "" {
 		return "-"

@@ -197,7 +197,7 @@ func (a *webApp) handleOIDCPlaygroundCallback(w http.ResponseWriter, r *http.Req
 		return
 	}
 	tokenBytes, _ := io.ReadAll(tokenResp.Body)
-	closeBody(tokenResp.Body)
+	_ = tokenResp.Body.Close()
 	result.TokenStatus = tokenResp.Status
 	result.TokenBody = prettyJSON(string(tokenBytes))
 	if tokenResp.StatusCode != http.StatusOK {
@@ -223,18 +223,12 @@ func (a *webApp) handleOIDCPlaygroundCallback(w http.ResponseWriter, r *http.Req
 			userinfoReq.Header.Set("Authorization", "Bearer "+tokenPayload.AccessToken)
 			if userinfoResp, err := http.DefaultClient.Do(userinfoReq); err == nil {
 				userinfoBytes, _ := io.ReadAll(userinfoResp.Body)
-				closeBody(userinfoResp.Body)
+				_ = userinfoResp.Body.Close()
 				result.UserinfoBody = prettyJSON(string(userinfoBytes))
 			}
 		}
 	}
 	render()
-}
-
-func closeBody(body io.Closer) {
-	if err := body.Close(); err != nil {
-		return
-	}
 }
 
 // decodeJWTSegments returns the pretty-printed header and claims of a compact

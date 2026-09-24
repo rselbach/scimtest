@@ -2041,7 +2041,7 @@ func applyFormDraft(data *pageData, draft formDraft) {
 		data.GroupForm.Group.DisplayName = values.Get("display_name")
 		selected := values["member_ids"]
 		for i := range data.GroupForm.Members {
-			data.GroupForm.Members[i].Checked = stringIn(selected, data.GroupForm.Members[i].ID)
+			data.GroupForm.Members[i].Checked = slices.Contains(selected, data.GroupForm.Members[i].ID)
 		}
 	case "app":
 		if data.AppForm == nil {
@@ -2864,7 +2864,7 @@ func summarizeGroupSave(existing group, displayName string, memberIDs []string) 
 	if existing.DisplayName != displayName {
 		return "Updated name"
 	}
-	if !stringSlicesEqual(existing.MemberIDs, memberIDs) {
+	if !slices.Equal(existing.MemberIDs, memberIDs) {
 		return "Updated members"
 	}
 
@@ -3237,7 +3237,7 @@ func consumeFlash(w http.ResponseWriter, r *http.Request) flashMessage {
 func setShowTraceCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     "scimtest_trace",
-		Value:    strconvFormatInt(time.Now().UnixNano()),
+		Value:    strconv.FormatInt(time.Now().UnixNano(), 10),
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
@@ -3259,8 +3259,4 @@ func consumeShowTrace(w http.ResponseWriter, r *http.Request) bool {
 		MaxAge:   -1,
 	})
 	return true
-}
-
-func strconvFormatInt(v int64) string {
-	return fmt.Sprintf("%d", v)
 }
