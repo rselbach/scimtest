@@ -55,6 +55,7 @@ var (
 	supportsOIDC                     = core.SupportsOIDC
 	supportsSAML                     = core.SupportsSAML
 	oidcSetupStatus                  = core.OIDCSetupStatus
+	parseRetryAfter                  = core.ParseRetryAfter
 	samlSetupStatus                  = core.SAMLSetupStatus
 	parseSAMLRequestCertificate      = core.ParseSAMLRequestCertificate
 	parseSAMLEncryptionCertificate   = core.ParseSAMLEncryptionCertificate

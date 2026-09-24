@@ -562,7 +562,7 @@ func (c *SCIMClient) doJSONOnce(method string, path string, payload []byte, requ
 				Method:           method,
 				Path:             path,
 				Status:           resp.Status,
-				RetryAfter:       parseRetryAfter(trace.ResponseRetryAfter, currentTime()),
+				RetryAfter:       ParseRetryAfter(trace.ResponseRetryAfter, currentTime()),
 				RetryAfterHeader: trace.ResponseRetryAfter,
 				ResponseBody:     strings.TrimSpace(string(data)),
 			}
@@ -617,60 +617,52 @@ func (c *SCIMClient) setLastTraceError(err error) {
 	c.traces[len(c.traces)-1].Err = err.Error()
 }
 
-func parseRetryAfter(value string, now time.Time) string {
+// ParseRetryAfter renders a Retry-After value or a stored fragment of one —
+// delta seconds, an HTTP date, a duration, or already-readable text — as a
+// human phrase such as "in 5 minutes" or "now".
+func ParseRetryAfter(value string, now time.Time) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return ""
 	}
-
-	seconds, err := strconv.Atoi(value)
-	if err == nil {
-		if seconds <= 0 {
+	if value == "now" || strings.HasPrefix(value, "in ") || strings.HasPrefix(value, "after ") {
+		return value
+	}
+	if delay, ok := retryAfterDelay(value, now); ok {
+		if delay <= 0 {
 			return "now"
 		}
-
-		return "in " + humanRetryAfter(time.Duration(seconds)*time.Second)
+		return "in " + humanRetryAfter(delay)
 	}
-
-	retryAt, err := http.ParseTime(value)
-	if err != nil {
-		return "after " + value
+	if delay, err := time.ParseDuration(value); err == nil {
+		if delay <= 0 {
+			return "now"
+		}
+		return "in " + humanRetryAfter(delay)
 	}
+	return "after " + value
+}
 
-	delay := retryAt.Sub(now)
-	if delay <= 0 {
-		return "now"
+// retryAfterDelay converts delta-seconds and HTTP-date Retry-After values to
+// a delay; ok is false for every other format.
+func retryAfterDelay(value string, now time.Time) (time.Duration, bool) {
+	if seconds, err := strconv.Atoi(value); err == nil {
+		return time.Duration(seconds) * time.Second, true
 	}
-
-	return "in " + humanRetryAfter(delay)
+	if retryAt, err := http.ParseTime(value); err == nil {
+		return retryAt.Sub(now), true
+	}
+	return 0, false
 }
 
 func rateLimitRetryDelay(value string, attempt int, now time.Time) time.Duration {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return fallbackRateLimitDelay(attempt)
-	}
-
-	seconds, err := strconv.Atoi(value)
-	if err == nil {
-		if seconds <= 0 {
+	if delay, ok := retryAfterDelay(strings.TrimSpace(value), now); ok {
+		if delay <= 0 {
 			return 0
 		}
-
-		return time.Duration(seconds) * time.Second
+		return delay
 	}
-
-	retryAt, err := http.ParseTime(value)
-	if err != nil {
-		return fallbackRateLimitDelay(attempt)
-	}
-
-	delay := retryAt.Sub(now)
-	if delay <= 0 {
-		return 0
-	}
-
-	return delay
+	return fallbackRateLimitDelay(attempt)
 }
 
 func fallbackRateLimitDelay(attempt int) time.Duration {

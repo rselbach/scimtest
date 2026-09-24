@@ -2454,60 +2454,7 @@ func legacyRetryAfter(message string) string {
 		return ""
 	}
 
-	return readableRetryAfter(value)
-}
-
-func readableRetryAfter(value string) string {
-	if strings.HasPrefix(value, "in ") || strings.HasPrefix(value, "after ") || value == "now" {
-		return value
-	}
-
-	delay, err := time.ParseDuration(value)
-	if err == nil {
-		return readableRetryDelay(delay)
-	}
-
-	seconds, err := strconv.Atoi(value)
-	if err == nil {
-		return readableRetryDelay(time.Duration(seconds) * time.Second)
-	}
-
-	return "after " + value
-}
-
-func readableRetryDelay(delay time.Duration) string {
-	if delay <= 0 {
-		return "now"
-	}
-
-	seconds := int64((delay + time.Second - 1) / time.Second)
-	switch {
-	case seconds <= 1:
-		return "in 1 second"
-	case seconds < 60:
-		return fmt.Sprintf("in %d seconds", seconds)
-	case seconds < 3600:
-		minutes := (seconds + 59) / 60
-		if minutes == 1 {
-			return "in 1 minute"
-		}
-
-		return fmt.Sprintf("in %d minutes", minutes)
-	case seconds < 86400:
-		hours := (seconds + 3599) / 3600
-		if hours == 1 {
-			return "in 1 hour"
-		}
-
-		return fmt.Sprintf("in %d hours", hours)
-	default:
-		days := (seconds + 86399) / 86400
-		if days == 1 {
-			return "in 1 day"
-		}
-
-		return fmt.Sprintf("in %d days", days)
-	}
+	return parseRetryAfter(value, time.Now())
 }
 
 func buildHistoryView(state appState, tab string, page int, pageSize int, search string, statusFilter string, sortOrder string, values url.Values) *historyView {
