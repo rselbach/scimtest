@@ -560,6 +560,19 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 		}
 		progress.startUser(u, operation)
 
+		fail := func(err error) error {
+			u.LastError = err.Error()
+			counts.failed++
+			nextUsers = append(nextUsers, u)
+			progress.reportUser(u, operation, "Failed")
+			if isStoppingSCIMError(err) {
+				nextUsers = append(nextUsers, state.Users[i+1:]...)
+				state.Users = nextUsers
+				return err
+			}
+			return nil
+		}
+
 		switch {
 		case u.Deleted && u.RemoteID == "":
 			progress.addTotal(pruneUserFromGroups(&state, u.ID))
@@ -568,14 +581,8 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 			continue
 		case u.Deleted:
 			if err := client.deleteUser(u, "delete"); err != nil {
-				u.LastError = err.Error()
-				counts.failed++
-				nextUsers = append(nextUsers, u)
-				progress.reportUser(u, operation, "Failed")
-				if isStoppingSCIMError(err) {
-					nextUsers = append(nextUsers, state.Users[i+1:]...)
-					state.Users = nextUsers
-					return state, counts, err
+				if stopped := fail(err); stopped != nil {
+					return state, counts, stopped
 				}
 				continue
 			}
@@ -586,14 +593,8 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 		case u.RemoteID == "":
 			remoteID, adopted, err := client.createUser(u)
 			if err != nil {
-				u.LastError = err.Error()
-				counts.failed++
-				nextUsers = append(nextUsers, u)
-				progress.reportUser(u, operation, "Failed")
-				if isStoppingSCIMError(err) {
-					nextUsers = append(nextUsers, state.Users[i+1:]...)
-					state.Users = nextUsers
-					return state, counts, err
+				if stopped := fail(err); stopped != nil {
+					return state, counts, stopped
 				}
 				continue
 			}
@@ -610,14 +611,8 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 			progress.reportUser(u, operation, "Created")
 		default:
 			if err := client.replaceUser(u); err != nil {
-				u.LastError = err.Error()
-				counts.failed++
-				nextUsers = append(nextUsers, u)
-				progress.reportUser(u, operation, "Failed")
-				if isStoppingSCIMError(err) {
-					nextUsers = append(nextUsers, state.Users[i+1:]...)
-					state.Users = nextUsers
-					return state, counts, err
+				if stopped := fail(err); stopped != nil {
+					return state, counts, stopped
 				}
 				continue
 			}
@@ -678,6 +673,19 @@ func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressR
 		}
 		progress.startGroup(g, operation)
 
+		fail := func(err error) error {
+			g.LastError = err.Error()
+			counts.failed++
+			nextGroups = append(nextGroups, g)
+			progress.reportGroup(g, operation, "Failed")
+			if isStoppingSCIMError(err) {
+				nextGroups = append(nextGroups, state.Groups[i+1:]...)
+				state.Groups = nextGroups
+				return err
+			}
+			return nil
+		}
+
 		switch {
 		case g.Deleted && g.RemoteID == "":
 			counts.deleted++
@@ -685,14 +693,8 @@ func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressR
 			continue
 		case g.Deleted:
 			if err := client.deleteGroup(g, "delete"); err != nil {
-				g.LastError = err.Error()
-				counts.failed++
-				nextGroups = append(nextGroups, g)
-				progress.reportGroup(g, operation, "Failed")
-				if isStoppingSCIMError(err) {
-					nextGroups = append(nextGroups, state.Groups[i+1:]...)
-					state.Groups = nextGroups
-					return state, counts, err
+				if stopped := fail(err); stopped != nil {
+					return state, counts, stopped
 				}
 				continue
 			}
@@ -702,14 +704,8 @@ func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressR
 		case g.RemoteID == "":
 			remoteID, adopted, err := client.createGroup(g, state.Users)
 			if err != nil {
-				g.LastError = err.Error()
-				counts.failed++
-				nextGroups = append(nextGroups, g)
-				progress.reportGroup(g, operation, "Failed")
-				if isStoppingSCIMError(err) {
-					nextGroups = append(nextGroups, state.Groups[i+1:]...)
-					state.Groups = nextGroups
-					return state, counts, err
+				if stopped := fail(err); stopped != nil {
+					return state, counts, stopped
 				}
 				continue
 			}
@@ -726,14 +722,8 @@ func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressR
 			progress.reportGroup(g, operation, "Created")
 		default:
 			if err := client.replaceGroup(g, state.Users); err != nil {
-				g.LastError = err.Error()
-				counts.failed++
-				nextGroups = append(nextGroups, g)
-				progress.reportGroup(g, operation, "Failed")
-				if isStoppingSCIMError(err) {
-					nextGroups = append(nextGroups, state.Groups[i+1:]...)
-					state.Groups = nextGroups
-					return state, counts, err
+				if stopped := fail(err); stopped != nil {
+					return state, counts, stopped
 				}
 				continue
 			}
