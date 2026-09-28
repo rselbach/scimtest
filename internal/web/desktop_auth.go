@@ -31,6 +31,13 @@ func (a *webApp) githubAccountGate(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		case r.Method == http.MethodPost && r.URL.Path == "/desktop/auth/retry":
 			next.ServeHTTP(w, r)
+		case strings.HasPrefix(r.URL.Path, "/api/v1"):
+			switch r.URL.Path {
+			case "/api/v1", "/api/v1/", "/api/v1/status", "/api/v1/account", "/api/v1/account/start", "/api/v1/account/retry", "/api/v1/tunnel", "/api/v1/tunnel/retry":
+				next.ServeHTTP(w, r)
+			default:
+				apiError(w, http.StatusUnauthorized, "GitHub account sign-in is required")
+			}
 		default:
 			http.Error(w, "GitHub account sign-in is required", http.StatusUnauthorized)
 		}

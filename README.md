@@ -8,7 +8,14 @@ implementations without touching a real IDP. It combines:
 - a SAML HTTP-POST test IDP
 - a SCIM sync control surface for local users and groups
 
-Everything runs in a local web UI. Each environment owns its users and
+Everything runs in a local web UI or through the [local JSON API](docs/api.md).
+Agents can configure environments, manage directories, run protocol flows,
+sync SCIM resources, and inspect results without a browser. See
+[Automate a local instance](docs/automation.md) for a complete example.
+The bundled [scimtest agent skill](.agents/skills/scimtest/SKILL.md) provides
+operating instructions and an API helper. Copy its directory into your agent's
+skills directory to use it outside this checkout.
+Each environment owns its users and
 groups in SQLite and supplies that environment's OIDC claims, SAML
 attributes, and optional SCIM provisioning, along with independent
 credentials, remote IDs, sync state, operation history, and errors.
@@ -80,6 +87,10 @@ steps, the authentication design, and release packaging details.
 
 ## Features
 
+- **Local automation API.** `/api/v1` lists the available operations. The API
+  uses the running instance's private token, addresses environments explicitly,
+  and returns JSON results and errors. It works in both source and desktop
+  builds and is available only on the local listener.
 - **Environments.** Each environment is one app you are testing, with its
   own directory, credentials, and protocol configuration. The environment
   selector in the top bar sets the context for the whole admin UI.

@@ -877,12 +877,31 @@ func rememberEnvironment(w http.ResponseWriter, environmentID string) {
 func (a *webApp) adminRoutes() http.Handler {
 	mux := http.NewServeMux()
 	a.registerAdminRoutes(mux)
-	handler := http.NewCrossOriginProtection().Handler(mux)
+	api := a.apiHandler()
+	crossOrigin := http.NewCrossOriginProtection()
+	crossOrigin.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v1") {
+			apiError(w, http.StatusForbidden, "cross-origin API request rejected")
+			return
+		}
+		http.Error(w, "cross-origin request rejected", http.StatusForbidden)
+	}))
+	handler := crossOrigin.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isAPIRequest(r) {
+			api.ServeHTTP(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	}))
 	if a.adminHost == "" {
 		return handler
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host != a.adminHost {
+			if strings.HasPrefix(r.URL.Path, "/api/v1") {
+				apiError(w, http.StatusMisdirectedRequest, "unrecognized admin host")
+				return
+			}
 			http.Error(w, "unrecognized admin host", http.StatusMisdirectedRequest)
 			return
 		}
@@ -1973,6 +1992,10 @@ func (a *webApp) redirectToolsError(w http.ResponseWriter, r *http.Request, tab 
 const formDraftCookieName = "scimtest_form_draft"
 
 func (a *webApp) redirectFormError(w http.ResponseWriter, r *http.Request, tab string, modal string, err error) {
+	if _, ok := apiEnvironmentRequestFrom(r); ok {
+		apiError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	values := make(url.Values, len(r.Form))
 	for key, entries := range r.Form {
 		if key == "bearer_token" || key == "scim_bearer_token" || key == "oidc_client_secret" {
@@ -2095,6 +2118,10 @@ func applyFormDraft(data *pageData, draft formDraft) {
 }
 
 func (a *webApp) redirectError(w http.ResponseWriter, r *http.Request, tab string, err error) {
+	if _, ok := apiEnvironmentRequestFrom(r); ok {
+		apiError(w, apiMutationStatus(err), err.Error())
+		return
+	}
 	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "error", Message: err.Error()})
 }
 

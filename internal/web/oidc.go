@@ -188,6 +188,10 @@ func (a *webApp) issueOIDCCode(w http.ResponseWriter, r *http.Request, state app
 		query.Set("state", stateValue)
 	}
 	redirectURI.RawQuery = query.Encode()
+	if wantsAPIProtocolResponse(r) {
+		writeJSON(w, map[string]string{"code": code, "redirect_uri": redirectURI.String(), "state": values.Get("state")})
+		return
+	}
 	http.Redirect(w, r, redirectURI.String(), http.StatusFound)
 }
 

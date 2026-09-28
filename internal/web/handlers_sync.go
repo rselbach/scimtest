@@ -71,7 +71,11 @@ func (a *webApp) startPushRequest(w http.ResponseWriter, r *http.Request, resour
 	}
 
 	if wantsJSON(r) {
-		writeJSON(w, job)
+		status := http.StatusOK
+		if wantsAPIProtocolResponse(r) {
+			status = http.StatusAccepted
+		}
+		writeJSONStatus(w, status, job)
 		return
 	}
 	redirectWithFlash(w, r, dashboardURLWithPage(tab, formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: "pushing " + label})
@@ -101,7 +105,11 @@ func (a *webApp) startSyncRequest(w http.ResponseWriter, r *http.Request, kind s
 	}
 
 	if wantsJSON(r) {
-		writeJSON(w, job)
+		status := http.StatusOK
+		if wantsAPIProtocolResponse(r) {
+			status = http.StatusAccepted
+		}
+		writeJSONStatus(w, status, job)
 		return
 	}
 

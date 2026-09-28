@@ -53,6 +53,10 @@ func (a *webApp) handleAppConfigJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeJSON(w, a.appConfigExport(r, state, foundApp))
+}
+
+func (a *webApp) appConfigExport(r *http.Request, state appState, foundApp app) appConfigExport {
 	baseURL := a.effectiveIDPBaseURL(r, state)
 	export := appConfigExport{Environment: foundApp.Name, Slug: foundApp.Slug}
 	if supportsOIDC(foundApp) {
@@ -91,7 +95,7 @@ func (a *webApp) handleAppConfigJSON(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, export)
+	return export
 }
 
 // handleSAMLCertificate serves the IDP signing certificate as a PEM file,

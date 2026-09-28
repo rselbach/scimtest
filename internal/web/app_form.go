@@ -11,6 +11,25 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	apiRequest, isAPI := apiEnvironmentRequestFrom(r)
+	if isAPI {
+		current := app{}
+		id := r.PathValue("environment_id")
+		if id != "" {
+			state, err := loadStateForApp(id)
+			if err != nil {
+				apiError(w, http.StatusNotFound, err.Error())
+				return
+			}
+			current, err = apiAppByID(state, id)
+			if err != nil {
+				apiError(w, http.StatusNotFound, err.Error())
+				return
+			}
+		}
+		r.Form = apiEnvironmentForm(current, apiRequest)
+	}
+
 	id := strings.TrimSpace(r.FormValue("id"))
 	globalState, err := loadState()
 	if err != nil {
@@ -54,7 +73,7 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		if protocolEnabled["oidc"] && oidcClientSecret == "" && r.FormValue("regenerate_oidc_secret") != "on" {
 			oidcClientSecret = state.Apps[existingIndex].OIDCClientSecret
 		}
-		if protocolEnabled["scim"] && scimBearerToken == "" {
+		if protocolEnabled["scim"] && scimBearerToken == "" && (!isAPI || apiRequest.SCIMBearerToken == nil) {
 			scimBearerToken = state.Apps[existingIndex].SCIMBearerToken
 		}
 	}
@@ -185,6 +204,14 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := saveEnvironmentState(state); err != nil {
 		a.redirectError(w, r, tab, err)
+		return
+	}
+	if _, ok := apiEnvironmentRequestFrom(r); ok {
+		status := http.StatusOK
+		if created {
+			status = http.StatusCreated
+		}
+		writeJSONStatus(w, status, app)
 		return
 	}
 	location := dashboardURL("apps", nil)

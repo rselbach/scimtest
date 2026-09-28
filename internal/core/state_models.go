@@ -137,7 +137,7 @@ type OperationLog struct {
 type Group struct {
 	ID          string   `json:"id"`
 	DisplayName string   `json:"display_name"`
-	MemberIDs   []string `json:"member_ids,omitempty"`
+	MemberIDs   []string `json:"member_ids"`
 	RemoteID    string   `json:"remote_id,omitempty"`
 	Dirty       bool     `json:"dirty"`
 	Deleted     bool     `json:"deleted"`

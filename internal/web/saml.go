@@ -163,6 +163,10 @@ func (a *webApp) completeSAMLSSO(w http.ResponseWriter, r *http.Request, state a
 	}
 	a.recordFlowEvent(app.Slug, "saml", "sso", "ok", userLabel(user), ssoDetail)
 	rememberChooserUser(w, app.Slug, user.ID)
+	if wantsAPIProtocolResponse(r) {
+		writeJSON(w, map[string]string{"acs_url": responseContext.ACSURL, "saml_response": encodedResponse, "relay_state": values.Get("RelayState")})
+		return
+	}
 	renderPostBack(w, responseContext.ACSURL, map[string]string{
 		"SAMLResponse": encodedResponse,
 		"RelayState":   values.Get("RelayState"),
