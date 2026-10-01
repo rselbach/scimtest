@@ -1543,6 +1543,7 @@
       color: var(--muted);
       cursor: not-allowed;
     }
+    .checkbox-group { display: flex; flex-wrap: wrap; gap: 8px; }
     .checkbox-row {
       display: inline-flex;
       align-items: center;

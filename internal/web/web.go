@@ -35,7 +35,8 @@ import (
 var templateFS embed.FS
 
 var pageTemplate = template.Must(template.New("index.html").Funcs(template.FuncMap{
-	"join": strings.Join,
+	"join":            strings.Join,
+	"tamperFaultsFor": tamperFaultsFor,
 }).ParseFS(templateFS, "templates/*.html"))
 
 type webApp struct {

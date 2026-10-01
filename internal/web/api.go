@@ -130,7 +130,7 @@ var environmentAPIFields = []string{
 
 var userAPIFields = []string{"given_name", "family_name", "email", "username", "active"}
 var groupAPIFields = []string{"display_name", "member_ids"}
-var faultAPIFields = []string{"id_token_ttl", "clock_skew", "break_signature", "drop_claims", "token_error", "saml_status"}
+var faultAPIFields = []string{"id_token_ttl", "clock_skew", "break_signature", "drop_claims", "token_error", "saml_status", "tamper"}
 
 type apiEnvironmentRequest struct {
 	Name                    *string                `json:"name"`
@@ -189,6 +189,7 @@ type apiFaultRequest struct {
 	DropClaims     []string `json:"drop_claims"`
 	TokenError     *string  `json:"token_error"`
 	SAMLStatus     *string  `json:"saml_status"`
+	Tamper         []string `json:"tamper"`
 }
 
 func isAPIRequest(r *http.Request) bool {
@@ -556,6 +557,7 @@ func apiFaultValues(request apiFaultRequest) (url.Values, error) {
 	if request.SAMLStatus != nil {
 		values.Set("fault_saml_status", *request.SAMLStatus)
 	}
+	values.Set("fault_tamper", strings.Join(request.Tamper, ","))
 	faults, warnings := parseFaultOptionsWithWarnings(values)
 	if len(warnings) > 0 {
 		return nil, errors.New(strings.Join(warnings, "; "))
@@ -567,7 +569,7 @@ func apiFaultValues(request apiFaultRequest) (url.Values, error) {
 }
 
 func apiFaultResponse(f faultOptions) map[string]any {
-	return map[string]any{"active": f.active(), "id_token_ttl": f.IDTokenTTL.String(), "id_token_ttl_set": f.IDTokenTTLSet, "clock_skew": f.ClockSkew.String(), "break_signature": f.BreakSignature, "drop_claims": f.DropClaims, "token_error": f.TokenError, "saml_status": f.SAMLStatus}
+	return map[string]any{"active": f.active(), "id_token_ttl": f.IDTokenTTL.String(), "id_token_ttl_set": f.IDTokenTTLSet, "clock_skew": f.ClockSkew.String(), "break_signature": f.BreakSignature, "drop_claims": f.DropClaims, "token_error": f.TokenError, "saml_status": f.SAMLStatus, "tamper": f.Tamper}
 }
 
 func apiParseCount(value any) (int, error) {

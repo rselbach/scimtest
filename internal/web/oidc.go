@@ -308,7 +308,7 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		claims["nonce"] = code.Nonce
 	}
 	code.Faults.applyToClaims(claims, now)
-	idToken, err := a.signJWT(claims)
+	idToken, err := a.signJWT(claims, code.Faults)
 	if err != nil {
 		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
 		return
@@ -567,8 +567,16 @@ func hasOIDCScope(scope string, target string) bool {
 	return slices.Contains(strings.Fields(scope), target)
 }
 
-func (a *webApp) signJWT(claims map[string]any) (string, error) {
+// signJWT signs claims as an RS256 compact JWS. Tamper faults can name a key
+// the JWKS does not publish or emit an unsecured alg none token.
+func (a *webApp) signJWT(claims map[string]any, faults faultOptions) (string, error) {
 	header := map[string]any{"typ": "JWT", "alg": "RS256", "kid": "scimtest-dev"}
+	if faults.tampers(tamperUnknownKeyID) {
+		header["kid"] = "scimtest-unknown"
+	}
+	if faults.tampers(tamperAlgNone) {
+		header = map[string]any{"typ": "JWT", "alg": "none"}
+	}
 	headerData, err := json.Marshal(header)
 	if err != nil {
 		return "", err
@@ -579,6 +587,9 @@ func (a *webApp) signJWT(claims map[string]any) (string, error) {
 	}
 	a.writeDebugOIDCTokenPayload(os.Stdout, claimData)
 	unsigned := base64.RawURLEncoding.EncodeToString(headerData) + "." + base64.RawURLEncoding.EncodeToString(claimData)
+	if faults.tampers(tamperAlgNone) {
+		return unsigned + ".", nil
+	}
 	digest := sha256.Sum256([]byte(unsigned))
 	sig, err := rsa.SignPKCS1v15(rand.Reader, a.signingKey, crypto.SHA256, digest[:])
 	if err != nil {

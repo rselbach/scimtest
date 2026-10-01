@@ -192,8 +192,10 @@ In identifier chooser mode, use `login_identifier` instead of `user_id` for
 OIDC authorization, the playground, and SAML sign-in.
 
 Fault writes accept duration strings in `id_token_ttl` and `clock_skew`, a
-`break_signature` boolean, a `drop_claims` string array, `token_error`, and
-`saml_status`. Invalid fault values are rejected. Fault scenarios expire after
+`break_signature` boolean, a `drop_claims` string array, `token_error`,
+`saml_status`, and a `tamper` string array. Tamper values are `wrong_issuer`,
+`wrong_audience`, `unknown_kid`, `alg_none`, and `nonce_mismatch`. Invalid
+fault values are rejected. Fault scenarios expire after
 15 minutes.
 
 Traffic, inspections, flow activity, faults, and jobs are in memory. They

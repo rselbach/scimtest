@@ -84,6 +84,30 @@ func TestAPIOIDCPlaygroundReturnsFlowErrors(t *testing.T) {
 	require.Equal(t, "temporarily_unavailable", fault.Error)
 }
 
+func TestAPIOIDCPlaygroundAppliesTamperFaults(t *testing.T) {
+	handler, environmentID, adminURL := newAPIPlayground(t, false)
+
+	result := apiPlaygroundRequest(t, handler, environmentID, adminURL, `{"user_id":"user-troy","faults":{"tamper":["alg_none","wrong_audience"]}}`)
+	require.Equal(t, http.StatusOK, result.TokenStatus)
+	header, ok := result.IDTokenHeader.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "none", header["alg"])
+	claims, ok := result.IDTokenClaims.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "greendale-client-wrong", claims["aud"])
+
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/environments/"+environmentID+"/oidc/playground", strings.NewReader(`{"user_id":"user-troy","faults":{"tamper":["bogus"]}}`))
+	request.Header.Set(instanceTokenHeader, "playground-token")
+	request.Header.Set("Content-Type", "application/json")
+	parsed, err := url.Parse(adminURL)
+	require.NoError(t, err)
+	request.Host = parsed.Host
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	require.Equal(t, http.StatusBadRequest, response.Code)
+	require.Contains(t, response.Body.String(), `ignored unknown fault_tamper \"bogus\"`)
+}
+
 func TestAPIProtocolSignInRejectsInactiveUserAsJSON(t *testing.T) {
 	handler, environmentID, adminURL := newAPIPlayground(t, false)
 	parsed, err := url.Parse(adminURL)
