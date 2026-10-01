@@ -992,6 +992,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /inspect/oidc/{slug}", a.handleOIDCInspector)
 	mux.HandleFunc("GET /inspect/oidc/{slug}/playground", a.handleOIDCPlayground)
 	mux.HandleFunc("GET /inspect/oidc/{slug}/playground/callback", a.handleOIDCPlaygroundCallback)
+	mux.HandleFunc("POST /inspect/oidc/{slug}/playground/refresh", a.handleOIDCPlaygroundRefresh)
 	mux.HandleFunc("POST /inspect/oidc/{slug}/revoke", a.handleOIDCTokenRevoke)
 	mux.HandleFunc("GET /inspect/saml/{slug}", a.handleSAMLInspector)
 	mux.HandleFunc("GET /inspect/resilience/{slug}", a.handleResilience)

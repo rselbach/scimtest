@@ -186,6 +186,9 @@ The headless playground accepts `{"user_id":"..."}` and optional `faults`
 using the fields below. It handles confidential-client authentication or
 public-client PKCE. Its result includes `authorize_status`, `token_status`,
 `token`, `id_token_header`, `id_token_claims`, `userinfo_status`, and `userinfo`.
+With `"refresh": true`, it also requests `offline_access`, redeems the refresh
+token once, and adds `refresh_status`, `refresh`, and
+`refreshed_id_token_claims`.
 Protocol failures appear in those statuses and an `error` field; the enclosing
 API response remains `200` when the experiment itself ran successfully.
 

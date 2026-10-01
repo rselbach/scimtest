@@ -72,6 +72,28 @@ func TestAPIOIDCPlaygroundRunsConfidentialAndPublicFlows(t *testing.T) {
 	}
 }
 
+func TestAPIOIDCPlaygroundRefreshes(t *testing.T) {
+	for _, public := range []bool{false, true} {
+		t.Run(fmt.Sprintf("public=%t", public), func(t *testing.T) {
+			handler, environmentID, adminURL := newAPIPlayground(t, public)
+
+			plain := apiPlaygroundRequest(t, handler, environmentID, adminURL, `{"user_id":"user-troy"}`)
+			require.NotContains(t, plain.Token, "refresh_token")
+			require.Zero(t, plain.RefreshStatus)
+
+			result := apiPlaygroundRequest(t, handler, environmentID, adminURL, `{"user_id":"user-troy","refresh":true}`)
+			require.Empty(t, result.Error)
+			require.Equal(t, http.StatusOK, result.RefreshStatus)
+			require.NotEmpty(t, result.Token["refresh_token"])
+			require.NotEqual(t, result.Token["refresh_token"], result.Refresh["refresh_token"])
+			claims, ok := result.RefreshedClaims.(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, "troy@greendale.edu", claims["email"])
+			require.NotContains(t, claims, "nonce")
+		})
+	}
+}
+
 func TestAPIOIDCPlaygroundReturnsFlowErrors(t *testing.T) {
 	handler, environmentID, adminURL := newAPIPlayground(t, false)
 

@@ -5,7 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"io"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -66,7 +66,7 @@ func (a *webApp) handleOIDCPlayground(w http.ResponseWriter, r *http.Request) {
 		"response_type": {"code"},
 		"client_id":     {foundApp.OIDCClientID},
 		"redirect_uri":  {callback},
-		"scope":         {"openid profile email groups"},
+		"scope":         {"openid profile email groups offline_access"},
 		"state":         {stateValue},
 		"nonce":         {nonce},
 	}
@@ -112,9 +112,15 @@ type playgroundResult struct {
 	IDToken       string
 	IDTokenHeader string
 	IDTokenClaims string
+	RefreshToken  string
 	UserinfoBody  string
 	InspectorURL  string
 	GitHubAccount githubAccountView
+
+	// Refreshed marks a page produced by redeeming a refresh token.
+	Refreshed             bool
+	RequestedScope        string
+	PreviousIDTokenClaims string
 }
 
 // handleOIDCPlaygroundCallback completes the built-in RP flow: it exchanges the
@@ -167,24 +173,70 @@ func (a *webApp) handleOIDCPlaygroundCallback(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	issuer := a.playgroundIssuer(foundApp)
 	tokenForm := url.Values{
 		"grant_type":   {"authorization_code"},
 		"code":         {code},
 		"redirect_uri": {a.playgroundCallbackURI(foundApp.Slug)},
 	}
 	if foundApp.OIDCPublicClient {
-		tokenForm.Set("client_id", foundApp.OIDCClientID)
 		tokenForm.Set("code_verifier", verifier)
 	}
-
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
+	if err := a.redeemPlaygroundTokens(ctx, foundApp, tokenForm, &result); err != nil {
+		result.Error = err.Error()
+	}
+	render()
+}
+
+// handleOIDCPlaygroundRefresh redeems the refresh token the playground
+// received and renders the new tokens beside the claims they replace.
+func (a *webApp) handleOIDCPlaygroundRefresh(w http.ResponseWriter, r *http.Request) {
+	_, foundApp, ok := appForProtocol(w, r, supportsOIDC)
+	if !ok {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	result := playgroundResult{
+		App:            foundApp,
+		InspectorURL:   "/inspect/oidc/" + url.PathEscape(foundApp.Slug),
+		GitHubAccount:  a.githubAccountView(),
+		Refreshed:      true,
+		RequestedScope: strings.TrimSpace(r.PostFormValue("scope")),
+	}
+	_, result.PreviousIDTokenClaims = decodeJWTSegments(r.PostFormValue("previous_id_token"))
+	tokenForm := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {r.PostFormValue("refresh_token")},
+	}
+	if result.RequestedScope != "" {
+		tokenForm.Set("scope", result.RequestedScope)
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	if err := a.redeemPlaygroundTokens(ctx, foundApp, tokenForm, &result); err != nil {
+		result.Error = err.Error()
+	}
+	if err := pageTemplate.ExecuteTemplate(w, "oidc-playground.html", result); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// redeemPlaygroundTokens posts tokenForm to the token endpoint as the
+// environment's client. It records the token response, the decoded ID token,
+// and a userinfo call made with the new access token. A rejected token
+// request is recorded rather than returned, so the page can show it.
+func (a *webApp) redeemPlaygroundTokens(ctx context.Context, foundApp app, tokenForm url.Values, result *playgroundResult) error {
+	issuer := a.playgroundIssuer(foundApp)
+	if foundApp.OIDCPublicClient {
+		tokenForm.Set("client_id", foundApp.OIDCClientID)
+	}
 	tokenReq, err := http.NewRequestWithContext(ctx, http.MethodPost, issuer+"/token", strings.NewReader(tokenForm.Encode()))
 	if err != nil {
-		result.Error = err.Error()
-		render()
-		return
+		return err
 	}
 	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if !foundApp.OIDCPublicClient {
@@ -193,43 +245,48 @@ func (a *webApp) handleOIDCPlaygroundCallback(w http.ResponseWriter, r *http.Req
 	}
 	tokenResp, err := http.DefaultClient.Do(tokenReq)
 	if err != nil {
-		result.Error = "token request failed: " + err.Error()
-		render()
-		return
+		return fmt.Errorf("token request failed: %w", err)
 	}
-	tokenBytes, _ := io.ReadAll(tokenResp.Body)
-	_ = tokenResp.Body.Close()
+	tokenBytes, err := readAndCloseAPIResponse(tokenResp, 1<<20)
+	if err != nil {
+		return fmt.Errorf("read token response: %w", err)
+	}
 	result.TokenStatus = tokenResp.Status
 	result.TokenBody = prettyJSON(string(tokenBytes))
 	if tokenResp.StatusCode != http.StatusOK {
-		render()
-		return
+		return nil
 	}
 
 	var tokenPayload struct {
-		AccessToken string `json:"access_token"`
-		IDToken     string `json:"id_token"`
+		AccessToken  string `json:"access_token"`
+		IDToken      string `json:"id_token"`
+		RefreshToken string `json:"refresh_token"`
 	}
 	if err := json.Unmarshal(tokenBytes, &tokenPayload); err != nil {
-		result.Error = "decode token response: " + err.Error()
-		render()
-		return
+		return fmt.Errorf("decode token response: %w", err)
 	}
 	result.IDToken = tokenPayload.IDToken
 	result.IDTokenHeader, result.IDTokenClaims = decodeJWTSegments(tokenPayload.IDToken)
-
-	if tokenPayload.AccessToken != "" {
-		userinfoReq, err := http.NewRequestWithContext(ctx, http.MethodGet, issuer+"/userinfo", nil)
-		if err == nil {
-			userinfoReq.Header.Set("Authorization", "Bearer "+tokenPayload.AccessToken)
-			if userinfoResp, err := http.DefaultClient.Do(userinfoReq); err == nil {
-				userinfoBytes, _ := io.ReadAll(userinfoResp.Body)
-				_ = userinfoResp.Body.Close()
-				result.UserinfoBody = prettyJSON(string(userinfoBytes))
-			}
-		}
+	result.RefreshToken = tokenPayload.RefreshToken
+	if tokenPayload.AccessToken == "" {
+		return nil
 	}
-	render()
+
+	userinfoReq, err := http.NewRequestWithContext(ctx, http.MethodGet, issuer+"/userinfo", nil)
+	if err != nil {
+		return err
+	}
+	userinfoReq.Header.Set("Authorization", "Bearer "+tokenPayload.AccessToken)
+	userinfoResp, err := http.DefaultClient.Do(userinfoReq)
+	if err != nil {
+		return fmt.Errorf("userinfo request failed: %w", err)
+	}
+	userinfoBytes, err := readAndCloseAPIResponse(userinfoResp, 1<<20)
+	if err != nil {
+		return fmt.Errorf("read userinfo response: %w", err)
+	}
+	result.UserinfoBody = prettyJSON(string(userinfoBytes))
+	return nil
 }
 
 // decodeJWTSegments returns the pretty-printed header and claims of a compact

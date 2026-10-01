@@ -30,6 +30,15 @@
       <p>{{.Error}}</p>
     </section>
     {{else}}
+    {{if .Refreshed}}
+    <section class="card inspector-card">
+      <h2>Refresh request</h2>
+      <dl class="inspector-details">
+        <div><dt>Grant type</dt><dd class="mono">refresh_token</dd></div>
+        <div><dt>Scope</dt><dd class="mono">{{if .RequestedScope}}{{.RequestedScope}}{{else}}original grant{{end}}</dd></div>
+      </dl>
+    </section>
+    {{else}}
     <section class="card inspector-card">
       <h2>Authorization response</h2>
       <dl class="inspector-details">
@@ -37,6 +46,7 @@
         <div><dt>State echoed</dt><dd>{{if .State}}Yes{{else}}No{{end}}</dd></div>
       </dl>
     </section>
+    {{end}}
     <section class="card inspector-card">
       <h2>Token response <span class="hint">{{.TokenStatus}}</span></h2>
       <pre class="inspector-payload">{{.TokenBody}}</pre>
@@ -48,6 +58,12 @@
       <pre class="inspector-payload">{{.IDTokenHeader}}</pre>
       <h3>Claims</h3>
       <pre class="inspector-payload">{{.IDTokenClaims}}</pre>
+      {{if .PreviousIDTokenClaims}}
+      <details>
+        <summary>Claims before this refresh</summary>
+        <pre class="inspector-payload">{{.PreviousIDTokenClaims}}</pre>
+      </details>
+      {{end}}
       {{if .IDToken}}
       <h3>Raw (compact)</h3>
       <pre class="inspector-payload">{{.IDToken}}</pre>
@@ -58,6 +74,18 @@
     <section class="card inspector-card">
       <h2>Userinfo</h2>
       <pre class="inspector-payload">{{.UserinfoBody}}</pre>
+    </section>
+    {{end}}
+    {{if .RefreshToken}}
+    <section class="card inspector-card">
+      <h2>Refresh tokens</h2>
+      <p class="hint">Redeems the refresh token above. The response carries a replacement, and the old token stops working. Leave scope empty to keep the original grant, or name a subset to narrow it.</p>
+      <form method="post" action="{{.InspectorURL}}/playground/refresh" class="form-grid">
+        <input type="hidden" name="refresh_token" value="{{.RefreshToken}}">
+        <input type="hidden" name="previous_id_token" value="{{.IDToken}}">
+        <label class="field"><span class="label">Scope</span><input name="scope" placeholder="openid email" autocomplete="off"></label>
+        <div class="form-actions"><button class="btn btn-primary" type="submit">Refresh tokens</button></div>
+      </form>
     </section>
     {{end}}
     {{end}}
