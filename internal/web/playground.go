@@ -188,7 +188,8 @@ func (a *webApp) handleOIDCPlaygroundCallback(w http.ResponseWriter, r *http.Req
 	}
 	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if !foundApp.OIDCPublicClient {
-		tokenReq.SetBasicAuth(foundApp.OIDCClientID, foundApp.OIDCClientSecret)
+		// OAuth Basic credentials are form-encoded before base64 (RFC 6749).
+		tokenReq.SetBasicAuth(url.QueryEscape(foundApp.OIDCClientID), url.QueryEscape(foundApp.OIDCClientSecret))
 	}
 	tokenResp, err := http.DefaultClient.Do(tokenReq)
 	if err != nil {
