@@ -363,7 +363,7 @@ func TestResiliencePresetsMatchApplicationProtocols(t *testing.T) {
 		},
 		"SAML": {
 			app:      app{Protocol: "saml"},
-			wantIDs:  []string{"broken-signature", "saml-auth-failed"},
+			wantIDs:  []string{"broken-signature", "wrong-audience", "replayed-assertion", "saml-auth-failed"},
 			rejectID: "token-outage",
 		},
 	}

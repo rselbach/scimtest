@@ -10,6 +10,7 @@ type samlInspection struct {
 	User               string
 	ACSURL             string
 	InResponseTo       string
+	AssertionID        string
 	ResponseXML        string
 	SignedAssertionXML string
 	EncodedResponse    string
@@ -32,6 +33,7 @@ func (a *webApp) rememberSAMLInspection(app app, user user, context samlResponse
 		User:               userLabel(user),
 		ACSURL:             context.ACSURL,
 		InResponseTo:       context.InResponseTo,
+		AssertionID:        context.AssertionID,
 		ResponseXML:        posted.XML,
 		SignedAssertionXML: posted.SignedAssertion,
 		EncodedResponse:    encoded,

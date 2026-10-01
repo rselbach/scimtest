@@ -15,14 +15,16 @@ import (
 // are parsed from fault_* request parameters and, for OIDC, carried from the
 // authorize request to the token response through the authorization code.
 type faultOptions struct {
-	IDTokenTTL     time.Duration // overrides the ID token lifetime when non-zero
-	IDTokenTTLSet  bool
-	ClockSkew      time.Duration // added to iat/exp and SAML instants
-	BreakSignature bool          // corrupt the ID token / assertion signature
-	DropClaims     []string      // claims omitted from the ID token and userinfo
-	TokenError     string        // force this OAuth error at the token endpoint
-	SAMLStatus     string        // non-success SAML status: Responder or AuthnFailed
-	Tamper         []tamperFault // validation rules the response deliberately breaks
+	IDTokenTTL      time.Duration // overrides the ID token lifetime when non-zero
+	IDTokenTTLSet   bool
+	AssertionTTL    time.Duration // overrides the SAML assertion lifetime
+	AssertionTTLSet bool
+	ClockSkew       time.Duration // added to iat/exp and SAML instants
+	BreakSignature  bool          // corrupt the ID token / assertion signature
+	DropClaims      []string      // claims omitted from the ID token and userinfo
+	TokenError      string        // force this OAuth error at the token endpoint
+	SAMLStatus      string        // non-success SAML status: Responder or AuthnFailed
+	Tamper          []tamperFault // validation rules the response deliberately breaks
 }
 
 // tamperFault names one validation rule a relying party or service provider
@@ -36,6 +38,11 @@ const (
 	tamperUnknownKeyID  tamperFault = "unknown_kid"
 	tamperAlgNone       tamperFault = "alg_none"
 	tamperNonceMismatch tamperFault = "nonce_mismatch"
+
+	tamperWrongDestination     tamperFault = "wrong_destination"
+	tamperWrongRecipient       tamperFault = "wrong_recipient"
+	tamperInResponseToMismatch tamperFault = "in_response_to_mismatch"
+	tamperReplayedAssertion    tamperFault = "replayed_assertion"
 )
 
 // tamperFaultInfo describes a tamper fault for forms and descriptions.
@@ -46,11 +53,15 @@ type tamperFaultInfo struct {
 }
 
 var tamperFaults = []tamperFaultInfo{
-	{ID: tamperWrongIssuer, Protocol: "oidc", Label: "Wrong issuer"},
-	{ID: tamperWrongAudience, Protocol: "oidc", Label: "Wrong audience"},
+	{ID: tamperWrongIssuer, Protocol: "both", Label: "Wrong issuer"},
+	{ID: tamperWrongAudience, Protocol: "both", Label: "Wrong audience"},
 	{ID: tamperUnknownKeyID, Protocol: "oidc", Label: "Unknown signing key ID"},
 	{ID: tamperAlgNone, Protocol: "oidc", Label: "Unsigned ID token (alg none)"},
 	{ID: tamperNonceMismatch, Protocol: "oidc", Label: "Nonce mismatch"},
+	{ID: tamperWrongDestination, Protocol: "saml", Label: "Wrong destination"},
+	{ID: tamperWrongRecipient, Protocol: "saml", Label: "Wrong recipient"},
+	{ID: tamperInResponseToMismatch, Protocol: "saml", Label: "InResponseTo mismatch"},
+	{ID: tamperReplayedAssertion, Protocol: "saml", Label: "Replayed assertion ID"},
 }
 
 func tamperFaultInfoByID(id tamperFault) (tamperFaultInfo, bool) {
@@ -90,6 +101,15 @@ func parseFaultOptionsWithWarnings(values url.Values) (faultOptions, []string) {
 		} else {
 			faults.IDTokenTTL = ttl
 			faults.IDTokenTTLSet = true
+		}
+	}
+	if raw := strings.TrimSpace(values.Get("fault_assertion_ttl")); raw != "" {
+		ttl, err := time.ParseDuration(raw)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("ignored invalid fault_assertion_ttl %q", raw))
+		} else {
+			faults.AssertionTTL = ttl
+			faults.AssertionTTLSet = true
 		}
 	}
 	if raw := strings.TrimSpace(values.Get("fault_clock_skew")); raw != "" {
@@ -138,7 +158,7 @@ func parseFaultOptionsWithWarnings(values url.Values) (faultOptions, []string) {
 
 // active reports whether any fault was requested.
 func (f faultOptions) active() bool {
-	return f.IDTokenTTLSet || f.ClockSkew != 0 || f.BreakSignature ||
+	return f.IDTokenTTLSet || f.AssertionTTLSet || f.ClockSkew != 0 || f.BreakSignature ||
 		len(f.DropClaims) > 0 || f.TokenError != "" || f.SAMLStatus != "" ||
 		len(f.Tamper) > 0
 }
@@ -152,6 +172,9 @@ func (f faultOptions) describe() string {
 	var parts []string
 	if f.IDTokenTTLSet {
 		parts = append(parts, "ID token TTL "+f.IDTokenTTL.String())
+	}
+	if f.AssertionTTLSet {
+		parts = append(parts, "assertion TTL "+f.AssertionTTL.String())
 	}
 	if f.ClockSkew != 0 {
 		parts = append(parts, "clock skew "+f.ClockSkew.String())

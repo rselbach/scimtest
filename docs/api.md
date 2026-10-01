@@ -191,11 +191,14 @@ are not SAML signing inputs.
 In identifier chooser mode, use `login_identifier` instead of `user_id` for
 OIDC authorization, the playground, and SAML sign-in.
 
-Fault writes accept duration strings in `id_token_ttl` and `clock_skew`, a
-`break_signature` boolean, a `drop_claims` string array, `token_error`,
-`saml_status`, and a `tamper` string array. Tamper values are `wrong_issuer`,
-`wrong_audience`, `unknown_kid`, `alg_none`, and `nonce_mismatch`. Invalid
-fault values are rejected. Fault scenarios expire after
+Fault writes accept duration strings in `id_token_ttl`, `assertion_ttl`, and
+`clock_skew`, a `break_signature` boolean, a `drop_claims` string array,
+`token_error`, `saml_status`, and a `tamper` string array. Tamper values for
+both protocols are `wrong_issuer` and `wrong_audience`. OIDC adds
+`unknown_kid`, `alg_none`, and `nonce_mismatch`. SAML adds
+`wrong_destination`, `wrong_recipient`, `in_response_to_mismatch`, and
+`replayed_assertion`, which reuses the newest assertion ID the environment
+sent. Invalid fault values are rejected. Fault scenarios expire after
 15 minutes.
 
 Traffic, inspections, flow activity, faults, and jobs are in memory. They

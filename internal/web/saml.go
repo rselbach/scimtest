@@ -45,6 +45,7 @@ type samlAuthnRequest struct {
 type samlResponseContext struct {
 	ACSURL       string
 	InResponseTo string
+	AssertionID  string // generated when empty
 }
 
 func (a *webApp) handleSAMLMetadata(w http.ResponseWriter, r *http.Request) {
@@ -150,6 +151,11 @@ func (a *webApp) completeSAMLSSO(w http.ResponseWriter, r *http.Request, state a
 		return
 	}
 	faults := a.flowFaults(app.Slug, values)
+	responseContext.AssertionID, err = a.samlAssertionID(app.Slug, faults)
+	if err != nil {
+		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
+		return
+	}
 	posted, err := a.buildSignedSAMLResponse(state, baseURL, app, user, responseContext, encryption, faults)
 	if err != nil {
 		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
@@ -171,6 +177,22 @@ func (a *webApp) completeSAMLSSO(w http.ResponseWriter, r *http.Request, state a
 		"SAMLResponse": encodedResponse,
 		"RelayState":   values.Get("RelayState"),
 	})
+}
+
+// samlAssertionID returns a fresh assertion ID, or the newest one this app
+// already received when the flow replays an assertion.
+func (a *webApp) samlAssertionID(slug string, faults faultOptions) (string, error) {
+	if !faults.tampers(tamperReplayedAssertion) {
+		return newID("saml-assertion")
+	}
+	a.samlInspectorMu.Lock()
+	defer a.samlInspectorMu.Unlock()
+	for _, inspection := range a.samlInspections[slug] {
+		if inspection.AssertionID != "" {
+			return inspection.AssertionID, nil
+		}
+	}
+	return "", errors.New("no earlier SAML assertion to replay; complete a SAML sign-in first")
 }
 
 // denySAML posts an AuthnFailed status response so an SP's failure handling can
@@ -500,9 +522,12 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user, respo
 	if err != nil {
 		return "", fmt.Errorf("generate SAML response ID: %w", err)
 	}
-	assertionID, err := newID("saml-assertion")
-	if err != nil {
-		return "", fmt.Errorf("generate SAML assertion ID: %w", err)
+	assertionID := responseContext.AssertionID
+	if assertionID == "" {
+		assertionID, err = newID("saml-assertion")
+		if err != nil {
+			return "", fmt.Errorf("generate SAML assertion ID: %w", err)
+		}
 	}
 	issuer := baseURL + "/saml/" + app.Slug + "/metadata"
 	audience := app.SAMLAudience
@@ -512,6 +537,33 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user, respo
 	if audience == "" {
 		audience = responseContext.ACSURL
 	}
+	destination := responseContext.ACSURL
+	recipient := responseContext.ACSURL
+	inResponseTo := responseContext.InResponseTo
+	if faults.tampers(tamperWrongIssuer) {
+		issuer = nearMiss(issuer)
+	}
+	if faults.tampers(tamperWrongAudience) {
+		audience = nearMiss(audience)
+	}
+	if faults.tampers(tamperWrongDestination) {
+		destination = nearMiss(destination)
+	}
+	if faults.tampers(tamperWrongRecipient) {
+		recipient = nearMiss(recipient)
+	}
+	if faults.tampers(tamperInResponseToMismatch) {
+		inResponseTo = nearMiss(inResponseTo)
+	}
+	notOnOrAfter := now.Add(5 * time.Minute)
+	if faults.AssertionTTLSet {
+		notOnOrAfter = now.Add(faults.AssertionTTL)
+	}
+	notBefore := now.Add(-time.Minute)
+	// keep the validity window ordered so expiry is the only broken rule
+	if notOnOrAfter.Before(now) {
+		notBefore = notOnOrAfter.Add(-time.Minute)
+	}
 	attributeStatement := samlAttributeStatement(state, app, user)
 	nameIDValue := samlNameIDValue(app, user)
 	nameIDFormat := app.SAMLNameIDFormat
@@ -520,9 +572,9 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user, respo
 	}
 	responseInResponseTo := ""
 	subjectInResponseTo := ""
-	if responseContext.InResponseTo != "" {
-		responseInResponseTo = ` InResponseTo="` + xmlEscape(responseContext.InResponseTo) + `"`
-		subjectInResponseTo = ` InResponseTo="` + xmlEscape(responseContext.InResponseTo) + `"`
+	if inResponseTo != "" {
+		responseInResponseTo = ` InResponseTo="` + xmlEscape(inResponseTo) + `"`
+		subjectInResponseTo = ` InResponseTo="` + xmlEscape(inResponseTo) + `"`
 	}
 	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="%s" Version="2.0" IssueInstant="%s" Destination="%s"%s>
@@ -543,10 +595,10 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user, respo
     </saml:AttributeStatement>
   </saml:Assertion>
 </samlp:Response>`,
-		xmlEscape(responseID), now.Format(time.RFC3339), xmlEscape(responseContext.ACSURL), responseInResponseTo, xmlEscape(issuer),
+		xmlEscape(responseID), now.Format(time.RFC3339), xmlEscape(destination), responseInResponseTo, xmlEscape(issuer),
 		xmlEscape(assertionID), now.Format(time.RFC3339), xmlEscape(issuer),
-		xmlEscape(nameIDFormat), xmlEscape(nameIDValue), subjectInResponseTo, now.Add(5*time.Minute).Format(time.RFC3339), xmlEscape(responseContext.ACSURL),
-		now.Add(-time.Minute).Format(time.RFC3339), now.Add(5*time.Minute).Format(time.RFC3339), xmlEscape(audience),
+		xmlEscape(nameIDFormat), xmlEscape(nameIDValue), subjectInResponseTo, notOnOrAfter.Format(time.RFC3339), xmlEscape(recipient),
+		notBefore.Format(time.RFC3339), notOnOrAfter.Format(time.RFC3339), xmlEscape(audience),
 		now.Format(time.RFC3339), attributeStatement), nil
 }
 

@@ -96,16 +96,28 @@ func TestAPIOIDCPlaygroundAppliesTamperFaults(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "greendale-client-wrong", claims["aud"])
 
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/environments/"+environmentID+"/oidc/playground", strings.NewReader(`{"user_id":"user-troy","faults":{"tamper":["bogus"]}}`))
-	request.Header.Set(instanceTokenHeader, "playground-token")
-	request.Header.Set("Content-Type", "application/json")
 	parsed, err := url.Parse(adminURL)
 	require.NoError(t, err)
-	request.Host = parsed.Host
-	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	require.Equal(t, http.StatusBadRequest, response.Code)
-	require.Contains(t, response.Body.String(), `ignored unknown fault_tamper \"bogus\"`)
+	rejected := map[string]struct {
+		faults    string
+		wantError string
+	}{
+		"unknown":   {faults: `{"tamper":["bogus"]}`, wantError: `ignored unknown fault_tamper \"bogus\"`},
+		"SAML-only": {faults: `{"tamper":["wrong_recipient"]}`, wantError: "tamper wrong_recipient is not valid for an OIDC playground flow"},
+		"SAML TTL":  {faults: `{"assertion_ttl":"-1m"}`, wantError: "assertion_ttl is not valid for an OIDC playground flow"},
+	}
+	for name, tc := range rejected {
+		t.Run(name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/environments/"+environmentID+"/oidc/playground", strings.NewReader(`{"user_id":"user-troy","faults":`+tc.faults+`}`))
+			request.Header.Set(instanceTokenHeader, "playground-token")
+			request.Header.Set("Content-Type", "application/json")
+			request.Host = parsed.Host
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			require.Equal(t, http.StatusBadRequest, response.Code)
+			require.Contains(t, response.Body.String(), tc.wantError)
+		})
+	}
 }
 
 func TestAPIProtocolSignInRejectsInactiveUserAsJSON(t *testing.T) {

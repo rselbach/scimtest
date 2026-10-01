@@ -90,6 +90,16 @@ func (a *webApp) handleAPIOIDCPlayground(w http.ResponseWriter, r *http.Request)
 			apiError(w, http.StatusBadRequest, "saml_status is not valid for an OIDC playground flow")
 			return
 		}
+		if faults.AssertionTTLSet {
+			apiError(w, http.StatusBadRequest, "assertion_ttl is not valid for an OIDC playground flow")
+			return
+		}
+		for _, fault := range faults.Tamper {
+			if info, _ := tamperFaultInfoByID(fault); info.Protocol == "saml" {
+				apiError(w, http.StatusBadRequest, "tamper "+string(fault)+" is not valid for an OIDC playground flow")
+				return
+			}
+		}
 		for key, values := range faultValues {
 			query[key] = append([]string(nil), values...)
 		}

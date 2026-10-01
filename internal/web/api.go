@@ -130,7 +130,7 @@ var environmentAPIFields = []string{
 
 var userAPIFields = []string{"given_name", "family_name", "email", "username", "active"}
 var groupAPIFields = []string{"display_name", "member_ids"}
-var faultAPIFields = []string{"id_token_ttl", "clock_skew", "break_signature", "drop_claims", "token_error", "saml_status", "tamper"}
+var faultAPIFields = []string{"id_token_ttl", "assertion_ttl", "clock_skew", "break_signature", "drop_claims", "token_error", "saml_status", "tamper"}
 
 type apiEnvironmentRequest struct {
 	Name                    *string                `json:"name"`
@@ -184,6 +184,7 @@ type apiConfigRequest struct {
 
 type apiFaultRequest struct {
 	IDTokenTTL     *string  `json:"id_token_ttl"`
+	AssertionTTL   *string  `json:"assertion_ttl"`
 	ClockSkew      *string  `json:"clock_skew"`
 	BreakSignature *bool    `json:"break_signature"`
 	DropClaims     []string `json:"drop_claims"`
@@ -544,6 +545,9 @@ func apiFaultValues(request apiFaultRequest) (url.Values, error) {
 	if request.IDTokenTTL != nil {
 		values.Set("fault_id_token_ttl", *request.IDTokenTTL)
 	}
+	if request.AssertionTTL != nil {
+		values.Set("fault_assertion_ttl", *request.AssertionTTL)
+	}
 	if request.ClockSkew != nil {
 		values.Set("fault_clock_skew", *request.ClockSkew)
 	}
@@ -569,7 +573,7 @@ func apiFaultValues(request apiFaultRequest) (url.Values, error) {
 }
 
 func apiFaultResponse(f faultOptions) map[string]any {
-	return map[string]any{"active": f.active(), "id_token_ttl": f.IDTokenTTL.String(), "id_token_ttl_set": f.IDTokenTTLSet, "clock_skew": f.ClockSkew.String(), "break_signature": f.BreakSignature, "drop_claims": f.DropClaims, "token_error": f.TokenError, "saml_status": f.SAMLStatus, "tamper": f.Tamper}
+	return map[string]any{"active": f.active(), "id_token_ttl": f.IDTokenTTL.String(), "id_token_ttl_set": f.IDTokenTTLSet, "assertion_ttl": f.AssertionTTL.String(), "assertion_ttl_set": f.AssertionTTLSet, "clock_skew": f.ClockSkew.String(), "break_signature": f.BreakSignature, "drop_claims": f.DropClaims, "token_error": f.TokenError, "saml_status": f.SAMLStatus, "tamper": f.Tamper}
 }
 
 func apiParseCount(value any) (int, error) {

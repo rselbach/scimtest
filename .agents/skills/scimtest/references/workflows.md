@@ -160,10 +160,14 @@ Use the playground's `faults` object for one OIDC experiment:
 
 This experiment should report `token_status: 400` and a token error even though
 the API call itself returns `200`. Other fault fields include duration strings
-`id_token_ttl` and `clock_skew`, boolean `break_signature`, array `drop_claims`,
-`saml_status`, and array `tamper`. SAML status faults apply to SAML flows.
-Tamper values break one check in an otherwise valid response: `wrong_issuer`,
-`wrong_audience`, `unknown_kid`, `alg_none`, and `nonce_mismatch`.
+`id_token_ttl`, `assertion_ttl`, and `clock_skew`, boolean `break_signature`,
+array `drop_claims`, `saml_status`, and array `tamper`. SAML status and
+assertion TTL faults apply to SAML flows. Tamper values break one check in an
+otherwise valid response. `wrong_issuer` and `wrong_audience` apply to both
+protocols. OIDC adds `unknown_kid`, `alg_none`, and `nonce_mismatch`. SAML
+adds `wrong_destination`, `wrong_recipient`, `in_response_to_mismatch`, and
+`replayed_assertion`. Replay needs an earlier SAML sign-in in the same
+environment.
 
 To affect the next incoming protocol flow, `PUT /environments/{ENV_ID}/faults`.
 Read or disarm it with `GET` or `DELETE` on the same path. Disarming returns

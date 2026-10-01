@@ -129,10 +129,19 @@ var resiliencePresets = []resiliencePreset{
 	{
 		ID:           "wrong-audience",
 		Name:         "Wrong audience",
-		Summary:      "Issue a token for a different client.",
-		Protocol:     "oidc",
+		Summary:      "Issue a token or assertion for a different audience.",
+		Protocol:     "both",
 		Phase:        "flow",
 		Action:       resilienceAction{Faults: faultOptions{Tamper: []tamperFault{tamperWrongAudience}}},
+		DefaultCount: 1,
+	},
+	{
+		ID:           "replayed-assertion",
+		Name:         "Replayed SAML assertion",
+		Summary:      "Reuse the previous assertion ID in a fresh, signed response.",
+		Protocol:     "saml",
+		Phase:        "flow",
+		Action:       resilienceAction{Faults: faultOptions{Tamper: []tamperFault{tamperReplayedAssertion}}},
 		DefaultCount: 1,
 	},
 	{
