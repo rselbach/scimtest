@@ -3455,34 +3455,6 @@ func TestAdminUIRespondsDuringRunningSync(t *testing.T) {
 	r.True(job.Success, job.Error)
 }
 
-func TestRestoreMidSyncEditsKeepsNewerEntries(t *testing.T) {
-	r := require.New(t)
-
-	atStart := map[string]resourceSyncState{
-		"troy":    {Dirty: true},
-		"abed":    {RemoteID: "remote-abed"},
-		"shirley": {RemoteID: "remote-shirley"},
-	}
-	// troy synced clean, abed synced clean, shirley deleted mid-sync.
-	merged := map[string]resourceSyncState{
-		"troy":    {RemoteID: "remote-troy"},
-		"abed":    {RemoteID: "remote-abed"},
-		"shirley": {RemoteID: "remote-shirley"},
-	}
-	// While the sync ran, shirley was edited (marked dirty and deleted).
-	beforeMerge := map[string]resourceSyncState{
-		"troy":    {Dirty: true},
-		"abed":    {RemoteID: "remote-abed"},
-		"shirley": {RemoteID: "remote-shirley", Dirty: true, Deleted: true},
-	}
-
-	restoreMidSyncEdits(merged, atStart, beforeMerge)
-
-	r.Equal(resourceSyncState{RemoteID: "remote-troy"}, merged["troy"])
-	r.Equal(resourceSyncState{RemoteID: "remote-abed"}, merged["abed"])
-	r.Equal(resourceSyncState{RemoteID: "remote-shirley", Dirty: true, Deleted: true}, merged["shirley"])
-}
-
 func TestStylesheetHidesIsHiddenEverywhere(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)

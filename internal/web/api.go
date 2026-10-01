@@ -207,9 +207,13 @@ func (a *webApp) apiHandler() http.Handler {
 				if route.Method != r.Method {
 					continue
 				}
-				if route.mutatesState && a.anySyncRunning() {
-					apiError(w, http.StatusConflict, "sync is running; wait for it to finish before changing state")
-					return
+				if route.mutatesState {
+					a.syncMutationMu.Lock()
+					defer a.syncMutationMu.Unlock()
+					if a.anySyncRunning() {
+						apiError(w, http.StatusConflict, "sync is running; wait for it to finish before changing state")
+						return
+					}
 				}
 				if len(route.Fields) == 0 && r.Method != http.MethodGet && r.Body != nil && r.ContentLength != 0 {
 					var empty struct{}

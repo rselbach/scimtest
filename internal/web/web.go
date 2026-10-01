@@ -70,9 +70,11 @@ type webApp struct {
 	armedFaults          map[string]faultOptions
 	resilienceMu         sync.Mutex
 	resilienceRuns       map[string]resilienceRun
-	syncJobMu            sync.Mutex
-	syncJobs             map[string]*syncJobSnapshot
-	syncCancels          map[string]context.CancelFunc
+	// syncMutationMu keeps admitted mutations ahead of the next sync snapshot.
+	syncMutationMu sync.Mutex
+	syncJobMu      sync.Mutex
+	syncJobs       map[string]*syncJobSnapshot
+	syncCancels    map[string]context.CancelFunc
 	// oidcMu guards authCodes and accessTokens so sign-in flows never
 	// contend with admin handlers holding mu.
 	oidcMu           sync.Mutex
@@ -1010,6 +1012,8 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 
 func (a *webApp) rejectWhileSyncing(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		a.syncMutationMu.Lock()
+		defer a.syncMutationMu.Unlock()
 		if a.anySyncRunning() {
 			if wantsJSON(r) {
 				writeJSONStatus(w, http.StatusConflict, map[string]string{"error": "sync is running; wait for it to finish"})

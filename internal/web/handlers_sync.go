@@ -213,6 +213,8 @@ func (a *webApp) respondSyncStartError(w http.ResponseWriter, r *http.Request, t
 }
 
 func (a *webApp) startSyncJob(appID string, environmentName string, kind string, targetType string, targetID string) (*syncJobSnapshot, error) {
+	a.syncMutationMu.Lock()
+	defer a.syncMutationMu.Unlock()
 	a.syncJobMu.Lock()
 	defer a.syncJobMu.Unlock()
 
@@ -287,28 +289,17 @@ func (a *webApp) runSyncJob(ctx context.Context, id string, appID string, kind s
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	// Reload before merging: edits that slipped in while the walk ran
-	// must not be clobbered by the snapshot taken at sync start.
-	fresh, err := loadStateForApp(appID)
-	if err != nil {
-		a.finishSyncJob(appID, id, false, err.Error(), len(result.Traces) > 0)
-		return
-	}
 	if kind == "push" {
 		// A push cleared everyone else's dirty flag in the projection, so a
 		// whole-state merge would erase their pending changes; only the
 		// target's row may be written back.
-		applyPushResult(&fresh, appID, targetType, targetID, result.State)
+		applyPushResult(&state, appID, targetType, targetID, result.State)
 	} else {
-		userSyncBeforeMerge := fresh.UserSync[appID]
-		groupSyncBeforeMerge := fresh.GroupSync[appID]
-		mergeAppSyncState(&fresh, appID, result.State)
-		restoreMidSyncEdits(fresh.UserSync[appID], state.UserSync[appID], userSyncBeforeMerge)
-		restoreMidSyncEdits(fresh.GroupSync[appID], state.GroupSync[appID], groupSyncBeforeMerge)
+		mergeAppSyncState(&state, appID, result.State)
 	}
-	appendOperationLogs(&fresh, appID, result.Traces)
-	purgeFullySyncedDeletions(&fresh)
-	if err := saveRequestState(fresh); err != nil {
+	appendOperationLogs(&state, appID, result.Traces)
+	purgeFullySyncedDeletions(&state)
+	if err := saveRequestState(state); err != nil {
 		a.finishSyncJob(appID, id, false, err.Error(), len(result.Traces) > 0)
 		return
 	}
@@ -376,17 +367,6 @@ func applyPushResult(state *appState, appID string, resourceType string, resourc
 			state.GroupSync[appID] = make(map[string]resourceSyncState)
 		}
 		state.GroupSync[appID][resourceID] = row
-	}
-}
-
-// restoreMidSyncEdits keeps sync entries that changed while the remote walk
-// ran: those record local edits the sync result never saw, so they must stay
-// scheduled instead of being overwritten by the merge.
-func restoreMidSyncEdits(merged map[string]resourceSyncState, atStart map[string]resourceSyncState, beforeMerge map[string]resourceSyncState) {
-	for id, entry := range beforeMerge {
-		if atStart[id] != entry {
-			merged[id] = entry
-		}
 	}
 }
 
