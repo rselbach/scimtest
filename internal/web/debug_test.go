@@ -169,6 +169,57 @@ func TestDebugRedactsAuthorizationCodeInLocationHeader(t *testing.T) {
 	r.Contains(secretsOutput.String(), "code=paintball")
 }
 
+func TestDebugRequestURIRedaction(t *testing.T) {
+	for name, tc := range map[string]struct {
+		query          string
+		includeSecrets bool
+		want           string
+	}{
+		"credentials": {
+			query: "code=troy-code&client_secret=greendale-secret&state=study-group",
+			want:  "client_secret=%5BREDACTED%5D&code=%5BREDACTED%5D&state=study-group",
+		},
+		"encoded and repeated keys": {
+			query: "%63ode=troy-code&code=abed-code&CLIENT_SECRET=greendale-secret",
+			want:  "CLIENT_SECRET=%5BREDACTED%5D&code=%5BREDACTED%5D",
+		},
+		"PKCE verifier": {
+			query: "code_verifier=greendale-verifier&code_challenge=public-challenge",
+			want:  "code_challenge=public-challenge&code_verifier=%5BREDACTED%5D",
+		},
+		"malformed query": {
+			query: "client_secret=greendale-secret%zz&code=troy-code",
+			want:  "POST [REDACTED] HTTP/1.1",
+		},
+		"explicit secrets": {
+			query:          "code=troy-code&client_secret=greendale-secret",
+			includeSecrets: true,
+			want:           "code=troy-code&client_secret=greendale-secret",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			app := debugApp(false, tc.includeSecrets)
+			app.trafficRecord.Store(true)
+			req := httptest.NewRequest(http.MethodPost, "/oidc/greendale/token?"+tc.query, nil)
+			var output bytes.Buffer
+			app.writeDebugHTTPRequest(&output, req, nil)
+			r.Contains(output.String(), tc.want)
+			handler := app.debugRPHandler(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadRequest) })
+			handler(httptest.NewRecorder(), req)
+			entries := app.traffic.snapshot()
+			r.Len(entries, 1)
+			r.Contains(entries[0], tc.want)
+			if !tc.includeSecrets {
+				for _, secret := range []string{"troy-code", "abed-code", "greendale-secret", "greendale-verifier"} {
+					r.NotContains(output.String(), secret)
+					r.NotContains(entries[0], secret)
+				}
+			}
+		})
+	}
+}
+
 func debugApp(debugRP, debugSecrets bool) *webApp {
 	app := &webApp{}
 	app.debugRP.Store(debugRP)

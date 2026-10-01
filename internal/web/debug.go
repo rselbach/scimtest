@@ -131,7 +131,11 @@ func (a *webApp) writeDebugOIDCTokenPayload(w io.Writer, payload []byte) {
 
 func (a *webApp) writeDebugHTTPRequest(w io.Writer, r *http.Request, body []byte) {
 	writeDebugln(w, "----- request from RP -----")
-	writeDebugf(w, "%s %s %s\n", r.Method, r.URL.RequestURI(), r.Proto)
+	requestURI := r.URL.RequestURI()
+	if !a.debugSecretsEnabled() {
+		requestURI = redactDebugURL(requestURI)
+	}
+	writeDebugf(w, "%s %s %s\n", r.Method, requestURI, r.Proto)
 	writeDebugf(w, "Host: %s\n", r.Host)
 	writeDebugHeaders(w, r.Header, a.debugSecretsEnabled())
 	if len(body) > 0 {
@@ -176,21 +180,22 @@ func writeDebugHeaders(w io.Writer, headers http.Header, includeSecrets bool) {
 				value = "[REDACTED]"
 			}
 			if !includeSecrets && http.CanonicalHeaderKey(key) == "Location" {
-				value = redactLocationHeader(value)
+				value = redactDebugURL(value)
 			}
 			writeDebugf(w, "%s: %s\n", key, value)
 		}
 	}
 }
 
-// redactLocationHeader hides sensitive query values such as the
-// authorization code carried by the authorize endpoint's redirect.
-func redactLocationHeader(value string) string {
+func redactDebugURL(value string) string {
 	parsed, err := url.Parse(value)
 	if err != nil {
 		return "[REDACTED]"
 	}
-	query := parsed.Query()
+	query, err := url.ParseQuery(parsed.RawQuery)
+	if err != nil {
+		return "[REDACTED]"
+	}
 	redacted := false
 	for key := range query {
 		if isSensitiveDebugKey(key) {
@@ -271,7 +276,7 @@ func redactJSONValue(value any) {
 // redacted mode prints them decoded anyway.
 func isSensitiveDebugKey(key string) bool {
 	switch strings.ToLower(key) {
-	case "client_secret", "code", "access_token", "id_token", "refresh_token", "assertion", "samlresponse":
+	case "client_secret", "code", "code_verifier", "access_token", "id_token", "refresh_token", "assertion", "samlresponse":
 		return true
 	default:
 		return false
