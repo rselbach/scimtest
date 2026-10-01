@@ -1170,7 +1170,7 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		HasIDP:                 activeEnvironment.ID != "" && supportsAnyIDP(activeEnvironment),
 		HasOIDC:                activeEnvironment.ID != "" && supportsOIDC(activeEnvironment),
 		HasSAML:                activeEnvironment.ID != "" && supportsSAML(activeEnvironment),
-		HasSCIMEnvironments:    activeEnvironment.SCIMEnabled,
+		HasSCIMEnvironments:    scimTracksDirectory(state),
 		Environments:           globalState.Apps,
 		ActiveEnvironment:      activeEnvironment,
 		GitHubAccount:          a.githubAccountView(),
@@ -1836,7 +1836,7 @@ func (a *webApp) handleToolsDeleteAll(w http.ResponseWriter, r *http.Request) {
 
 	changed := 0
 	message := "no users changed"
-	if scimEnabled(state) {
+	if scimTracksDirectory(state) {
 		for i := range state.Users {
 			if state.Users[i].Deleted {
 				continue
@@ -2178,6 +2178,16 @@ func buildStats(state appState) statsView {
 func scimEnabled(state appState) bool {
 	for _, candidate := range state.Apps {
 		if candidate.SCIMEnabled {
+			return true
+		}
+	}
+	return false
+}
+
+// scimTracksDirectory includes paused apps so remembered deletions can resume.
+func scimTracksDirectory(state appState) bool {
+	for _, candidate := range state.Apps {
+		if candidate.SCIMEnabled || appHasSyncState(state, candidate.ID) {
 			return true
 		}
 	}

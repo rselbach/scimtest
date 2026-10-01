@@ -232,7 +232,7 @@ func (a *webApp) setAPIUserDeleted(w http.ResponseWriter, r *http.Request, delet
 		apiError(w, http.StatusNotFound, "user not found")
 		return
 	}
-	if scimEnabled(state) {
+	if scimTracksDirectory(state) {
 		state.Users[index].Deleted = deleted
 		state.Users[index].Dirty = true
 		state.Users[index].LastError = ""
@@ -254,7 +254,7 @@ func (a *webApp) setAPIUserDeleted(w http.ResponseWriter, r *http.Request, delet
 	}
 	if deleted {
 		message := "user deleted"
-		if scimEnabled(state) {
+		if scimTracksDirectory(state) {
 			message = "user marked for deletion"
 		}
 		writeJSON(w, map[string]string{"message": message})
@@ -292,7 +292,7 @@ func (a *webApp) handleAPIUsersBulkDelete(w http.ResponseWriter, r *http.Request
 		}
 		selected[id] = true
 	}
-	if scimEnabled(state) {
+	if scimTracksDirectory(state) {
 		for i := range state.Users {
 			if selected[state.Users[i].ID] {
 				state.Users[i].Deleted = true
@@ -472,7 +472,7 @@ func (a *webApp) setAPIGroupDeleted(w http.ResponseWriter, r *http.Request, dele
 		apiError(w, http.StatusNotFound, "group not found")
 		return
 	}
-	if scimEnabled(state) {
+	if scimTracksDirectory(state) {
 		state.Groups[index].Deleted = deleted
 		state.Groups[index].Dirty = true
 		state.Groups[index].LastError = ""
@@ -490,7 +490,7 @@ func (a *webApp) setAPIGroupDeleted(w http.ResponseWriter, r *http.Request, dele
 	}
 	if deleted {
 		message := "group deleted"
-		if scimEnabled(state) {
+		if scimTracksDirectory(state) {
 			message = "group marked for deletion"
 		}
 		writeJSON(w, map[string]string{"message": message})
@@ -523,7 +523,7 @@ func (a *webApp) handleAPIGroupsBulkDelete(w http.ResponseWriter, r *http.Reques
 		}
 		selected[id] = true
 	}
-	if scimEnabled(state) {
+	if scimTracksDirectory(state) {
 		for i := range state.Groups {
 			if selected[state.Groups[i].ID] {
 				state.Groups[i].Deleted = true

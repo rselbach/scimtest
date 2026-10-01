@@ -155,7 +155,7 @@ func (a *webApp) handleUsersDelete(w http.ResponseWriter, r *http.Request) {
 		selected[id] = true
 	}
 
-	if scimEnabled(state) {
+	if scimTracksDirectory(state) {
 		for i := range state.Users {
 			if !selected[state.Users[i].ID] {
 				continue
@@ -187,7 +187,7 @@ func (a *webApp) handleUsersDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	message := fmt.Sprintf("deleted %d users", len(selected))
-	if scimEnabled(state) {
+	if scimTracksDirectory(state) {
 		message = fmt.Sprintf("marked %d users for deletion", len(selected))
 	}
 	redirectWithFlash(w, r, dashboardURLWithPage("users", formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: message})
@@ -214,7 +214,7 @@ func (a *webApp) handleUserDeletedState(w http.ResponseWriter, r *http.Request, 
 		a.redirectError(w, r, tab, fmt.Errorf("user %s not found", id))
 		return
 	}
-	if !scimEnabled(state) {
+	if !scimTracksDirectory(state) {
 		if !deleted {
 			a.redirectError(w, r, tab, fmt.Errorf("SCIM is disabled"))
 			return
@@ -344,7 +344,7 @@ func (a *webApp) handleGroupsDelete(w http.ResponseWriter, r *http.Request) {
 		selected[id] = true
 	}
 
-	if scimEnabled(state) {
+	if scimTracksDirectory(state) {
 		for i := range state.Groups {
 			if !selected[state.Groups[i].ID] {
 				continue
@@ -371,7 +371,7 @@ func (a *webApp) handleGroupsDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	message := fmt.Sprintf("deleted %d groups", len(selected))
-	if scimEnabled(state) {
+	if scimTracksDirectory(state) {
 		message = fmt.Sprintf("marked %d groups for deletion", len(selected))
 	}
 	redirectWithFlash(w, r, dashboardURLWithPage("groups", formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: message})
@@ -398,7 +398,7 @@ func (a *webApp) handleGroupDeletedState(w http.ResponseWriter, r *http.Request,
 		a.redirectError(w, r, tab, fmt.Errorf("group %s not found", id))
 		return
 	}
-	if !scimEnabled(state) {
+	if !scimTracksDirectory(state) {
 		if !deleted {
 			a.redirectError(w, r, tab, fmt.Errorf("SCIM is disabled"))
 			return

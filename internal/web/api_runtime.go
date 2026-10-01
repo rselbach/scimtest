@@ -580,7 +580,7 @@ func (a *webApp) handleAPIToolAction(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	case "delete-all":
-		if scimEnabled(state) {
+		if scimTracksDirectory(state) {
 			for i := range state.Users {
 				if !state.Users[i].Deleted {
 					state.Users[i].Deleted = true
