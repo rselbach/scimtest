@@ -76,11 +76,12 @@ type webApp struct {
 	syncJobMu      sync.Mutex
 	syncJobs       map[string]*syncJobSnapshot
 	syncCancels    map[string]context.CancelFunc
-	// oidcMu guards authCodes and accessTokens so sign-in flows never
-	// contend with admin handlers holding mu.
+	// oidcMu guards authCodes, accessTokens, and refreshTokens so sign-in
+	// flows never contend with admin handlers holding mu.
 	oidcMu           sync.Mutex
 	authCodes        map[string]authCode
 	accessTokens     map[string]accessToken
+	refreshTokens    map[string]refreshToken
 	oidcInspectorMu  sync.Mutex
 	oidcInspections  map[string][]oidcInspection
 	samlInspectorMu  sync.Mutex
@@ -632,6 +633,7 @@ func Run(options ...RunOptions) error {
 		requireGitHubAccount: opts.RequireGitHubAccount,
 		authCodes:            make(map[string]authCode),
 		accessTokens:         make(map[string]accessToken),
+		refreshTokens:        make(map[string]refreshToken),
 	}
 	app.debugRP.Store(opts.Debug)
 	app.debugSecrets.Store(opts.DebugSecrets)

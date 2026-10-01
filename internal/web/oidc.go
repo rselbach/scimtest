@@ -33,6 +33,20 @@ type authCode struct {
 	Redeeming     bool
 }
 
+// refreshTokenLifetime bounds a refresh token. Each refresh rotates the token
+// and starts a new lifetime.
+const refreshTokenLifetime = 24 * time.Hour
+
+// refreshToken keeps the grant an offline_access authorization started, so a
+// refresh can re-check the user and issue tokens for the original scope.
+type refreshToken struct {
+	AppSlug   string
+	ClientID  string
+	UserID    string
+	Scope     string
+	ExpiresAt time.Time
+}
+
 type accessToken struct {
 	AppSlug   string
 	UserID    string
@@ -51,7 +65,7 @@ func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 	if app.OIDCPublicClient {
 		authMethods = []string{"none"}
 	}
-	scopes := []string{"openid", "profile", "email"}
+	scopes := []string{"openid", "profile", "email", "offline_access"}
 	if app.IncludeGroupsClaim {
 		scopes = append(scopes, "groups")
 	}
@@ -62,7 +76,7 @@ func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 		"userinfo_endpoint":                     issuer + "/userinfo",
 		"jwks_uri":                              issuer + "/jwks",
 		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 []string{"authorization_code"},
+		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
 		"subject_types_supported":               []string{"public"},
 		"id_token_signing_alg_values_supported": []string{"RS256"},
 		"scopes_supported":                      scopes,
@@ -206,8 +220,9 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	if r.FormValue("grant_type") != "authorization_code" {
-		a.failOAuth(w, app, "token", http.StatusBadRequest, "unsupported_grant_type", "only authorization_code is supported")
+	grantType := r.FormValue("grant_type")
+	if grantType != "authorization_code" && grantType != "refresh_token" {
+		a.failOAuth(w, app, "token", http.StatusBadRequest, "unsupported_grant_type", "grant_type must be authorization_code or refresh_token")
 		return
 	}
 	if !clientAuthenticated(r, app) {
@@ -217,6 +232,10 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("WWW-Authenticate", `Basic realm="scimtest", charset="UTF-8"`)
 		}
 		a.failOAuth(w, app, "token", http.StatusUnauthorized, "invalid_client", "client authentication failed")
+		return
+	}
+	if grantType == "refresh_token" {
+		a.refreshOIDCTokens(w, r, state, app)
 		return
 	}
 
@@ -332,17 +351,115 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt: now.Add(time.Hour),
 		Faults:    code.Faults,
 	}
-	tokenDetail := "ID and access tokens issued to " + app.OIDCClientID
-	if code.Faults.active() {
-		tokenDetail += " (faults injected)"
-	}
-	a.recordFlowEvent(app.Slug, "oidc", "token", "ok", userLabel(user), tokenDetail)
-	writeJSON(w, map[string]any{
+	response := map[string]any{
 		"access_token": access,
 		"token_type":   "Bearer",
 		"expires_in":   3600,
 		"id_token":     idToken,
 		"scope":        code.Scope,
+	}
+	tokenDetail := "ID and access tokens issued to " + app.OIDCClientID
+	if hasOIDCScope(code.Scope, "offline_access") {
+		refresh, err := a.issueRefreshToken(refreshToken{AppSlug: app.Slug, ClientID: code.ClientID, UserID: user.ID, Scope: code.Scope}, now)
+		if err != nil {
+			a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
+			return
+		}
+		response["refresh_token"] = refresh
+		tokenDetail = "ID, access, and refresh tokens issued to " + app.OIDCClientID
+	}
+	if code.Faults.active() {
+		tokenDetail += " (faults injected)"
+	}
+	a.recordFlowEvent(app.Slug, "oidc", "token", "ok", userLabel(user), tokenDetail)
+	writeJSON(w, response)
+}
+
+// issueRefreshToken stores grant under a new refresh token value. The caller
+// holds oidcMu.
+func (a *webApp) issueRefreshToken(grant refreshToken, now time.Time) (string, error) {
+	value, err := randomSecret(32)
+	if err != nil {
+		return "", err
+	}
+	grant.ExpiresAt = now.Add(refreshTokenLifetime)
+	a.refreshTokens[value] = grant
+	return value, nil
+}
+
+// refreshOIDCTokens redeems a refresh token (RFC 6749 section 6). The token
+// rotates: the presented value stops working and the response carries its
+// replacement. A narrower scope applies to the new access and ID tokens
+// only; the replacement refresh token keeps the original scope.
+func (a *webApp) refreshOIDCTokens(w http.ResponseWriter, r *http.Request, state appState, app app) {
+	a.oidcMu.Lock()
+	defer a.oidcMu.Unlock()
+	now := time.Now()
+	a.pruneExpiredOIDCCredentials(now)
+
+	presented := r.FormValue("refresh_token")
+	grant, ok := a.refreshTokens[presented]
+	if !ok || grant.AppSlug != app.Slug || grant.ClientID != app.OIDCClientID {
+		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "refresh token is invalid, expired, or revoked")
+		return
+	}
+	scope := grant.Scope
+	if requested := r.FormValue("scope"); requested != "" {
+		for _, value := range strings.Fields(requested) {
+			if !hasOIDCScope(grant.Scope, value) {
+				a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_scope", "scope "+value+" was not granted")
+				return
+			}
+		}
+		scope = requested
+	}
+	user, ok := userByID(state.Users, grant.UserID)
+	if !ok || !user.Active || user.Deleted {
+		delete(a.refreshTokens, presented)
+		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "user is inactive or missing")
+		return
+	}
+
+	// OIDC Core section 12.2: same iss, sub, and aud, a new iat, and no nonce.
+	claims := userClaims(state, app, user, scope)
+	claims["iss"] = oidcIssuer(a.effectiveIDPBaseURL(r, state), app)
+	claims["aud"] = app.OIDCClientID
+	claims["iat"] = now.Unix()
+	claims["exp"] = now.Add(time.Hour).Unix()
+	idToken, err := a.signJWT(claims, faultOptions{})
+	if err != nil {
+		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
+		return
+	}
+	access, err := randomSecret(32)
+	if err != nil {
+		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
+		return
+	}
+	replacement, err := a.issueRefreshToken(grant, now)
+	if err != nil {
+		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
+		return
+	}
+	delete(a.refreshTokens, presented)
+	a.accessTokens[access] = accessToken{
+		AppSlug:   app.Slug,
+		UserID:    user.ID,
+		Scope:     scope,
+		ExpiresAt: now.Add(time.Hour),
+	}
+	if err := a.rememberOIDCInspection(app, user, authCode{ClientID: grant.ClientID, Scope: scope}, "Tokens refreshed", claims, idToken, now); err != nil {
+		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
+		return
+	}
+	a.recordFlowEvent(app.Slug, "oidc", "token", "ok", userLabel(user), "Tokens refreshed for "+grant.ClientID+"; refresh token rotated")
+	writeJSON(w, map[string]any{
+		"access_token":  access,
+		"token_type":    "Bearer",
+		"expires_in":    3600,
+		"id_token":      idToken,
+		"refresh_token": replacement,
+		"scope":         scope,
 	})
 }
 
@@ -393,6 +510,11 @@ func (a *webApp) pruneExpiredOIDCCredentials(now time.Time) {
 	for value, token := range a.accessTokens {
 		if !token.ExpiresAt.After(now) {
 			delete(a.accessTokens, value)
+		}
+	}
+	for value, token := range a.refreshTokens {
+		if !token.ExpiresAt.After(now) {
+			delete(a.refreshTokens, value)
 		}
 	}
 }

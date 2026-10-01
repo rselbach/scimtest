@@ -1210,10 +1210,11 @@ func newTestIDPApp(t *testing.T) *webApp {
 	certDER, err := selfSignedCert(key)
 	require.NoError(t, err)
 	return &webApp{
-		signingKey:   key,
-		certDER:      certDER,
-		authCodes:    make(map[string]authCode),
-		accessTokens: make(map[string]accessToken),
+		signingKey:    key,
+		certDER:       certDER,
+		authCodes:     make(map[string]authCode),
+		accessTokens:  make(map[string]accessToken),
+		refreshTokens: make(map[string]refreshToken),
 	}
 }
 

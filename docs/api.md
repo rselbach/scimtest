@@ -172,6 +172,10 @@ All paths in this section are relative to `/environments/{id}`.
 OIDC authorization accepts `user_id` and standard authorization fields,
 including `client_id`, `redirect_uri`, `scope`, `state`, `nonce`, and PKCE
 parameters. Codes are redeemed at the standard `/oidc/{slug}/token` endpoint.
+With `offline_access` in the scope, the token response includes a
+`refresh_token`. Redeem it at the same endpoint with
+`grant_type=refresh_token`. Each refresh returns a replacement and
+invalidates the presented token.
 Userinfo remains at `/oidc/{slug}/userinfo`. The
 [automation example](automation.md) performs both requests.
 
