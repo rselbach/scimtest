@@ -493,6 +493,96 @@ func (a *webApp) handleOIDCUserinfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, claims)
 }
 
+// oidcTokenHolder counts the live tokens one user holds for an app.
+type oidcTokenHolder struct {
+	UserID        string `json:"user_id"`
+	User          string `json:"user"`
+	AccessTokens  int    `json:"access_tokens"`
+	RefreshTokens int    `json:"refresh_tokens"`
+}
+
+// oidcTokenHolders lists the users holding live tokens for an app, sorted by
+// user label.
+func (a *webApp) oidcTokenHolders(slug string, users []user) []oidcTokenHolder {
+	a.oidcMu.Lock()
+	defer a.oidcMu.Unlock()
+	a.pruneExpiredOIDCCredentials(time.Now())
+	byUser := make(map[string]*oidcTokenHolder)
+	holder := func(userID string) *oidcTokenHolder {
+		if byUser[userID] == nil {
+			byUser[userID] = &oidcTokenHolder{UserID: userID, User: userID}
+			if found, ok := userByID(users, userID); ok {
+				byUser[userID].User = userLabel(found)
+			}
+		}
+		return byUser[userID]
+	}
+	for _, token := range a.accessTokens {
+		if token.AppSlug == slug {
+			holder(token.UserID).AccessTokens++
+		}
+	}
+	for _, token := range a.refreshTokens {
+		if token.AppSlug == slug {
+			holder(token.UserID).RefreshTokens++
+		}
+	}
+	holders := make([]oidcTokenHolder, 0, len(byUser))
+	for _, found := range byUser {
+		holders = append(holders, *found)
+	}
+	slices.SortFunc(holders, func(x, y oidcTokenHolder) int { return strings.Compare(x.User, y.User) })
+	return holders
+}
+
+// revokeOIDCTokens deletes an app's access and refresh tokens, or only
+// userID's when it is set, and reports how many it deleted.
+func (a *webApp) revokeOIDCTokens(slug, userID string) int {
+	a.oidcMu.Lock()
+	defer a.oidcMu.Unlock()
+	matches := func(appSlug, tokenUserID string) bool {
+		return appSlug == slug && (userID == "" || tokenUserID == userID)
+	}
+	revoked := 0
+	for value, token := range a.accessTokens {
+		if matches(token.AppSlug, token.UserID) {
+			delete(a.accessTokens, value)
+			revoked++
+		}
+	}
+	for value, token := range a.refreshTokens {
+		if matches(token.AppSlug, token.UserID) {
+			delete(a.refreshTokens, value)
+			revoked++
+		}
+	}
+	return revoked
+}
+
+func (a *webApp) handleOIDCTokenRevoke(w http.ResponseWriter, r *http.Request) {
+	state, foundApp, ok := appForProtocol(w, r, supportsOIDC)
+	if !ok {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	userID := r.FormValue("user_id")
+	revoked := a.revokeOIDCTokens(foundApp.Slug, userID)
+	a.recordFlowEvent(foundApp.Slug, "oidc", "revoke", "ok", revokedUserLabel(state.Users, userID), fmt.Sprintf("Revoked %d tokens", revoked))
+	http.Redirect(w, r, inspectorReturnPath(r, foundApp), http.StatusSeeOther)
+}
+
+// revokedUserLabel names the user whose tokens were revoked, or no one when
+// every user's tokens were.
+func revokedUserLabel(users []user, userID string) string {
+	if found, ok := userByID(users, userID); ok {
+		return userLabel(found)
+	}
+	return userID
+}
+
 func oidcBearerToken(value string) (string, bool) {
 	scheme, token, found := strings.Cut(strings.TrimSpace(value), " ")
 	if !found || !strings.EqualFold(scheme, "Bearer") || token == "" || strings.ContainsAny(token, " \t\r\n") {

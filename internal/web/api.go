@@ -97,6 +97,8 @@ func apiRoutes() []apiRoute {
 		{http.MethodPost, "/api/v1/environments/{environment_id}/restore", []string{"version", "exported_at", "state", "user_operations", "group_operations", "user_sync", "group_sync"}, (*webApp).handleAPIRestore, true},
 		{http.MethodPost, "/api/v1/environments/{environment_id}/oidc/authorize", []string{"user_id", "login_identifier", "response_type", "client_id", "redirect_uri", "scope", "state", "nonce", "code_challenge", "code_challenge_method"}, (*webApp).handleAPIOIDCAuthorize, false},
 		{http.MethodPost, "/api/v1/environments/{environment_id}/oidc/playground", []string{"user_id", "login_identifier", "faults"}, (*webApp).handleAPIOIDCPlayground, false},
+		{http.MethodGet, "/api/v1/environments/{environment_id}/oidc/tokens", nil, (*webApp).handleAPIOIDCTokens, false},
+		{http.MethodDelete, "/api/v1/environments/{environment_id}/oidc/tokens", nil, (*webApp).handleAPIOIDCTokensRevoke, false},
 		{http.MethodPost, "/api/v1/environments/{environment_id}/saml/sign-in", []string{"user_id", "login_identifier", "relay_state", "saml_request", "sig_alg", "signature", "redirect_query"}, (*webApp).handleAPISAMLSignIn, false},
 		{http.MethodGet, "/api/v1/traffic", nil, (*webApp).handleAPITraffic, false},
 		{http.MethodPatch, "/api/v1/traffic/settings", []string{"record", "record_secrets"}, (*webApp).handleAPITrafficSettings, false},

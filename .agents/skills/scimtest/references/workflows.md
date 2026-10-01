@@ -179,6 +179,12 @@ presets, then `POST /scenarios/arm` under the same environment with `preset_id`
 and an optional integer `count`. Inspect the returned run and disarm with
 `POST /scenarios/disarm`. These scenarios expire after fifteen minutes.
 
+To test refresh handling, include `offline_access` in the OIDC scope and redeem
+the returned `refresh_token` with `grant_type=refresh_token`. Each refresh
+rotates the token. `GET /environments/{ENV_ID}/oidc/tokens` lists users with
+live tokens. `DELETE` on the same path revokes them all, or one user's with
+`?user_id=`, so the next refresh fails with `invalid_grant`.
+
 Use environment `/flows` and `/inspections/oidc` or `/inspections/saml` for
 protocol outcomes. `/traffic` is global; `PATCH /traffic/settings` accepts
 `record` and `record_secrets`. Keep secret recording off unless the specific

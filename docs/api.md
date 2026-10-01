@@ -161,6 +161,8 @@ All paths in this section are relative to `/environments/{id}`.
 | --- | --- | --- |
 | POST | `/oidc/authorize` | Authorize a directory user and return `code`, `redirect_uri`, and `state`. |
 | POST | `/oidc/playground` | Run authorization, code exchange, and userinfo locally and return the results. |
+| GET | `/oidc/tokens` | Users holding live access or refresh tokens, with counts. |
+| DELETE | `/oidc/tokens` | Revoke every token, or one user's with `?user_id=`. Returns `revoked`. |
 | POST | `/saml/sign-in` | Return `acs_url`, base64 `saml_response`, and `relay_state`. |
 | GET | `/inspections/oidc`, `/inspections/saml` | Recent protocol inspections. |
 | GET | `/flows` | Recent flow activity, including failures. |
@@ -175,7 +177,8 @@ parameters. Codes are redeemed at the standard `/oidc/{slug}/token` endpoint.
 With `offline_access` in the scope, the token response includes a
 `refresh_token`. Redeem it at the same endpoint with
 `grant_type=refresh_token`. Each refresh returns a replacement and
-invalidates the presented token.
+invalidates the presented token. After a revocation, refreshes fail with
+`invalid_grant` and userinfo calls fail with `invalid_token`.
 Userinfo remains at `/oidc/{slug}/userinfo`. The
 [automation example](automation.md) performs both requests.
 

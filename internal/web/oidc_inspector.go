@@ -30,6 +30,7 @@ type oidcInspectorPageData struct {
 	Found       bool
 	History     []oidcInspection
 	Events      []flowEvent
+	Tokens      []oidcTokenHolder
 	ArmedFaults string
 	ReturnTab   string
 }
@@ -89,13 +90,14 @@ func (a *webApp) handleOIDCInspector(w http.ResponseWriter, r *http.Request) {
 	a.handleIndex(w, request)
 }
 
-func (a *webApp) buildOIDCInspectorPageData(foundApp app) *oidcInspectorPageData {
+func (a *webApp) buildOIDCInspectorPageData(foundApp app, users []user) *oidcInspectorPageData {
 	a.oidcInspectorMu.Lock()
 	entries := append([]oidcInspection(nil), a.oidcInspections[foundApp.Slug]...)
 	a.oidcInspectorMu.Unlock()
 	data := &oidcInspectorPageData{
 		App:         foundApp,
 		Events:      a.flowEvents(foundApp.Slug),
+		Tokens:      a.oidcTokenHolders(foundApp.Slug, users),
 		ArmedFaults: a.peekArmedFaults(foundApp.Slug).describe(),
 		ReturnTab:   "oidc-inspector",
 	}

@@ -45,6 +45,47 @@ func (a *webApp) apiEnvironmentApp(w http.ResponseWriter, r *http.Request) (app,
 	found, _ := apiAppByID(state, r.PathValue("environment_id"))
 	return found, true
 }
+
+// apiOIDCEnvironment loads an environment that must have OIDC enabled.
+func (a *webApp) apiOIDCEnvironment(w http.ResponseWriter, r *http.Request) (appState, app, bool) {
+	state, err := a.loadAPIEnvironment(r.PathValue("environment_id"))
+	if err != nil {
+		apiError(w, http.StatusNotFound, err.Error())
+		return appState{}, app{}, false
+	}
+	found, _ := apiAppByID(state, r.PathValue("environment_id"))
+	if !supportsOIDC(found) {
+		apiError(w, http.StatusBadRequest, "OIDC is not enabled")
+		return appState{}, app{}, false
+	}
+	return state, found, true
+}
+
+func (a *webApp) handleAPIOIDCTokens(w http.ResponseWriter, r *http.Request) {
+	state, found, ok := a.apiOIDCEnvironment(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, map[string]any{"holders": a.oidcTokenHolders(found.Slug, state.Users)})
+}
+
+// handleAPIOIDCTokensRevoke revokes every token for the environment, or only
+// the user named by the user_id query parameter.
+func (a *webApp) handleAPIOIDCTokensRevoke(w http.ResponseWriter, r *http.Request) {
+	state, found, ok := a.apiOIDCEnvironment(w, r)
+	if !ok {
+		return
+	}
+	userID := r.URL.Query().Get("user_id")
+	if _, known := userByID(state.Users, userID); userID != "" && !known {
+		apiError(w, http.StatusNotFound, fmt.Sprintf("user %q not found", userID))
+		return
+	}
+	revoked := a.revokeOIDCTokens(found.Slug, userID)
+	a.recordFlowEvent(found.Slug, "oidc", "revoke", "ok", revokedUserLabel(state.Users, userID), fmt.Sprintf("Revoked %d tokens", revoked))
+	writeJSON(w, map[string]int{"revoked": revoked})
+}
+
 func (a *webApp) handleAPIFaultGet(w http.ResponseWriter, r *http.Request) {
 	found, ok := a.apiEnvironmentApp(w, r)
 	if !ok {

@@ -152,8 +152,9 @@ Add `offline_access` to the OIDC scope to receive a refresh token. Each
 refresh rotates the token: the response carries a replacement, and the
 presented token stops working. A refresh can narrow the scope but not widen
 it. It fails with `invalid_grant` once the user is deactivated or deleted.
-Refresh tokens last 24 hours and are kept in memory, so restarting scimtest
-revokes them.
+The OIDC inspector lists users with live tokens and can revoke one user's
+tokens or all of them, as an administrator would. Refresh tokens last 24
+hours and are kept in memory, so restarting scimtest revokes them.
 
 Paste the service provider's RSA encryption certificate into SAML setup to
 wrap that signed assertion in `EncryptedAssertion` (AES-128-GCM, AES-192-GCM,

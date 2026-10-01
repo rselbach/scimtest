@@ -992,6 +992,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /inspect/oidc/{slug}", a.handleOIDCInspector)
 	mux.HandleFunc("GET /inspect/oidc/{slug}/playground", a.handleOIDCPlayground)
 	mux.HandleFunc("GET /inspect/oidc/{slug}/playground/callback", a.handleOIDCPlaygroundCallback)
+	mux.HandleFunc("POST /inspect/oidc/{slug}/revoke", a.handleOIDCTokenRevoke)
 	mux.HandleFunc("GET /inspect/saml/{slug}", a.handleSAMLInspector)
 	mux.HandleFunc("GET /inspect/resilience/{slug}", a.handleResilience)
 	mux.HandleFunc("POST /inspect/resilience/{slug}/arm", a.handleResilienceArm)
@@ -1182,7 +1183,7 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		data.Resilience = a.buildResiliencePageData(activeEnvironment, strings.TrimSpace(r.URL.Query().Get("error")))
 	}
 	if tab == "oidc-inspector" && data.HasOIDC {
-		data.OIDCInspector = a.buildOIDCInspectorPageData(activeEnvironment)
+		data.OIDCInspector = a.buildOIDCInspectorPageData(activeEnvironment, state.Users)
 	}
 	if tab == "saml-inspector" && data.HasSAML {
 		data.SAMLInspector = a.buildSAMLInspectorPageData(activeEnvironment)
