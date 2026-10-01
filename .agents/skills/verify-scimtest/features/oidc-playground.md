@@ -16,6 +16,9 @@ userinfo.
 
 - On Environments, expand `Show options for Greendale Portal` and choose `Test
   with built-in RP`.
+- For a public OIDC client, `Test sign-in` on the same card also opens the
+  playground. Complete the chooser and confirm `Token response 200 OK` to
+  verify that the PKCE verifier survives through code redemption.
 - Open `OIDC Inspector` from the active-environment sidebar and use its
   playground action.
 - Open `/inspect/oidc/greendale-portal/playground` on the run origin.

@@ -737,32 +737,6 @@
       replaceListCard(new URL(link.href, window.location.href));
     });
 
-    function base64urlBytes(bytes) {
-      let binary = '';
-      for (const byte of bytes) binary += String.fromCharCode(byte);
-      return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    }
-
-    // Public clients must use PKCE, so a static test link cannot work.
-    // Generate a challenge on click and open the authorize endpoint with it.
-    document.addEventListener('click', async function (event) {
-      const link = event.target.closest('[data-pkce-test]');
-      if (!link) return;
-      event.preventDefault();
-      if (!(window.crypto && window.crypto.subtle)) {
-        alert('This test link needs crypto.subtle, which is only available in a secure context.');
-        return;
-      }
-      const verifierBytes = new Uint8Array(32);
-      crypto.getRandomValues(verifierBytes);
-      const verifier = base64urlBytes(verifierBytes);
-      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
-      const url = new URL(link.href, window.location.href);
-      url.searchParams.set('code_challenge', base64urlBytes(new Uint8Array(digest)));
-      url.searchParams.set('code_challenge_method', 'S256');
-      window.open(url, '_blank', 'noreferrer');
-    });
-
     const confirmationOverlay = document.querySelector('[data-confirm-overlay]');
     const confirmationMessage = confirmationOverlay ? confirmationOverlay.querySelector('[data-confirm-message]') : null;
     const confirmationCancel = confirmationOverlay ? confirmationOverlay.querySelector('[data-confirm-cancel]') : null;

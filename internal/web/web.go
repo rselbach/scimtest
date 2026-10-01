@@ -295,17 +295,14 @@ type appRowView struct {
 	OIDCInspectorURL  string
 	SAMLInspectorURL  string
 	ResilienceURL     string
-	// OIDCPKCETestURL is an authorize URL missing its code_challenge; the
-	// page script generates a PKCE pair on click and appends the challenge.
-	OIDCPKCETestURL string
-	SAMLTestURL     string
-	SCIMEnabled     bool
-	OIDCStatus      setupStatusView
-	SAMLStatus      setupStatusView
-	SCIMStatus      setupStatusView
-	HasSetup        bool
-	Active          bool
-	OpenURL         string
+	SAMLTestURL       string
+	SCIMEnabled       bool
+	OIDCStatus        setupStatusView
+	SAMLStatus        setupStatusView
+	SCIMStatus        setupStatusView
+	HasSetup          bool
+	Active            bool
+	OpenURL           string
 }
 
 type setupStatusView struct {
@@ -2401,7 +2398,9 @@ func buildAppRows(state appState, environmentID string, base string) []appRowVie
 			row.OIDCDiscovery = base + "/oidc/" + app.Slug + "/.well-known/openid-configuration"
 			row.OIDCInspectorURL = dashboardURL("oidc-inspector", map[string]string{"environment": app.ID})
 			row.OIDCPlaygroundURL = "/inspect/oidc/" + url.PathEscape(app.Slug) + "/playground"
-			if len(app.OIDCRedirectURIs) > 0 {
+			if app.OIDCPublicClient {
+				row.OIDCTestURL = row.OIDCPlaygroundURL
+			} else if len(app.OIDCRedirectURIs) > 0 {
 				query := url.Values{
 					"response_type": {"code"},
 					"client_id":     {app.OIDCClientID},
@@ -2417,12 +2416,7 @@ func buildAppRows(state appState, environmentID string, base string) []appRowVie
 				if nonce, err := randomSecret(12); err == nil {
 					query.Set("nonce", nonce)
 				}
-				testURL := base + "/oidc/" + app.Slug + "/authorize?" + query.Encode()
-				if app.OIDCPublicClient {
-					row.OIDCPKCETestURL = testURL
-				} else {
-					row.OIDCTestURL = testURL
-				}
+				row.OIDCTestURL = base + "/oidc/" + app.Slug + "/authorize?" + query.Encode()
 			}
 		}
 		if row.SAMLStatus.Configured {

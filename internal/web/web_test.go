@@ -2834,7 +2834,7 @@ func TestIndexRendersBulkGroupSelection(t *testing.T) {
 	r.NotContains(body, `name="group_ids" value="g2"`)
 }
 
-func TestAppsTabRendersPKCETestLinkForPublicClients(t *testing.T) {
+func TestAppsTabRendersPlaygroundTestLinkForPublicClients(t *testing.T) {
 	r := require.New(t)
 	setTestStateFile(t)
 	r.NoError(saveState(appState{
@@ -2855,8 +2855,8 @@ func TestAppsTabRendersPKCETestLinkForPublicClients(t *testing.T) {
 
 	r.Equal(http.StatusOK, rec.Code)
 	body := rec.Body.String()
-	r.Contains(body, "data-pkce-test")
-	r.Contains(body, "http://idp.test/oidc/public-spa/authorize?")
+	r.NotContains(body, "data-pkce-test")
+	r.Contains(body, `href="/inspect/oidc/public-spa/playground" target="_blank" rel="noreferrer">Test sign-in</a>`)
 	r.NotContains(body, `<div class="mono">public-spa</div>`)
 }
 
