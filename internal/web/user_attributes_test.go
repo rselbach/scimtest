@@ -169,7 +169,7 @@ func TestUserClaimsIncludeUserAttributes(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			r := require.New(t)
-			claims := userClaims(appState{Users: tc.users}, app{}, troy, tc.scope)
+			claims := userClaims(appState{Users: tc.users}, app{}, troy, tc.scope, "")
 			for claim, want := range tc.want {
 				r.Equal(want, claims[claim], claim)
 			}

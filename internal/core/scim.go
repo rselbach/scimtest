@@ -23,6 +23,8 @@ type SCIMClient struct {
 	client      *http.Client
 	onRateLimit func(TraceTarget, time.Duration, string, int)
 	traces      []SyncTraceEntry
+	// entra sends requests in Microsoft Entra ID's SCIM dialect.
+	entra bool
 }
 
 type TraceTarget struct {
@@ -235,6 +237,7 @@ func newSCIMClient(ctx context.Context, cfg Config) (*SCIMClient, error) {
 		token:   token,
 		filter:  cfg.FilterSupported,
 		patch:   cfg.PatchSupported,
+		entra:   NormalizePersona(cfg.Persona) == PersonaEntra,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},

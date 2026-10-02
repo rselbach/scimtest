@@ -131,9 +131,10 @@ var environmentAPIFields = []string{
 	"oidc_jwt_access_tokens", "oidc_access_token_audience",
 	"saml_entity_id", "saml_acs_url", "saml_audience", "saml_name_id_field",
 	"saml_email_attribute_name", "saml_request_certificate_pem", "saml_encryption_certificate_pem",
-	"saml_encryption_algorithm", "saml_signing_mode", "include_groups_claim", "chooser_mode",
-	"oidc_claim_mappings", "saml_attribute_mappings", "scim_base_url", "scim_bearer_token",
-	"scim_auto_open_trace", "regenerate_oidc_secret",
+	"saml_encryption_algorithm", "saml_signing_mode", "include_groups_claim", "chooser_mode", "persona",
+	"groups_overage_threshold", "oidc_claim_mappings",
+	"saml_attribute_mappings", "scim_base_url", "scim_bearer_token", "scim_auto_open_trace",
+	"regenerate_oidc_secret",
 }
 
 var userAPIFields = []string{"given_name", "family_name", "email", "username", "active"}
@@ -164,6 +165,8 @@ type apiEnvironmentRequest struct {
 	SAMLSigningMode         *string                `json:"saml_signing_mode"`
 	IncludeGroupsClaim      *bool                  `json:"include_groups_claim"`
 	ChooserMode             *string                `json:"chooser_mode"`
+	Persona                 *string                `json:"persona"`
+	GroupsOverageThreshold  *int                   `json:"groups_overage_threshold"`
 	OIDCClaimMappings       *oidcClaimMappings     `json:"oidc_claim_mappings"`
 	SAMLAttributeMappings   *samlAttributeMappings `json:"saml_attribute_mappings"`
 	SCIMBaseURL             *string                `json:"scim_base_url"`
@@ -477,6 +480,8 @@ func apiEnvironmentForm(current app, request apiEnvironmentRequest) url.Values {
 	values.Set("saml_signing_mode", current.SAMLSigningMode)
 	setFormBool(values, "include_groups_claim", current.IncludeGroupsClaim)
 	values.Set("chooser_mode", current.ChooserMode)
+	values.Set("persona", current.Persona)
+	values.Set("groups_overage_threshold", strconv.Itoa(current.GroupsOverageThreshold))
 	values.Set("oidc_claim_name", current.OIDCClaimMappings.Name)
 	values.Set("oidc_claim_given_name", current.OIDCClaimMappings.GivenName)
 	values.Set("oidc_claim_family_name", current.OIDCClaimMappings.FamilyName)
@@ -517,6 +522,10 @@ func apiEnvironmentForm(current app, request apiEnvironmentRequest) url.Values {
 	applyString(values, "saml_signing_mode", request.SAMLSigningMode)
 	applyBool(values, "include_groups_claim", request.IncludeGroupsClaim)
 	applyString(values, "chooser_mode", request.ChooserMode)
+	applyString(values, "persona", request.Persona)
+	if request.GroupsOverageThreshold != nil {
+		values.Set("groups_overage_threshold", strconv.Itoa(*request.GroupsOverageThreshold))
+	}
 	if request.OIDCClaimMappings != nil {
 		values.Set("oidc_claim_name", request.OIDCClaimMappings.Name)
 		values.Set("oidc_claim_given_name", request.OIDCClaimMappings.GivenName)

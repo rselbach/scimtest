@@ -134,6 +134,9 @@ steps, the authentication design, and release packaging details.
 - **User attributes.** Give users enterprise fields (employee number, cost
   center, organization, division, department, and manager) and custom
   attributes such as `role=student`, to test attribute-based role mapping.
+- **Provider personas.** Shape an environment's claims and SCIM requests like
+  Microsoft Entra ID, Okta, or Google, to catch breaks before moving an app
+  from one provider to another.
 - **Config export.** Download SAML IDP metadata and the signing
   certificate as files, or fetch `GET /apps/{id}/config.json` for a
   machine-readable connection bundle to use in CI.
@@ -153,6 +156,7 @@ Each environment can expose OIDC, SAML, or both, under its endpoint name
 - OIDC userinfo: `/oidc/{slug}/userinfo`
 - OIDC end session (RP-initiated logout): `/oidc/{slug}/logout`
 - OIDC JWKS: `/oidc/{slug}/jwks`
+- Entra ID groups overage: `/oidc/{slug}/users/{oid}/getMemberObjects`
 - OIDC token introspection: `/oidc/{slug}/introspect`
 - OIDC token revocation: `/oidc/{slug}/revoke`
 - SAML metadata: `/saml/{slug}/metadata` (`?download=1` for a file)
@@ -294,6 +298,41 @@ never replace a claim or attribute that scimtest already sends. SCIM does not
 send them, and SCIM import keeps the local values. A deleted manager stops
 appearing in claims, attributes, and SCIM payloads.
 
+An environment's **Provider persona** shapes its OIDC claims, and for Entra
+ID its SCIM requests, the way that provider sends them. **Generic** is
+scimtest's own shape. ID tokens and userinfo change as follows:
+
+- **Microsoft Entra ID.** Every token carries `tid`, a tenant GUID that stays
+  the same for the environment. With `profile`, tokens also carry `oid`, a
+  GUID that stays the same for the user, and `upn`. `preferred_username` is
+  the UPN: the username, or the username at the email's domain when the
+  username has no `@`. `email_verified` is left out, as Entra ID leaves it
+  out. When a user has more groups than the **groups overage threshold**
+  (200 by default), the token drops `groups` and carries `_claim_names` and
+  `_claim_sources` instead. The source endpoint,
+  `POST /oidc/{slug}/users/{oid}/getMemberObjects`, answers like Microsoft
+  Graph: send the user's access token and `{"securityEnabledOnly": false}`,
+  and the response's `value` lists the groups. The token must have the
+  `groups` scope and belong to that user.
+- **Okta.** Tokens carry `ver: 1`. The `groups` claim starts with
+  `Everyone`, the group Okta puts every user in.
+- **Google.** Tokens carry `hd`, the email's domain, except for `gmail.com`
+  addresses. `email_verified` stays.
+
+Claim mappings still apply. When a mapping renames a field to a claim that
+the persona also sends, the mapped value wins. Personas do not change SAML
+assertions.
+
+The Entra ID persona also changes SCIM sync to match Entra ID's default
+dialect. Before every user or group write, scimtest looks the resource up
+with `filter=externalId eq "..."` and nothing else. If the filter fails,
+scimtest does not fall back to listing the collection. Updates are always
+`PATCH`, with one operation per changed attribute. Operations use capitalized
+`op` values (`Add`, `Replace`, `Remove`) and paths such as
+`emails[type eq "work"].value`. `active` is sent as the string `"True"` or
+`"False"`. The manager is sent as a bare ID. Group updates add and remove
+only the members that changed. Creates use `POST` as before.
+
 Paste the service provider's RSA encryption certificate into SAML setup to
 wrap the assertion in `EncryptedAssertion` (AES-128-GCM, AES-192-GCM, or
 AES-256-GCM, RSA-OAEP). AES-256-GCM is the default. The assertion is signed
@@ -364,6 +403,7 @@ GET /oidc/{slug}/jwks
 GET,POST /oidc/{slug}/authorize
 POST /oidc/{slug}/token
 GET,POST /oidc/{slug}/userinfo
+POST /oidc/{slug}/users/{oid}/getMemberObjects
 POST /oidc/{slug}/introspect
 POST /oidc/{slug}/revoke
 GET,POST /oidc/{slug}/logout

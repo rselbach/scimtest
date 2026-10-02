@@ -24,6 +24,8 @@ type Config struct {
 	SigningCertificatePEM string `json:"signing_certificate_pem,omitempty"`
 	FilterSupported       bool   `json:"filter_supported,omitempty"`
 	PatchSupported        bool   `json:"patch_supported,omitempty"`
+	// Persona is the app's provider persona, projected for the SCIM client.
+	Persona string `json:"-"`
 	// SCIMEnterpriseUsed remembers that this environment manages enterprise
 	// values, so clearing its last value still sends the extension.
 	SCIMEnterpriseUsed bool `json:"scim_enterprise_used,omitempty"`
@@ -207,6 +209,11 @@ type App struct {
 	SCIMCapabilitiesKnown   bool                  `json:"scim_capabilities_known,omitempty"`
 	SCIMPatchSupported      bool                  `json:"scim_patch_supported,omitempty"`
 	SCIMFilterSupported     bool                  `json:"scim_filter_supported,omitempty"`
+	// Persona shapes OIDC claims and SCIM requests like a real provider.
+	Persona string `json:"persona,omitempty"`
+	// GroupsOverageThreshold is the Entra ID group count above which tokens
+	// carry the groups overage form. Zero means Entra ID's default.
+	GroupsOverageThreshold int `json:"groups_overage_threshold,omitempty"`
 
 	// OpenID Connect Back-Channel Logout 1.0 client metadata.
 	OIDCBackchannelLogoutURI             string `json:"oidc_backchannel_logout_uri,omitempty"`

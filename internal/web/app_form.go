@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -82,6 +83,18 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 			existingProtocol = protocolWithout(existingProtocol, protocol)
 		}
 	}
+	groupsOverageThreshold := 0
+	if raw := strings.TrimSpace(r.FormValue("groups_overage_threshold")); raw != "" {
+		groupsOverageThreshold, err = strconv.Atoi(raw)
+		if err != nil {
+			a.redirectFormError(w, r, tab, "app", fmt.Errorf("groups overage threshold must be a whole number"))
+			return
+		}
+	}
+	persona := strings.TrimSpace(r.FormValue("persona"))
+	if persona == "" {
+		persona = personaGeneric
+	}
 	app := app{
 		ID:                      id,
 		Name:                    strings.TrimSpace(r.FormValue("name")),
@@ -105,6 +118,8 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		SAMLSigningMode:         strings.TrimSpace(r.FormValue("saml_signing_mode")),
 		IncludeGroupsClaim:      r.FormValue("include_groups_claim") == "on",
 		ChooserMode:             normalizeChooserMode(r.FormValue("chooser_mode")),
+		Persona:                 persona,
+		GroupsOverageThreshold:  groupsOverageThreshold,
 		OIDCClaimMappings: oidcClaimMappings{
 			Name: strings.TrimSpace(r.FormValue("oidc_claim_name")), GivenName: strings.TrimSpace(r.FormValue("oidc_claim_given_name")),
 			FamilyName: strings.TrimSpace(r.FormValue("oidc_claim_family_name")), Username: strings.TrimSpace(r.FormValue("oidc_claim_username")),
