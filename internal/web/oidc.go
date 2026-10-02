@@ -262,7 +262,7 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if grantType == "refresh_token" {
-		a.refreshOIDCTokens(w, r, state, app)
+		a.refreshOIDCTokens(w, r, app)
 		return
 	}
 
@@ -446,7 +446,7 @@ func (a *webApp) issueRefreshToken(grant refreshToken, now time.Time) (string, e
 // rotates: the presented value stops working and the response carries its
 // replacement. A narrower scope applies to the new access and ID tokens
 // only; the replacement refresh token keeps the original scope.
-func (a *webApp) refreshOIDCTokens(w http.ResponseWriter, r *http.Request, state appState, app app) {
+func (a *webApp) refreshOIDCTokens(w http.ResponseWriter, r *http.Request, app app) {
 	a.oidcMu.Lock()
 	defer a.oidcMu.Unlock()
 	a.pruneExpiredOIDCCredentials(time.Now())
@@ -477,8 +477,14 @@ func (a *webApp) refreshOIDCTokens(w http.ResponseWriter, r *http.Request, state
 		return
 	}
 	grant, ok = a.refreshTokens[presented]
-	if !ok {
+	if !ok || !grant.ExpiresAt.After(time.Now()) {
+		delete(a.refreshTokens, presented)
 		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "refresh token is invalid, expired, or revoked")
+		return
+	}
+	state, err := loadStateForApp(app.ID)
+	if err != nil {
+		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
 		return
 	}
 	user, ok := userByID(state.Users, grant.UserID)
