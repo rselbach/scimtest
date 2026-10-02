@@ -444,8 +444,7 @@
 	  const slug = setupFieldValue('slug');
 	  for (const value of samlPanel.querySelectorAll('[data-saml-setup-url]')) {
 		const kind = value.dataset.samlSetupUrl;
-		const path = kind === 'sso' ? 'sso' : 'metadata';
-		const url = baseURL && slug ? baseURL + '/saml/' + encodeURIComponent(slug) + '/' + path : '';
+		const url = baseURL && slug ? baseURL + '/saml/' + encodeURIComponent(slug) + '/' + kind : '';
 		value.textContent = url || 'Enter an endpoint name to generate this URL';
 		value.title = url;
 		const copyButton = samlPanel.querySelector('[data-saml-copy-url="' + kind + '"]');

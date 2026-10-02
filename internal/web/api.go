@@ -101,6 +101,8 @@ func apiRoutes() []apiRoute {
 		{http.MethodDelete, "/api/v1/environments/{environment_id}/oidc/tokens", nil, (*webApp).handleAPIOIDCTokensRevoke, false},
 		{http.MethodGet, "/api/v1/environments/{environment_id}/sessions", nil, (*webApp).handleAPISessions, false},
 		{http.MethodDelete, "/api/v1/environments/{environment_id}/sessions", nil, (*webApp).handleAPISessionsEnd, false},
+		{http.MethodPost, "/api/v1/environments/{environment_id}/saml/logout", []string{"session_id", "binding"}, (*webApp).handleAPISAMLLogout, false},
+		{http.MethodGet, "/api/v1/environments/{environment_id}/saml/logouts", nil, (*webApp).handleAPISAMLLogouts, false},
 		{http.MethodPost, "/api/v1/environments/{environment_id}/saml/sign-in", []string{"user_id", "login_identifier", "relay_state", "saml_request", "sig_alg", "signature", "redirect_query", "authn_strength"}, (*webApp).handleAPISAMLSignIn, false},
 		{http.MethodGet, "/api/v1/traffic", nil, (*webApp).handleAPITraffic, false},
 		{http.MethodPatch, "/api/v1/traffic/settings", []string{"record", "record_secrets"}, (*webApp).handleAPITrafficSettings, false},
@@ -126,7 +128,7 @@ var environmentAPIFields = []string{
 	"name", "slug", "oidc_enabled", "saml_enabled", "scim_enabled", "oidc_client_id",
 	"oidc_client_secret", "oidc_public_client", "oidc_redirect_uris", "allow_any_oidc_redirect",
 	"oidc_backchannel_logout_uri", "oidc_backchannel_logout_session_required",
-	"saml_entity_id", "saml_acs_url", "saml_audience", "saml_name_id_field",
+	"saml_entity_id", "saml_acs_url", "saml_slo_url", "saml_audience", "saml_name_id_field",
 	"saml_email_attribute_name", "saml_request_certificate_pem", "saml_encryption_certificate_pem",
 	"saml_encryption_algorithm", "include_groups_claim", "chooser_mode", "oidc_claim_mappings",
 	"saml_attribute_mappings", "scim_base_url", "scim_bearer_token", "scim_auto_open_trace",
@@ -150,6 +152,7 @@ type apiEnvironmentRequest struct {
 	AllowAnyOIDCRedirect    *bool                  `json:"allow_any_oidc_redirect"`
 	SAMLEntityID            *string                `json:"saml_entity_id"`
 	SAMLACSURL              *string                `json:"saml_acs_url"`
+	SAMLSLOURL              *string                `json:"saml_slo_url"`
 	SAMLAudience            *string                `json:"saml_audience"`
 	SAMLNameIDField         *string                `json:"saml_name_id_field"`
 	SAMLEmailAttributeName  *string                `json:"saml_email_attribute_name"`
@@ -452,6 +455,7 @@ func apiEnvironmentForm(current app, request apiEnvironmentRequest) url.Values {
 	setFormBool(values, "oidc_backchannel_logout_session_required", current.OIDCBackchannelLogoutSessionRequired)
 	values.Set("saml_entity_id", current.SAMLEntityID)
 	values.Set("saml_acs_url", current.SAMLACSURL)
+	values.Set("saml_slo_url", current.SAMLSLOURL)
 	values.Set("saml_audience", current.SAMLAudience)
 	values.Set("saml_name_id_field", current.SAMLNameIDField)
 	values.Set("saml_email_attribute_name", current.SAMLEmailAttributeName)
@@ -489,6 +493,7 @@ func apiEnvironmentForm(current app, request apiEnvironmentRequest) url.Values {
 	applyBool(values, "oidc_backchannel_logout_session_required", request.OIDCBackchannelLogoutSessionRequired)
 	applyString(values, "saml_entity_id", request.SAMLEntityID)
 	applyString(values, "saml_acs_url", request.SAMLACSURL)
+	applyString(values, "saml_slo_url", request.SAMLSLOURL)
 	applyString(values, "saml_audience", request.SAMLAudience)
 	applyString(values, "saml_name_id_field", request.SAMLNameIDField)
 	applyString(values, "saml_email_attribute_name", request.SAMLEmailAttributeName)

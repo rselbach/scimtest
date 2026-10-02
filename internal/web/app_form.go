@@ -94,6 +94,7 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		AllowAnyOIDCRedirect:    r.FormValue("allow_any_oidc_redirect") == "on",
 		SAMLEntityID:            strings.TrimSpace(r.FormValue("saml_entity_id")),
 		SAMLACSURL:              strings.TrimSpace(r.FormValue("saml_acs_url")),
+		SAMLSLOURL:              strings.TrimSpace(r.FormValue("saml_slo_url")),
 		SAMLAudience:            strings.TrimSpace(r.FormValue("saml_audience")),
 		SAMLNameIDField:         normalizeSAMLNameIDField(r.FormValue("saml_name_id_field")),
 		SAMLEmailAttributeName:  strings.TrimSpace(r.FormValue("saml_email_attribute_name")),
@@ -236,6 +237,7 @@ func clearAppProtocol(app *app, protocol string) {
 	case "saml":
 		app.SAMLEntityID = ""
 		app.SAMLACSURL = ""
+		app.SAMLSLOURL = ""
 		app.SAMLAudience = ""
 		app.SAMLRequestCertPEM = ""
 		app.SAMLEncryptionCertPEM = ""

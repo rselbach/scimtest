@@ -25,13 +25,16 @@ const (
 
 func validateSAMLAuthnRequestSignature(r *http.Request, encodedRequest string, cert *x509.Certificate) error {
 	if r.URL.Query().Get("SAMLRequest") != "" {
-		return validateRedirectSAMLSignature(r.URL.RawQuery, cert)
+		return validateRedirectSAMLSignature(r.URL.RawQuery, "SAMLRequest", "AuthnRequest", cert)
 	}
-	return validatePOSTSAMLSignature(encodedRequest, cert)
+	return validatePOSTSAMLSignature(encodedRequest, "AuthnRequest", cert)
 }
 
-func validateRedirectSAMLSignature(rawQuery string, cert *x509.Certificate) error {
-	request, _, err := uniqueRawQueryValue(rawQuery, "SAMLRequest", true)
+// validateRedirectSAMLSignature checks the HTTP-Redirect binding signature
+// over the message in param (SAMLRequest or SAMLResponse), RelayState, and
+// SigAlg. kind names the message type in errors.
+func validateRedirectSAMLSignature(rawQuery, param, kind string, cert *x509.Certificate) error {
+	message, _, err := uniqueRawQueryValue(rawQuery, param, true)
 	if err != nil {
 		return err
 	}
@@ -48,7 +51,7 @@ func validateRedirectSAMLSignature(rawQuery string, cert *x509.Certificate) erro
 		return err
 	}
 
-	signed := "SAMLRequest=" + request
+	signed := param + "=" + message
 	if relayStatePresent {
 		signed += "&RelayState=" + relayState
 	}
@@ -82,7 +85,7 @@ func validateRedirectSAMLSignature(rawQuery string, cert *x509.Certificate) erro
 		return fmt.Errorf("pinned SAML request certificate must use RSA")
 	}
 	if err := rsa.VerifyPKCS1v15(key, hash, digestValue, signature); err != nil {
-		return fmt.Errorf("invalid SAML AuthnRequest signature")
+		return fmt.Errorf("invalid SAML %s signature", kind)
 	}
 	return nil
 }
@@ -130,26 +133,28 @@ func redirectSignatureHash(algorithm string) (crypto.Hash, error) {
 	}
 }
 
-func validatePOSTSAMLSignature(encodedRequest string, cert *x509.Certificate) error {
-	doc, err := parseSAMLRequestDocument(encodedRequest)
+// validatePOSTSAMLSignature checks the enveloped XML signature of a message
+// sent with the HTTP-POST binding. kind names the message type in errors.
+func validatePOSTSAMLSignature(encodedMessage, kind string, cert *x509.Certificate) error {
+	doc, err := parseSAMLRequestDocument(encodedMessage)
 	if err != nil {
 		return err
 	}
 	root := doc.Root()
 	id := strings.TrimSpace(root.SelectAttrValue("ID", ""))
 	if id == "" {
-		return fmt.Errorf("SAML AuthnRequest ID is required before signature validation")
+		return fmt.Errorf("SAML %s ID is required before signature validation", kind)
 	}
 
 	signatures := elementsByNameAndNamespace(root, "Signature", xmlDSIGNamespace)
 	if len(signatures) == 0 {
-		return fmt.Errorf("SAML AuthnRequest signature is required")
+		return fmt.Errorf("SAML %s signature is required", kind)
 	}
 	if len(signatures) != 1 || signatures[0].Parent() != root {
-		return fmt.Errorf("SAML AuthnRequest must contain exactly one direct XMLDSIG signature")
+		return fmt.Errorf("SAML %s must contain exactly one direct XMLDSIG signature", kind)
 	}
 	signature := signatures[0]
-	if err := validateXMLSignatureAlgorithms(signature, id); err != nil {
+	if err := validateXMLSignatureAlgorithms(signature, id, kind); err != nil {
 		return err
 	}
 
@@ -157,19 +162,19 @@ func validatePOSTSAMLSignature(encodedRequest string, cert *x509.Certificate) er
 		Roots: []*x509.Certificate{cert},
 	})
 	if _, err := validator.Validate(root); err != nil {
-		return fmt.Errorf("invalid SAML AuthnRequest signature: %w", err)
+		return fmt.Errorf("invalid SAML %s signature: %w", kind, err)
 	}
 	return nil
 }
 
-func validateXMLSignatureAlgorithms(signature *etree.Element, requestID string) error {
+func validateXMLSignatureAlgorithms(signature *etree.Element, messageID, kind string) error {
 	signedInfo := directChildByNameAndNamespace(signature, "SignedInfo", xmlDSIGNamespace)
 	if signedInfo == nil {
-		return fmt.Errorf("SAML AuthnRequest signature has no SignedInfo")
+		return fmt.Errorf("SAML %s signature has no SignedInfo", kind)
 	}
 	method := directChildByNameAndNamespace(signedInfo, "SignatureMethod", xmlDSIGNamespace)
 	if method == nil {
-		return fmt.Errorf("SAML AuthnRequest signature has no SignatureMethod")
+		return fmt.Errorf("SAML %s signature has no SignatureMethod", kind)
 	}
 	if _, err := redirectSignatureHash(method.SelectAttrValue("Algorithm", "")); err != nil {
 		return err
@@ -180,16 +185,16 @@ func validateXMLSignatureAlgorithms(signature *etree.Element, requestID string) 
 			continue
 		}
 		references++
-		if child.SelectAttrValue("URI", "") != "#"+requestID {
-			return fmt.Errorf("SAML AuthnRequest signature must reference the request ID")
+		if child.SelectAttrValue("URI", "") != "#"+messageID {
+			return fmt.Errorf("SAML %s signature must reference the message ID", kind)
 		}
 		digestMethod := directChildByNameAndNamespace(child, "DigestMethod", xmlDSIGNamespace)
 		if digestMethod == nil || !strongXMLDigestMethod(digestMethod.SelectAttrValue("Algorithm", "")) {
-			return fmt.Errorf("SAML AuthnRequest signature must use SHA-256, SHA-384, or SHA-512")
+			return fmt.Errorf("SAML %s signature must use SHA-256, SHA-384, or SHA-512", kind)
 		}
 	}
 	if references != 1 {
-		return fmt.Errorf("SAML AuthnRequest signature must contain one reference")
+		return fmt.Errorf("SAML %s signature must contain one reference", kind)
 	}
 	return nil
 }

@@ -88,6 +88,8 @@ type webApp struct {
 	oidcInspectorMu  sync.Mutex
 	oidcInspections  map[string][]oidcInspection
 	samlInspectorMu  sync.Mutex
+	samlLogoutMu     sync.Mutex              // guards samlLogoutLog
+	samlLogoutLog    map[string][]samlLogout // IdP-initiated LogoutRequests by environment slug, newest first
 	samlInspections  map[string][]samlInspection
 	flowLogMu        sync.Mutex
 	flowLog          map[string][]flowEvent
@@ -400,6 +402,7 @@ type appFormView struct {
 	SAMLCertificatePEM           string
 	SAMLIDPEntityID              string
 	SAMLIDPSSO                   string
+	SAMLIDPSLO                   string
 	Close                        string
 	AllowAnyOIDCRedirectDisabled bool
 	Section                      string
@@ -1004,6 +1007,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /inspect/oidc/{slug}/revoke", a.handleOIDCTokenRevoke)
 	mux.HandleFunc("POST /inspect/oidc/{slug}/sessions/end", a.handleOIDCSessionEnd)
 	mux.HandleFunc("GET /inspect/saml/{slug}", a.handleSAMLInspector)
+	mux.HandleFunc("POST /inspect/saml/{slug}/sessions/logout", a.handleSAMLSessionLogout)
 	mux.HandleFunc("GET /inspect/resilience/{slug}", a.handleResilience)
 	mux.HandleFunc("POST /inspect/resilience/{slug}/arm", a.handleResilienceArm)
 	mux.HandleFunc("POST /inspect/resilience/{slug}/disarm", a.handleResilienceDisarm)
@@ -1066,6 +1070,8 @@ func (a *webApp) registerIDPRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /saml/{slug}/certificate.pem", a.debugRPHandler(a.handleSAMLCertificate))
 	mux.HandleFunc("GET /saml/{slug}/sso", a.debugRPHandler(a.handleSAMLSSO))
 	mux.HandleFunc("POST /saml/{slug}/sso", a.debugRPHandler(a.handleSAMLSSOPost))
+	mux.HandleFunc("GET /saml/{slug}/slo", a.debugRPHandler(a.handleSAMLSLO))
+	mux.HandleFunc("POST /saml/{slug}/slo", a.debugRPHandler(a.handleSAMLSLO))
 }
 
 func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -2099,6 +2105,7 @@ func applyFormDraft(data *pageData, draft formDraft) {
 		data.AppForm.App.OIDCBackchannelLogoutSessionRequired = values.Get("oidc_backchannel_logout_session_required") == "on"
 		data.AppForm.App.SAMLEntityID = values.Get("saml_entity_id")
 		data.AppForm.App.SAMLACSURL = values.Get("saml_acs_url")
+		data.AppForm.App.SAMLSLOURL = values.Get("saml_slo_url")
 		data.AppForm.App.SAMLAudience = values.Get("saml_audience")
 		data.AppForm.App.SAMLNameIDField = values.Get("saml_name_id_field")
 		data.AppForm.App.SAMLEmailAttributeName = values.Get("saml_email_attribute_name")
@@ -2643,6 +2650,7 @@ func buildAppFormView(state appState, tab string, id string, baseURL string, cer
 	if form.App.Slug != "" {
 		form.SAMLIDPEntityID = baseURL + "/saml/" + form.App.Slug + "/metadata"
 		form.SAMLIDPSSO = baseURL + "/saml/" + form.App.Slug + "/sso"
+		form.SAMLIDPSLO = baseURL + "/saml/" + form.App.Slug + "/slo"
 		form.OIDCIssuer = baseURL + "/oidc/" + form.App.Slug
 		form.OIDCDiscoveryURL = form.OIDCIssuer + "/.well-known/openid-configuration"
 		form.OIDCAuthorizeURL = form.OIDCIssuer + "/authorize"

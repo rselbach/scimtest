@@ -124,6 +124,22 @@ For a signed Redirect-binding request, pass the original encoded query as
 `signature`, or `relay_state` fields. Re-encoding signed fields can invalidate
 their signature. The API URL's query is not SAML signing input.
 
+To test SAML Single Logout, set `saml_slo_url` to the service provider's
+SingleLogoutService. scimtest's own endpoint is `/saml/{slug}/slo` (`slo_url`
+in the connection export), and the metadata advertises it for HTTP-Redirect
+and HTTP-POST. `GET /environments/{ENV_ID}/sessions` lists each SAML session's
+`saml_session_index` and `saml_name_id`. For SP-initiated logout, have the SP
+send its `LogoutRequest` through the browser, then confirm the session is gone
+and read the `saml logout` row in `/flows`. A `failed` row names the error
+status scimtest answered, such as a NameID or SessionIndex that does not match
+the session. For IdP-initiated logout, `POST
+/environments/{ENV_ID}/saml/logout` with `session_id` and optional `binding`
+(`redirect` or `post`) ends the session and returns the signed message: send a
+browser to `url` for Redirect, or post `form` to `url` for POST. The SP answers
+at `/saml/{slug}/slo`, and `GET /environments/{ENV_ID}/saml/logouts` shows each
+request's `outcome`. A pinned `saml_request_certificate_pem` also requires
+signed logout messages. Ending a session any other way does not notify the SP.
+
 ## SCIM sync and import
 
 Paths in this section follow `/environments/{ENV_ID}`. Set `scim_enabled`,

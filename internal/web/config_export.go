@@ -29,11 +29,13 @@ type oidcConfigExport struct {
 
 type samlConfigExport struct {
 	SSOURL         string `json:"sso_url"`
+	SLOURL         string `json:"slo_url"`
 	IDPEntityID    string `json:"idp_entity_id"`
 	MetadataURL    string `json:"metadata_url"`
 	CertificatePEM string `json:"certificate_pem"`
 	SPEntityID     string `json:"sp_entity_id,omitempty"`
 	ACSURL         string `json:"acs_url,omitempty"`
+	SPSLOURL       string `json:"sp_slo_url,omitempty"`
 	Audience       string `json:"audience,omitempty"`
 	NameIDFormat   string `json:"name_id_format,omitempty"`
 }
@@ -85,11 +87,13 @@ func (a *webApp) appConfigExport(r *http.Request, state appState, foundApp app) 
 		}
 		export.SAML = &samlConfigExport{
 			SSOURL:         baseURL + "/saml/" + foundApp.Slug + "/sso",
+			SLOURL:         baseURL + "/saml/" + foundApp.Slug + "/slo",
 			IDPEntityID:    metadataURL,
 			MetadataURL:    metadataURL,
 			CertificatePEM: certificatePEM(a.certDER),
 			SPEntityID:     foundApp.SAMLEntityID,
 			ACSURL:         foundApp.SAMLACSURL,
+			SPSLOURL:       foundApp.SAMLSLOURL,
 			Audience:       foundApp.SAMLAudience,
 			NameIDFormat:   nameIDFormat,
 		}

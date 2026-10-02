@@ -1508,6 +1508,66 @@ func TestValidateAppBackchannelLogoutURI(t *testing.T) {
 	}
 }
 
+func TestSchemaMigrationAddsSAMLSLOURL(t *testing.T) {
+	r := require.New(t)
+	path := filepath.Join(t.TempDir(), "state.db")
+	t.Setenv("SCIMTEST_STATE_FILE", path)
+	r.NoError(SaveState(AppState{Apps: []App{{
+		ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "saml",
+		SAMLACSURL: "https://greendale.test/saml/acs",
+	}}}))
+
+	db, err := openStateDB()
+	r.NoError(err)
+	_, err = db.Exec(`ALTER TABLE apps DROP COLUMN saml_slo_url`)
+	r.NoError(err)
+	_, err = db.Exec(`PRAGMA user_version = 3`)
+	r.NoError(err)
+	r.NoError(resetStateDBCache())
+
+	state, err := LoadState()
+	r.NoError(err)
+	r.Len(state.Apps, 1)
+	r.Empty(state.Apps[0].SAMLSLOURL)
+
+	state.Apps[0].SAMLSLOURL = "https://greendale.test/saml/slo"
+	r.NoError(SaveState(state))
+	r.NoError(resetStateDBCache())
+	state, err = LoadState()
+	r.NoError(err)
+	r.Equal("https://greendale.test/saml/slo", state.Apps[0].SAMLSLOURL)
+}
+
+func TestValidateAppSAMLSLOURL(t *testing.T) {
+	tests := map[string]struct {
+		url     string
+		wantErr string
+	}{
+		"empty":         {},
+		"https":         {url: "https://greendale.test/saml/slo"},
+		"with a query":  {url: "http://localhost:3000/slo?tenant=greendale"},
+		"relative":      {url: "/saml/slo", wantErr: "must be an absolute HTTP(S) URL"},
+		"other scheme":  {url: "ftp://greendale.test/slo", wantErr: "must be an absolute HTTP(S) URL"},
+		"with fragment": {url: "https://greendale.test/slo#study-group", wantErr: "without a fragment"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			app := App{
+				ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "saml",
+				SAMLACSURL: "https://greendale.test/saml/acs", SAMLSLOURL: tc.url,
+			}
+			err := ValidateApp(app, nil)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				require.Equal(t, SetupStatusConfigured, SAMLSetupStatus(app))
+				return
+			}
+			require.ErrorContains(t, err, tc.wantErr)
+			require.Equal(t, SetupStatusIncomplete, SAMLSetupStatus(app))
+		})
+	}
+}
+
 func TestSchemaMigrationDefaultsSAMLEncryptionAlgorithm(t *testing.T) {
 	r := require.New(t)
 	path := filepath.Join(t.TempDir(), "state.db")

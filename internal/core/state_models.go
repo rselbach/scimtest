@@ -179,6 +179,10 @@ type App struct {
 	// OpenID Connect Back-Channel Logout 1.0 client metadata.
 	OIDCBackchannelLogoutURI             string `json:"oidc_backchannel_logout_uri,omitempty"`
 	OIDCBackchannelLogoutSessionRequired bool   `json:"oidc_backchannel_logout_session_required,omitempty"`
+
+	// SAMLSLOURL is the SP's SingleLogoutService, where scimtest sends
+	// LogoutRequest and LogoutResponse messages.
+	SAMLSLOURL string `json:"saml_slo_url,omitempty"`
 }
 
 const (

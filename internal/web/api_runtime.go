@@ -118,6 +118,60 @@ func (a *webApp) handleAPISessionsEnd(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]int{"ended": len(ended)})
 }
 
+type apiSAMLLogoutRequest struct {
+	SessionID string `json:"session_id"`
+	Binding   string `json:"binding"`
+}
+
+// handleAPISAMLLogout ends a live session with a SAML sign-in and returns the
+// signed LogoutRequest for the caller to deliver to the SP, as a browser
+// would. The SP's LogoutResponse goes to the IdP's Single Logout URL.
+func (a *webApp) handleAPISAMLLogout(w http.ResponseWriter, r *http.Request) {
+	var request apiSAMLLogoutRequest
+	if decodeAPIJSON(w, r, &request) != nil {
+		return
+	}
+	state, err := a.loadAPIEnvironment(r.PathValue("environment_id"))
+	if err != nil {
+		apiError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	found, _ := apiAppByID(state, r.PathValue("environment_id"))
+	if !supportsSAML(found) {
+		apiError(w, http.StatusBadRequest, "SAML is not enabled")
+		return
+	}
+	if _, live := a.liveIdPSession(found.Slug, request.SessionID); !live {
+		apiError(w, http.StatusNotFound, fmt.Sprintf("session %q not found", request.SessionID))
+		return
+	}
+	message, err := a.logOutSAMLSession(found, a.effectiveIDPBaseURL(r, state), request.SessionID, request.Binding)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	response := map[string]any{"request_id": message.ID, "binding": samlBindingName(message.Binding), "url": message.URL}
+	if message.Binding == samlHTTPPostBinding {
+		response["url"] = message.Destination
+		response["form"] = map[string]string{message.Param: message.Encoded}
+	}
+	writeJSON(w, response)
+}
+
+// handleAPISAMLLogouts lists the environment's IdP-initiated LogoutRequests
+// and the SP's answers, newest first.
+func (a *webApp) handleAPISAMLLogouts(w http.ResponseWriter, r *http.Request) {
+	found, ok := a.apiEnvironmentApp(w, r)
+	if !ok {
+		return
+	}
+	if !supportsSAML(found) {
+		apiError(w, http.StatusBadRequest, "SAML is not enabled")
+		return
+	}
+	writeJSON(w, map[string]any{"logouts": a.recentSAMLLogouts(found.Slug)})
+}
+
 func (a *webApp) handleAPIFaultGet(w http.ResponseWriter, r *http.Request) {
 	found, ok := a.apiEnvironmentApp(w, r)
 	if !ok {

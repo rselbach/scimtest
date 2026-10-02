@@ -38,6 +38,57 @@
     <p>Run a SAML sign-in for this environment, then return here to inspect the latest signed response.</p>
   </section>
   {{end}}
+  {{if .Sessions}}
+  <section class="card inspector-card" aria-labelledby="saml-sessions-heading">
+    <h2 id="saml-sessions-heading">IdP sessions</h2>
+    <p class="hint">Sessions in this environment that signed in over SAML. Assertions carry each session's SessionIndex, and an SP-initiated LogoutRequest to the Single Logout URL ends the session it names. Send LogoutRequest ends the session here, then sends a signed LogoutRequest to the SP through this browser; the SP's LogoutResponse comes back to scimtest.{{if not .App.SAMLSLOURL}} Set the environment's Single Logout URL to send LogoutRequests.{{end}}</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>User</th><th>NameID</th><th>SessionIndex</th><th>Signed in</th><th>Protocols</th><th></th></tr></thead>
+      <tbody>
+        {{range .Sessions}}
+        <tr>
+          <td>{{.User}}</td>
+          <td class="mono">{{.SAMLNameID}}</td>
+          <td class="mono">{{.SAMLSessionIndex}}</td>
+          <td>{{.SignedInAt}} · {{.Method}}</td>
+          <td>{{join .Protocols ", "}}</td>
+          <td>
+            <form method="post" action="/inspect/saml/{{$.App.Slug}}/sessions/logout">
+              <input type="hidden" name="return_tab" value="{{$.ReturnTab}}">
+              <input type="hidden" name="session_id" value="{{.SessionID}}">
+              <select name="binding" aria-label="Binding for {{.User}}'s LogoutRequest" {{if not $.App.SAMLSLOURL}}disabled{{end}}>
+                <option value="redirect">HTTP-Redirect</option>
+                <option value="post">HTTP-POST</option>
+              </select>
+              <button class="btn btn-sm" type="submit" aria-label="Send LogoutRequest for {{.User}}'s session" {{if not $.App.SAMLSLOURL}}disabled{{end}}>Send LogoutRequest</button>
+            </form>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table></div>
+  </section>
+  {{end}}
+  {{if .Logouts}}
+  <section class="card inspector-card" aria-labelledby="saml-logouts-heading">
+    <h2 id="saml-logouts-heading">Single Logout requests</h2>
+    <p class="hint">LogoutRequests scimtest sent, newest first, and how the SP answered.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Sent</th><th>User</th><th>Binding</th><th>Request ID</th><th>Result</th></tr></thead>
+      <tbody>
+        {{range .Logouts}}
+        <tr>
+          <td class="mono">{{.SentAt}}</td>
+          <td>{{.User}}</td>
+          <td>{{.Binding}}</td>
+          <td class="mono">{{.RequestID}}</td>
+          <td>{{if eq .Outcome "pending"}}Waiting for the SP's LogoutResponse{{else if eq .Outcome "ok"}}{{.Detail}}{{else}}Failed: {{.Detail}}{{end}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table></div>
+  </section>
+  {{end}}
   {{template "flow-activity" .Events}}
   {{template "fault-help" .}}
 </div>

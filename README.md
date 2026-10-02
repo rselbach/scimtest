@@ -103,9 +103,11 @@ steps, the authentication design, and release packaging details.
   last ten flows, including decoded claims, the raw ID token, and the
   base64 `SAMLResponse` exactly as posted, plus a per-hop activity log
   that records failures too. The OIDC inspector also lists live IdP
-  sessions and can end them.
+  sessions and can end them. The SAML inspector lists sessions with a SAML
+  sign-in and can send their service provider a `LogoutRequest`.
 - **Traffic view.** Request/response transcripts of every OIDC and SAML
-  exchange, including the back-channel logout requests scimtest sends,
+  exchange, including the back-channel logout requests scimtest sends and
+  decoded SAML Single Logout messages,
   recorded by default into a bounded in-memory ring, with
   optional raw-secret capture. `--debug` additionally prints transcripts
   to stdout.
@@ -151,6 +153,7 @@ Each environment can expose OIDC, SAML, or both, under its endpoint name
 - SAML metadata: `/saml/{slug}/metadata` (`?download=1` for a file)
 - SAML certificate: `/saml/{slug}/certificate.pem`
 - SAML SSO: `/saml/{slug}/sso`
+- SAML Single Logout: `/saml/{slug}/slo`
 
 The OIDC flow signs RS256 ID tokens. SAML responses include a signed
 assertion. Signing material is generated on first run and stored in the
@@ -188,8 +191,9 @@ there is none, or it is older than `max_age`, authorize redirects with
 `amr`, and `sid`.
 
 A session ends when the app sends the browser to the end session endpoint,
-when the tester ends it in the OIDC inspector, or when its user is
-deactivated or deleted. The endpoint implements OpenID Connect RP-Initiated
+when a SAML service provider sends a `LogoutRequest`, when the tester ends it
+in the OIDC inspector or sends a `LogoutRequest` from the SAML inspector, or
+when its user is deactivated or deleted. The endpoint implements OpenID Connect RP-Initiated
 Logout 1.0: it accepts `id_token_hint`, `client_id`, `post_logout_redirect_uri`,
 and `state` by GET or POST. The hint must be an ID token this environment
 issued to the app; an expired one is accepted. The `post_logout_redirect_uri`
@@ -224,6 +228,34 @@ token consumes them. A safe app answers each tampered token with `400 Bad
 Request` and keeps the user's session. Recent activity marks a tampered token
 that the app accepted with a 2xx status as failed.
 
+SAML assertions carry the session's `SessionIndex` in the `AuthnStatement`, and
+the IdP metadata advertises a `SingleLogoutService` at `/saml/{slug}/slo` for
+the HTTP-Redirect and HTTP-POST bindings. Set the service provider's **Single
+Logout URL** in SAML setup to test SAML Single Logout. When the SP sends a
+`LogoutRequest`, scimtest checks its issuer, signature, `Destination`,
+`IssueInstant`, and `NotOnOrAfter`. It then ends the sessions with the
+request's `NameID` and, when the request lists any, one of its `SessionIndex`
+values, and answers with a signed `LogoutResponse` through the same binding,
+echoing `RelayState`. A request whose `SessionIndex` names another user's
+session, or whose `NameID` differs from the browser's own session, gets a
+`Requester` status with `UnknownPrincipal`. A `SessionIndex` that no live
+session for the `NameID` has, a wrong `Destination`, or a stale timestamp gets
+`Requester`. In those cases the sessions stay. A request that matches no live
+session succeeds without ending anything, since its sessions may already have
+ended. A request from another issuer, with a bad signature, or sent before the
+Single Logout URL is set gets a plain `400` instead of a `LogoutResponse`.
+Ending a session this way also sends back-channel logout tokens for its OIDC
+sign-ins.
+
+To test IdP-initiated logout, open the SAML inspector, pick a binding, and
+choose **Send LogoutRequest** for a session. scimtest ends the session, then
+sends a signed `LogoutRequest` with the session's `NameID` and `SessionIndex`
+to the SP through your browser. The SP's `LogoutResponse` comes back to
+`/saml/{slug}/slo`, where scimtest checks it and shows the result. The
+inspector lists each request and the SP's answer. Ending a session any other
+way does not notify the SP, because both bindings need a browser to carry the
+message. Recent activity and the Traffic view record every logout message.
+
 Paste the service provider's RSA encryption certificate into SAML setup to
 wrap that signed assertion in `EncryptedAssertion` (AES-128-GCM, AES-192-GCM,
 or AES-256-GCM, RSA-OAEP). AES-256-GCM is the default.
@@ -235,7 +267,8 @@ certificate into the request-signing certificate field. Leave the field empty
 to accept unsigned AuthnRequests. scimtest validates HTTP-Redirect query
 signatures and enveloped HTTP-POST XML signatures with SHA-256, SHA-384, or
 SHA-512. When a certificate is present, scimtest rejects unsigned requests,
-SHA-1 signatures, and signatures from any other certificate.
+SHA-1 signatures, and signatures from any other certificate. The same rules
+apply to the SP's `LogoutRequest` and `LogoutResponse` messages.
 
 ## Configuration
 
@@ -297,6 +330,7 @@ GET,POST /oidc/{slug}/logout
 GET /saml/{slug}/metadata
 GET /saml/{slug}/certificate.pem
 GET,POST /saml/{slug}/sso
+GET,POST /saml/{slug}/slo
 ```
 
 Tunnel startup diagnostics are written to the application log; private keys

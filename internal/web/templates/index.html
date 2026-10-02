@@ -834,6 +834,11 @@
 				<span class="hint">Where scimtest should post the signed SAML response after sign-in.</span>
               </label>
               <label class="field">
+                <span class="label">Single Logout URL</span>
+                <input name="saml_slo_url" value="{{.AppForm.App.SAMLSLOURL}}" placeholder="http://localhost:3000/saml/slo" autocomplete="off">
+				<span class="hint">Where scimtest sends LogoutRequest and LogoutResponse messages. Leave empty if your app has no Single Logout.</span>
+              </label>
+              <label class="field">
                 <span class="label">Audience</span>
                 <input name="saml_audience" value="{{.AppForm.App.SAMLAudience}}" autocomplete="off">
               </label>
@@ -893,6 +898,13 @@
                     <span class="k">Sign-on URL</span>
                     <span class="v" title="{{.AppForm.SAMLIDPSSO}}" data-saml-setup-url="sso">{{if .AppForm.SAMLIDPSSO}}{{.AppForm.SAMLIDPSSO}}{{else}}Enter an endpoint name to generate this URL{{end}}</span>
                     <button class="copy-btn" type="button" data-copy-button data-saml-copy-url="sso" aria-label="Copy sign-on URL" title="Copy sign-on URL" {{if not .AppForm.SAMLIDPSSO}}disabled{{end}}>
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="7" height="8" rx="1.2"/><path d="M3 10.5V4a1 1 0 0 1 1-1h6.5"/></svg>
+                    </button>
+                  </div>
+                  <div class="copy-field">
+                    <span class="k">Single Logout URL</span>
+                    <span class="v" title="{{.AppForm.SAMLIDPSLO}}" data-saml-setup-url="slo">{{if .AppForm.SAMLIDPSLO}}{{.AppForm.SAMLIDPSLO}}{{else}}Enter an endpoint name to generate this URL{{end}}</span>
+                    <button class="copy-btn" type="button" data-copy-button data-saml-copy-url="slo" aria-label="Copy Single Logout URL" title="Copy Single Logout URL" {{if not .AppForm.SAMLIDPSLO}}disabled{{end}}>
                       <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="5" width="7" height="8" rx="1.2"/><path d="M3 10.5V4a1 1 0 0 1 1-1h6.5"/></svg>
                     </button>
                   </div>
