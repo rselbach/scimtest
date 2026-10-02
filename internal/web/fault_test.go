@@ -1,6 +1,9 @@
 package web
 
 import (
+	"crypto"
+	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -206,4 +209,73 @@ func TestInvalidFaultValuesAreReported(t *testing.T) {
 	events := svc.flowEvents("example")
 	r.NotEmpty(events)
 	r.Contains(events[0].Detail, "ignored invalid fault_id_token_ttl")
+}
+
+func TestParseFaultTamper(t *testing.T) {
+	r := require.New(t)
+	faults, warnings := parseFaultOptionsWithWarnings(url.Values{
+		"fault_tamper": {"wrong_issuer, alg_none", "wrong_issuer", "bogus"},
+	})
+	r.Equal([]tamperFault{tamperWrongIssuer, tamperAlgNone}, faults.Tamper)
+	r.Equal([]string{`ignored unknown fault_tamper "bogus"`}, warnings)
+	r.True(faults.active())
+	r.Equal("tamper wrong_issuer,alg_none", faults.describe())
+}
+
+func TestFaultTamperIDToken(t *testing.T) {
+	tests := map[string]struct {
+		tamper     string
+		wantHeader map[string]any
+		wantClaim  string
+		wantSigned bool
+	}{
+		"wrong issuer":   {tamper: "wrong_issuer", wantHeader: map[string]any{"typ": "JWT", "alg": "RS256", "kid": "scimtest-dev"}, wantClaim: "iss", wantSigned: true},
+		"wrong audience": {tamper: "wrong_audience", wantHeader: map[string]any{"typ": "JWT", "alg": "RS256", "kid": "scimtest-dev"}, wantClaim: "aud", wantSigned: true},
+		"nonce mismatch": {tamper: "nonce_mismatch", wantHeader: map[string]any{"typ": "JWT", "alg": "RS256", "kid": "scimtest-dev"}, wantClaim: "nonce", wantSigned: true},
+		"unknown kid":    {tamper: "unknown_kid", wantHeader: map[string]any{"typ": "JWT", "alg": "RS256", "kid": "scimtest-unknown"}, wantSigned: true},
+		"alg none":       {tamper: "alg_none", wantHeader: map[string]any{"typ": "JWT", "alg": "none"}},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			svc := oidcFaultTestApp(t)
+			clean := issueIDToken(t, svc, url.Values{"nonce": {"n-1"}})
+			tampered := issueIDToken(t, svc, url.Values{"nonce": {"n-1"}, "fault_tamper": {tc.tamper}})
+
+			r.Equal(tc.wantHeader, decodeJWTHeader(t, tampered))
+			cleanClaims := decodeIDTokenClaims(t, clean)
+			tamperedClaims := decodeIDTokenClaims(t, tampered)
+			if tc.wantClaim != "" {
+				r.Equal(cleanClaims[tc.wantClaim].(string)+"-wrong", tamperedClaims[tc.wantClaim])
+			}
+			signature := strings.Split(tampered, ".")[2]
+			if !tc.wantSigned {
+				r.Empty(signature)
+				return
+			}
+			parts := strings.Split(tampered, ".")
+			digest := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
+			decoded, err := base64.RawURLEncoding.DecodeString(signature)
+			r.NoError(err)
+			r.NoError(rsa.VerifyPKCS1v15(&svc.signingKey.PublicKey, crypto.SHA256, digest[:], decoded), "the tampered token must still carry a valid signature")
+		})
+	}
+}
+
+func issueIDToken(t *testing.T, svc *webApp, extra url.Values) string {
+	t.Helper()
+	rec := redeemToken(t, svc, authorizeForCode(t, svc, extra))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	return body["id_token"].(string)
+}
+
+func decodeJWTHeader(t *testing.T, token string) map[string]any {
+	t.Helper()
+	header, err := base64.RawURLEncoding.DecodeString(strings.Split(token, ".")[0])
+	require.NoError(t, err)
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(header, &decoded))
+	return decoded
 }

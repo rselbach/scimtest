@@ -15,6 +15,7 @@ type apiOIDCPlaygroundRequest struct {
 	UserID          string           `json:"user_id"`
 	LoginIdentifier string           `json:"login_identifier"`
 	Faults          *apiFaultRequest `json:"faults"`
+	Refresh         bool             `json:"refresh"`
 }
 
 type apiOIDCPlaygroundResult struct {
@@ -27,6 +28,9 @@ type apiOIDCPlaygroundResult struct {
 	IDTokenClaims   any            `json:"id_token_claims,omitempty"`
 	UserinfoStatus  int            `json:"userinfo_status,omitempty"`
 	Userinfo        any            `json:"userinfo,omitempty"`
+	RefreshStatus   int            `json:"refresh_status,omitempty"`
+	Refresh         map[string]any `json:"refresh,omitempty"`
+	RefreshedClaims any            `json:"refreshed_id_token_claims,omitempty"`
 	Error           string         `json:"error,omitempty"`
 }
 
@@ -73,7 +77,11 @@ func (a *webApp) handleAPIOIDCPlayground(w http.ResponseWriter, r *http.Request)
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	query := url.Values{"response_type": {"code"}, "client_id": {found.OIDCClientID}, "redirect_uri": {callback}, "scope": {"openid profile email groups"}, "state": {stateValue}, "nonce": {nonce}, "user_id": {request.UserID}, "login_identifier": {request.LoginIdentifier}}
+	scope := "openid profile email groups"
+	if request.Refresh {
+		scope += " offline_access"
+	}
+	query := url.Values{"response_type": {"code"}, "client_id": {found.OIDCClientID}, "redirect_uri": {callback}, "scope": {scope}, "state": {stateValue}, "nonce": {nonce}, "user_id": {request.UserID}, "login_identifier": {request.LoginIdentifier}}
 	if found.OIDCPublicClient {
 		challenge := sha256.Sum256([]byte(verifier))
 		query.Set("code_challenge", base64.RawURLEncoding.EncodeToString(challenge[:]))
@@ -89,6 +97,16 @@ func (a *webApp) handleAPIOIDCPlayground(w http.ResponseWriter, r *http.Request)
 		if faults.SAMLStatus != "" {
 			apiError(w, http.StatusBadRequest, "saml_status is not valid for an OIDC playground flow")
 			return
+		}
+		if faults.AssertionTTLSet {
+			apiError(w, http.StatusBadRequest, "assertion_ttl is not valid for an OIDC playground flow")
+			return
+		}
+		for _, fault := range faults.Tamper {
+			if info, _ := tamperFaultInfoByID(fault); info.Protocol == "saml" {
+				apiError(w, http.StatusBadRequest, "tamper "+string(fault)+" is not valid for an OIDC playground flow")
+				return
+			}
 		}
 		for key, values := range faultValues {
 			query[key] = append([]string(nil), values...)
@@ -199,6 +217,43 @@ func (a *webApp) handleAPIOIDCPlayground(w http.ResponseWriter, r *http.Request)
 	}
 	if err := json.NewDecoder(bytes.NewReader(userinfoBody)).Decode(&result.Userinfo); err != nil {
 		result.Error = strings.TrimSpace(string(userinfoBody))
+	}
+	if !request.Refresh || result.Error != "" {
+		writeJSON(w, result)
+		return
+	}
+	refreshToken, _ := result.Token["refresh_token"].(string)
+	refreshForm := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refreshToken}, "client_id": {found.OIDCClientID}}
+	if !found.OIDCPublicClient {
+		refreshForm.Set("client_secret", found.OIDCClientSecret)
+	}
+	refreshRequest, err := http.NewRequestWithContext(r.Context(), http.MethodPost, baseURL+"/oidc/"+url.PathEscape(found.Slug)+"/token", strings.NewReader(refreshForm.Encode()))
+	if err != nil {
+		apiError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	refreshRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	refreshResponse, err := client.Do(refreshRequest)
+	if err != nil {
+		apiError(w, http.StatusBadGateway, "refresh request: "+err.Error())
+		return
+	}
+	result.RefreshStatus = refreshResponse.StatusCode
+	refreshBody, err := readAndCloseAPIResponse(refreshResponse, 1<<20)
+	if err != nil {
+		apiError(w, http.StatusBadGateway, "read refresh response: "+err.Error())
+		return
+	}
+	if err := json.Unmarshal(refreshBody, &result.Refresh); err != nil {
+		result.Error = strings.TrimSpace(string(refreshBody))
+		writeJSON(w, result)
+		return
+	}
+	if value, ok := result.Refresh["error"].(string); ok {
+		result.Error = value
+	}
+	if idToken, ok := result.Refresh["id_token"].(string); ok {
+		_, result.RefreshedClaims = decodeAPIJWT(idToken)
 	}
 	writeJSON(w, result)
 }

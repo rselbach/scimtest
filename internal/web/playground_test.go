@@ -128,3 +128,89 @@ func TestPlaygroundWorksWithoutRegisteredRedirectURIs(t *testing.T) {
 	r.Equal(http.StatusFound, resp.Code, resp.Body.String())
 	r.Contains(resp.Header().Get("Location"), "http://127.0.0.1:8080/oidc/example/authorize")
 }
+
+func TestPlaygroundRefreshesTokens(t *testing.T) {
+	for name, public := range map[string]bool{"confidential client": false, "public client": true} {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			setTestStateFile(t)
+			secret := "secret"
+			if public {
+				secret = ""
+			}
+			r.NoError(saveState(appState{
+				Users: []user{{ID: "usr-1", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}},
+				Apps:  []app{{ID: "app-1", Name: "Example", Slug: "example", Protocol: "oidc", OIDCClientID: "example-client", OIDCClientSecret: secret, OIDCPublicClient: public}},
+			}))
+			svc := newTestIDPApp(t)
+			server := httptest.NewServer(svc.routes())
+			defer server.Close()
+			svc.adminHost = strings.TrimPrefix(server.URL, "http://")
+			client := &http.Client{
+				CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+				Jar:           newTestCookieJar(t),
+			}
+
+			startResp, err := client.Get(server.URL + "/inspect/oidc/example/playground")
+			r.NoError(err)
+			r.NoError(startResp.Body.Close())
+			authorizeURL, err := url.Parse(startResp.Header.Get("Location"))
+			r.NoError(err)
+			r.Contains(authorizeURL.Query().Get("scope"), "offline_access")
+			form := authorizeURL.Query()
+			form.Set("user_id", "usr-1")
+			authorizeResp, err := client.PostForm(server.URL+authorizeURL.Path, form)
+			r.NoError(err)
+			r.NoError(authorizeResp.Body.Close())
+			callbackResp, err := client.Get(authorizeResp.Header.Get("Location"))
+			r.NoError(err)
+			signedIn := readAll(t, callbackResp.Body)
+			r.NoError(callbackResp.Body.Close())
+			firstRefresh := hiddenInputValue(signedIn, "refresh_token")
+			r.NotEmpty(firstRefresh, "the playground must offer a refresh")
+
+			refreshPage := func(refreshToken, previousIDToken, scope string) string {
+				t.Helper()
+				resp, err := client.PostForm(server.URL+"/inspect/oidc/example/playground/refresh", url.Values{
+					"refresh_token":     {refreshToken},
+					"previous_id_token": {previousIDToken},
+					"scope":             {scope},
+				})
+				r.NoError(err)
+				body := readAll(t, resp.Body)
+				r.NoError(resp.Body.Close())
+				r.Equal(http.StatusOK, resp.StatusCode)
+				return body
+			}
+
+			refreshed := refreshPage(firstRefresh, hiddenInputValue(signedIn, "previous_id_token"), "")
+			r.Contains(refreshed, "Refresh request")
+			r.Contains(refreshed, "original grant")
+			r.Contains(refreshed, "Claims before this refresh")
+			r.Contains(refreshed, "200 OK")
+			r.Contains(decodedPlaygroundClaims(t, refreshed), "troy@greendale.edu")
+			secondRefresh := hiddenInputValue(refreshed, "refresh_token")
+			r.NotEmpty(secondRefresh)
+			r.NotEqual(firstRefresh, secondRefresh, "the token must rotate")
+
+			narrowed := refreshPage(secondRefresh, hiddenInputValue(refreshed, "previous_id_token"), "openid")
+			r.Contains(narrowed, `<dd class="mono">openid</dd>`)
+			r.NotContains(decodedPlaygroundClaims(t, narrowed), "troy@greendale.edu")
+
+			reused := refreshPage(firstRefresh, "", "")
+			r.Contains(reused, "400 Bad Request")
+			r.Contains(reused, "invalid_grant")
+			r.NotContains(reused, `name="refresh_token"`, "a rejected refresh offers nothing to redeem")
+		})
+	}
+}
+
+// decodedPlaygroundClaims returns the ID token claims block of a playground page.
+func decodedPlaygroundClaims(t *testing.T, body string) string {
+	t.Helper()
+	_, after, found := strings.Cut(body, "<h3>Claims</h3>")
+	require.True(t, found)
+	claims, _, found := strings.Cut(after, "</pre>")
+	require.True(t, found)
+	return claims
+}

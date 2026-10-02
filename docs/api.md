@@ -161,6 +161,8 @@ All paths in this section are relative to `/environments/{id}`.
 | --- | --- | --- |
 | POST | `/oidc/authorize` | Authorize a directory user and return `code`, `redirect_uri`, and `state`. |
 | POST | `/oidc/playground` | Run authorization, code exchange, and userinfo locally and return the results. |
+| GET | `/oidc/tokens` | Users holding live access or refresh tokens, with counts. |
+| DELETE | `/oidc/tokens` | Revoke every token, or one user's with `?user_id=`. Returns `revoked`. |
 | POST | `/saml/sign-in` | Return `acs_url`, base64 `saml_response`, and `relay_state`. |
 | GET | `/inspections/oidc`, `/inspections/saml` | Recent protocol inspections. |
 | GET | `/flows` | Recent flow activity, including failures. |
@@ -172,6 +174,11 @@ All paths in this section are relative to `/environments/{id}`.
 OIDC authorization accepts `user_id` and standard authorization fields,
 including `client_id`, `redirect_uri`, `scope`, `state`, `nonce`, and PKCE
 parameters. Codes are redeemed at the standard `/oidc/{slug}/token` endpoint.
+With `offline_access` in the scope, the token response includes a
+`refresh_token`. Redeem it at the same endpoint with
+`grant_type=refresh_token`. Each refresh returns a replacement and
+invalidates the presented token. After a revocation, refreshes fail with
+`invalid_grant` and userinfo calls fail with `invalid_token`.
 Userinfo remains at `/oidc/{slug}/userinfo`. The
 [automation example](automation.md) performs both requests.
 
@@ -179,6 +186,9 @@ The headless playground accepts `{"user_id":"..."}` and optional `faults`
 using the fields below. It handles confidential-client authentication or
 public-client PKCE. Its result includes `authorize_status`, `token_status`,
 `token`, `id_token_header`, `id_token_claims`, `userinfo_status`, and `userinfo`.
+With `"refresh": true`, it also requests `offline_access`, redeems the refresh
+token once, and adds `refresh_status`, `refresh`, and
+`refreshed_id_token_claims`.
 Protocol failures appear in those statuses and an `error` field; the enclosing
 API response remains `200` when the experiment itself ran successfully.
 
@@ -191,9 +201,14 @@ are not SAML signing inputs.
 In identifier chooser mode, use `login_identifier` instead of `user_id` for
 OIDC authorization, the playground, and SAML sign-in.
 
-Fault writes accept duration strings in `id_token_ttl` and `clock_skew`, a
-`break_signature` boolean, a `drop_claims` string array, `token_error`, and
-`saml_status`. Invalid fault values are rejected. Fault scenarios expire after
+Fault writes accept duration strings in `id_token_ttl`, `assertion_ttl`, and
+`clock_skew`, a `break_signature` boolean, a `drop_claims` string array,
+`token_error`, `saml_status`, and a `tamper` string array. Tamper values for
+both protocols are `wrong_issuer` and `wrong_audience`. OIDC adds
+`unknown_kid`, `alg_none`, and `nonce_mismatch`. SAML adds
+`wrong_destination`, `wrong_recipient`, `in_response_to_mismatch`, and
+`replayed_assertion`, which reuses the newest assertion ID the environment
+sent. Invalid fault values are rejected. Fault scenarios expire after
 15 minutes.
 
 Traffic, inspections, flow activity, faults, and jobs are in memory. They

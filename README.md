@@ -96,7 +96,9 @@ steps, the authentication design, and release packaging details.
   selector in the top bar sets the context for the whole admin UI.
 - **OIDC playground.** A built-in relying party that runs the full
   authorization-code exchange and shows the token response, decoded and
-  raw ID token, and userinfo on one page.
+  raw ID token, and userinfo on one page. It requests `offline_access`, so
+  the page can also redeem the refresh token, optionally with a narrower
+  scope, and show the refreshed claims beside the ones they replace.
 - **Flow inspectors.** Per-environment OIDC and SAML inspectors keep the
   last ten flows, including decoded claims, the raw ID token, and the
   base64 `SAMLResponse` exactly as posted, plus a per-hop activity log
@@ -107,11 +109,18 @@ steps, the authentication design, and release packaging details.
   to stdout.
 - **Fault Injection.** Choose **Fault Injection** in an environment's sidebar to
   arm a preset such as a temporary token outage, a slow token endpoint, an
-  expired token, a broken signature, a missing claim, or a SAML failure. The
-  page waits for RP-initiated and SP-initiated flows, records each injection,
-  and disarms active scenarios after 15 minutes. Inspector controls still
-  provide one-shot clock skew, claim, signature, and error faults. The same
-  one-shot effects are available as `fault_*` URL parameters.
+  expired token, a broken signature, an unsigned token, a wrong audience, a
+  missing claim, a replayed SAML assertion, or a SAML failure. The page waits
+  for RP-initiated and SP-initiated flows, records each injection, and
+  disarms active scenarios after 15 minutes. Inspector controls still provide
+  one-shot clock skew, token and assertion lifetime, claim, signature, and
+  error faults, plus tamper faults that break one validation rule in an
+  otherwise valid response. OIDC tamper faults cover a wrong issuer or
+  audience, an unknown signing key ID, an unsigned `alg: none` token, and a
+  nonce mismatch. SAML tamper faults cover a wrong issuer, audience,
+  destination, or recipient, an `InResponseTo` mismatch, and a replayed
+  assertion ID. The same one-shot effects are available as `fault_*` URL
+  parameters, such as `fault_tamper=wrong_issuer,alg_none`.
 - **SCIM sync.** Push the directory to your app's SCIM endpoint, reconcile
   drift, import an existing remote directory with a preview, and inspect
   every request in the sync trace and per-resource history.
@@ -140,6 +149,14 @@ Each environment can expose OIDC, SAML, or both, under its endpoint name
 The OIDC flow signs RS256 ID tokens. SAML responses include a signed
 assertion. Signing material is generated on first run and stored in the
 SQLite state database.
+
+Add `offline_access` to the OIDC scope to receive a refresh token. Each
+refresh rotates the token: the response carries a replacement, and the
+presented token stops working. A refresh can narrow the scope but not widen
+it. It fails with `invalid_grant` once the user is deactivated or deleted.
+The OIDC inspector lists users with live tokens and can revoke one user's
+tokens or all of them, as an administrator would. Refresh tokens last 24
+hours and are kept in memory, so restarting scimtest revokes them.
 
 Paste the service provider's RSA encryption certificate into SAML setup to
 wrap that signed assertion in `EncryptedAssertion` (AES-128-GCM, AES-192-GCM,

@@ -50,6 +50,7 @@ func TestFailedTokenExchangeAppearsInInspector(t *testing.T) {
 	r.Contains(inspectorRec.Body.String(), `<input type="hidden" name="tab" value="oidc-inspector">`)
 	r.Contains(inspectorRec.Body.String(), `name="return_tab" value="oidc-inspector"`)
 	r.NotContains(inspectorRec.Body.String(), `name="fault_saml_status"`)
+	r.Contains(inspectorRec.Body.String(), `name="fault_tamper" value="alg_none"`)
 	r.Contains(inspectorRec.Body.String(), `class="flow-activity-wrap"`)
 	r.Contains(inspectorRec.Body.String(), "data-flow-activity-row")
 	r.Contains(inspectorRec.Body.String(), `aria-controls="flow-activity-detail-0"`)

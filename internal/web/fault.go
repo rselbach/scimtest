@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -14,13 +15,73 @@ import (
 // are parsed from fault_* request parameters and, for OIDC, carried from the
 // authorize request to the token response through the authorization code.
 type faultOptions struct {
-	IDTokenTTL     time.Duration // overrides the ID token lifetime when non-zero
-	IDTokenTTLSet  bool
-	ClockSkew      time.Duration // added to iat/exp and SAML instants
-	BreakSignature bool          // corrupt the ID token / assertion signature
-	DropClaims     []string      // claims omitted from the ID token and userinfo
-	TokenError     string        // force this OAuth error at the token endpoint
-	SAMLStatus     string        // non-success SAML status: Responder or AuthnFailed
+	IDTokenTTL      time.Duration // overrides the ID token lifetime when non-zero
+	IDTokenTTLSet   bool
+	AssertionTTL    time.Duration // overrides the SAML assertion lifetime
+	AssertionTTLSet bool
+	ClockSkew       time.Duration // added to iat/exp and SAML instants
+	BreakSignature  bool          // corrupt the ID token / assertion signature
+	DropClaims      []string      // claims omitted from the ID token and userinfo
+	TokenError      string        // force this OAuth error at the token endpoint
+	SAMLStatus      string        // non-success SAML status: Responder or AuthnFailed
+	Tamper          []tamperFault // validation rules the response deliberately breaks
+}
+
+// tamperFault names one validation rule a relying party or service provider
+// must enforce. The tampered response is otherwise valid, so a sign-in that
+// still succeeds shows the app skips that check.
+type tamperFault string
+
+const (
+	tamperWrongIssuer   tamperFault = "wrong_issuer"
+	tamperWrongAudience tamperFault = "wrong_audience"
+	tamperUnknownKeyID  tamperFault = "unknown_kid"
+	tamperAlgNone       tamperFault = "alg_none"
+	tamperNonceMismatch tamperFault = "nonce_mismatch"
+
+	tamperWrongDestination     tamperFault = "wrong_destination"
+	tamperWrongRecipient       tamperFault = "wrong_recipient"
+	tamperInResponseToMismatch tamperFault = "in_response_to_mismatch"
+	tamperReplayedAssertion    tamperFault = "replayed_assertion"
+)
+
+// tamperFaultInfo describes a tamper fault for forms and descriptions.
+type tamperFaultInfo struct {
+	ID       tamperFault
+	Protocol string // oidc, saml, or both, like app.Protocol
+	Label    string
+}
+
+var tamperFaults = []tamperFaultInfo{
+	{ID: tamperWrongIssuer, Protocol: "both", Label: "Wrong issuer"},
+	{ID: tamperWrongAudience, Protocol: "both", Label: "Wrong audience"},
+	{ID: tamperUnknownKeyID, Protocol: "oidc", Label: "Unknown signing key ID"},
+	{ID: tamperAlgNone, Protocol: "oidc", Label: "Unsigned ID token (alg none)"},
+	{ID: tamperNonceMismatch, Protocol: "oidc", Label: "Nonce mismatch"},
+	{ID: tamperWrongDestination, Protocol: "saml", Label: "Wrong destination"},
+	{ID: tamperWrongRecipient, Protocol: "saml", Label: "Wrong recipient"},
+	{ID: tamperInResponseToMismatch, Protocol: "saml", Label: "InResponseTo mismatch"},
+	{ID: tamperReplayedAssertion, Protocol: "saml", Label: "Replayed assertion ID"},
+}
+
+func tamperFaultInfoByID(id tamperFault) (tamperFaultInfo, bool) {
+	for _, info := range tamperFaults {
+		if info.ID == id {
+			return info, true
+		}
+	}
+	return tamperFaultInfo{}, false
+}
+
+// tamperFaultsFor lists the tamper faults that apply to an app protocol.
+func tamperFaultsFor(protocol string) []tamperFaultInfo {
+	var faults []tamperFaultInfo
+	for _, info := range tamperFaults {
+		if protocol == "both" || info.Protocol == "both" || info.Protocol == protocol {
+			faults = append(faults, info)
+		}
+	}
+	return faults
 }
 
 func parseFaultOptions(values url.Values) faultOptions {
@@ -40,6 +101,15 @@ func parseFaultOptionsWithWarnings(values url.Values) (faultOptions, []string) {
 		} else {
 			faults.IDTokenTTL = ttl
 			faults.IDTokenTTLSet = true
+		}
+	}
+	if raw := strings.TrimSpace(values.Get("fault_assertion_ttl")); raw != "" {
+		ttl, err := time.ParseDuration(raw)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("ignored invalid fault_assertion_ttl %q", raw))
+		} else {
+			faults.AssertionTTL = ttl
+			faults.AssertionTTLSet = true
 		}
 	}
 	if raw := strings.TrimSpace(values.Get("fault_clock_skew")); raw != "" {
@@ -68,13 +138,33 @@ func parseFaultOptionsWithWarnings(values url.Values) (faultOptions, []string) {
 	default:
 		warnings = append(warnings, fmt.Sprintf("ignored invalid fault_saml_status %q; use Responder or AuthnFailed", raw))
 	}
+	// Form checkboxes repeat the parameter; URLs and the API join values
+	// with commas.
+	for _, raw := range values["fault_tamper"] {
+		for _, name := range strings.Split(raw, ",") {
+			fault := tamperFault(strings.TrimSpace(name))
+			if fault == "" || slices.Contains(faults.Tamper, fault) {
+				continue
+			}
+			if _, ok := tamperFaultInfoByID(fault); !ok {
+				warnings = append(warnings, fmt.Sprintf("ignored unknown fault_tamper %q", fault))
+				continue
+			}
+			faults.Tamper = append(faults.Tamper, fault)
+		}
+	}
 	return faults, warnings
 }
 
 // active reports whether any fault was requested.
 func (f faultOptions) active() bool {
-	return f.IDTokenTTLSet || f.ClockSkew != 0 || f.BreakSignature ||
-		len(f.DropClaims) > 0 || f.TokenError != "" || f.SAMLStatus != ""
+	return f.IDTokenTTLSet || f.AssertionTTLSet || f.ClockSkew != 0 || f.BreakSignature ||
+		len(f.DropClaims) > 0 || f.TokenError != "" || f.SAMLStatus != "" ||
+		len(f.Tamper) > 0
+}
+
+func (f faultOptions) tampers(fault tamperFault) bool {
+	return slices.Contains(f.Tamper, fault)
 }
 
 // describe renders the requested faults for banners and flow records.
@@ -82,6 +172,9 @@ func (f faultOptions) describe() string {
 	var parts []string
 	if f.IDTokenTTLSet {
 		parts = append(parts, "ID token TTL "+f.IDTokenTTL.String())
+	}
+	if f.AssertionTTLSet {
+		parts = append(parts, "assertion TTL "+f.AssertionTTL.String())
 	}
 	if f.ClockSkew != 0 {
 		parts = append(parts, "clock skew "+f.ClockSkew.String())
@@ -97,6 +190,13 @@ func (f faultOptions) describe() string {
 	}
 	if f.SAMLStatus != "" {
 		parts = append(parts, "SAML status "+f.SAMLStatus[strings.LastIndex(f.SAMLStatus, ":")+1:])
+	}
+	if len(f.Tamper) > 0 {
+		names := make([]string, len(f.Tamper))
+		for i, fault := range f.Tamper {
+			names[i] = string(fault)
+		}
+		parts = append(parts, "tamper "+strings.Join(names, ","))
 	}
 	return strings.Join(parts, "; ")
 }
@@ -206,6 +306,15 @@ func (a *webApp) handleFaultDisarm(w http.ResponseWriter, r *http.Request) {
 
 func (f faultOptions) applyToClaims(claims map[string]any, issued time.Time) {
 	f.dropClaims(claims)
+	if f.tampers(tamperWrongIssuer) {
+		claims["iss"] = nearMiss(claims["iss"])
+	}
+	if f.tampers(tamperWrongAudience) {
+		claims["aud"] = nearMiss(claims["aud"])
+	}
+	if f.tampers(tamperNonceMismatch) {
+		claims["nonce"] = nearMiss(claims["nonce"])
+	}
 	if f.ClockSkew != 0 {
 		claims["iat"] = issued.Add(f.ClockSkew).Unix()
 	}
@@ -220,6 +329,15 @@ func (f faultOptions) dropClaims(claims map[string]any) {
 	for _, claim := range f.DropClaims {
 		delete(claims, claim)
 	}
+}
+
+// nearMiss derives a wrong value that still starts with the right one, so an
+// app comparing prefixes is caught along with one that never compares.
+func nearMiss(value any) string {
+	if text, ok := value.(string); ok && text != "" {
+		return text + "-wrong"
+	}
+	return "scimtest-wrong"
 }
 
 // corruptJWTSignature flips the signature segment of a compact JWS so the

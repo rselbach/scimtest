@@ -160,8 +160,14 @@ Use the playground's `faults` object for one OIDC experiment:
 
 This experiment should report `token_status: 400` and a token error even though
 the API call itself returns `200`. Other fault fields include duration strings
-`id_token_ttl` and `clock_skew`, boolean `break_signature`, array `drop_claims`,
-and `saml_status`. SAML status faults apply to SAML flows.
+`id_token_ttl`, `assertion_ttl`, and `clock_skew`, boolean `break_signature`,
+array `drop_claims`, `saml_status`, and array `tamper`. SAML status and
+assertion TTL faults apply to SAML flows. Tamper values break one check in an
+otherwise valid response. `wrong_issuer` and `wrong_audience` apply to both
+protocols. OIDC adds `unknown_kid`, `alg_none`, and `nonce_mismatch`. SAML
+adds `wrong_destination`, `wrong_recipient`, `in_response_to_mismatch`, and
+`replayed_assertion`. Replay needs an earlier SAML sign-in in the same
+environment.
 
 To affect the next incoming protocol flow, `PUT /environments/{ENV_ID}/faults`.
 Read or disarm it with `GET` or `DELETE` on the same path. Disarming returns
@@ -172,6 +178,14 @@ For repeated faults, read `/environments/{ENV_ID}/scenarios` for available
 presets, then `POST /scenarios/arm` under the same environment with `preset_id`
 and an optional integer `count`. Inspect the returned run and disarm with
 `POST /scenarios/disarm`. These scenarios expire after fifteen minutes.
+
+To test refresh handling, include `offline_access` in the OIDC scope and redeem
+the returned `refresh_token` with `grant_type=refresh_token`. Each refresh
+rotates the token. The playground's `"refresh": true` option runs one refresh
+for you and returns `refresh_status`, `refresh`, and
+`refreshed_id_token_claims`. `GET /environments/{ENV_ID}/oidc/tokens` lists users with
+live tokens. `DELETE` on the same path revokes them all, or one user's with
+`?user_id=`, so the next refresh fails with `invalid_grant`.
 
 Use environment `/flows` and `/inspections/oidc` or `/inspections/saml` for
 protocol outcomes. `/traffic` is global; `PATCH /traffic/settings` accepts

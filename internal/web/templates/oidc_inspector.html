@@ -44,6 +44,35 @@
     <p>Run an OIDC sign-in for this environment, then return here to inspect the latest flow.</p>
   </section>
   {{end}}
+  {{if .Tokens}}
+  <section class="card inspector-card" aria-labelledby="active-tokens-heading">
+    <h2 id="active-tokens-heading">Active tokens</h2>
+    <p class="hint">Revoking makes the next refresh fail with invalid_grant and userinfo fail with invalid_token, as if an administrator ended the grant.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>User</th><th>Refresh tokens</th><th>Access tokens</th><th></th></tr></thead>
+      <tbody>
+        {{range .Tokens}}
+        <tr>
+          <td>{{.User}}</td>
+          <td>{{.RefreshTokens}}</td>
+          <td>{{.AccessTokens}}</td>
+          <td>
+            <form method="post" action="/inspect/oidc/{{$.App.Slug}}/revoke">
+              <input type="hidden" name="return_tab" value="{{$.ReturnTab}}">
+              <input type="hidden" name="user_id" value="{{.UserID}}">
+              <button class="btn btn-sm" type="submit">Revoke</button>
+            </form>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table></div>
+    <form method="post" action="/inspect/oidc/{{.App.Slug}}/revoke" class="form-actions">
+      <input type="hidden" name="return_tab" value="{{.ReturnTab}}">
+      <button class="btn" type="submit">Revoke all</button>
+    </form>
+  </section>
+  {{end}}
   {{template "flow-activity" .Events}}
   {{template "fault-help" .}}
 </div>

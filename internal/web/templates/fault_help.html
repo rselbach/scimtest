@@ -30,11 +30,19 @@
           <option value="authnfailed">AuthnFailed</option>
         </select>
       </label>
+      <label class="field"><span class="label">Assertion TTL</span><input name="fault_assertion_ttl" placeholder="-10m" autocomplete="off"><span class="hint">Negative issues an already-expired assertion</span></label>
       {{end}}
       <label class="field"><span class="label">Signature</span><span class="checkbox-row"><input type="checkbox" name="fault_break_signature" value="1"> Corrupt the token or assertion signature</span></label>
+      {{with tamperFaultsFor .App.Protocol}}
+      <div class="field full"><span class="label">Tamper</span>
+        <div class="checkbox-group">
+          {{range .}}<label class="checkbox-row"><input type="checkbox" name="fault_tamper" value="{{.ID}}"> {{.Label}}</label>{{end}}
+        </div>
+      </div>
+      {{end}}
       <div class="form-actions"><button class="btn btn-primary" type="submit">Arm for next flow</button></div>
     </form>
-    <p class="hint">The same effects are available as one-shot fault_* URL parameters on a Test sign-in URL, e.g. <span class="mono">fault_break_signature=1</span>. Invalid values are reported in Recent activity instead of being silently ignored.</p>
+    <p class="hint">The same effects are available as one-shot fault_* URL parameters on a Test sign-in URL, e.g. <span class="mono">fault_break_signature=1</span> or <span class="mono">fault_tamper=wrong_issuer,alg_none</span>. Invalid values are reported in Recent activity instead of being silently ignored.</p>
   </details>
 </section>
 {{end}}

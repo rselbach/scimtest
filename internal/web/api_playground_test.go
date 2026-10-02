@@ -72,6 +72,28 @@ func TestAPIOIDCPlaygroundRunsConfidentialAndPublicFlows(t *testing.T) {
 	}
 }
 
+func TestAPIOIDCPlaygroundRefreshes(t *testing.T) {
+	for _, public := range []bool{false, true} {
+		t.Run(fmt.Sprintf("public=%t", public), func(t *testing.T) {
+			handler, environmentID, adminURL := newAPIPlayground(t, public)
+
+			plain := apiPlaygroundRequest(t, handler, environmentID, adminURL, `{"user_id":"user-troy"}`)
+			require.NotContains(t, plain.Token, "refresh_token")
+			require.Zero(t, plain.RefreshStatus)
+
+			result := apiPlaygroundRequest(t, handler, environmentID, adminURL, `{"user_id":"user-troy","refresh":true}`)
+			require.Empty(t, result.Error)
+			require.Equal(t, http.StatusOK, result.RefreshStatus)
+			require.NotEmpty(t, result.Token["refresh_token"])
+			require.NotEqual(t, result.Token["refresh_token"], result.Refresh["refresh_token"])
+			claims, ok := result.RefreshedClaims.(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, "troy@greendale.edu", claims["email"])
+			require.NotContains(t, claims, "nonce")
+		})
+	}
+}
+
 func TestAPIOIDCPlaygroundReturnsFlowErrors(t *testing.T) {
 	handler, environmentID, adminURL := newAPIPlayground(t, false)
 
@@ -82,6 +104,42 @@ func TestAPIOIDCPlaygroundReturnsFlowErrors(t *testing.T) {
 	fault := apiPlaygroundRequest(t, handler, environmentID, adminURL, `{"user_id":"user-troy","faults":{"token_error":"temporarily_unavailable"}}`)
 	require.Equal(t, http.StatusBadRequest, fault.TokenStatus)
 	require.Equal(t, "temporarily_unavailable", fault.Error)
+}
+
+func TestAPIOIDCPlaygroundAppliesTamperFaults(t *testing.T) {
+	handler, environmentID, adminURL := newAPIPlayground(t, false)
+
+	result := apiPlaygroundRequest(t, handler, environmentID, adminURL, `{"user_id":"user-troy","faults":{"tamper":["alg_none","wrong_audience"]}}`)
+	require.Equal(t, http.StatusOK, result.TokenStatus)
+	header, ok := result.IDTokenHeader.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "none", header["alg"])
+	claims, ok := result.IDTokenClaims.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "greendale-client-wrong", claims["aud"])
+
+	parsed, err := url.Parse(adminURL)
+	require.NoError(t, err)
+	rejected := map[string]struct {
+		faults    string
+		wantError string
+	}{
+		"unknown":   {faults: `{"tamper":["bogus"]}`, wantError: `ignored unknown fault_tamper \"bogus\"`},
+		"SAML-only": {faults: `{"tamper":["wrong_recipient"]}`, wantError: "tamper wrong_recipient is not valid for an OIDC playground flow"},
+		"SAML TTL":  {faults: `{"assertion_ttl":"-1m"}`, wantError: "assertion_ttl is not valid for an OIDC playground flow"},
+	}
+	for name, tc := range rejected {
+		t.Run(name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/environments/"+environmentID+"/oidc/playground", strings.NewReader(`{"user_id":"user-troy","faults":`+tc.faults+`}`))
+			request.Header.Set(instanceTokenHeader, "playground-token")
+			request.Header.Set("Content-Type", "application/json")
+			request.Host = parsed.Host
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			require.Equal(t, http.StatusBadRequest, response.Code)
+			require.Contains(t, response.Body.String(), tc.wantError)
+		})
+	}
 }
 
 func TestAPIProtocolSignInRejectsInactiveUserAsJSON(t *testing.T) {

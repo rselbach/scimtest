@@ -96,7 +96,9 @@ func apiRoutes() []apiRoute {
 		{http.MethodGet, "/api/v1/environments/{environment_id}/backup", nil, (*webApp).handleAPIBackup, false},
 		{http.MethodPost, "/api/v1/environments/{environment_id}/restore", []string{"version", "exported_at", "state", "user_operations", "group_operations", "user_sync", "group_sync"}, (*webApp).handleAPIRestore, true},
 		{http.MethodPost, "/api/v1/environments/{environment_id}/oidc/authorize", []string{"user_id", "login_identifier", "response_type", "client_id", "redirect_uri", "scope", "state", "nonce", "code_challenge", "code_challenge_method"}, (*webApp).handleAPIOIDCAuthorize, false},
-		{http.MethodPost, "/api/v1/environments/{environment_id}/oidc/playground", []string{"user_id", "login_identifier", "faults"}, (*webApp).handleAPIOIDCPlayground, false},
+		{http.MethodPost, "/api/v1/environments/{environment_id}/oidc/playground", []string{"user_id", "login_identifier", "faults", "refresh"}, (*webApp).handleAPIOIDCPlayground, false},
+		{http.MethodGet, "/api/v1/environments/{environment_id}/oidc/tokens", nil, (*webApp).handleAPIOIDCTokens, false},
+		{http.MethodDelete, "/api/v1/environments/{environment_id}/oidc/tokens", nil, (*webApp).handleAPIOIDCTokensRevoke, false},
 		{http.MethodPost, "/api/v1/environments/{environment_id}/saml/sign-in", []string{"user_id", "login_identifier", "relay_state", "saml_request", "sig_alg", "signature", "redirect_query"}, (*webApp).handleAPISAMLSignIn, false},
 		{http.MethodGet, "/api/v1/traffic", nil, (*webApp).handleAPITraffic, false},
 		{http.MethodPatch, "/api/v1/traffic/settings", []string{"record", "record_secrets"}, (*webApp).handleAPITrafficSettings, false},
@@ -130,7 +132,7 @@ var environmentAPIFields = []string{
 
 var userAPIFields = []string{"given_name", "family_name", "email", "username", "active"}
 var groupAPIFields = []string{"display_name", "member_ids"}
-var faultAPIFields = []string{"id_token_ttl", "clock_skew", "break_signature", "drop_claims", "token_error", "saml_status"}
+var faultAPIFields = []string{"id_token_ttl", "assertion_ttl", "clock_skew", "break_signature", "drop_claims", "token_error", "saml_status", "tamper"}
 
 type apiEnvironmentRequest struct {
 	Name                    *string                `json:"name"`
@@ -184,11 +186,13 @@ type apiConfigRequest struct {
 
 type apiFaultRequest struct {
 	IDTokenTTL     *string  `json:"id_token_ttl"`
+	AssertionTTL   *string  `json:"assertion_ttl"`
 	ClockSkew      *string  `json:"clock_skew"`
 	BreakSignature *bool    `json:"break_signature"`
 	DropClaims     []string `json:"drop_claims"`
 	TokenError     *string  `json:"token_error"`
 	SAMLStatus     *string  `json:"saml_status"`
+	Tamper         []string `json:"tamper"`
 }
 
 func isAPIRequest(r *http.Request) bool {
@@ -543,6 +547,9 @@ func apiFaultValues(request apiFaultRequest) (url.Values, error) {
 	if request.IDTokenTTL != nil {
 		values.Set("fault_id_token_ttl", *request.IDTokenTTL)
 	}
+	if request.AssertionTTL != nil {
+		values.Set("fault_assertion_ttl", *request.AssertionTTL)
+	}
 	if request.ClockSkew != nil {
 		values.Set("fault_clock_skew", *request.ClockSkew)
 	}
@@ -556,6 +563,7 @@ func apiFaultValues(request apiFaultRequest) (url.Values, error) {
 	if request.SAMLStatus != nil {
 		values.Set("fault_saml_status", *request.SAMLStatus)
 	}
+	values.Set("fault_tamper", strings.Join(request.Tamper, ","))
 	faults, warnings := parseFaultOptionsWithWarnings(values)
 	if len(warnings) > 0 {
 		return nil, errors.New(strings.Join(warnings, "; "))
@@ -567,7 +575,7 @@ func apiFaultValues(request apiFaultRequest) (url.Values, error) {
 }
 
 func apiFaultResponse(f faultOptions) map[string]any {
-	return map[string]any{"active": f.active(), "id_token_ttl": f.IDTokenTTL.String(), "id_token_ttl_set": f.IDTokenTTLSet, "clock_skew": f.ClockSkew.String(), "break_signature": f.BreakSignature, "drop_claims": f.DropClaims, "token_error": f.TokenError, "saml_status": f.SAMLStatus}
+	return map[string]any{"active": f.active(), "id_token_ttl": f.IDTokenTTL.String(), "id_token_ttl_set": f.IDTokenTTLSet, "assertion_ttl": f.AssertionTTL.String(), "assertion_ttl_set": f.AssertionTTLSet, "clock_skew": f.ClockSkew.String(), "break_signature": f.BreakSignature, "drop_claims": f.DropClaims, "token_error": f.TokenError, "saml_status": f.SAMLStatus, "tamper": f.Tamper}
 }
 
 func apiParseCount(value any) (int, error) {
