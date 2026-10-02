@@ -58,11 +58,13 @@ jobs:
       - name: Package macOS preview app
         shell: bash
         run: |
+          printf 'Preview build %s.\n' "${GITHUB_RUN_NUMBER}" > build/release-notes.md
           ./packaging/macos/build-app.sh \
             build/scimtest-desktop \
             build \
             0.0.0 \
-            "${GITHUB_RUN_NUMBER}"
+            "${GITHUB_RUN_NUMBER}" \
+            build/release-notes.md
           ./packaging/macos/sign-app.sh build/scimtest.app -
           codesign --verify --deep --strict --verbose=2 build/scimtest.app
           ditto -c -k --sequesterRsrc --keepParent \
