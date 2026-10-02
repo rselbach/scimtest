@@ -274,7 +274,15 @@ otherwise valid response. `wrong_issuer` and `wrong_audience` apply to both
 protocols. OIDC adds `unknown_kid`, `alg_none`, and `nonce_mismatch`. SAML
 adds `wrong_destination`, `wrong_recipient`, `in_response_to_mismatch`, and
 `replayed_assertion`. Replay needs an earlier SAML sign-in in the same
-environment. Logout token tamper values `logout_alg_none`,
+environment. SAML also adds `xsw_assertion`, `xsw_response`, and
+`nameid_comment`: forgery faults that keep the genuine signature valid while
+asserting a second directory user's identity. They need another active user
+with a different, non-empty configured `NameID` and refuse assertion encryption.
+`xsw_assertion` needs `saml_signing_mode: "assertion"`; `xsw_response` needs
+`"response"` or `"both"`. Either wrapping fault can combine with
+`nameid_comment`.
+
+Logout token tamper values `logout_alg_none`,
 `logout_wrong_audience`, `logout_missing_events`, and `logout_repeated_jti`
 apply only through `PUT /faults`: sign-ins leave them armed, and the next
 back-channel logout token consumes them. A safe app answers `400`.

@@ -76,3 +76,6 @@ exactly four H2 sections in this order.
 - [Choose SAML signed parts](./saml-signing.md) covers the setup combobox, the
   API field, the posted signatures with and without encryption, and the broken
   signature fault.
+- [Inject SAML identity-forgery faults](./saml-forgery-faults.md) covers the
+  signature wrapping and `NameID` comment faults, the forged-user choice, the
+  preserved signature, and the encryption refusal.

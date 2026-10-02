@@ -44,6 +44,10 @@ const (
 	tamperInResponseToMismatch tamperFault = "in_response_to_mismatch"
 	tamperReplayedAssertion    tamperFault = "replayed_assertion"
 
+	tamperSignatureWrappingAssertion tamperFault = "xsw_assertion"
+	tamperSignatureWrappingResponse  tamperFault = "xsw_response"
+	tamperNameIDComment              tamperFault = "nameid_comment"
+
 	tamperLogoutAlgNone       tamperFault = "logout_alg_none"
 	tamperLogoutWrongAudience tamperFault = "logout_wrong_audience"
 	tamperLogoutMissingEvents tamperFault = "logout_missing_events"
@@ -68,6 +72,9 @@ var tamperFaults = []tamperFaultInfo{
 	{ID: tamperWrongRecipient, Protocol: "saml", Label: "Wrong recipient"},
 	{ID: tamperInResponseToMismatch, Protocol: "saml", Label: "InResponseTo mismatch"},
 	{ID: tamperReplayedAssertion, Protocol: "saml", Label: "Replayed assertion ID"},
+	{ID: tamperSignatureWrappingAssertion, Protocol: "saml", Label: "Signature wrapping (signed assertion)"},
+	{ID: tamperSignatureWrappingResponse, Protocol: "saml", Label: "Signature wrapping (signed response)"},
+	{ID: tamperNameIDComment, Protocol: "saml", Label: "NameID comment injection"},
 	{ID: tamperLogoutAlgNone, Protocol: "oidc", Label: "Logout token: unsigned (alg none)", Logout: true},
 	{ID: tamperLogoutWrongAudience, Protocol: "oidc", Label: "Logout token: wrong audience", Logout: true},
 	{ID: tamperLogoutMissingEvents, Protocol: "oidc", Label: "Logout token: missing events", Logout: true},

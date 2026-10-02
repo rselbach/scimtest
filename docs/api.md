@@ -289,7 +289,18 @@ both protocols are `wrong_issuer` and `wrong_audience`. OIDC adds
 `unknown_kid`, `alg_none`, and `nonce_mismatch`. SAML adds
 `wrong_destination`, `wrong_recipient`, `in_response_to_mismatch`, and
 `replayed_assertion`, which reuses the newest assertion ID the environment
-sent. Back-channel logout tokens have their own tamper values:
+sent. SAML also adds three forgery faults that keep the genuine signature
+valid while asserting another directory user's identity: `xsw_assertion` and
+`xsw_response` place an unsigned forged copy ahead of the genuinely signed
+assertion or response, and `nameid_comment` splits the signed `NameID` with a
+comment so a naive first-text-node read returns the forged user. A safe SP
+rejects all three; it processes the exact element the signature covers and
+reads the whole `NameID`. They need a second active directory user with a
+different, non-empty configured `NameID`. `xsw_assertion` requires
+assertion-only signing, since inserting the forgery would invalidate a response
+signature. `xsw_response` requires response signing (`response` or `both`).
+Either wrapping fault can combine with `nameid_comment`; none combine with
+assertion encryption. Back-channel logout tokens have their own tamper values:
 `logout_alg_none`, `logout_wrong_audience`, `logout_missing_events`, and
 `logout_repeated_jti`. Sign-ins leave these armed, and the next logout token
 consumes them. The headless playground rejects them. With JWT access tokens, tamper values, `break_signature`, and
