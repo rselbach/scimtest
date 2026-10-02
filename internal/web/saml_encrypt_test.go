@@ -30,7 +30,7 @@ func TestSignedSAMLResponseEmptyPEMStaysPlaintext(t *testing.T) {
 	r.Contains(posted.XML, "<saml:Assertion")
 	r.Contains(posted.XML, "ds:Signature")
 	r.Contains(posted.XML, "troy@greendale.edu")
-	r.Empty(posted.SignedAssertion)
+	r.Empty(posted.PlaintextAssertion)
 }
 
 func TestSignedSAMLResponseEncryptsAssertionToSPCertificate(t *testing.T) {
@@ -57,11 +57,11 @@ func TestSignedSAMLResponseEncryptsAssertionToSPCertificate(t *testing.T) {
 	r.NotContains(posted.XML, "<saml:Assertion")
 	r.NotContains(posted.XML, "troy@greendale.edu")
 	r.NotContains(posted.XML, "troy.barnes@greendale.edu")
-	r.Contains(posted.SignedAssertion, "troy@greendale.edu")
-	r.Contains(posted.SignedAssertion, "Signature")
+	r.Contains(posted.PlaintextAssertion, "troy@greendale.edu")
+	r.Contains(posted.PlaintextAssertion, "Signature")
 
 	signedDoc := etree.NewDocument()
-	r.NoError(signedDoc.ReadFromString(posted.SignedAssertion))
+	r.NoError(signedDoc.ReadFromString(posted.PlaintextAssertion))
 	assertion := signedDoc.Root()
 	r.Equal("Assertion", elementLocalName(assertion))
 	children := assertion.ChildElements()
@@ -135,7 +135,7 @@ func TestSignedSAMLResponseBreakSignatureThenEncrypts(t *testing.T) {
 	posted, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], troy, samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL}, encryption, faultOptions{BreakSignature: true})
 	r.NoError(err)
 
-	signedValue := findElementByLocalName(mustParseXML(t, posted.SignedAssertion).Root(), "SignatureValue")
+	signedValue := findElementByLocalName(mustParseXML(t, posted.PlaintextAssertion).Root(), "SignatureValue")
 	r.NotNil(signedValue)
 	recovered := decryptPostedAssertion(t, posted.XML, spKey)
 	broken := findElementByLocalName(recovered, "SignatureValue")
@@ -165,7 +165,7 @@ func TestSignedSAMLResponseStatusDoesNotEncrypt(t *testing.T) {
 	r.NoError(err)
 	r.NotContains(posted.XML, "EncryptedAssertion")
 	r.NotContains(posted.XML, "Assertion")
-	r.Empty(posted.SignedAssertion)
+	r.Empty(posted.PlaintextAssertion)
 	r.Contains(posted.XML, "AuthnFailed")
 }
 
@@ -196,7 +196,7 @@ func TestSAMLSSOPostsEncryptedAssertion(t *testing.T) {
 	r.Equal(http.StatusOK, inspector.Code)
 	body := inspector.Body.String()
 	r.Contains(body, "Decoded SAML response")
-	r.Contains(body, "Signed assertion (before encryption)")
+	r.Contains(body, "Assertion before encryption")
 	r.Contains(body, "EncryptedAssertion")
 	r.Contains(body, "troy@greendale.edu")
 }

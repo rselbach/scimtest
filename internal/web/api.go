@@ -101,6 +101,8 @@ func apiRoutes() []apiRoute {
 		{http.MethodDelete, "/api/v1/environments/{environment_id}/oidc/tokens", nil, (*webApp).handleAPIOIDCTokensRevoke, false},
 		{http.MethodGet, "/api/v1/environments/{environment_id}/sessions", nil, (*webApp).handleAPISessions, false},
 		{http.MethodDelete, "/api/v1/environments/{environment_id}/sessions", nil, (*webApp).handleAPISessionsEnd, false},
+		{http.MethodGet, "/api/v1/environments/{environment_id}/signing-keys", nil, (*webApp).handleAPISigningKeys, false},
+		{http.MethodPost, "/api/v1/environments/{environment_id}/signing-keys/rotate", []string{"grace_period"}, (*webApp).handleAPISigningKeyRotate, true},
 		{http.MethodPost, "/api/v1/environments/{environment_id}/saml/sign-in", []string{"user_id", "login_identifier", "relay_state", "saml_request", "sig_alg", "signature", "redirect_query", "authn_strength"}, (*webApp).handleAPISAMLSignIn, false},
 		{http.MethodGet, "/api/v1/traffic", nil, (*webApp).handleAPITraffic, false},
 		{http.MethodPatch, "/api/v1/traffic/settings", []string{"record", "record_secrets"}, (*webApp).handleAPITrafficSettings, false},
@@ -126,11 +128,12 @@ var environmentAPIFields = []string{
 	"name", "slug", "oidc_enabled", "saml_enabled", "scim_enabled", "oidc_client_id",
 	"oidc_client_secret", "oidc_public_client", "oidc_redirect_uris", "allow_any_oidc_redirect",
 	"oidc_backchannel_logout_uri", "oidc_backchannel_logout_session_required",
+	"oidc_jwt_access_tokens", "oidc_access_token_audience",
 	"saml_entity_id", "saml_acs_url", "saml_audience", "saml_name_id_field",
 	"saml_email_attribute_name", "saml_request_certificate_pem", "saml_encryption_certificate_pem",
-	"saml_encryption_algorithm", "include_groups_claim", "chooser_mode", "oidc_claim_mappings",
-	"saml_attribute_mappings", "scim_base_url", "scim_bearer_token", "scim_auto_open_trace",
-	"regenerate_oidc_secret",
+	"saml_encryption_algorithm", "saml_signing_mode", "include_groups_claim", "chooser_mode",
+	"oidc_claim_mappings", "saml_attribute_mappings", "scim_base_url", "scim_bearer_token",
+	"scim_auto_open_trace", "regenerate_oidc_secret",
 }
 
 var userAPIFields = []string{"given_name", "family_name", "email", "username", "active"}
@@ -148,6 +151,8 @@ type apiEnvironmentRequest struct {
 	OIDCPublicClient        *bool                  `json:"oidc_public_client"`
 	OIDCRedirectURIs        *[]string              `json:"oidc_redirect_uris"`
 	AllowAnyOIDCRedirect    *bool                  `json:"allow_any_oidc_redirect"`
+	OIDCJWTAccessTokens     *bool                  `json:"oidc_jwt_access_tokens"`
+	OIDCAccessTokenAudience *string                `json:"oidc_access_token_audience"`
 	SAMLEntityID            *string                `json:"saml_entity_id"`
 	SAMLACSURL              *string                `json:"saml_acs_url"`
 	SAMLAudience            *string                `json:"saml_audience"`
@@ -156,6 +161,7 @@ type apiEnvironmentRequest struct {
 	SAMLRequestCertPEM      *string                `json:"saml_request_certificate_pem"`
 	SAMLEncryptionCertPEM   *string                `json:"saml_encryption_certificate_pem"`
 	SAMLEncryptionAlgorithm *string                `json:"saml_encryption_algorithm"`
+	SAMLSigningMode         *string                `json:"saml_signing_mode"`
 	IncludeGroupsClaim      *bool                  `json:"include_groups_claim"`
 	ChooserMode             *string                `json:"chooser_mode"`
 	OIDCClaimMappings       *oidcClaimMappings     `json:"oidc_claim_mappings"`
@@ -170,11 +176,19 @@ type apiEnvironmentRequest struct {
 }
 
 type apiUserRequest struct {
-	GivenName  *string `json:"given_name"`
-	FamilyName *string `json:"family_name"`
-	Email      *string `json:"email"`
-	Username   *string `json:"username"`
-	Active     *bool   `json:"active"`
+	GivenName      *string `json:"given_name"`
+	FamilyName     *string `json:"family_name"`
+	Email          *string `json:"email"`
+	Username       *string `json:"username"`
+	Active         *bool   `json:"active"`
+	EmployeeNumber *string `json:"employee_number"`
+	CostCenter     *string `json:"cost_center"`
+	Organization   *string `json:"organization"`
+	Division       *string `json:"division"`
+	Department     *string `json:"department"`
+	ManagerID      *string `json:"manager_id"`
+	// Attributes replaces every custom attribute when present.
+	Attributes *map[string]string `json:"attributes"`
 }
 
 type apiGroupRequest struct {
@@ -450,6 +464,8 @@ func apiEnvironmentForm(current app, request apiEnvironmentRequest) url.Values {
 	setFormBool(values, "allow_any_oidc_redirect", current.AllowAnyOIDCRedirect)
 	values.Set("oidc_backchannel_logout_uri", current.OIDCBackchannelLogoutURI)
 	setFormBool(values, "oidc_backchannel_logout_session_required", current.OIDCBackchannelLogoutSessionRequired)
+	setFormBool(values, "oidc_jwt_access_tokens", current.OIDCJWTAccessTokens)
+	values.Set("oidc_access_token_audience", current.OIDCAccessTokenAudience)
 	values.Set("saml_entity_id", current.SAMLEntityID)
 	values.Set("saml_acs_url", current.SAMLACSURL)
 	values.Set("saml_audience", current.SAMLAudience)
@@ -458,6 +474,7 @@ func apiEnvironmentForm(current app, request apiEnvironmentRequest) url.Values {
 	values.Set("saml_request_certificate_pem", current.SAMLRequestCertPEM)
 	values.Set("saml_encryption_certificate_pem", current.SAMLEncryptionCertPEM)
 	values.Set("saml_encryption_algorithm", current.SAMLEncryptionAlgorithm)
+	values.Set("saml_signing_mode", current.SAMLSigningMode)
 	setFormBool(values, "include_groups_claim", current.IncludeGroupsClaim)
 	values.Set("chooser_mode", current.ChooserMode)
 	values.Set("oidc_claim_name", current.OIDCClaimMappings.Name)
@@ -487,6 +504,8 @@ func apiEnvironmentForm(current app, request apiEnvironmentRequest) url.Values {
 	applyBool(values, "allow_any_oidc_redirect", request.AllowAnyOIDCRedirect)
 	applyString(values, "oidc_backchannel_logout_uri", request.OIDCBackchannelLogoutURI)
 	applyBool(values, "oidc_backchannel_logout_session_required", request.OIDCBackchannelLogoutSessionRequired)
+	applyBool(values, "oidc_jwt_access_tokens", request.OIDCJWTAccessTokens)
+	applyString(values, "oidc_access_token_audience", request.OIDCAccessTokenAudience)
 	applyString(values, "saml_entity_id", request.SAMLEntityID)
 	applyString(values, "saml_acs_url", request.SAMLACSURL)
 	applyString(values, "saml_audience", request.SAMLAudience)
@@ -495,6 +514,7 @@ func apiEnvironmentForm(current app, request apiEnvironmentRequest) url.Values {
 	applyString(values, "saml_request_certificate_pem", request.SAMLRequestCertPEM)
 	applyString(values, "saml_encryption_certificate_pem", request.SAMLEncryptionCertPEM)
 	applyString(values, "saml_encryption_algorithm", request.SAMLEncryptionAlgorithm)
+	applyString(values, "saml_signing_mode", request.SAMLSigningMode)
 	applyBool(values, "include_groups_claim", request.IncludeGroupsClaim)
 	applyString(values, "chooser_mode", request.ChooserMode)
 	if request.OIDCClaimMappings != nil {

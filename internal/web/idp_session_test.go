@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -143,6 +144,7 @@ func TestEndSessionEndpoint(t *testing.T) {
 		"hint for another client":              {faults: url.Values{"fault_tamper": {"wrong_audience"}}, hint: true, wantStatus: http.StatusBadRequest, wantError: "not issued to this client"},
 		"hint from another issuer":             {faults: url.Values{"fault_tamper": {"wrong_issuer"}}, hint: true, wantStatus: http.StatusBadRequest, wantError: "not issued by this environment"},
 		"hint with a broken signature":         {faults: url.Values{"fault_break_signature": {"1"}}, hint: true, wantStatus: http.StatusBadRequest, wantError: "signature is invalid"},
+		"hint with an unknown key":             {faults: url.Values{"fault_tamper": {"unknown_kid"}}, hint: true, wantStatus: http.StatusBadRequest, wantError: "signing key is not published"},
 		"unsigned hint":                        {faults: url.Values{"fault_tamper": {"alg_none"}}, hint: true, wantStatus: http.StatusBadRequest, wantError: "must be signed with RS256"},
 	}
 	for name, tc := range tests {
@@ -357,4 +359,54 @@ func flowDetails(svc *webApp, slug string) string {
 		details = append(details, event.Detail)
 	}
 	return strings.Join(details, "\n")
+}
+
+func TestLogoutHintUsesEnvironmentKeys(t *testing.T) {
+	for name, tc := range map[string]struct {
+		rotateBeforeSignIn bool
+		grace              time.Duration
+		want               int
+	}{
+		"active rotated key":       {rotateBeforeSignIn: true, want: http.StatusOK},
+		"retired key within grace": {grace: time.Hour, want: http.StatusOK},
+		"retired key removed":      {want: http.StatusBadRequest},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			svc := oidcFaultTestApp(t)
+			state, err := loadState()
+			r.NoError(err)
+			rotate := func() {
+				_, err := svc.rotateEnvironmentSigningKey(state.Apps[0], tc.grace, time.Now())
+				r.NoError(err)
+			}
+			if tc.rotateBeforeSignIn {
+				rotate()
+			}
+			signedIn := oidcAuthorize(t, svc, http.MethodPost, url.Values{"user_id": {"usr-1"}, "fault_id_token_ttl": {"-1h"}})
+			cookie := sessionCookie(t, signedIn)
+			idToken := tokenBody(t, redeemToken(t, svc, redirectQuery(t, signedIn).Get("code")))["id_token"].(string)
+			if !tc.rotateBeforeSignIn {
+				rotate()
+			}
+			response := oidcLogout(t, svc, http.MethodGet, url.Values{"id_token_hint": {idToken}}, cookie)
+			r.Equal(tc.want, response.Code, response.Body.String())
+			if tc.want == http.StatusOK {
+				r.Empty(svc.liveIdPSessions("example"))
+			} else {
+				r.Len(svc.liveIdPSessions("example"), 1)
+			}
+		})
+	}
+}
+
+func TestLogoutRejectsAccessTokenHint(t *testing.T) {
+	r := require.New(t)
+	svc := jwtAccessTokenTestApp(t, "")
+	signedIn := oidcAuthorize(t, svc, http.MethodPost, url.Values{"user_id": {"usr-1"}})
+	cookie := sessionCookie(t, signedIn)
+	tokens := tokenBody(t, redeemToken(t, svc, redirectQuery(t, signedIn).Get("code")))
+	response := oidcLogout(t, svc, http.MethodPost, url.Values{"id_token_hint": {tokens["access_token"].(string)}}, cookie)
+	r.Equal(http.StatusBadRequest, response.Code, response.Body.String())
+	r.Len(svc.liveIdPSessions("example"), 1)
 }

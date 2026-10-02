@@ -220,17 +220,18 @@ func (a *webApp) handleAPIScenarioDisarm(w http.ResponseWriter, r *http.Request)
 }
 
 func (a *webApp) handleAPIConnection(w http.ResponseWriter, r *http.Request) {
-	state, err := loadState()
+	state, err := a.loadAPIEnvironment(r.PathValue("environment_id"))
+	if err != nil {
+		apiError(w, http.StatusNotFound, "environment not found")
+		return
+	}
+	found, _ := apiAppByID(state, r.PathValue("environment_id"))
+	export, err := a.appConfigExport(r, state, found)
 	if err != nil {
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	found, ok := appByID(state.Apps, r.PathValue("environment_id"))
-	if !ok {
-		apiError(w, http.StatusNotFound, "environment not found")
-		return
-	}
-	writeJSON(w, a.appConfigExport(r, state, found))
+	writeJSON(w, export)
 }
 
 func (a *webApp) handleAPISCIMDiscover(w http.ResponseWriter, r *http.Request) {

@@ -116,7 +116,7 @@ func writeDebugf(w io.Writer, format string, args ...any) {
 	}
 }
 
-func (a *webApp) writeDebugOIDCTokenPayload(w io.Writer, payload []byte) {
+func (a *webApp) writeDebugOIDCTokenPayload(w io.Writer, name string, payload []byte) {
 	if !a.debugRPEnabled() {
 		return
 	}
@@ -124,9 +124,9 @@ func (a *webApp) writeDebugOIDCTokenPayload(w io.Writer, payload []byte) {
 	defer rpDebugLogMu.Unlock()
 
 	writeDebugln(w)
-	writeDebugln(w, "===== OIDC ID token payload =====")
+	writeDebugln(w, "===== OIDC "+name+" payload =====")
 	writeDebugln(w, string(payload))
-	writeDebugln(w, "===== end OIDC ID token payload =====")
+	writeDebugln(w, "===== end OIDC "+name+" payload =====")
 }
 
 func (a *webApp) writeDebugHTTPRequest(w io.Writer, r *http.Request, body []byte) {
@@ -276,7 +276,7 @@ func redactJSONValue(value any) {
 // redacted mode prints them decoded anyway.
 func isSensitiveDebugKey(key string) bool {
 	switch strings.ToLower(key) {
-	case "client_secret", "code", "code_verifier", "access_token", "id_token", "refresh_token", "logout_token", "assertion", "samlresponse":
+	case "client_secret", "code", "code_verifier", "access_token", "id_token", "refresh_token", "logout_token", "token", "assertion", "samlresponse":
 		return true
 	default:
 		return false

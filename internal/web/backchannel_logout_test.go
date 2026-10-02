@@ -473,3 +473,23 @@ func shortenBackchannelLogoutTimeout(t *testing.T) {
 	backchannelLogoutTimeout = 200 * time.Millisecond
 	t.Cleanup(func() { backchannelLogoutTimeout = previous })
 }
+
+func TestBackchannelLogoutUsesRotatedEnvironmentKey(t *testing.T) {
+	r := require.New(t)
+	receiver := newLogoutReceiver(t, http.StatusOK)
+	svc := backchannelTestApp(t, receiver.URL, true)
+	cookie, _ := backchannelSignIn(t, svc, "usr-1")
+	state, err := loadState()
+	r.NoError(err)
+	rotated, err := svc.rotateEnvironmentSigningKey(state.Apps[0], 0, time.Now())
+	r.NoError(err)
+	key, err := svc.activeSigningKey(rotated)
+	r.NoError(err)
+	endSessionFromInspector(t, svc, cookie.Value)
+	svc.logoutDeliveries.Wait()
+	deliveries := receiver.received()
+	r.Len(deliveries, 1)
+	r.Equal(key.ID, decodeJWTHeader(t, deliveries[0].Token)["kid"])
+	r.NoError(verifyWithJWKS(t, svc, deliveries[0].Token))
+	r.Equal(cookie.Value, decodeIDTokenClaims(t, deliveries[0].Token)["sid"])
+}
