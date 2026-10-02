@@ -457,93 +457,114 @@ func TestCanceledRefreshDelayKeepsToken(t *testing.T) {
 	r.False(stored.Redeeming)
 }
 
-func TestSlowRefreshValidatesCurrentGrantAndUser(t *testing.T) {
-	for name, tc := range map[string]struct {
-		method string
-		body   string
-		expire bool
-		want   int
-	}{
-		"deactivated user": {method: http.MethodPatch, body: `{"active":false}`, want: http.StatusBadRequest},
-		"deleted user":     {method: http.MethodDelete, want: http.StatusBadRequest},
-		"expired grant":    {expire: true, want: http.StatusBadRequest},
-		"updated email":    {method: http.MethodPatch, body: `{"email":"troy.barnes@greendale.edu"}`, want: http.StatusOK},
-	} {
-		t.Run(name, func(t *testing.T) {
-			r := require.New(t)
-			svc := oidcFaultTestApp(t)
-			first := tokenBody(t, redeemToken(t, svc, authorizeForCode(t, svc, url.Values{"scope": {"openid email offline_access"}})))
-			presented := first["refresh_token"].(string)
-			svc.instanceToken = "greendale-local-instance"
-			svc.adminHost = "127.0.0.1:8080"
-			svc.adminURL = "http://" + svc.adminHost
-			_, err := svc.armResilienceRun("example", "slow-token", 0, time.Now())
-			r.NoError(err)
-			svc.resilienceMu.Lock()
-			run := svc.resilienceRuns["example"]
-			run.Action.Delay = 300 * time.Millisecond
-			svc.resilienceRuns["example"] = run
-			svc.resilienceMu.Unlock()
+func TestSlowTokenValidatesCurrentGrantAndUser(t *testing.T) {
+	for grantType, wantAccessCount := range map[string]int{"authorization_code": 0, "refresh_token": 1} {
+		t.Run(grantType, func(t *testing.T) {
+			for name, tc := range map[string]struct {
+				method string
+				body   string
+				expire bool
+				want   int
+			}{
+				"deactivated user": {method: http.MethodPatch, body: `{"active":false}`, want: http.StatusBadRequest},
+				"deleted user":     {method: http.MethodDelete, want: http.StatusBadRequest},
+				"expired grant":    {expire: true, want: http.StatusBadRequest},
+				"updated email":    {method: http.MethodPatch, body: `{"email":"troy.barnes@greendale.edu"}`, want: http.StatusOK},
+			} {
+				t.Run(name, func(t *testing.T) {
+					r := require.New(t)
+					svc := oidcFaultTestApp(t)
+					presented := authorizeForCode(t, svc, url.Values{"scope": {"openid email offline_access"}})
+					form := url.Values{"grant_type": {grantType}, "code": {presented}, "redirect_uri": {"http://client.test/callback"}}
+					if grantType == "refresh_token" {
+						first := tokenBody(t, redeemToken(t, svc, presented))
+						presented = first["refresh_token"].(string)
+						form = url.Values{"grant_type": {grantType}, "refresh_token": {presented}}
+					}
+					svc.instanceToken = "greendale-local-instance"
+					svc.adminHost = "127.0.0.1:8080"
+					svc.adminURL = "http://" + svc.adminHost
+					_, err := svc.armResilienceRun("example", "slow-token", 0, time.Now())
+					r.NoError(err)
+					svc.resilienceMu.Lock()
+					run := svc.resilienceRuns["example"]
+					run.Action.Delay = 300 * time.Millisecond
+					svc.resilienceRuns["example"] = run
+					svc.resilienceMu.Unlock()
 
-			ctx, cancel := context.WithCancel(context.Background())
-			finished := make(chan struct{})
-			t.Cleanup(func() {
-				cancel()
-				select {
-				case <-finished:
-				case <-time.After(time.Second):
-					t.Error("delayed refresh did not stop")
-				}
-			})
-			form := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {presented}}
-			request := httptest.NewRequest(http.MethodPost, "/oidc/example/token", strings.NewReader(form.Encode())).WithContext(ctx)
-			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-			request.SetBasicAuth("example-client", "secret")
-			delayed := httptest.NewRecorder()
-			go func() {
-				defer close(finished)
-				svc.routes().ServeHTTP(delayed, request)
-			}()
-			r.Eventually(func() bool {
-				svc.oidcMu.Lock()
-				defer svc.oidcMu.Unlock()
-				return svc.refreshTokens[presented].Redeeming
-			}, time.Second, time.Millisecond)
+					ctx, cancel := context.WithCancel(context.Background())
+					finished := make(chan struct{})
+					t.Cleanup(func() {
+						cancel()
+						select {
+						case <-finished:
+						case <-time.After(time.Second):
+							t.Error("delayed token exchange did not stop")
+						}
+					})
+					request := httptest.NewRequest(http.MethodPost, "/oidc/example/token", strings.NewReader(form.Encode())).WithContext(ctx)
+					request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+					request.SetBasicAuth("example-client", "secret")
+					delayed := httptest.NewRecorder()
+					go func() {
+						defer close(finished)
+						svc.routes().ServeHTTP(delayed, request)
+					}()
+					r.Eventually(func() bool {
+						svc.oidcMu.Lock()
+						defer svc.oidcMu.Unlock()
+						if grantType == "authorization_code" {
+							return svc.authCodes[presented].Redeeming
+						}
+						return svc.refreshTokens[presented].Redeeming
+					}, time.Second, time.Millisecond)
 
-			if tc.expire {
-				svc.oidcMu.Lock()
-				grant := svc.refreshTokens[presented]
-				grant.ExpiresAt = time.Now().Add(-time.Second)
-				svc.refreshTokens[presented] = grant
-				svc.oidcMu.Unlock()
+					if tc.expire {
+						svc.oidcMu.Lock()
+						switch grantType {
+						case "authorization_code":
+							code := svc.authCodes[presented]
+							code.ExpiresAt = time.Now().Add(-time.Second)
+							svc.authCodes[presented] = code
+						case "refresh_token":
+							grant := svc.refreshTokens[presented]
+							grant.ExpiresAt = time.Now().Add(-time.Second)
+							svc.refreshTokens[presented] = grant
+						}
+						svc.oidcMu.Unlock()
+					}
+					if tc.method != "" {
+						acceptanceRequest(t, svc.routes(), tc.method, "/api/v1/environments/app-1/users/usr-1", tc.body, http.StatusOK)
+					}
+					select {
+					case <-finished:
+					case <-time.After(time.Second):
+						t.Fatal("delayed token exchange did not finish")
+					}
+					r.Equal(tc.want, delayed.Code, delayed.Body.String())
+					svc.oidcMu.Lock()
+					_, found := svc.refreshTokens[presented]
+					if grantType == "authorization_code" {
+						_, found = svc.authCodes[presented]
+					}
+					svc.oidcMu.Unlock()
+					r.False(found, "presented grant must be removed")
+					if tc.want == http.StatusOK {
+						body := tokenBody(t, delayed)
+						r.Equal("troy.barnes@greendale.edu", decodeIDTokenClaims(t, body["id_token"].(string))["email"])
+						return
+					}
+					r.Contains(delayed.Body.String(), "invalid_grant")
+					r.NotContains(delayed.Body.String(), "access_token")
+					r.NotContains(delayed.Body.String(), "id_token")
+					r.NotContains(delayed.Body.String(), "refresh_token")
+					svc.oidcMu.Lock()
+					accessCount, refreshCount := len(svc.accessTokens), len(svc.refreshTokens)
+					svc.oidcMu.Unlock()
+					r.Equal(wantAccessCount, accessCount, "rejected exchange must not mint an access token")
+					r.Zero(refreshCount, "rejected exchange must not mint a refresh token")
+				})
 			}
-			if tc.method != "" {
-				acceptanceRequest(t, svc.routes(), tc.method, "/api/v1/environments/app-1/users/usr-1", tc.body, http.StatusOK)
-			}
-			select {
-			case <-finished:
-			case <-time.After(time.Second):
-				t.Fatal("delayed refresh did not finish")
-			}
-			r.Equal(tc.want, delayed.Code, delayed.Body.String())
-			svc.oidcMu.Lock()
-			_, found := svc.refreshTokens[presented]
-			svc.oidcMu.Unlock()
-			r.False(found, "presented grant must be removed")
-			if tc.want == http.StatusOK {
-				body := tokenBody(t, delayed)
-				r.Equal("troy.barnes@greendale.edu", decodeIDTokenClaims(t, body["id_token"].(string))["email"])
-				return
-			}
-			r.Contains(delayed.Body.String(), "invalid_grant")
-			r.NotContains(delayed.Body.String(), "access_token")
-			r.NotContains(delayed.Body.String(), "id_token")
-			r.NotContains(delayed.Body.String(), "refresh_token")
-			svc.oidcMu.Lock()
-			accessCount, refreshCount := len(svc.accessTokens), len(svc.refreshTokens)
-			svc.oidcMu.Unlock()
-			r.Equal(1, accessCount, "rejected refresh must not mint an access token")
-			r.Zero(refreshCount, "rejected refresh must not mint a replacement grant")
 		})
 	}
 }
