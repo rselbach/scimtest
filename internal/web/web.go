@@ -2084,6 +2084,8 @@ func applyFormDraft(data *pageData, draft formDraft) {
 		data.AppForm.App.OIDCRedirectURIs = lines(values.Get("oidc_redirect_uris"))
 		data.AppForm.App.OIDCPublicClient = values.Get("oidc_public_client") == "on"
 		data.AppForm.App.AllowAnyOIDCRedirect = values.Get("allow_any_oidc_redirect") == "on"
+		data.AppForm.App.OIDCJWTAccessTokens = values.Get("oidc_jwt_access_tokens") == "on"
+		data.AppForm.App.OIDCAccessTokenAudience = values.Get("oidc_access_token_audience")
 		data.AppForm.App.SAMLEntityID = values.Get("saml_entity_id")
 		data.AppForm.App.SAMLACSURL = values.Get("saml_acs_url")
 		data.AppForm.App.SAMLAudience = values.Get("saml_audience")

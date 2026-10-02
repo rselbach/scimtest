@@ -123,6 +123,7 @@ func apiRoutes() []apiRoute {
 var environmentAPIFields = []string{
 	"name", "slug", "oidc_enabled", "saml_enabled", "scim_enabled", "oidc_client_id",
 	"oidc_client_secret", "oidc_public_client", "oidc_redirect_uris", "allow_any_oidc_redirect",
+	"oidc_jwt_access_tokens", "oidc_access_token_audience",
 	"saml_entity_id", "saml_acs_url", "saml_audience", "saml_name_id_field",
 	"saml_email_attribute_name", "saml_request_certificate_pem", "saml_encryption_certificate_pem",
 	"saml_encryption_algorithm", "include_groups_claim", "chooser_mode", "oidc_claim_mappings",
@@ -145,6 +146,8 @@ type apiEnvironmentRequest struct {
 	OIDCPublicClient        *bool                  `json:"oidc_public_client"`
 	OIDCRedirectURIs        *[]string              `json:"oidc_redirect_uris"`
 	AllowAnyOIDCRedirect    *bool                  `json:"allow_any_oidc_redirect"`
+	OIDCJWTAccessTokens     *bool                  `json:"oidc_jwt_access_tokens"`
+	OIDCAccessTokenAudience *string                `json:"oidc_access_token_audience"`
 	SAMLEntityID            *string                `json:"saml_entity_id"`
 	SAMLACSURL              *string                `json:"saml_acs_url"`
 	SAMLAudience            *string                `json:"saml_audience"`
@@ -442,6 +445,8 @@ func apiEnvironmentForm(current app, request apiEnvironmentRequest) url.Values {
 	setFormBool(values, "oidc_public_client", current.OIDCPublicClient)
 	values.Set("oidc_redirect_uris", strings.Join(current.OIDCRedirectURIs, "\n"))
 	setFormBool(values, "allow_any_oidc_redirect", current.AllowAnyOIDCRedirect)
+	setFormBool(values, "oidc_jwt_access_tokens", current.OIDCJWTAccessTokens)
+	values.Set("oidc_access_token_audience", current.OIDCAccessTokenAudience)
 	values.Set("saml_entity_id", current.SAMLEntityID)
 	values.Set("saml_acs_url", current.SAMLACSURL)
 	values.Set("saml_audience", current.SAMLAudience)
@@ -477,6 +482,8 @@ func apiEnvironmentForm(current app, request apiEnvironmentRequest) url.Values {
 		values.Set("oidc_redirect_uris", strings.Join(*request.OIDCRedirectURIs, "\n"))
 	}
 	applyBool(values, "allow_any_oidc_redirect", request.AllowAnyOIDCRedirect)
+	applyBool(values, "oidc_jwt_access_tokens", request.OIDCJWTAccessTokens)
+	applyString(values, "oidc_access_token_audience", request.OIDCAccessTokenAudience)
 	applyString(values, "saml_entity_id", request.SAMLEntityID)
 	applyString(values, "saml_acs_url", request.SAMLACSURL)
 	applyString(values, "saml_audience", request.SAMLAudience)
