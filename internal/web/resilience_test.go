@@ -378,3 +378,81 @@ func TestResiliencePresetsMatchApplicationProtocols(t *testing.T) {
 		})
 	}
 }
+
+func TestTokenOutageAppliesToRefreshWithoutConsumingToken(t *testing.T) {
+	r := require.New(t)
+	svc := oidcFaultTestApp(t)
+	first := tokenBody(t, redeemToken(t, svc, authorizeForCode(t, svc, url.Values{"scope": {"openid offline_access"}})))
+	_, err := svc.armResilienceRun("example", "token-outage", 1, time.Now())
+	r.NoError(err)
+
+	outage := refreshTokens(t, svc, first["refresh_token"].(string), nil)
+	r.Equal(http.StatusServiceUnavailable, outage.Code)
+	r.Contains(outage.Body.String(), "temporarily_unavailable")
+
+	recovered := refreshTokens(t, svc, first["refresh_token"].(string), nil)
+	r.Equal(http.StatusOK, recovered.Code, recovered.Body.String())
+	run, ok := svc.resilienceRun("example", time.Now())
+	r.True(ok)
+	r.Equal(resilienceRunCompleted, run.State)
+	r.Equal("token (refresh_token)", run.Decisions[len(run.Decisions)-1].Phase)
+}
+
+func TestSlowRefreshHoldsTokenUntilDelayEnds(t *testing.T) {
+	r := require.New(t)
+	svc := oidcFaultTestApp(t)
+	first := tokenBody(t, redeemToken(t, svc, authorizeForCode(t, svc, url.Values{"scope": {"openid offline_access"}})))
+	presented := first["refresh_token"].(string)
+	_, err := svc.armResilienceRun("example", "slow-token", 0, time.Now())
+	r.NoError(err)
+	svc.resilienceMu.Lock()
+	run := svc.resilienceRuns["example"]
+	run.Action.Delay = 200 * time.Millisecond
+	svc.resilienceRuns["example"] = run
+	svc.resilienceMu.Unlock()
+
+	slow := make(chan *httptest.ResponseRecorder)
+	go func() { slow <- refreshTokens(t, svc, presented, nil) }()
+	r.Eventually(func() bool {
+		svc.oidcMu.Lock()
+		defer svc.oidcMu.Unlock()
+		return svc.refreshTokens[presented].Redeeming
+	}, time.Second, 5*time.Millisecond)
+
+	concurrent := refreshTokens(t, svc, presented, nil)
+	r.Equal(http.StatusBadRequest, concurrent.Code)
+	r.Contains(concurrent.Body.String(), "invalid_grant")
+	delayed := <-slow
+	r.Equal(http.StatusOK, delayed.Code, delayed.Body.String())
+
+	reused := refreshTokens(t, svc, presented, nil)
+	r.Equal(http.StatusBadRequest, reused.Code, "the delayed refresh rotated the token")
+}
+
+func TestCanceledRefreshDelayKeepsToken(t *testing.T) {
+	r := require.New(t)
+	svc := oidcFaultTestApp(t)
+	first := tokenBody(t, redeemToken(t, svc, authorizeForCode(t, svc, url.Values{"scope": {"openid offline_access"}})))
+	presented := first["refresh_token"].(string)
+	_, err := svc.armResilienceRun("example", "slow-token", 0, time.Now())
+	r.NoError(err)
+
+	form := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {presented}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	request := httptest.NewRequest(http.MethodPost, "/oidc/example/token", strings.NewReader(form.Encode())).WithContext(ctx)
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.SetBasicAuth("example-client", "secret")
+	svc.routes().ServeHTTP(httptest.NewRecorder(), request)
+
+	run, ok := svc.resilienceRun("example", time.Now())
+	r.True(ok)
+	r.Equal(resilienceRunArmed, run.State)
+	r.Equal("token (refresh_token)", run.Decisions[0].Phase)
+	r.Equal("canceled", run.Decisions[0].Outcome)
+	svc.oidcMu.Lock()
+	stored, found := svc.refreshTokens[presented]
+	svc.oidcMu.Unlock()
+	r.True(found)
+	r.False(stored.Redeeming)
+}

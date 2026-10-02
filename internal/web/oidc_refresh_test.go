@@ -1,6 +1,8 @@
 package web
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -125,4 +127,36 @@ func tokenBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	return body
+}
+
+func TestRefreshInspectionKeepsOriginalAuthorization(t *testing.T) {
+	r := require.New(t)
+	svc := oidcFaultTestApp(t)
+	verifier := strings.Repeat("greendale-", 5)
+	digest := sha256.Sum256([]byte(verifier))
+	code := authorizeForCode(t, svc, url.Values{
+		"scope":                 {"openid email offline_access"},
+		"code_challenge":        {base64.RawURLEncoding.EncodeToString(digest[:])},
+		"code_challenge_method": {"S256"},
+	})
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {"http://client.test/callback"},
+		"code_verifier": {verifier},
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/oidc/example/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth("example-client", "secret")
+	svc.routes().ServeHTTP(rec, req)
+	first := tokenBody(t, rec)
+
+	refreshed := refreshTokens(t, svc, first["refresh_token"].(string), nil)
+	r.Equal(http.StatusOK, refreshed.Code, refreshed.Body.String())
+
+	inspection := svc.buildOIDCInspectorPageData(app{Slug: "example"}, nil).Inspection
+	r.Equal("Tokens refreshed", inspection.Stage)
+	r.Equal("http://client.test/callback", inspection.RedirectURI)
+	r.True(inspection.PKCE)
 }
