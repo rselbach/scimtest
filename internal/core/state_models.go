@@ -53,10 +53,21 @@ type User struct {
 	Email      string `json:"email"`
 	Username   string `json:"username"`
 	Active     bool   `json:"active"`
-	RemoteID   string `json:"remote_id,omitempty"`
-	Dirty      bool   `json:"dirty"`
-	Deleted    bool   `json:"deleted"`
-	LastError  string `json:"last_error,omitempty"`
+	// Enterprise fields follow the SCIM enterprise user extension. ManagerID
+	// names another user in the same environment.
+	EmployeeNumber string `json:"employee_number,omitempty"`
+	CostCenter     string `json:"cost_center,omitempty"`
+	Organization   string `json:"organization,omitempty"`
+	Division       string `json:"division,omitempty"`
+	Department     string `json:"department,omitempty"`
+	ManagerID      string `json:"manager_id,omitempty"`
+	// Attributes are free-form values sent as OIDC claims and SAML
+	// attributes under their own names.
+	Attributes map[string]string `json:"attributes,omitempty"`
+	RemoteID   string            `json:"remote_id,omitempty"`
+	Dirty      bool              `json:"dirty"`
+	Deleted    bool              `json:"deleted"`
+	LastError  string            `json:"last_error,omitempty"`
 }
 
 func (u *User) UnmarshalJSON(data []byte) error {

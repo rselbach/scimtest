@@ -177,6 +177,30 @@ func (a *webApp) saveAPIUser(environmentID, id string, request apiUserRequest) (
 	if request.Active != nil {
 		found.Active = *request.Active
 	}
+	for _, field := range []struct {
+		value  *string
+		target *string
+	}{
+		{request.EmployeeNumber, &found.EmployeeNumber},
+		{request.CostCenter, &found.CostCenter},
+		{request.Organization, &found.Organization},
+		{request.Division, &found.Division},
+		{request.Department, &found.Department},
+	} {
+		if field.value != nil {
+			*field.target = strings.TrimSpace(*field.value)
+		}
+	}
+	if request.ManagerID != nil {
+		managerID := strings.TrimSpace(*request.ManagerID)
+		if err := validateManager(state.Users, id, managerID); err != nil {
+			return user{}, err
+		}
+		found.ManagerID = managerID
+	}
+	if request.Attributes != nil {
+		found.Attributes = trimCustomAttributes(*request.Attributes)
+	}
 	if found.Username == "" {
 		found.Username = found.Email
 	}
@@ -184,6 +208,9 @@ func (a *webApp) saveAPIUser(environmentID, id string, request apiUserRequest) (
 		return user{}, err
 	}
 	if err := validateUserUnique(state.Users, found.ID, found.Email, found.Username); err != nil {
+		return user{}, err
+	}
+	if err := validateCustomAttributes(found.Attributes); err != nil {
 		return user{}, err
 	}
 	if id == "" {
@@ -200,7 +227,7 @@ func (a *webApp) saveAPIUser(environmentID, id string, request apiUserRequest) (
 		found.Dirty = true
 		found.LastError = ""
 		state.Users[index] = found
-		summary := summarizeUserUpdate(old, found.GivenName, found.FamilyName, found.Email, found.Username)
+		summary := summarizeUserUpdate(old, found)
 		if old.Active != found.Active {
 			summary += fmt.Sprintf("; active set to %t", found.Active)
 		}
@@ -211,6 +238,19 @@ func (a *webApp) saveAPIUser(environmentID, id string, request apiUserRequest) (
 		return user{}, err
 	}
 	return found, nil
+}
+
+// trimCustomAttributes trims values and returns nil for an empty map, the
+// same shape the user form produces.
+func trimCustomAttributes(attributes map[string]string) map[string]string {
+	if len(attributes) == 0 {
+		return nil
+	}
+	trimmed := make(map[string]string, len(attributes))
+	for name, value := range attributes {
+		trimmed[name] = strings.TrimSpace(value)
+	}
+	return trimmed
 }
 
 func (a *webApp) handleAPIUserDelete(w http.ResponseWriter, r *http.Request) {

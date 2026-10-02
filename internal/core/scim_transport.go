@@ -18,20 +18,20 @@ func isRateLimitError(err error) bool {
 	return errors.As(err, &rateLimitErr)
 }
 
-func (c *SCIMClient) createUser(u User) (string, bool, error) {
+func (c *SCIMClient) createUser(u User, directory scimUserDirectory) (string, bool, error) {
 	remoteID, found, err := c.findUserByExternalID(u)
 	switch {
 	case err != nil:
 		return "", false, err
 	case err == nil && found:
 		u.RemoteID = remoteID
-		if err := c.replaceUser(u); err != nil {
+		if err := c.replaceUser(u, directory); err != nil {
 			return "", false, err
 		}
 		return remoteID, true, nil
 	}
 
-	resource := newSCIMUserResource(u)
+	resource := newSCIMUserResource(u, directory)
 
 	var response SCIMUserResource
 	if err := c.doJSON(http.MethodPost, "/Users", resource, &response, traceTargetForUser(u, "create")); err != nil {
@@ -127,8 +127,8 @@ func (c *SCIMClient) getGroup(g Group) (SCIMGroupResource, error) {
 	return resource, err
 }
 
-func (c *SCIMClient) replaceUser(u User) error {
-	resource := newSCIMUserResource(u)
+func (c *SCIMClient) replaceUser(u User, directory scimUserDirectory) error {
+	resource := newSCIMUserResource(u, directory)
 	resource.ID = u.RemoteID
 	method := http.MethodPut
 	body := any(resource)
@@ -142,7 +142,40 @@ func (c *SCIMClient) replaceUser(u User) error {
 	return c.doJSON(method, "/Users/"+url.PathEscape(u.RemoteID), body, nil, traceTargetForUser(u, "update"))
 }
 
-func newSCIMUserResource(u User) SCIMUserResource {
+// scimUserDirectory holds what a user payload needs from the rest of the
+// directory during one sync pass.
+type scimUserDirectory struct {
+	// enterprise is set when any live user has enterprise values. Every
+	// payload then carries the extension, so clearing a value reaches the
+	// remote, while directories that never use it send nothing new.
+	enterprise bool
+	// remoteIDs maps live users to their remote IDs, or "" before they are
+	// created. Sync passes update it as they create and delete users.
+	remoteIDs map[string]string
+}
+
+func newSCIMUserDirectory(users []User) scimUserDirectory {
+	directory := scimUserDirectory{remoteIDs: make(map[string]string, len(users))}
+	for _, u := range users {
+		if u.Deleted {
+			continue
+		}
+		directory.remoteIDs[u.ID] = u.RemoteID
+		if HasEnterpriseValues(u) {
+			directory.enterprise = true
+		}
+	}
+	return directory
+}
+
+// awaitsManager reports whether u names a live manager that has no remote ID
+// yet, so u's manager reference must be sent again once it does.
+func (d scimUserDirectory) awaitsManager(u User) bool {
+	remoteID, live := d.remoteIDs[u.ManagerID]
+	return d.enterprise && u.ManagerID != "" && live && remoteID == ""
+}
+
+func newSCIMUserResource(u User, directory scimUserDirectory) SCIMUserResource {
 	active := u.Active
 	formattedName := FullName(u)
 	resource := SCIMUserResource{
@@ -162,6 +195,21 @@ func newSCIMUserResource(u User) SCIMUserResource {
 		GivenName:  strings.TrimSpace(u.GivenName),
 		FamilyName: strings.TrimSpace(u.FamilyName),
 		Formatted:  formattedName,
+	}
+
+	if !directory.enterprise {
+		return resource
+	}
+	resource.Schemas = append(resource.Schemas, scimEnterpriseUserSchema)
+	resource.Enterprise = &SCIMEnterpriseUser{
+		EmployeeNumber: strings.TrimSpace(u.EmployeeNumber),
+		CostCenter:     strings.TrimSpace(u.CostCenter),
+		Organization:   strings.TrimSpace(u.Organization),
+		Division:       strings.TrimSpace(u.Division),
+		Department:     strings.TrimSpace(u.Department),
+	}
+	if managerRemoteID := directory.remoteIDs[u.ManagerID]; u.ManagerID != "" && managerRemoteID != "" {
+		resource.Enterprise.Manager = &SCIMManager{Value: managerRemoteID}
 	}
 
 	return resource

@@ -851,7 +851,29 @@ func userClaims(state appState, app app, user user, scope string) map[string]any
 	if app.IncludeGroupsClaim && hasOIDCScope(scope, "groups") {
 		claims[mappings.Groups] = userGroups(state, user.ID)
 	}
+	if hasOIDCScope(scope, "profile") {
+		addUserAttributeClaims(claims, state, user)
+	}
 	return claims
+}
+
+// addUserAttributeClaims adds non-empty enterprise values, the manager's
+// sub, and custom attributes. Custom attributes never replace a claim that
+// is already set.
+func addUserAttributeClaims(claims map[string]any, state appState, user user) {
+	for _, value := range enterpriseValues(user) {
+		if value.Value != "" {
+			claims[value.Name] = value.Value
+		}
+	}
+	if manager, ok := userManager(state.Users, user); ok {
+		claims[enterpriseManager] = manager.ID
+	}
+	for _, name := range customAttributeNames(user.Attributes) {
+		if _, exists := claims[name]; !exists && !isReservedAttributeName(name) {
+			claims[name] = user.Attributes[name]
+		}
+	}
 }
 
 func oidcClaimsSupported(app app) []string {
@@ -860,6 +882,8 @@ func oidcClaimsSupported(app app) []string {
 		"sub", mappings.Name, mappings.GivenName, mappings.FamilyName,
 		mappings.Username, mappings.Email, "email_verified", mappings.Groups,
 		"auth_time", "acr", "amr",
+		enterpriseEmployeeNumber, enterpriseCostCenter, enterpriseOrganization,
+		enterpriseDivision, enterpriseDepartment, enterpriseManager,
 	}
 }
 

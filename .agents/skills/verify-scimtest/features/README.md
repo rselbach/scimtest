@@ -54,6 +54,8 @@ exactly four H2 sections in this order.
   OIDC setup, persistence, and discovery.
 - [Load the Greendale sample](./greendale-sample.md) covers both sample entry
   points, directory rows, group rows, and repeat loading.
+- [Edit user attributes](./user-attributes.md) covers enterprise fields, the
+  manager picker, custom attributes, and the resulting claims.
 - [Run the OIDC playground](./oidc-playground.md) covers the built-in relying
   party, chooser, token exchange, claims, and inspector.
 - [Export environment config](./config-export.md) covers the setup link and the

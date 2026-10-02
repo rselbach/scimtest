@@ -364,10 +364,18 @@ type directoryOptionView struct {
 }
 
 type userFormView struct {
-	Title string
-	ID    string
-	User  user
-	Close string
+	Title      string
+	ID         string
+	User       user
+	Attributes string
+	Managers   []managerOptionView
+	Close      string
+}
+
+type managerOptionView struct {
+	ID       string
+	Label    string
+	Selected bool
 }
 
 type memberOptionView struct {
@@ -2062,6 +2070,16 @@ func applyFormDraft(data *pageData, draft formDraft) {
 		data.UserForm.User.Email = values.Get("email")
 		data.UserForm.User.GivenName = values.Get("given_name")
 		data.UserForm.User.FamilyName = values.Get("family_name")
+		data.UserForm.User.EmployeeNumber = values.Get("employee_number")
+		data.UserForm.User.CostCenter = values.Get("cost_center")
+		data.UserForm.User.Organization = values.Get("organization")
+		data.UserForm.User.Division = values.Get("division")
+		data.UserForm.User.Department = values.Get("department")
+		data.UserForm.Attributes = values.Get("attributes")
+		managerID := values.Get("manager_id")
+		for i := range data.UserForm.Managers {
+			data.UserForm.Managers[i].Selected = data.UserForm.Managers[i].ID == managerID
+		}
 	case "group":
 		if data.GroupForm == nil {
 			return
@@ -2549,16 +2567,36 @@ func buildHistoryView(state appState, tab string, page int, pageSize int, search
 }
 
 func buildUserFormView(state appState, tab string, page int, pageSize int, search string, statusFilter string, sortOrder string, id string) (*userFormView, error) {
-	if strings.TrimSpace(id) == "" {
-		return &userFormView{Title: "Add User", Close: dashboardURLWithDirectory(tab, page, pageSize, search, statusFilter, sortOrder, nil)}, nil
+	form := &userFormView{Title: "Add User", Close: dashboardURLWithDirectory(tab, page, pageSize, search, statusFilter, sortOrder, nil)}
+	if strings.TrimSpace(id) != "" {
+		u, ok := userByID(state.Users, id)
+		if !ok {
+			return nil, fmt.Errorf("user %s not found", id)
+		}
+		form.Title = "Edit User"
+		form.ID = id
+		form.User = u
+		form.Attributes = formatCustomAttributes(u.Attributes)
 	}
+	form.Managers = managerOptions(state.Users, form.ID, form.User.ManagerID)
+	return form, nil
+}
 
-	u, ok := userByID(state.Users, id)
-	if !ok {
-		return nil, fmt.Errorf("user %s not found", id)
+// managerOptions lists users who can manage userID. A current manager that
+// was deleted stays listed so saving the form keeps it.
+func managerOptions(users []user, userID string, managerID string) []managerOptionView {
+	options := make([]managerOptionView, 0, len(users))
+	for _, u := range users {
+		if u.ID == userID || (u.Deleted && u.ID != managerID) {
+			continue
+		}
+		label := userLabel(u) + " (" + u.Email + ")"
+		if u.Deleted {
+			label += " — deleted"
+		}
+		options = append(options, managerOptionView{ID: u.ID, Label: label, Selected: u.ID == managerID})
 	}
-
-	return &userFormView{Title: "Edit User", ID: id, User: u, Close: dashboardURLWithDirectory(tab, page, pageSize, search, statusFilter, sortOrder, nil)}, nil
+	return options
 }
 
 func buildGroupFormView(state appState, tab string, page int, pageSize int, search string, statusFilter string, sortOrder string, id string) (*groupFormView, error) {

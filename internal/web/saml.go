@@ -630,10 +630,38 @@ func samlAttributeStatement(state appState, app app, user user) string {
 	writeSAMLAttribute(&attributes, mappings.Username, []string{user.Username})
 	writeSAMLAttribute(&attributes, mappings.GivenName, []string{user.GivenName})
 	writeSAMLAttribute(&attributes, mappings.FamilyName, []string{user.FamilyName})
+	written := map[string]bool{mappings.Email: true, mappings.Username: true, mappings.GivenName: true, mappings.FamilyName: true}
 	if app.IncludeGroupsClaim {
 		writeSAMLAttribute(&attributes, mappings.Groups, userGroups(state, user.ID))
+		written[mappings.Groups] = true
 	}
+	writeSAMLUserAttributes(&attributes, written, state, app, user)
 	return attributes.String()
+}
+
+// writeSAMLUserAttributes writes non-empty enterprise values, the manager's
+// NameID value, and custom attributes, skipping names already written.
+func writeSAMLUserAttributes(attributes *strings.Builder, written map[string]bool, state appState, app app, user user) {
+	write := func(name string, value string) {
+		if written[name] {
+			return
+		}
+		written[name] = true
+		writeSAMLAttribute(attributes, name, []string{value})
+	}
+	for _, value := range enterpriseValues(user) {
+		if value.Value != "" {
+			write(value.Name, value.Value)
+		}
+	}
+	if manager, ok := userManager(state.Users, user); ok {
+		write(enterpriseManager, samlNameIDValue(app, manager))
+	}
+	for _, name := range customAttributeNames(user.Attributes) {
+		if !isReservedAttributeName(name) {
+			write(name, user.Attributes[name])
+		}
+	}
 }
 
 func writeSAMLAttribute(attributes *strings.Builder, name string, values []string) {

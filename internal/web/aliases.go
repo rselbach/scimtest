@@ -49,6 +49,14 @@ var (
 	joinLines                        = core.JoinLines
 	validateUser                     = core.ValidateUser
 	validateUserUnique               = core.ValidateUserUnique
+	validateManager                  = core.ValidateManager
+	validateCustomAttributes         = core.ValidateCustomAttributes
+	parseCustomAttributes            = core.ParseCustomAttributes
+	formatCustomAttributes           = core.FormatCustomAttributes
+	customAttributeNames             = core.CustomAttributeNames
+	isReservedAttributeName          = core.IsReservedAttributeName
+	enterpriseValues                 = core.EnterpriseValues
+	userManager                      = core.UserManager
 	validateGroup                    = core.ValidateGroup
 	validateHTTPBaseURL              = core.ValidateHTTPBaseURL
 	validateApp                      = core.ValidateApp
@@ -106,4 +114,10 @@ const (
 	setupStatusNotSetUp              = core.SetupStatusNotSetUp
 	setupStatusIncomplete            = core.SetupStatusIncomplete
 	setupStatusConfigured            = core.SetupStatusConfigured
+	enterpriseEmployeeNumber         = core.EnterpriseEmployeeNumber
+	enterpriseCostCenter             = core.EnterpriseCostCenter
+	enterpriseOrganization           = core.EnterpriseOrganization
+	enterpriseDivision               = core.EnterpriseDivision
+	enterpriseDepartment             = core.EnterpriseDepartment
+	enterpriseManager                = core.EnterpriseManager
 )

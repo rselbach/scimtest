@@ -109,6 +109,15 @@ All paths in this section are relative to `/environments/{id}`.
 
 User writes accept `given_name`, `family_name`, `email`, `username`, and
 `active`. New users default to active. An empty username uses the email.
+They also accept the enterprise fields `employee_number`, `cost_center`,
+`organization`, `division`, `department`, and `manager_id`, which names
+another user in the same environment. An empty `manager_id` removes the
+manager. `attributes` is an object of custom string attributes, such as
+`{"role":"student"}`, and replaces every existing custom attribute. Send `{}`
+to remove them all. Names start with a letter or underscore and use letters,
+digits, and `_ . : / # -`. Protocol claim names such as `sub` and `iss`, and the
+enterprise names such as `department`, are reserved. A user can have up to 50
+custom attributes, and each value is one line of at most 1024 characters.
 Group writes accept `display_name` and a `member_ids` array of local user IDs.
 An empty array removes all group members.
 

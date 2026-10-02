@@ -35,7 +35,20 @@ Create Troy with `POST /environments/{ENV_ID}/users`:
 {"given_name":"Troy","family_name":"Barnes","email":"troy@greendale.edu","username":"tbarnes","active":true}
 ```
 
-Save the returned `id` as `USER_ID`. Use local user IDs in a group's
+Save the returned `id` as `USER_ID`. To test attribute-based role mapping,
+add enterprise fields and custom attributes:
+
+```json
+{"department":"Air Conditioning Repair","employee_number":"GC-1001","manager_id":"DEAN_USER_ID","attributes":{"role":"student"}}
+```
+
+`manager_id` is another local user ID. OIDC returns these values with the
+`profile` scope as `department`, `employeeNumber`, `manager` (the manager's
+`sub`), and `role`. SAML assertions carry the same attribute names. SCIM sends
+the enterprise fields in the enterprise extension but never the custom
+attributes.
+
+Use local user IDs in a group's
 `member_ids` array when posting to `/environments/{ENV_ID}/groups` with a
 `display_name`. These are IDs within that environment, not remote SCIM IDs.
 Use `PATCH` on an individual resource for edits. `{"member_ids":[]}` removes
@@ -43,8 +56,10 @@ all group memberships.
 
 For a larger directory, `POST /environments/{ENV_ID}/tools/seed-sample` with
 `{}` adds ten Greendale users and three groups. Repeating it adds no duplicate
-sample records. One sample user is deliberately inactive. Read environment
-`/users` and `/groups` afterward instead of assuming IDs or active states.
+sample records. One sample user is deliberately inactive. Sample users have
+enterprise fields, a manager (except the Dean), and a `role` attribute. Read
+environment `/users` and `/groups` afterward instead of assuming IDs or active
+states.
 
 Environment `tools/create-users` accepts `count` and `email_domain`. The catalog
 also offers activation, deletion, and local-clear actions. With SCIM configured,

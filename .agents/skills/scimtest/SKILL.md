@@ -78,6 +78,8 @@ standard input rather than exposing them in command arguments.
   Unknown fields and `null` are rejected, except nulls in backup restores.
 - Claim-mapping objects replace the whole supplied mapping. Omit the object to
   preserve it. Disabling a protocol removes its configuration.
+- A user's `attributes` object replaces all of that user's custom attributes.
+  Omit it to preserve them, or send `{}` to remove them.
 - An empty `oidc_client_secret` preserves or generates a confidential-client
   secret. Use `regenerate_oidc_secret: true` to rotate it. Public clients use
   PKCE and no secret. An empty `scim_bearer_token` clears the SCIM token.
