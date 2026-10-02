@@ -64,6 +64,7 @@ Read [workflows.md](references/workflows.md) for the relevant task:
 - Environment setup, directory edits, and a minimal OIDC experiment.
 - OIDC or SAML flows against an application, including identifier mode.
 - SCIM planning, asynchronous jobs, import, and backup/restore.
+- Joiner, mover, and leaver scenarios across SCIM, OIDC, and SAML.
 - Faults, diagnostics, desktop authorization, and tunnel status.
 
 Send small updates with `--json '{...}'`. Use `--data-file PATH`, or

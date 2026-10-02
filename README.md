@@ -133,6 +133,9 @@ steps, the authentication design, and release packaging details.
 - **SCIM sync.** Push the directory to your app's SCIM endpoint, reconcile
   drift, import an existing remote directory with a preview, and inspect
   every request in the sync trace and per-resource history.
+- **Lifecycle scenarios.** Run a joiner, mover, or leaver across SCIM, OIDC,
+  and SAML in one action, and get a checklist of each message scimtest sent
+  and how the app answered. See [Lifecycle scenarios](#lifecycle-scenarios).
 - **User attributes.** Give users enterprise fields (employee number, cost
   center, organization, division, department, and manager) and custom
   attributes such as `role=student`, to test attribute-based role mapping.
@@ -379,6 +382,41 @@ signatures and enveloped HTTP-POST XML signatures with SHA-256, SHA-384, or
 SHA-512. When a certificate is present, scimtest rejects unsigned requests,
 SHA-1 signatures, and signatures from any other certificate. The same rules
 apply to the SP's `LogoutRequest` and `LogoutResponse` messages.
+
+## Lifecycle scenarios
+
+Choose **Lifecycle** in an environment's sidebar to run a joiner, mover, or
+leaver across every protocol the environment uses. Each run keeps a checklist
+of each step: what scimtest sent, where it went, and how the app answered. A
+failed step does not stop the steps that do not depend on it. A step for a
+protocol the environment does not use, or has not finished setting up, is
+skipped with the reason.
+
+- **Joiner** creates a user, optionally adds them to groups, and pushes the
+  user and then each group through SCIM. The group pushes are skipped when the
+  user push fails.
+- **Mover** adds an active user to groups, removes them from groups, or both,
+  and pushes each changed group through SCIM. It then waits for the next ID
+  token or userinfo response, and the next SAML assertion, issued to the
+  user, and records the groups each one carried. Each check passes when the
+  groups match the user's new groups. The environment must send the groups
+  claim, and an OIDC app must request the `groups` scope.
+  Okta checks include its `Everyone` group. Entra ID groups overage keeps
+  the check waiting until the app calls the group source endpoint; the
+  returned groups then settle it. SAML checks use directory groups.
+- **Leaver** deactivates the user, which ends their IdP sessions and sends a
+  back-channel logout token for each session that issued ID tokens. The
+  checklist records each token and the app's answer. The leaver also revokes
+  the user's access and refresh tokens and pushes `active=false` through SCIM.
+  SAML Single Logout needs a browser to carry its messages, so each ended
+  session with a SAML sign-in gets a **Send LogoutRequest** button in the
+  checklist. That step finishes when the SP's `LogoutResponse` arrives.
+
+SCIM steps list each request from the sync trace, with its body and the app's
+status. The page refreshes itself while a SCIM push or logout token is in
+flight. Runs are kept in memory, ten per environment, so restarting scimtest
+clears them. The local API runs the same scenarios; see the
+[API reference](docs/api.md#lifecycle-scenarios).
 
 ## Configuration
 

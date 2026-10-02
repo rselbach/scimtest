@@ -306,3 +306,54 @@ environment.
 Diagnostics preserve their existing field names, including capitalized names
 such as `Summary` and `CreatedAt` in operation history. Disabling traffic
 recording also disables recording secrets.
+
+## Lifecycle scenarios
+
+All paths in this section are relative to `/environments/{id}`.
+
+| Method | Path | Result |
+| --- | --- | --- |
+| POST | `/lifecycle/joiner` | Create a user, add them to `group_ids`, and provision them. Returns `202` and the run. |
+| POST | `/lifecycle/mover` | Change `user_id`'s groups with `add_group_ids` and `remove_group_ids`. Returns `202` and the run. |
+| POST | `/lifecycle/leaver` | Deactivate `user_id` and offboard them everywhere. Returns `202` and the run. |
+| GET | `/lifecycle` | The environment's runs, newest first, as `runs`. |
+| GET | `/lifecycle/{run_id}` | One run. |
+
+The joiner accepts `given_name`, `family_name`, `email`, and `username`, as
+user creation does, plus an optional `group_ids` array. The mover needs an
+active user and at least one group in `add_group_ids` or `remove_group_ids`.
+Adding a group the user is already in, or removing one they are not in,
+returns `400`. An unknown user or group returns `404`. A rejected request
+changes nothing. Like other directory writes, these return `409` while a SCIM
+job runs.
+
+A run has `id`, `kind` (`joiner`, `mover`, or `leaver`), `user_id`, `user`,
+`status`, `started_at`, and `steps`. Each step has `id`, `protocol`
+(`directory`, `idp`, `oidc`, `saml`, or `scim`), `title`, `status`, and a
+`detail`. Steps that send messages list them in `messages`, each with `at`,
+`sent`, `to`, an optional request `body`, the app's `response`, and an
+`outcome`. A step's `status` is one of:
+
+- `running`: scimtest is still pushing through SCIM or delivering a logout
+  token.
+- `waiting`: the step waits for the app or a sign-in, such as a mover's next
+  ID token or the SP's `LogoutResponse`.
+- `needs_browser`: a leaver's SAML Single Logout step. Both bindings travel
+  through a browser, so the step has a `browser_url`. Open it, pick a binding,
+  and choose **Send LogoutRequest**.
+- `ok`, `failed`, or `skipped`. A skipped step's `detail` gives the reason,
+  such as a protocol the environment does not use.
+
+The run's `status` is `running` while any step runs, then `failed` if any step
+failed, `waiting` while any step waits, and `ok` otherwise. Poll
+`GET /lifecycle/{run_id}` until it settles. SCIM pushes run one at a time
+after the response. A failed push does not stop other steps, but a joiner
+skips its group pushes when the user push fails.
+
+A mover's `oidc-groups` and `saml-groups` steps record the groups that the
+next ID token or userinfo response, and the next SAML assertion, issued to the
+user actually carried. They need `include_groups_claim`, and the OIDC check
+needs an app that requests the `groups` scope. A leaver's `backchannel-*`
+steps record each logout token sent for an ended session. The `revoke` step
+counts the access and refresh tokens it revoked. Runs are in memory, ten per
+environment.

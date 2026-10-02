@@ -236,6 +236,27 @@ python3 "${SCIMTEST_API}" --state-file "${SCIMTEST_STATE}" \
 Restore requires the matching target environment and saves a safety copy.
 It replaces local state and does not undo prior remote SCIM writes.
 
+## Lifecycle scenarios
+
+Paths in this section follow `/environments/{ENV_ID}`. A scenario changes the
+directory, then sends the messages the change calls for in every protocol the
+environment uses, and records the app's answers. `POST /lifecycle/joiner`
+takes user fields and optional `group_ids`. `POST /lifecycle/mover` takes
+`user_id`, `add_group_ids`, and `remove_group_ids`. `POST /lifecycle/leaver`
+takes `user_id`. Each returns `202` and the run. These scenarios write to the
+directory, and their SCIM pushes write to the configured target, so keep them
+within the user's authorized environment.
+
+Poll `GET /lifecycle/{RUN_ID}` until no step is `running`. Read each step's
+`status`, `detail`, and `messages`. A `skipped` step names the setup it lacks.
+A leaver's SAML Single Logout step is `needs_browser` with a `browser_url`:
+open it in a browser and choose **Send LogoutRequest**. The step then waits
+for the SP's `LogoutResponse`. A mover's `oidc-groups` and `saml-groups`
+steps stay `waiting` until the app signs the user in or refreshes again. Run a
+real sign-in through the app, then read the step to see the groups the token
+or assertion carried. Check the app's own state too: the provisioned or
+deactivated resource, its ended session, and its rejected tokens.
+
 ## Faults and diagnostics
 
 Use the playground's `faults` object for one OIDC experiment:

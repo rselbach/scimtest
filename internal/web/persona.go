@@ -190,6 +190,7 @@ func (a *webApp) handleEntraMemberObjects(w http.ResponseWriter, r *http.Request
 		groups = []string{}
 	}
 	a.recordFlowEvent(app.Slug, "oidc", "groups overage", "ok", userLabel(user), fmt.Sprintf("Served %d groups through getMemberObjects", len(groups)))
+	a.noteIssuedGroups(app, user.ID, "oidc", "group source response", app.OIDCClientID, lifecycleGroupClaims{Groups: groups, Carried: true})
 	writeJSON(w, map[string]any{
 		"@odata.context": "https://graph.microsoft.com/v1.0/$metadata#Collection(Edm.String)",
 		"value":          groups,

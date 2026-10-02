@@ -478,6 +478,8 @@ func (a *webApp) issueOIDCTokens(r *http.Request, state appState, app app, user 
 	if err != nil {
 		return nil, err
 	}
+	groups := claimGroups(claims, oidcClaimMappingsForApp(app).Groups)
+	a.noteIssuedGroups(app, user.ID, "oidc", "ID token", app.OIDCClientID, groups)
 	return map[string]any{
 		"access_token": access,
 		"token_type":   "Bearer",
@@ -688,6 +690,8 @@ func (a *webApp) handleOIDCUserinfo(w http.ResponseWriter, r *http.Request) {
 	}
 	claims := userClaims(state, app, user, token.Scope, oidcIssuer(a.effectiveIDPBaseURL(r, state), app))
 	token.Faults.dropClaims(claims)
+	groups := claimGroups(claims, oidcClaimMappingsForApp(app).Groups)
+	a.noteIssuedGroups(app, user.ID, "oidc", "userinfo response", app.OIDCClientID, groups)
 	a.recordFlowEvent(app.Slug, "oidc", "userinfo", "ok", userLabel(user), "Userinfo claims served")
 	writeJSON(w, claims)
 }

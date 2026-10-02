@@ -62,6 +62,9 @@ exactly four H2 sections in this order.
 - [Run SAML Single Logout](./saml-single-logout.md) covers the SP's Single
   Logout URL, metadata, SessionIndex, IdP-initiated and SP-initiated logout
   over both bindings, error statuses, and Traffic.
+- [Run lifecycle scenarios](./lifecycle-scenarios.md) covers the joiner,
+  mover, and leaver forms, their checklists, SAML logout from the checklist,
+  and the lifecycle API.
 - [Choose a provider persona](./provider-personas.md) covers the persona
   setting, persona claims, Entra ID groups overage, and Entra ID SCIM requests.
 - [Export environment config](./config-export.md) covers the setup link and the
