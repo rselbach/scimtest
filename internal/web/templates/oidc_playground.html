@@ -70,6 +70,15 @@
       {{end}}
     </section>
     {{end}}
+    {{if .AccessTokenClaims}}
+    <section class="card inspector-card">
+      <h2>Decoded access token</h2>
+      <h3>Header</h3>
+      <pre class="inspector-payload">{{.AccessTokenHeader}}</pre>
+      <h3>Claims</h3>
+      <pre class="inspector-payload">{{.AccessTokenClaims}}</pre>
+    </section>
+    {{end}}
     {{if .UserinfoBody}}
     <section class="card inspector-card">
       <h2>Userinfo</h2>

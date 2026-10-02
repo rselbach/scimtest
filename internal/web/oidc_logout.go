@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 )
 
 // logoutRequest is a validated end session request.
@@ -46,7 +47,7 @@ func (a *webApp) handleOIDCLogout(w http.ResponseWriter, r *http.Request) {
 		}
 		values = r.PostForm
 	}
-	request, err := a.parseLogoutRequest(r, oidcIssuer(a.effectiveIDPBaseURL(r, state), app), app, values)
+	request, err := a.parseLogoutRequest(r, state, oidcIssuer(a.effectiveIDPBaseURL(r, state), app), app, values)
 	if err != nil {
 		a.failFlow(w, app, "oidc", "logout", http.StatusBadRequest, err.Error())
 		return
@@ -99,14 +100,14 @@ func (a *webApp) handleOIDCLogout(w http.ResponseWriter, r *http.Request) {
 // parseLogoutRequest checks client_id, id_token_hint, and
 // post_logout_redirect_uri. A redirect needs a hint or client_id to name the
 // client, and must go to one of the environment's registered redirect URIs.
-func (a *webApp) parseLogoutRequest(r *http.Request, issuer string, app app, values url.Values) (logoutRequest, error) {
+func (a *webApp) parseLogoutRequest(r *http.Request, state appState, issuer string, app app, values url.Values) (logoutRequest, error) {
 	var request logoutRequest
 	clientID := values.Get("client_id")
 	if clientID != "" && clientID != app.OIDCClientID {
 		return logoutRequest{}, errors.New("client_id is invalid")
 	}
 	if hint := values.Get("id_token_hint"); hint != "" {
-		claims, err := a.verifyIDTokenHint(hint, issuer, app.OIDCClientID)
+		claims, err := a.verifyIDTokenHint(state, hint, issuer, app.OIDCClientID)
 		if err != nil {
 			return logoutRequest{}, err
 		}
@@ -136,7 +137,7 @@ func (a *webApp) parseLogoutRequest(r *http.Request, issuer string, app app, val
 // verifyIDTokenHint checks that token is an RS256 ID token this IdP signed
 // for clientID under issuer, and returns its claims. It accepts an expired
 // token, as RP-Initiated Logout allows.
-func (a *webApp) verifyIDTokenHint(token, issuer, clientID string) (map[string]any, error) {
+func (a *webApp) verifyIDTokenHint(state appState, token, issuer, clientID string) (map[string]any, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return nil, errors.New("id_token_hint is not a signed JWT")
@@ -147,6 +148,8 @@ func (a *webApp) verifyIDTokenHint(token, issuer, clientID string) (map[string]a
 	}
 	var header struct {
 		Alg string `json:"alg"`
+		Typ string `json:"typ"`
+		Kid string `json:"kid"`
 	}
 	if err := json.Unmarshal(headerData, &header); err != nil {
 		return nil, fmt.Errorf("id_token_hint header: %w", err)
@@ -154,12 +157,29 @@ func (a *webApp) verifyIDTokenHint(token, issuer, clientID string) (map[string]a
 	if header.Alg != "RS256" {
 		return nil, fmt.Errorf("id_token_hint must be signed with RS256, not %q", header.Alg)
 	}
+	if header.Typ != idTokenJWT.typ {
+		return nil, errors.New("id_token_hint must be an ID token")
+	}
+	keys, err := a.publishedSigningKeys(state, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	var publicKey *rsa.PublicKey
+	for _, key := range keys {
+		if key.ID == header.Kid {
+			publicKey = &key.PrivateKey.PublicKey
+			break
+		}
+	}
+	if publicKey == nil {
+		return nil, errors.New("id_token_hint signing key is not published by this environment")
+	}
 	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
 		return nil, fmt.Errorf("id_token_hint signature: %w", err)
 	}
 	digest := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
-	if err := rsa.VerifyPKCS1v15(&a.signingKey.PublicKey, crypto.SHA256, digest[:], signature); err != nil {
+	if err := rsa.VerifyPKCS1v15(publicKey, crypto.SHA256, digest[:], signature); err != nil {
 		return nil, errors.New("id_token_hint signature is invalid")
 	}
 	claimData, err := base64.RawURLEncoding.DecodeString(parts[1])

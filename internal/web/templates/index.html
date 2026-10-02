@@ -723,6 +723,16 @@
 				<span class="hint">Unsafe when the IDP is reachable publicly.</span>
 				{{end}}
 			  </label>
+			  <label class="field full">
+				<span class="label">Access tokens</span>
+				<span class="checkbox-row"><input type="checkbox" name="oidc_jwt_access_tokens" {{if .AppForm.App.OIDCJWTAccessTokens}}checked{{end}}> Issue JWT access tokens (RFC 9068)</span>
+				<span class="hint">APIs can validate them locally against the JWKS. Off issues opaque tokens.</span>
+			  </label>
+			  <label class="field full">
+				<span class="label">Access token audience</span>
+				<input name="oidc_access_token_audience" value="{{.AppForm.App.OIDCAccessTokenAudience}}" placeholder="Defaults to the client ID" autocomplete="off">
+				<span class="hint">The aud claim of JWT access tokens. Use the identifier your API expects.</span>
+			  </label>
 			  <details class="field full form-disclosure">
 			  <summary>OIDC claim mappings</summary>
 			  <div class="form-grid">
@@ -841,6 +851,15 @@
               <details class="field full form-disclosure">
               <summary>Signing and Encryption</summary>
               <div class="form-grid">
+              <label class="field full">
+                <span class="label">Signed parts</span>
+                <select name="saml_signing_mode">
+                  <option value="assertion" {{if eq .AppForm.App.SAMLSigningMode "assertion"}}selected{{end}}>Assertion</option>
+                  <option value="response" {{if eq .AppForm.App.SAMLSigningMode "response"}}selected{{end}}>Response</option>
+                  <option value="both" {{if eq .AppForm.App.SAMLSigningMode "both"}}selected{{end}}>Response and assertion</option>
+                </select>
+                <span class="hint">Choose what the SP requires. With encryption, the assertion is signed before it is encrypted and the Response after.</span>
+              </label>
               <label class="field full">
                 <span class="label">SP request-signing certificate</span>
                 <textarea name="saml_request_certificate_pem" rows="7" spellcheck="false" autocomplete="off" placeholder="-----BEGIN CERTIFICATE-----&#10;MIIC...&#10;-----END CERTIFICATE-----">{{.AppForm.App.SAMLRequestCertPEM}}</textarea>

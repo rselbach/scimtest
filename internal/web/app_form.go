@@ -92,6 +92,8 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		OIDCPublicClient:        r.FormValue("oidc_public_client") == "on",
 		OIDCRedirectURIs:        lines(r.FormValue("oidc_redirect_uris")),
 		AllowAnyOIDCRedirect:    r.FormValue("allow_any_oidc_redirect") == "on",
+		OIDCJWTAccessTokens:     r.FormValue("oidc_jwt_access_tokens") == "on",
+		OIDCAccessTokenAudience: strings.TrimSpace(r.FormValue("oidc_access_token_audience")),
 		SAMLEntityID:            strings.TrimSpace(r.FormValue("saml_entity_id")),
 		SAMLACSURL:              strings.TrimSpace(r.FormValue("saml_acs_url")),
 		SAMLAudience:            strings.TrimSpace(r.FormValue("saml_audience")),
@@ -100,6 +102,7 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		SAMLRequestCertPEM:      strings.TrimSpace(r.FormValue("saml_request_certificate_pem")),
 		SAMLEncryptionCertPEM:   strings.TrimSpace(r.FormValue("saml_encryption_certificate_pem")),
 		SAMLEncryptionAlgorithm: strings.TrimSpace(r.FormValue("saml_encryption_algorithm")),
+		SAMLSigningMode:         strings.TrimSpace(r.FormValue("saml_signing_mode")),
 		IncludeGroupsClaim:      r.FormValue("include_groups_claim") == "on",
 		ChooserMode:             normalizeChooserMode(r.FormValue("chooser_mode")),
 		OIDCClaimMappings: oidcClaimMappings{
@@ -157,6 +160,7 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 			app.SAMLEmailAttributeName = defaultSAMLEmailAttributeName
 		}
 		app.SAMLEncryptionAlgorithm = normalizeSAMLEncryptionAlgorithm(app.SAMLEncryptionAlgorithm)
+		app.SAMLSigningMode = normalizeSAMLSigningMode(app.SAMLSigningMode)
 	}
 	if err := validateHTTPBaseURL("SCIM base URL", app.SCIMBaseURL, false); err != nil {
 		a.redirectFormError(w, r, tab, "app", err)
@@ -229,6 +233,8 @@ func clearAppProtocol(app *app, protocol string) {
 		app.OIDCPublicClient = false
 		app.OIDCRedirectURIs = nil
 		app.AllowAnyOIDCRedirect = false
+		app.OIDCJWTAccessTokens = false
+		app.OIDCAccessTokenAudience = ""
 	case "saml":
 		app.SAMLEntityID = ""
 		app.SAMLACSURL = ""
@@ -236,6 +242,7 @@ func clearAppProtocol(app *app, protocol string) {
 		app.SAMLRequestCertPEM = ""
 		app.SAMLEncryptionCertPEM = ""
 		app.SAMLEncryptionAlgorithm = ""
+		app.SAMLSigningMode = ""
 	case "scim":
 		app.SCIMBaseURL = ""
 		app.SCIMBearerToken = ""

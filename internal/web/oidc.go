@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -39,6 +38,9 @@ type authCode struct {
 // refreshTokenLifetime bounds a refresh token. Each refresh rotates the token
 // and starts a new lifetime.
 const refreshTokenLifetime = 24 * time.Hour
+
+// accessTokenLifetime bounds an access token, opaque or JWT.
+const accessTokenLifetime = time.Hour
 
 // refreshToken keeps the grant an offline_access authorization started, so a
 // refresh can re-check the user and issue tokens for the original scope and
@@ -99,21 +101,29 @@ func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleOIDCJWKS publishes the environment's active key and any retired keys
+// still inside their grace period. A stale-JWKS scenario leaves out the
+// active key, the way a cached or lagging JWKS would.
 func (a *webApp) handleOIDCJWKS(w http.ResponseWriter, r *http.Request) {
-	if _, _, ok := appForProtocol(w, r, supportsOIDC); !ok {
+	state, app, ok := appForProtocol(w, r, supportsOIDC)
+	if !ok {
 		return
 	}
-	pub := a.signingKey.PublicKey
-	writeJSON(w, map[string]any{
-		"keys": []map[string]string{{
-			"kty": "RSA",
-			"use": "sig",
-			"kid": "scimtest-dev",
-			"alg": "RS256",
-			"n":   base64.RawURLEncoding.EncodeToString(pub.N.Bytes()),
-			"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pub.E)).Bytes()),
-		}},
-	})
+	now := time.Now()
+	keys, err := a.publishedSigningKeys(state, now)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if action, inject := a.reserveResilienceEndpointAction(app.Slug, "jwks", now); inject && a.completeResilienceEndpointAction(app.Slug, "jwks", action, now) {
+		a.recordFlowEvent(app.Slug, "oidc", "jwks", "ok", "", "Injected JWKS without the current signing key "+keys[0].ID)
+		keys = keys[1:]
+	}
+	jwks := make([]map[string]string, 0, len(keys))
+	for _, key := range keys {
+		jwks = append(jwks, signingKeyJWK(key))
+	}
+	writeJSON(w, map[string]any{"keys": jwks})
 }
 
 func (a *webApp) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
@@ -406,8 +416,9 @@ func (a *webApp) injectTokenFault(w http.ResponseWriter, r *http.Request, app ap
 // records the inspection under stage, and returns the token response. The
 // caller holds oidcMu.
 func (a *webApp) issueOIDCTokens(r *http.Request, state appState, app app, user user, grant authCode, stage string, now time.Time) (map[string]any, error) {
+	issuer := oidcIssuer(a.effectiveIDPBaseURL(r, state), app)
 	claims := userClaims(state, app, user, grant.Scope)
-	claims["iss"] = oidcIssuer(a.effectiveIDPBaseURL(r, state), app)
+	claims["iss"] = issuer
 	claims["aud"] = app.OIDCClientID
 	claims["iat"] = now.Unix()
 	grant.Authn.addClaims(claims, grant.Faults.ClockSkew)
@@ -418,7 +429,7 @@ func (a *webApp) issueOIDCTokens(r *http.Request, state appState, app app, user 
 		claims["sid"] = grant.SessionID
 	}
 	grant.Faults.applyToClaims(claims, now)
-	idToken, err := a.signJWT(claims, grant.Faults)
+	idToken, err := a.signJWT(state, idTokenJWT, claims, grant.Faults)
 	if err != nil {
 		return nil, err
 	}
@@ -429,6 +440,12 @@ func (a *webApp) issueOIDCTokens(r *http.Request, state appState, app app, user 
 	if err != nil {
 		return nil, err
 	}
+	if app.OIDCJWTAccessTokens {
+		access, err = a.signAccessToken(state, issuer, app, user, grant, access, now)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if err := a.rememberOIDCInspection(app, user, grant, stage, claims, idToken, now); err != nil {
 		return nil, err
 	}
@@ -436,16 +453,59 @@ func (a *webApp) issueOIDCTokens(r *http.Request, state appState, app app, user 
 		AppSlug:   app.Slug,
 		UserID:    user.ID,
 		Scope:     grant.Scope,
-		ExpiresAt: now.Add(time.Hour),
+		ExpiresAt: now.Add(accessTokenLifetime),
 		Faults:    grant.Faults,
 	}
 	return map[string]any{
 		"access_token": access,
 		"token_type":   "Bearer",
-		"expires_in":   3600,
+		"expires_in":   int(accessTokenLifetime.Seconds()),
 		"id_token":     idToken,
 		"scope":        grant.Scope,
 	}, nil
+}
+
+// signAccessToken signs an RFC 9068 JWT access token for grant, identified by
+// jti. Faults that model the IDP's signing or clock apply as they do to the ID
+// token: tamper faults, a broken signature, and clock skew. Faults named for
+// the ID token, its lifetime, dropped claims, and the nonce, do not.
+func (a *webApp) signAccessToken(state appState, issuer string, app app, user user, grant authCode, jti string, now time.Time) (string, error) {
+	issued := now.Add(grant.Faults.ClockSkew)
+	claims := map[string]any{
+		"iss":       issuer,
+		"sub":       user.ID,
+		"aud":       accessTokenAudience(app),
+		"client_id": app.OIDCClientID,
+		"scope":     grant.Scope,
+		"iat":       issued.Unix(),
+		"exp":       issued.Add(accessTokenLifetime).Unix(),
+		"jti":       jti,
+	}
+	// RFC 9068 section 2.2.1: the sign-in that started the grant.
+	grant.Authn.addClaims(claims, grant.Faults.ClockSkew)
+	if grant.Faults.tampers(tamperWrongIssuer) {
+		claims["iss"] = nearMiss(claims["iss"])
+	}
+	if grant.Faults.tampers(tamperWrongAudience) {
+		claims["aud"] = nearMiss(claims["aud"])
+	}
+	token, err := a.signJWT(state, accessTokenJWT, claims, grant.Faults)
+	if err != nil {
+		return "", err
+	}
+	if grant.Faults.BreakSignature {
+		token = corruptJWTSignature(token)
+	}
+	return token, nil
+}
+
+// accessTokenAudience is the aud of an environment's JWT access tokens: the
+// configured audience, or the client ID.
+func accessTokenAudience(app app) string {
+	if audience := strings.TrimSpace(app.OIDCAccessTokenAudience); audience != "" {
+		return audience
+	}
+	return app.OIDCClientID
 }
 
 // issueRefreshToken stores grant under a new refresh token value. The caller
@@ -880,15 +940,33 @@ func hasOIDCScope(scope string, target string) bool {
 	return slices.Contains(strings.Fields(scope), target)
 }
 
+// jwtKind is a token signJWT produces: its JOSE typ header and the name debug
+// output uses.
+type jwtKind struct {
+	typ  string
+	name string
+}
+
+var (
+	idTokenJWT = jwtKind{typ: "JWT", name: "ID token"}
+	// RFC 9068 section 2.1 types access tokens so they cannot pass for ID
+	// tokens.
+	accessTokenJWT = jwtKind{typ: "at+jwt", name: "access token"}
+)
+
 // signJWT signs claims as an RS256 compact JWS. Tamper faults can name a key
 // the JWKS does not publish or emit an unsecured alg none token.
-func (a *webApp) signJWT(claims map[string]any, faults faultOptions) (string, error) {
-	header := map[string]any{"typ": "JWT", "alg": "RS256", "kid": "scimtest-dev"}
+func (a *webApp) signJWT(state appState, kind jwtKind, claims map[string]any, faults faultOptions) (string, error) {
+	key, err := a.activeSigningKey(state)
+	if err != nil {
+		return "", err
+	}
+	header := map[string]any{"typ": kind.typ, "alg": "RS256", "kid": key.ID}
 	if faults.tampers(tamperUnknownKeyID) {
 		header["kid"] = "scimtest-unknown"
 	}
 	if faults.tampers(tamperAlgNone) {
-		header = map[string]any{"typ": "JWT", "alg": "none"}
+		header = map[string]any{"typ": kind.typ, "alg": "none"}
 	}
 	headerData, err := json.Marshal(header)
 	if err != nil {
@@ -898,13 +976,13 @@ func (a *webApp) signJWT(claims map[string]any, faults faultOptions) (string, er
 	if err != nil {
 		return "", err
 	}
-	a.writeDebugOIDCTokenPayload(os.Stdout, claimData)
+	a.writeDebugOIDCTokenPayload(os.Stdout, kind.name, claimData)
 	unsigned := base64.RawURLEncoding.EncodeToString(headerData) + "." + base64.RawURLEncoding.EncodeToString(claimData)
 	if faults.tampers(tamperAlgNone) {
 		return unsigned + ".", nil
 	}
 	digest := sha256.Sum256([]byte(unsigned))
-	sig, err := rsa.SignPKCS1v15(rand.Reader, a.signingKey, crypto.SHA256, digest[:])
+	sig, err := rsa.SignPKCS1v15(rand.Reader, key.PrivateKey, crypto.SHA256, digest[:])
 	if err != nil {
 		return "", err
 	}

@@ -121,6 +121,10 @@ type playgroundResult struct {
 	Refreshed             bool
 	RequestedScope        string
 	PreviousIDTokenClaims string
+
+	// AccessTokenHeader and AccessTokenClaims are set for JWT access tokens.
+	AccessTokenHeader string
+	AccessTokenClaims string
 }
 
 // handleOIDCPlaygroundCallback completes the built-in RP flow: it exchanges the
@@ -267,6 +271,7 @@ func (a *webApp) redeemPlaygroundTokens(ctx context.Context, foundApp app, token
 	}
 	result.IDToken = tokenPayload.IDToken
 	result.IDTokenHeader, result.IDTokenClaims = decodeJWTSegments(tokenPayload.IDToken)
+	result.AccessTokenHeader, result.AccessTokenClaims = decodeJWTSegments(tokenPayload.AccessToken)
 	result.RefreshToken = tokenPayload.RefreshToken
 	if tokenPayload.AccessToken == "" {
 		return nil

@@ -32,6 +32,10 @@ type apiOIDCPlaygroundResult struct {
 	Refresh         map[string]any `json:"refresh,omitempty"`
 	RefreshedClaims any            `json:"refreshed_id_token_claims,omitempty"`
 	Error           string         `json:"error,omitempty"`
+
+	// AccessTokenHeader and AccessTokenClaims are set for JWT access tokens.
+	AccessTokenHeader any `json:"access_token_header,omitempty"`
+	AccessTokenClaims any `json:"access_token_claims,omitempty"`
 }
 
 func (a *webApp) handleAPIOIDCPlayground(w http.ResponseWriter, r *http.Request) {
@@ -193,6 +197,7 @@ func (a *webApp) handleAPIOIDCPlayground(w http.ResponseWriter, r *http.Request)
 		result.IDTokenHeader, result.IDTokenClaims = decodeAPIJWT(idToken)
 	}
 	accessToken, _ := result.Token["access_token"].(string)
+	result.AccessTokenHeader, result.AccessTokenClaims = decodeAPIJWT(accessToken)
 	if accessToken == "" {
 		result.Error = "token response carried no access token"
 		writeJSON(w, result)
