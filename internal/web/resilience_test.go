@@ -358,7 +358,7 @@ func TestResiliencePresetsMatchApplicationProtocols(t *testing.T) {
 	}{
 		"OIDC": {
 			app:      app{Protocol: "oidc"},
-			wantIDs:  []string{"token-outage", "slow-token", "expired-token", "broken-signature", "missing-email", "unsigned-id-token", "wrong-audience"},
+			wantIDs:  []string{"token-outage", "slow-token", "stale-jwks", "expired-token", "broken-signature", "missing-email", "unsigned-id-token", "wrong-audience"},
 			rejectID: "saml-auth-failed",
 		},
 		"SAML": {

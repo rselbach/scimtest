@@ -8,25 +8,34 @@ import (
 
 // The Greendale sample is a small realistic directory for first runs and
 // demos: ten named users and three overlapping groups. One user is inactive
-// so deactivation paths get exercised on the first sync.
+// so deactivation paths get exercised on the first sync. Every user has
+// enterprise attributes, a role attribute, and, except the Dean, a manager.
 var sampleUsers = []struct {
-	given    string
-	family   string
-	username string
-	email    string
-	active   bool
+	given      string
+	family     string
+	username   string
+	email      string
+	active     bool
+	employee   string
+	department string
+	division   string
+	costCenter string
+	manager    string
+	role       string
 }{
-	{given: "Troy", family: "Barnes", username: "tbarnes", email: "troy.barnes@greendale.edu", active: true},
-	{given: "Abed", family: "Nadir", username: "anadir", email: "abed.nadir@greendale.edu", active: true},
-	{given: "Annie", family: "Edison", username: "aedison", email: "annie.edison@greendale.edu", active: true},
-	{given: "Britta", family: "Perry", username: "bperry", email: "britta.perry@greendale.edu", active: true},
-	{given: "Shirley", family: "Bennett", username: "sbennett", email: "shirley.bennett@greendale.edu", active: true},
-	{given: "Jeff", family: "Winger", username: "jwinger", email: "jeff.winger@greendale.edu", active: true},
-	{given: "Dean", family: "Pelton", username: "dpelton", email: "dean.pelton@greendale.edu", active: true},
-	{given: "Señor", family: "Chang", username: "schang", email: "senor.chang@greendale.edu", active: false},
-	{given: "Leonard", family: "Rodriguez", username: "lrodriguez", email: "leonard.rodriguez@greendale.edu", active: true},
-	{given: "Magnitude", family: "PopPop", username: "magnitude", email: "magnitude@greendale.edu", active: true},
+	{given: "Troy", family: "Barnes", username: "tbarnes", email: "troy.barnes@greendale.edu", active: true, employee: "GC-1001", department: "Air Conditioning Repair", division: "Facilities", costCenter: "3100", manager: "dpelton", role: "student"},
+	{given: "Abed", family: "Nadir", username: "anadir", email: "abed.nadir@greendale.edu", active: true, employee: "GC-1002", department: "Film Studies", division: "Academics", costCenter: "2100", manager: "jwinger", role: "student"},
+	{given: "Annie", family: "Edison", username: "aedison", email: "annie.edison@greendale.edu", active: true, employee: "GC-1003", department: "Criminology", division: "Academics", costCenter: "2200", manager: "jwinger", role: "student"},
+	{given: "Britta", family: "Perry", username: "bperry", email: "britta.perry@greendale.edu", active: true, employee: "GC-1004", department: "Psychology", division: "Academics", costCenter: "2300", manager: "jwinger", role: "student"},
+	{given: "Shirley", family: "Bennett", username: "sbennett", email: "shirley.bennett@greendale.edu", active: true, employee: "GC-1005", department: "Business", division: "Academics", costCenter: "2400", manager: "jwinger", role: "student"},
+	{given: "Jeff", family: "Winger", username: "jwinger", email: "jeff.winger@greendale.edu", active: true, employee: "GC-1006", department: "Law", division: "Academics", costCenter: "2500", manager: "dpelton", role: "faculty"},
+	{given: "Dean", family: "Pelton", username: "dpelton", email: "dean.pelton@greendale.edu", active: true, employee: "GC-0001", department: "Office of the Dean", division: "Administration", costCenter: "1000", role: "admin"},
+	{given: "Señor", family: "Chang", username: "schang", email: "senor.chang@greendale.edu", active: false, employee: "GC-0666", department: "Spanish", division: "Academics", costCenter: "2600", manager: "dpelton", role: "faculty"},
+	{given: "Leonard", family: "Rodriguez", username: "lrodriguez", email: "leonard.rodriguez@greendale.edu", active: true, employee: "GC-1007", department: "Continuing Education", division: "Academics", costCenter: "2700", manager: "dpelton", role: "student"},
+	{given: "Magnitude", family: "PopPop", username: "magnitude", email: "magnitude@greendale.edu", active: true, employee: "GC-1008", department: "Air Conditioning Repair", division: "Facilities", costCenter: "3100", manager: "tbarnes", role: "student"},
 }
+
+const sampleOrganization = "Greendale Community College"
 
 var sampleGroups = []struct {
 	name      string
@@ -48,6 +57,7 @@ func appendSampleDirectory(state *appState) (usersAdded, groupsAdded int, err er
 		usedEmails[strings.ToLower(u.Email)] = struct{}{}
 	}
 
+	addedManagers := make(map[int]string, len(sampleUsers))
 	for _, sample := range sampleUsers {
 		if _, ok := userIDs[sample.username]; ok {
 			continue
@@ -62,19 +72,31 @@ func appendSampleDirectory(state *appState) (usersAdded, groupsAdded int, err er
 		if err != nil {
 			return usersAdded, groupsAdded, err
 		}
+		addedManagers[len(state.Users)] = sample.manager
 		state.Users = append(state.Users, user{
-			ID:         id,
-			GivenName:  sample.given,
-			FamilyName: sample.family,
-			Username:   sample.username,
-			Email:      sample.email,
-			Active:     sample.active,
-			Dirty:      true,
+			ID:             id,
+			GivenName:      sample.given,
+			FamilyName:     sample.family,
+			Username:       sample.username,
+			Email:          sample.email,
+			Active:         sample.active,
+			EmployeeNumber: sample.employee,
+			Department:     sample.department,
+			Division:       sample.division,
+			Organization:   sampleOrganization,
+			CostCenter:     sample.costCenter,
+			Attributes:     map[string]string{"role": sample.role},
+			Dirty:          true,
 		})
 		appendLocalOperationLog(state, "user", id, "Created by the Greendale sample")
 		userIDs[sample.username] = id
 		usedEmails[strings.ToLower(sample.email)] = struct{}{}
 		usersAdded++
+	}
+	// Managers resolve by username once every sample user exists, so a
+	// manager listed later in the sample still links.
+	for index, managerUsername := range addedManagers {
+		state.Users[index].ManagerID = userIDs[managerUsername]
 	}
 
 	groupNames := make(map[string]struct{}, len(state.Groups))
@@ -137,7 +159,7 @@ func (a *webApp) handleToolsSeedSample(w http.ResponseWriter, r *http.Request) {
 	for _, created := range state.Groups[firstNewGroup:] {
 		markGroupDirty(&state, created.ID, false)
 	}
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}

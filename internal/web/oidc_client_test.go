@@ -353,3 +353,22 @@ func TestTokenHoldersSkipClientCredentialsTokens(t *testing.T) {
 	r.Equal([]oidcTokenHolder{{UserID: "usr-1", User: "Troy Barnes", AccessTokens: 1}}, svc.oidcTokenHolders("example", []user{{ID: "usr-1", GivenName: "Troy", FamilyName: "Barnes"}}))
 	r.Equal(2, svc.revokeOIDCTokens("example", ""), "Revoke all includes the client's own token")
 }
+
+func TestClientCredentialsUsesRotatedEnvironmentKey(t *testing.T) {
+	r := require.New(t)
+	svc := jwtAccessTokenTestApp(t, "https://api.greendale.edu")
+	state, err := loadState()
+	r.NoError(err)
+	rotated, err := svc.rotateEnvironmentSigningKey(state.Apps[0], 0, time.Now())
+	r.NoError(err)
+	key, err := svc.activeSigningKey(rotated)
+	r.NoError(err)
+	tokens := tokenBody(t, clientRequest(t, svc, "token", "secret", url.Values{"grant_type": {"client_credentials"}, "scope": {"courses.read"}}))
+	access := tokens["access_token"].(string)
+	r.Equal(key.ID, decodeJWTHeader(t, access)["kid"])
+	r.NoError(verifyWithJWKS(t, svc, access))
+	r.Equal("example-client", decodeIDTokenClaims(t, access)["sub"])
+	r.Equal(true, introspect(t, svc, access)["active"])
+	revoke(t, svc, access)
+	r.Equal(false, introspect(t, svc, access)["active"])
+}

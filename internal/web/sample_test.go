@@ -28,6 +28,15 @@ func TestAppendSampleDirectory(t *testing.T) {
 	r.Equal("troy.barnes@greendale.edu", byUsername["tbarnes"].Email)
 	r.False(byUsername["schang"].Active, "Señor Chang must load inactive")
 	r.True(byUsername["tbarnes"].Dirty)
+	r.Equal("Air Conditioning Repair", byUsername["tbarnes"].Department)
+	r.Equal("Greendale Community College", byUsername["tbarnes"].Organization)
+	r.Equal(map[string]string{"role": "admin"}, byUsername["dpelton"].Attributes)
+	r.Empty(byUsername["dpelton"].ManagerID)
+	r.Equal(byUsername["dpelton"].ID, byUsername["tbarnes"].ManagerID)
+	// Magnitude reports to Troy, who is listed before him.
+	r.Equal(byUsername["tbarnes"].ID, byUsername["magnitude"].ManagerID)
+	// Abed reports to Jeff, who is listed after him.
+	r.Equal(byUsername["jwinger"].ID, byUsername["anadir"].ManagerID)
 
 	byName := make(map[string]group, len(state.Groups))
 	for _, g := range state.Groups {

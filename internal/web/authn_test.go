@@ -55,20 +55,21 @@ func TestIDTokenReportsSignIn(t *testing.T) {
 
 func TestPromptNoneReusesRememberedSignIn(t *testing.T) {
 	hourAgo := time.Now().Add(-time.Hour).Truncate(time.Second)
-	remembered := signInCookie(t, "example", "usr-1", hourAgo, "mfa")
 	tests := map[string]struct {
-		extra     url.Values
-		cookie    *http.Cookie
-		wantError string
+		extra      url.Values
+		remembered bool
+		cookie     *http.Cookie
+		wantError  string
 	}{
 		"no remembered sign-in":   {wantError: "login_required"},
-		"cookie from older build": {cookie: &http.Cookie{Name: signInCookieName("example"), Value: "usr-1"}, wantError: "login_required"},
-		"remembered sign-in":      {cookie: remembered},
-		"within max_age":          {extra: url.Values{"max_age": {"7200"}}, cookie: remembered},
-		"older than max_age":      {extra: url.Values{"max_age": {"60"}}, cookie: remembered, wantError: "login_required"},
-		"max_age=0":               {extra: url.Values{"max_age": {"0"}}, cookie: remembered, wantError: "login_required"},
-		"invalid max_age":         {extra: url.Values{"max_age": {"-1"}}, cookie: remembered, wantError: "invalid_request"},
-		"combined with login":     {extra: url.Values{"prompt": {"none login"}}, cookie: remembered, wantError: "invalid_request"},
+		"cookie from older build": {cookie: &http.Cookie{Name: signInCookieName("example"), Value: "user=usr-1&strength=mfa"}, wantError: "login_required"},
+		"unknown session":         {cookie: &http.Cookie{Name: signInCookieName("example"), Value: "greendale-session"}, wantError: "login_required"},
+		"remembered sign-in":      {remembered: true},
+		"within max_age":          {extra: url.Values{"max_age": {"7200"}}, remembered: true},
+		"older than max_age":      {extra: url.Values{"max_age": {"60"}}, remembered: true, wantError: "login_required"},
+		"max_age=0":               {extra: url.Values{"max_age": {"0"}}, remembered: true, wantError: "login_required"},
+		"invalid max_age":         {extra: url.Values{"max_age": {"-1"}}, remembered: true, wantError: "invalid_request"},
+		"combined with login":     {extra: url.Values{"prompt": {"none login"}}, remembered: true, wantError: "invalid_request"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -81,6 +82,9 @@ func TestPromptNoneReusesRememberedSignIn(t *testing.T) {
 			var cookies []*http.Cookie
 			if tc.cookie != nil {
 				cookies = append(cookies, tc.cookie)
+			}
+			if tc.remembered {
+				cookies = append(cookies, signInCookie(t, svc, "example", "usr-1", hourAgo, "mfa"))
 			}
 			query := redirectQuery(t, oidcAuthorize(t, svc, http.MethodGet, extra, cookies...))
 			r.Equal("study-group", query.Get("state"))
@@ -99,7 +103,7 @@ func TestRefreshedIDTokenKeepsOriginalSignIn(t *testing.T) {
 	r := require.New(t)
 	svc := oidcFaultTestApp(t)
 	hourAgo := time.Now().Add(-time.Hour).Truncate(time.Second)
-	cookie := signInCookie(t, "example", "usr-1", hourAgo, "mfa")
+	cookie := signInCookie(t, svc, "example", "usr-1", hourAgo, "mfa")
 	query := redirectQuery(t, oidcAuthorize(t, svc, http.MethodGet, url.Values{"prompt": {"none"}, "scope": {"openid offline_access"}}, cookie))
 	first := tokenBody(t, redeemToken(t, svc, query.Get("code")))
 
@@ -127,7 +131,7 @@ func TestChooserOffersReusableSignIn(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			r := require.New(t)
 			svc := oidcFaultTestApp(t)
-			cookie := signInCookie(t, "example", "usr-1", hourAgo, "password")
+			cookie := signInCookie(t, svc, "example", "usr-1", hourAgo, "password")
 
 			chooser := oidcAuthorize(t, svc, http.MethodGet, tc.extra, cookie)
 			r.Equal(http.StatusOK, chooser.Code)
@@ -192,7 +196,7 @@ func TestOIDCChooserEnterUsesChangedUserAndStrength(t *testing.T) {
 					state.Users = append(state.Users, user{ID: "usr-abed", GivenName: "Abed", FamilyName: "Nadir", Username: "anadir", Email: "abed@greendale.edu", Active: true})
 					r.NoError(saveState(state))
 					hourAgo := time.Now().Add(-time.Hour).Truncate(time.Second)
-					cookie := signInCookie(t, "example", "usr-1", hourAgo, tc.remembered)
+					cookie := signInCookie(t, svc, "example", "usr-1", hourAgo, tc.remembered)
 					chooser := oidcAuthorize(t, svc, http.MethodGet, nil, cookie)
 					r.Equal(http.StatusOK, chooser.Code)
 					r.Contains(chooser.Body.String(), "Reuse session")
@@ -243,7 +247,7 @@ func TestSAMLChooserEnterUsesChangedUserAndStrength(t *testing.T) {
 					state.Users = append(state.Users, user{ID: "usr-abed", GivenName: "Abed", FamilyName: "Nadir", Username: "anadir", Email: "abed@greendale.edu", Active: true})
 					r.NoError(saveState(state))
 					hourAgo := time.Now().Add(-time.Hour).Truncate(time.Second)
-					cookie := signInCookie(t, "greendale", troy.ID, hourAgo, tc.remembered)
+					cookie := signInCookie(t, svc, "greendale", troy.ID, hourAgo, tc.remembered)
 					request := url.Values{"SAMLRequest": {greendaleAuthnRequest("", false)}, "RelayState": {"study-group"}}
 					chooser := postSAMLSSO(t, svc, request, cookie)
 					r.Equal(http.StatusOK, chooser.Code)
@@ -362,7 +366,7 @@ func TestSAMLForceAuthnRulesOutRememberedSignIn(t *testing.T) {
 			state, troy := troyGreendaleSAMLState("")
 			r.NoError(saveState(state))
 			hourAgo := time.Now().Add(-time.Hour).Truncate(time.Second)
-			cookie := signInCookie(t, "greendale", troy.ID, hourAgo, "mfa")
+			cookie := signInCookie(t, svc, "greendale", troy.ID, hourAgo, "mfa")
 			request := greendaleAuthnRequest("", tc.force)
 
 			chooser := postSAMLSSO(t, svc, url.Values{"SAMLRequest": {request}}, cookie)
@@ -389,13 +393,15 @@ func TestSAMLForceAuthnRulesOutRememberedSignIn(t *testing.T) {
 	}
 }
 
-// signInCookie is the cookie a browser keeps after signing in as userID.
-func signInCookie(t *testing.T, slug, userID string, at time.Time, strengthID string) *http.Cookie {
+// signInCookie starts an IdP session in svc for a sign-in as userID at the
+// given time and strength, and returns the cookie the browser keeps for it.
+func signInCookie(t *testing.T, svc *webApp, slug, userID string, at time.Time, strengthID string) *http.Cookie {
 	t.Helper()
 	strength, ok := authnStrengthByID(strengthID)
 	require.True(t, ok)
 	rec := httptest.NewRecorder()
-	rememberSignIn(rec, slug, signIn{UserID: userID, Time: at, Strength: strength})
+	_, err := svc.joinIdPSession(rec, httptest.NewRequest(http.MethodGet, "/", nil), slug, user{ID: userID}, signIn{UserID: userID, Time: at, Strength: strength}, "oidc")
+	require.NoError(t, err)
 	cookies := rec.Result().Cookies()
 	require.Len(t, cookies, 1)
 	return cookies[0]

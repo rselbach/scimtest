@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -31,6 +30,7 @@ type authCode struct {
 	Scope         string
 	CodeChallenge string
 	Authn         authnStatement
+	SessionID     string // the IdP session the sign-in joined, sent as sid
 	ExpiresAt     time.Time
 	Faults        faultOptions
 	Redeeming     bool
@@ -62,6 +62,7 @@ type refreshToken struct {
 	Authn         authnStatement
 	GrantID       string
 	IssuedAt      time.Time
+	SessionID     string
 	ExpiresAt     time.Time
 	Redeeming     bool // an injected delay holds the token
 }
@@ -107,6 +108,7 @@ func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 		"jwks_uri":                              issuer + "/jwks",
 		"introspection_endpoint":                issuer + "/introspect",
 		"revocation_endpoint":                   issuer + "/revoke",
+		"end_session_endpoint":                  issuer + "/logout",
 		"response_types_supported":              []string{"code"},
 		"grant_types_supported":                 grantTypes,
 		"subject_types_supported":               []string{"public"},
@@ -124,21 +126,29 @@ func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleOIDCJWKS publishes the environment's active key and any retired keys
+// still inside their grace period. A stale-JWKS scenario leaves out the
+// active key, the way a cached or lagging JWKS would.
 func (a *webApp) handleOIDCJWKS(w http.ResponseWriter, r *http.Request) {
-	if _, _, ok := appForProtocol(w, r, supportsOIDC); !ok {
+	state, app, ok := appForProtocol(w, r, supportsOIDC)
+	if !ok {
 		return
 	}
-	pub := a.signingKey.PublicKey
-	writeJSON(w, map[string]any{
-		"keys": []map[string]string{{
-			"kty": "RSA",
-			"use": "sig",
-			"kid": "scimtest-dev",
-			"alg": "RS256",
-			"n":   base64.RawURLEncoding.EncodeToString(pub.N.Bytes()),
-			"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pub.E)).Bytes()),
-		}},
-	})
+	now := time.Now()
+	keys, err := a.publishedSigningKeys(state, now)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if action, inject := a.reserveResilienceEndpointAction(app.Slug, "jwks", now); inject && a.completeResilienceEndpointAction(app.Slug, "jwks", action, now) {
+		a.recordFlowEvent(app.Slug, "oidc", "jwks", "ok", "", "Injected JWKS without the current signing key "+keys[0].ID)
+		keys = keys[1:]
+	}
+	jwks := make([]map[string]string, 0, len(keys))
+	for _, key := range keys {
+		jwks = append(jwks, signingKeyJWK(key))
+	}
+	writeJSON(w, map[string]any{"keys": jwks})
 }
 
 func (a *webApp) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
@@ -185,7 +195,7 @@ func (a *webApp) serveOIDCAuthorize(w http.ResponseWriter, r *http.Request, post
 	}
 	now := time.Now()
 	if request.Passive {
-		found, session, ok := rememberedSignIn(r, state.Users, app.Slug)
+		found, session, ok := a.rememberedSignIn(r, state.Users, app.Slug)
 		if !ok {
 			a.failAuthorize(w, r, app, values, &authorizeError{code: "login_required", description: "prompt=none requires a remembered sign-in"})
 			return
@@ -199,11 +209,11 @@ func (a *webApp) serveOIDCAuthorize(w http.ResponseWriter, r *http.Request, post
 	}
 	if !post && !chooserSelectionProvided(app, values) {
 		data := newChooserData("OIDC sign-in", app, publicRequestURI(r), state.Users, loginHintFromValues(values), hiddenValues(values), "Create an active user before starting an OIDC flow.")
-		data.applySignIn(r, state.Users, app.Slug, values, request, now)
+		a.applySignIn(&data, r, state.Users, app.Slug, values, request, now)
 		renderChooser(w, data)
 		return
 	}
-	found, session, err := chooserSignIn(r, state.Users, app, values, request, now)
+	found, session, err := a.chooserSignIn(r, state.Users, app, values, request, now)
 	if err != nil {
 		a.failFlow(w, app, "oidc", "authorize", http.StatusBadRequest, err.Error())
 		return
@@ -218,6 +228,11 @@ func (a *webApp) issueOIDCCode(w http.ResponseWriter, r *http.Request, app app, 
 	redirectURI, err := parseOIDCRedirectURI(values.Get("redirect_uri"))
 	if err != nil {
 		a.failFlow(w, app, "oidc", "authorize", http.StatusBadRequest, err.Error())
+		return
+	}
+	sessionID, err := a.joinIdPSession(w, r, app.Slug, user, session, "oidc")
+	if err != nil {
+		a.failFlow(w, app, "oidc", "authorize", http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -240,6 +255,7 @@ func (a *webApp) issueOIDCCode(w http.ResponseWriter, r *http.Request, app app, 
 		Scope:         values.Get("scope"),
 		CodeChallenge: values.Get("code_challenge"),
 		Authn:         session.statement(request.Contexts),
+		SessionID:     sessionID,
 		ExpiresAt:     now.Add(5 * time.Minute),
 		Faults:        a.flowFaults(app.Slug, values),
 	}
@@ -249,7 +265,6 @@ func (a *webApp) issueOIDCCode(w http.ResponseWriter, r *http.Request, app app, 
 		return
 	}
 	a.recordFlowEvent(app.Slug, "oidc", "authorize", "ok", userLabel(user), "Authorization code issued to "+authCode.ClientID)
-	rememberSignIn(w, app.Slug, session)
 
 	query := redirectURI.Query()
 	query.Set("code", code)
@@ -372,6 +387,7 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 			CodeChallenge: code.CodeChallenge,
 			Authn:         code.Authn,
 			GrantID:       code.GrantID,
+			SessionID:     code.SessionID,
 		}, now)
 		if err != nil {
 			a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
@@ -439,8 +455,11 @@ func (a *webApp) issueOIDCTokens(r *http.Request, state appState, app app, user 
 	if grant.Nonce != "" {
 		claims["nonce"] = grant.Nonce
 	}
+	if grant.SessionID != "" {
+		claims["sid"] = grant.SessionID
+	}
 	grant.Faults.applyToClaims(claims, now)
-	idToken, err := a.signJWT(idTokenJWT, claims, grant.Faults)
+	idToken, err := a.signJWT(state, idTokenJWT, claims, grant.Faults)
 	if err != nil {
 		return nil, err
 	}
@@ -450,7 +469,7 @@ func (a *webApp) issueOIDCTokens(r *http.Request, state appState, app app, user 
 	if err := a.rememberOIDCInspection(app, user, grant, stage, claims, idToken, now); err != nil {
 		return nil, err
 	}
-	access, err := a.mintAccessToken(issuer, app, user.ID, grant, now)
+	access, err := a.mintAccessToken(state, issuer, app, user.ID, grant, now)
 	if err != nil {
 		return nil, err
 	}
@@ -466,7 +485,7 @@ func (a *webApp) issueOIDCTokens(r *http.Request, state appState, app app, user 
 // mintAccessToken stores a new access token for grant and returns its value:
 // random and opaque, or an RFC 9068 JWT when the environment issues them.
 // userID is empty for a client_credentials token. The caller holds oidcMu.
-func (a *webApp) mintAccessToken(issuer string, app app, userID string, grant authCode, now time.Time) (string, error) {
+func (a *webApp) mintAccessToken(state appState, issuer string, app app, userID string, grant authCode, now time.Time) (string, error) {
 	value, err := randomSecret(32)
 	if err != nil {
 		return "", err
@@ -486,7 +505,7 @@ func (a *webApp) mintAccessToken(issuer string, app app, userID string, grant au
 		// the client as its subject.
 		subject := cmp.Or(userID, grant.ClientID)
 		token.Audience = accessTokenAudience(app)
-		value, err = a.signAccessToken(issuer, app, subject, grant, value, now)
+		value, err = a.signAccessToken(state, issuer, app, subject, grant, value, now)
 		if err != nil {
 			return "", err
 		}
@@ -500,7 +519,7 @@ func (a *webApp) mintAccessToken(issuer string, app app, userID string, grant au
 // apply as they do to the ID token: tamper faults, a broken signature, and
 // clock skew. Faults named for the ID token, its lifetime, dropped claims, and
 // the nonce, do not.
-func (a *webApp) signAccessToken(issuer string, app app, subject string, grant authCode, jti string, now time.Time) (string, error) {
+func (a *webApp) signAccessToken(state appState, issuer string, app app, subject string, grant authCode, jti string, now time.Time) (string, error) {
 	issued := now.Add(grant.Faults.ClockSkew)
 	claims := map[string]any{
 		"iss":       issuer,
@@ -523,7 +542,7 @@ func (a *webApp) signAccessToken(issuer string, app app, subject string, grant a
 	if grant.Faults.tampers(tamperWrongAudience) {
 		claims["aud"] = nearMiss(claims["aud"])
 	}
-	token, err := a.signJWT(accessTokenJWT, claims, grant.Faults)
+	token, err := a.signJWT(state, accessTokenJWT, claims, grant.Faults)
 	if err != nil {
 		return "", err
 	}
@@ -617,6 +636,7 @@ func (a *webApp) refreshOIDCTokens(w http.ResponseWriter, r *http.Request, app a
 		CodeChallenge: grant.CodeChallenge,
 		Authn:         grant.Authn,
 		GrantID:       grant.GrantID,
+		SessionID:     grant.SessionID,
 	}, "Tokens refreshed", now)
 	if err != nil {
 		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
@@ -964,7 +984,29 @@ func userClaims(state appState, app app, user user, scope string) map[string]any
 	if app.IncludeGroupsClaim && hasOIDCScope(scope, "groups") {
 		claims[mappings.Groups] = userGroups(state, user.ID)
 	}
+	if hasOIDCScope(scope, "profile") {
+		addUserAttributeClaims(claims, state, user)
+	}
 	return claims
+}
+
+// addUserAttributeClaims adds non-empty enterprise values, the manager's
+// sub, and custom attributes. Custom attributes never replace a claim that
+// is already set.
+func addUserAttributeClaims(claims map[string]any, state appState, user user) {
+	for _, value := range enterpriseValues(user) {
+		if value.Value != "" {
+			claims[value.Name] = value.Value
+		}
+	}
+	if manager, ok := userManager(state.Users, user); ok {
+		claims[enterpriseManager] = manager.ID
+	}
+	for _, name := range customAttributeNames(user.Attributes) {
+		if _, exists := claims[name]; !exists && !isReservedAttributeName(name) {
+			claims[name] = user.Attributes[name]
+		}
+	}
 }
 
 func oidcClaimsSupported(app app) []string {
@@ -972,7 +1014,9 @@ func oidcClaimsSupported(app app) []string {
 	return []string{
 		"sub", mappings.Name, mappings.GivenName, mappings.FamilyName,
 		mappings.Username, mappings.Email, "email_verified", mappings.Groups,
-		"auth_time", "acr", "amr",
+		"auth_time", "acr", "amr", "sid",
+		enterpriseEmployeeNumber, enterpriseCostCenter, enterpriseOrganization,
+		enterpriseDivision, enterpriseDepartment, enterpriseManager,
 	}
 }
 
@@ -996,8 +1040,12 @@ var (
 
 // signJWT signs claims as an RS256 compact JWS. Tamper faults can name a key
 // the JWKS does not publish or emit an unsecured alg none token.
-func (a *webApp) signJWT(kind jwtKind, claims map[string]any, faults faultOptions) (string, error) {
-	header := map[string]any{"typ": kind.typ, "alg": "RS256", "kid": "scimtest-dev"}
+func (a *webApp) signJWT(state appState, kind jwtKind, claims map[string]any, faults faultOptions) (string, error) {
+	key, err := a.activeSigningKey(state)
+	if err != nil {
+		return "", err
+	}
+	header := map[string]any{"typ": kind.typ, "alg": "RS256", "kid": key.ID}
 	if faults.tampers(tamperUnknownKeyID) {
 		header["kid"] = "scimtest-unknown"
 	}
@@ -1018,7 +1066,7 @@ func (a *webApp) signJWT(kind jwtKind, claims map[string]any, faults faultOption
 		return unsigned + ".", nil
 	}
 	digest := sha256.Sum256([]byte(unsigned))
-	sig, err := rsa.SignPKCS1v15(rand.Reader, a.signingKey, crypto.SHA256, digest[:])
+	sig, err := rsa.SignPKCS1v15(rand.Reader, key.PrivateKey, crypto.SHA256, digest[:])
 	if err != nil {
 		return "", err
 	}

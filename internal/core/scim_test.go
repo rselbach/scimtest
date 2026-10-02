@@ -129,7 +129,7 @@ func TestCreateWithoutFilterDoesNotPostWhenAdoptionLookupsFail(t *testing.T) {
 	client, err := NewSCIMClient(Config{BaseURL: server.URL, BearerToken: "chang-secret"})
 	r.NoError(err)
 
-	_, _, err = client.createUser(User{ID: "troy"})
+	_, _, err = client.createUser(User{ID: "troy"}, scimUserDirectory{})
 	r.ErrorContains(err, "listing unavailable")
 	_, _, err = client.createGroup(Group{ID: "study-group", DisplayName: "Study Group"}, nil)
 	r.ErrorContains(err, "listing unavailable")
@@ -260,7 +260,7 @@ func TestSCIMClientUsesPatchWhenSupported(t *testing.T) {
 		Email: "troy@greendale.edu", Active: true, RemoteID: "remote-troy",
 	}
 
-	r.NoError(client.replaceUser(user))
+	r.NoError(client.replaceUser(user, scimUserDirectory{}))
 	r.NoError(client.replaceGroup(Group{
 		ID: "study-group", DisplayName: "Study Group", RemoteID: "remote-study-group", MemberIDs: []string{"troy"},
 	}, []User{user}))
@@ -1322,13 +1322,13 @@ func TestSCIMResourcePayloadsAssertClearedAttributes(t *testing.T) {
 		},
 		"cleared name fields are explicit": {
 			payload: func(r *require.Assertions) any {
-				return newSCIMUserResource(User{ID: "troy", Username: "troy", GivenName: "Troy", Email: "troy@greendale.edu", Active: true})
+				return newSCIMUserResource(User{ID: "troy", Username: "troy", GivenName: "Troy", Email: "troy@greendale.edu", Active: true}, scimUserDirectory{})
 			},
 			want: []string{`"givenName":"Troy"`, `"familyName":""`, `"displayName":"Troy"`},
 		},
 		"fully cleared names send empty strings": {
 			payload: func(r *require.Assertions) any {
-				return newSCIMUserResource(User{ID: "troy", Username: "troy", Email: "troy@greendale.edu", Active: true})
+				return newSCIMUserResource(User{ID: "troy", Username: "troy", Email: "troy@greendale.edu", Active: true}, scimUserDirectory{})
 			},
 			want: []string{`"givenName":""`, `"familyName":""`, `"formatted":""`, `"displayName":""`},
 		},

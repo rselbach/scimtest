@@ -48,7 +48,7 @@ func (a *webApp) issueClientCredentialsToken(w http.ResponseWriter, r *http.Requ
 	now := time.Now()
 	scope := r.FormValue("scope")
 	issuer := oidcIssuer(a.effectiveIDPBaseURL(r, state), app)
-	access, err := a.mintAccessToken(issuer, app, "", authCode{ClientID: app.OIDCClientID, Scope: scope}, now)
+	access, err := a.mintAccessToken(state, issuer, app, "", authCode{ClientID: app.OIDCClientID, Scope: scope}, now)
 	if err != nil {
 		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
 		return

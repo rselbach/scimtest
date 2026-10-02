@@ -64,7 +64,7 @@ func (a *webApp) handleAPIReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	initializeAppSync(&state, r.PathValue("environment_id"))
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

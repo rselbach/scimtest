@@ -91,14 +91,24 @@ func operationLogsForApp(logs map[string][]OperationLog, appID string) map[strin
 // SCIM-enabled app always records it; a paused app only when it already
 // remembers the user, so a later re-enable still pushes the edit or delete.
 func MarkUserDirty(state *AppState, userID string, deleted bool) {
+	// reports need their manager reference cleared on deletion and refreshed
+	// after a restored manager receives a new remote ID.
+	userIDs := []string{userID}
+	for _, user := range state.Users {
+		if !user.Deleted && user.ManagerID == userID && user.ID != userID {
+			userIDs = append(userIDs, user.ID)
+		}
+	}
 	if state.UserSync == nil {
 		state.UserSync = make(map[string]map[string]ResourceSyncState)
 	}
 	for _, app := range state.Apps {
-		if _, hasEntry := state.UserSync[app.ID][userID]; !app.SCIMEnabled && !hasEntry {
-			continue
+		for _, id := range userIDs {
+			if _, hasEntry := state.UserSync[app.ID][id]; !app.SCIMEnabled && !hasEntry {
+				continue
+			}
+			markResourceDirty(state.UserSync, app.ID, id, deleted && id == userID)
 		}
-		markResourceDirty(state.UserSync, app.ID, userID, deleted)
 	}
 }
 
@@ -142,6 +152,7 @@ func AppHasSyncState(state AppState, appID string) bool {
 
 // MergeAppSyncState stores one SCIM result without changing other apps.
 func MergeAppSyncState(state *AppState, appID string, synced AppState) {
+	state.Config.SCIMEnterpriseUsed = state.Config.SCIMEnterpriseUsed || synced.Config.SCIMEnterpriseUsed
 	if state.UserSync == nil {
 		state.UserSync = make(map[string]map[string]ResourceSyncState)
 	}

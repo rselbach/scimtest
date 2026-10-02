@@ -35,7 +35,20 @@ Create Troy with `POST /environments/{ENV_ID}/users`:
 {"given_name":"Troy","family_name":"Barnes","email":"troy@greendale.edu","username":"tbarnes","active":true}
 ```
 
-Save the returned `id` as `USER_ID`. Use local user IDs in a group's
+Save the returned `id` as `USER_ID`. To test attribute-based role mapping,
+add enterprise fields and custom attributes:
+
+```json
+{"department":"Air Conditioning Repair","employee_number":"GC-1001","manager_id":"DEAN_USER_ID","attributes":{"role":"student"}}
+```
+
+`manager_id` is another local user ID. OIDC returns these values with the
+`profile` scope as `department`, `employeeNumber`, `manager` (the manager's
+`sub`), and `role`. SAML assertions carry the same attribute names. SCIM sends
+the enterprise fields in the enterprise extension but never the custom
+attributes.
+
+Use local user IDs in a group's
 `member_ids` array when posting to `/environments/{ENV_ID}/groups` with a
 `display_name`. These are IDs within that environment, not remote SCIM IDs.
 Use `PATCH` on an individual resource for edits. `{"member_ids":[]}` removes
@@ -43,8 +56,10 @@ all group memberships.
 
 For a larger directory, `POST /environments/{ENV_ID}/tools/seed-sample` with
 `{}` adds ten Greendale users and three groups. Repeating it adds no duplicate
-sample records. One sample user is deliberately inactive. Read environment
-`/users` and `/groups` afterward instead of assuming IDs or active states.
+sample records. One sample user is deliberately inactive. Sample users have
+enterprise fields, a manager (except the Dean), and a `role` attribute. Read
+environment `/users` and `/groups` afterward instead of assuming IDs or active
+states.
 
 Environment `tools/create-users` accepts `count` and `email_domain`. The catalog
 also offers activation, deletion, and local-clear actions. With SCIM configured,
@@ -104,15 +119,25 @@ or email.
 To test an app's step-up check, set `authn_strength` to `mfa` or `password` in
 the authorization or SAML sign-in request. The ID token reports the choice in
 `acr` and `amr`. The SAML assertion reports it in `AuthnContextClassRef`. Each
-API call is a fresh sign-in. `prompt=none`, `max_age`, and session reuse need
-a browser, because they depend on the chooser's remembered sign-in cookie.
+API call is a fresh sign-in with its own IdP session. `prompt=none`, `max_age`,
+session reuse, and the end session confirmation need a browser, because they
+depend on the cookie that names the browser's IdP session.
+
+To test an app's logout, read the ID token's `sid`, send the app's
+RP-initiated logout to `/oidc/{slug}/logout`, and confirm the session is gone
+from `GET /environments/{ENV_ID}/sessions`. `DELETE` on the same path with
+`?session_id=` ends one session as an administrator would. Deactivating or
+deleting the user also ends that user's sessions. None of these revoke tokens.
 
 ## SAML
 
 Create or patch an environment with `saml_enabled: true`, `saml_entity_id`,
 and `saml_acs_url` matching the service provider. Read the SAML connection
 export for the IDP entity ID, SSO URL, metadata URL, and certificate. Metadata
-and certificate requests use those exported protocol URLs.
+and certificate requests use those exported protocol URLs. Set
+`saml_signing_mode` to `assertion` (the default), `response`, or `both` to match
+what the service provider requires. To check that it rejects a weaker form,
+set a mode that leaves out the signature it should require.
 
 `POST /environments/{ENV_ID}/saml/sign-in` accepts `user_id`, optional
 `relay_state`, and optional base64 `saml_request`. It returns `acs_url`, base64
@@ -202,6 +227,15 @@ For repeated faults, read `/environments/{ENV_ID}/scenarios` for available
 presets, then `POST /scenarios/arm` under the same environment with `preset_id`
 and an optional integer `count`. Inspect the returned run and disarm with
 `POST /scenarios/disarm`. These scenarios expire after fifteen minutes.
+
+To test signing key rollover, `GET /environments/{ENV_ID}/signing-keys`, then
+`POST /signing-keys/rotate` under the same environment with an optional
+`grace_period` such as `1h` or `0s`. New tokens and assertions use the new
+`kid` at once, and the old key stays in the JWKS and SAML metadata for the
+grace period. Rotation cannot be undone except by restoring a backup, so
+rotate only an environment the user named. To test JWKS refetch logic, arm
+the `stale-jwks` scenario; its `count` JWKS responses leave out the active
+key.
 
 To test refresh handling, include `offline_access` in the OIDC scope and redeem
 the returned `refresh_token` with `grant_type=refresh_token`. Each refresh

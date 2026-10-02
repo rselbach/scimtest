@@ -33,10 +33,13 @@ type resilienceAction struct {
 	OAuthError string
 	RetryAfter string
 	Delay      time.Duration
+	StaleJWKS  bool // leave the active signing key out of the JWKS
 }
 
 func (a resilienceAction) describe() string {
 	switch {
+	case a.StaleJWKS:
+		return "JWKS without the current signing key"
 	case a.Status != 0:
 		detail := fmt.Sprintf("HTTP %d", a.Status)
 		if a.RetryAfter != "" {
@@ -88,6 +91,16 @@ var resiliencePresets = []resiliencePreset{
 		DefaultCount: 1,
 	},
 	{
+		ID:           "stale-jwks",
+		Name:         "Stale JWKS",
+		Summary:      "Serve a JWKS without the current signing key, like a cached or lagging key set, to test key refetch logic.",
+		Protocol:     "oidc",
+		Phase:        "jwks",
+		Action:       resilienceAction{StaleJWKS: true},
+		DefaultCount: 1,
+		AllowCount:   true,
+	},
+	{
 		ID:       "expired-token",
 		Name:     "Expired ID token",
 		Summary:  "Issue a correctly formed ID token that is already expired.",
@@ -102,7 +115,7 @@ var resiliencePresets = []resiliencePreset{
 	{
 		ID:           "broken-signature",
 		Name:         "Invalid signature",
-		Summary:      "Corrupt the token or assertion signature without changing its shape.",
+		Summary:      "Corrupt the token signature, or every SAML signature, without changing its shape.",
 		Protocol:     "both",
 		Phase:        "flow",
 		Action:       resilienceAction{Faults: faultOptions{BreakSignature: true}},

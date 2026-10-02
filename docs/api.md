@@ -79,8 +79,9 @@ in the operation catalog.
   when the audience is empty.
 - SAML uses `saml_entity_id`, `saml_acs_url`, `saml_audience`,
   `saml_name_id_field`, `saml_email_attribute_name`,
-  `saml_request_certificate_pem`, `saml_encryption_certificate_pem`, and
-  `saml_encryption_algorithm`.
+  `saml_request_certificate_pem`, `saml_encryption_certificate_pem`,
+  `saml_encryption_algorithm`, and `saml_signing_mode`. The signing mode is
+  `assertion` (the default), `response`, or `both`.
 - Directory claims use `include_groups_claim`, `chooser_mode`,
   `oidc_claim_mappings`, and `saml_attribute_mappings`. Claim mappings are
   objects whose keys are directory field names and whose values are claim or
@@ -112,6 +113,15 @@ All paths in this section are relative to `/environments/{id}`.
 
 User writes accept `given_name`, `family_name`, `email`, `username`, and
 `active`. New users default to active. An empty username uses the email.
+They also accept the enterprise fields `employee_number`, `cost_center`,
+`organization`, `division`, `department`, and `manager_id`, which names
+another user in the same environment. An empty `manager_id` removes the
+manager. `attributes` is an object of custom string attributes, such as
+`{"role":"student"}`, and replaces every existing custom attribute. Send `{}`
+to remove them all. Names start with a letter or underscore and use letters,
+digits, and `_ . : / # -`. Protocol claim names such as `sub` and `iss`, and the
+enterprise names such as `department`, are reserved. A user can have up to 50
+custom attributes, and each value is one line of at most 1024 characters.
 Group writes accept `display_name` and a `member_ids` array of local user IDs.
 An empty array removes all group members.
 
@@ -166,7 +176,11 @@ All paths in this section are relative to `/environments/{id}`.
 | POST | `/oidc/playground` | Run authorization, code exchange, and userinfo locally and return the results. |
 | GET | `/oidc/tokens` | Users holding live access or refresh tokens, with counts. `client_credentials` tokens are not listed. |
 | DELETE | `/oidc/tokens` | Revoke every token, including `client_credentials` tokens, or one user's with `?user_id=`. Returns `revoked`. |
+| GET | `/sessions` | Live IdP sessions, newest sign-in first. |
+| DELETE | `/sessions` | End every IdP session, or one with `?session_id=`. Returns `ended`. |
 | POST | `/saml/sign-in` | Return `acs_url`, base64 `saml_response`, and `relay_state`. |
+| GET | `/signing-keys` | Published signing keys, active key first. |
+| POST | `/signing-keys/rotate` | Sign with a new key and keep the old key published for `grace_period`. |
 | GET | `/inspections/oidc`, `/inspections/saml` | Recent protocol inspections. |
 | GET | `/flows` | Recent flow activity, including failures. |
 | GET, PUT, DELETE | `/faults` | Read, replace, or disarm one-shot faults. |
@@ -197,6 +211,16 @@ authentication and a form-encoded `token`. Revoking a refresh token also
 revokes the access tokens from the same authorization. The connection export
 lists both URLs as `introspection_url` and `revocation_url`.
 
+API calls normally carry no browser cookie, so each OIDC authorization,
+playground run, and SAML sign-in through the API starts its own IdP session. ID
+tokens carry the session ID in `sid`, and refreshed ID tokens keep it. Each
+session in `GET /sessions` has `session_id`, `user_id`, `user`,
+`signed_in_at`, `authn_strength`, `protocols` (`oidc`, `saml`, or both), and
+`started_at`. Ending a session signs that browser out, as the end session
+endpoint `/oidc/{slug}/logout` does, but leaves its tokens valid. Ending an
+unknown `session_id` returns `404`. Deactivating or deleting a user ends that
+user's sessions.
+
 The headless playground accepts `{"user_id":"..."}` and optional `faults`
 using the fields below. It handles confidential-client authentication or
 public-client PKCE. Its result includes `authorize_status`, `token_status`,
@@ -219,11 +243,21 @@ string as `redirect_query` instead of splitting its signed fields. This keeps
 the exact encoding needed for signature validation. API URL query parameters
 are not SAML signing inputs.
 
+Each signing key has `kid`, `active`, `created_at`, `published_until`, and
+`certificate_pem`. The shared key that every environment starts with has the
+`kid` `scimtest-dev` and no `created_at`. Rotation accepts an optional
+`grace_period` duration from `0s` to `168h`; the default is `24h`, and `0s`
+removes the old key at once. It returns the new key list. Rotation changes
+only the selected environment. Backups include the environment's keys.
+Restoring a backup made before key rotation existed returns the environment
+to the shared key.
+
 In identifier chooser mode, use `login_identifier` instead of `user_id` for
 OIDC authorization, the playground, and SAML sign-in.
 
 Fault writes accept duration strings in `id_token_ttl`, `assertion_ttl`, and
-`clock_skew`, a `break_signature` boolean, a `drop_claims` string array,
+`clock_skew`, a `break_signature` boolean that corrupts the ID token signature
+or every SAML signature, a `drop_claims` string array,
 `token_error`, `saml_status`, and a `tamper` string array. Tamper values for
 both protocols are `wrong_issuer` and `wrong_audience`. OIDC adds
 `unknown_kid`, `alg_none`, and `nonce_mismatch`. SAML adds
@@ -232,11 +266,13 @@ both protocols are `wrong_issuer` and `wrong_audience`. OIDC adds
 sent. With JWT access tokens, tamper values, `break_signature`, and
 `clock_skew` also apply to the access token. Invalid fault values are
 rejected. Fault scenarios expire after
-15 minutes.
+15 minutes. The `stale-jwks` scenario serves `count` JWKS responses without
+the active signing key.
 
-Traffic, inspections, flow activity, faults, and jobs are in memory. They
-disappear when the app restarts. Traffic retains 100 entries, inspectors retain
-ten flows, and flow activity retains 20 events per environment.
+Traffic, inspections, flow activity, IdP sessions, faults, and jobs are in
+memory. They disappear when the app restarts. Traffic retains 100 entries,
+inspectors retain ten flows, and flow activity retains 20 events per
+environment.
 
 Diagnostics preserve their existing field names, including capitalized names
 such as `Summary` and `CreatedAt` in operation history. Disabling traffic

@@ -497,6 +497,32 @@
               <span class="label field-label">Family name<span class="hint">Optional</span></span>
               <input name="family_name" value="{{.UserForm.User.FamilyName}}" autocomplete="off">
             </label>
+            <details class="field full form-disclosure" {{if or .UserForm.User.EmployeeNumber .UserForm.User.CostCenter .UserForm.User.Organization .UserForm.User.Division .UserForm.User.Department .UserForm.User.ManagerID}}open{{end}}>
+              <summary>Enterprise attributes</summary>
+              <div class="form-grid">
+                <label class="field"><span class="label">Employee number</span><input name="employee_number" value="{{.UserForm.User.EmployeeNumber}}" autocomplete="off"></label>
+                <label class="field"><span class="label">Department</span><input name="department" value="{{.UserForm.User.Department}}" autocomplete="off"></label>
+                <label class="field"><span class="label">Division</span><input name="division" value="{{.UserForm.User.Division}}" autocomplete="off"></label>
+                <label class="field"><span class="label">Organization</span><input name="organization" value="{{.UserForm.User.Organization}}" autocomplete="off"></label>
+                <label class="field"><span class="label">Cost center</span><input name="cost_center" value="{{.UserForm.User.CostCenter}}" autocomplete="off"></label>
+                <label class="field">
+                  <span class="label">Manager</span>
+                  <select name="manager_id">
+                    <option value="">No manager</option>
+                    {{range .UserForm.Managers}}<option value="{{.ID}}" {{if .Selected}}selected{{end}}>{{.Label}}</option>{{end}}
+                  </select>
+                </label>
+                <span class="hint field full">Sent in the SCIM enterprise extension, as OIDC claims with the profile scope, and as SAML attributes.</span>
+              </div>
+            </details>
+            <details class="field full form-disclosure" {{if .UserForm.Attributes}}open{{end}}>
+              <summary>Custom attributes</summary>
+              <label class="field full">
+                <span class="label">Attributes</span>
+                <textarea name="attributes" rows="4" spellcheck="false" autocomplete="off" placeholder="role=student&#10;campus=Greendale">{{.UserForm.Attributes}}</textarea>
+                <span class="hint">One name=value per line. Sent as OIDC claims with the profile scope and as SAML attributes. SCIM does not send them.</span>
+              </label>
+            </details>
           </div>
           <div class="form-actions">
             <a class="btn btn-ghost" href="{{.UserForm.Close}}">Cancel</a>
@@ -851,6 +877,15 @@
               <details class="field full form-disclosure">
               <summary>Signing and Encryption</summary>
               <div class="form-grid">
+              <label class="field full">
+                <span class="label">Signed parts</span>
+                <select name="saml_signing_mode">
+                  <option value="assertion" {{if eq .AppForm.App.SAMLSigningMode "assertion"}}selected{{end}}>Assertion</option>
+                  <option value="response" {{if eq .AppForm.App.SAMLSigningMode "response"}}selected{{end}}>Response</option>
+                  <option value="both" {{if eq .AppForm.App.SAMLSigningMode "both"}}selected{{end}}>Response and assertion</option>
+                </select>
+                <span class="hint">Choose what the SP requires. With encryption, the assertion is signed before it is encrypted and the Response after.</span>
+              </label>
               <label class="field full">
                 <span class="label">SP request-signing certificate</span>
                 <textarea name="saml_request_certificate_pem" rows="7" spellcheck="false" autocomplete="off" placeholder="-----BEGIN CERTIFICATE-----&#10;MIIC...&#10;-----END CERTIFICATE-----">{{.AppForm.App.SAMLRequestCertPEM}}</textarea>

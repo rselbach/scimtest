@@ -12,9 +12,9 @@
     </dl>
     <h3>Decoded SAML response</h3>
     <pre class="inspector-payload">{{.Inspection.ResponseXML}}</pre>
-    {{if .Inspection.SignedAssertionXML}}
-    <h3>Signed assertion (before encryption)</h3>
-    <pre class="inspector-payload">{{.Inspection.SignedAssertionXML}}</pre>
+    {{if .Inspection.PlaintextAssertionXML}}
+    <h3>Assertion before encryption</h3>
+    <pre class="inspector-payload">{{.Inspection.PlaintextAssertionXML}}</pre>
     {{end}}
     {{if .Inspection.EncodedResponse}}
     <h3>Encoded SAMLResponse (base64, as posted)</h3>
@@ -38,6 +38,7 @@
     <p>Run a SAML sign-in for this environment, then return here to inspect the latest signed response.</p>
   </section>
   {{end}}
+  {{template "signing-keys" .}}
   {{template "flow-activity" .Events}}
   {{template "fault-help" .}}
 </div>

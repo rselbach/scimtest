@@ -73,7 +73,7 @@ func (a *webApp) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 		a.redirectError(w, r, "apps", err)
 		return
 	}
-	if err := saveRequestState(restored); err != nil {
+	if err := a.saveRequestState(restored); err != nil {
 		a.redirectError(w, r, "apps", err)
 		return
 	}
