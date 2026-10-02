@@ -1508,6 +1508,39 @@ func TestSchemaMigrationDefaultsSAMLEncryptionAlgorithm(t *testing.T) {
 	r.Equal(currentSchemaVersion, version)
 }
 
+func TestSchemaMigrationDefaultsSAMLSigningMode(t *testing.T) {
+	r := require.New(t)
+	path := filepath.Join(t.TempDir(), "state.db")
+	t.Setenv("SCIMTEST_STATE_FILE", path)
+	r.NoError(SaveState(AppState{Apps: []App{{
+		ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "saml",
+		SAMLACSURL: "https://greendale.test/saml/acs",
+	}}}))
+
+	db, err := openStateDB()
+	r.NoError(err)
+	_, err = db.Exec(`ALTER TABLE apps DROP COLUMN saml_signing_mode`)
+	r.NoError(err)
+	_, err = db.Exec(`PRAGMA user_version = 2`)
+	r.NoError(err)
+	r.NoError(resetStateDBCache())
+
+	state, err := LoadState()
+	r.NoError(err)
+	r.Len(state.Apps, 1)
+	r.Equal(SAMLSigningModeAssertion, state.Apps[0].SAMLSigningMode)
+
+	db, err = openStateDB()
+	r.NoError(err)
+	version, err := schemaVersion(db)
+	r.NoError(err)
+	r.Equal(currentSchemaVersion, version)
+	entries, err := os.ReadDir(filepath.Join(filepath.Dir(path), "backups"))
+	r.NoError(err)
+	r.Len(entries, 1)
+	r.Contains(entries[0].Name(), "pre-migrate-v002-")
+}
+
 func TestPlanSync(t *testing.T) {
 	state := AppState{
 		Users: []User{

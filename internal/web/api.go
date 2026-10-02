@@ -127,9 +127,9 @@ var environmentAPIFields = []string{
 	"oidc_client_secret", "oidc_public_client", "oidc_redirect_uris", "allow_any_oidc_redirect",
 	"saml_entity_id", "saml_acs_url", "saml_audience", "saml_name_id_field",
 	"saml_email_attribute_name", "saml_request_certificate_pem", "saml_encryption_certificate_pem",
-	"saml_encryption_algorithm", "include_groups_claim", "chooser_mode", "oidc_claim_mappings",
-	"saml_attribute_mappings", "scim_base_url", "scim_bearer_token", "scim_auto_open_trace",
-	"regenerate_oidc_secret",
+	"saml_encryption_algorithm", "saml_signing_mode", "include_groups_claim", "chooser_mode",
+	"oidc_claim_mappings", "saml_attribute_mappings", "scim_base_url", "scim_bearer_token",
+	"scim_auto_open_trace", "regenerate_oidc_secret",
 }
 
 var userAPIFields = []string{"given_name", "family_name", "email", "username", "active"}
@@ -155,6 +155,7 @@ type apiEnvironmentRequest struct {
 	SAMLRequestCertPEM      *string                `json:"saml_request_certificate_pem"`
 	SAMLEncryptionCertPEM   *string                `json:"saml_encryption_certificate_pem"`
 	SAMLEncryptionAlgorithm *string                `json:"saml_encryption_algorithm"`
+	SAMLSigningMode         *string                `json:"saml_signing_mode"`
 	IncludeGroupsClaim      *bool                  `json:"include_groups_claim"`
 	ChooserMode             *string                `json:"chooser_mode"`
 	OIDCClaimMappings       *oidcClaimMappings     `json:"oidc_claim_mappings"`
@@ -452,6 +453,7 @@ func apiEnvironmentForm(current app, request apiEnvironmentRequest) url.Values {
 	values.Set("saml_request_certificate_pem", current.SAMLRequestCertPEM)
 	values.Set("saml_encryption_certificate_pem", current.SAMLEncryptionCertPEM)
 	values.Set("saml_encryption_algorithm", current.SAMLEncryptionAlgorithm)
+	values.Set("saml_signing_mode", current.SAMLSigningMode)
 	setFormBool(values, "include_groups_claim", current.IncludeGroupsClaim)
 	values.Set("chooser_mode", current.ChooserMode)
 	values.Set("oidc_claim_name", current.OIDCClaimMappings.Name)
@@ -487,6 +489,7 @@ func apiEnvironmentForm(current app, request apiEnvironmentRequest) url.Values {
 	applyString(values, "saml_request_certificate_pem", request.SAMLRequestCertPEM)
 	applyString(values, "saml_encryption_certificate_pem", request.SAMLEncryptionCertPEM)
 	applyString(values, "saml_encryption_algorithm", request.SAMLEncryptionAlgorithm)
+	applyString(values, "saml_signing_mode", request.SAMLSigningMode)
 	applyBool(values, "include_groups_claim", request.IncludeGroupsClaim)
 	applyString(values, "chooser_mode", request.ChooserMode)
 	if request.OIDCClaimMappings != nil {

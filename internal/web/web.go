@@ -2109,6 +2109,7 @@ func applyFormDraft(data *pageData, draft formDraft) {
 		data.AppForm.App.SAMLRequestCertPEM = values.Get("saml_request_certificate_pem")
 		data.AppForm.App.SAMLEncryptionCertPEM = values.Get("saml_encryption_certificate_pem")
 		data.AppForm.App.SAMLEncryptionAlgorithm = values.Get("saml_encryption_algorithm")
+		data.AppForm.App.SAMLSigningMode = values.Get("saml_signing_mode")
 		data.AppForm.App.OIDCClaimMappings = oidcClaimMappings{
 			Name: values.Get("oidc_claim_name"), GivenName: values.Get("oidc_claim_given_name"),
 			FamilyName: values.Get("oidc_claim_family_name"), Username: values.Get("oidc_claim_username"),
@@ -2659,6 +2660,7 @@ func buildAppFormView(state appState, tab string, id string, baseURL string, cer
 
 func populateAppFormStatuses(form *appFormView) {
 	form.App.SAMLEncryptionAlgorithm = normalizeSAMLEncryptionAlgorithm(form.App.SAMLEncryptionAlgorithm)
+	form.App.SAMLSigningMode = normalizeSAMLSigningMode(form.App.SAMLSigningMode)
 	form.OIDCStatus = newSetupStatusView(oidcSetupStatus(form.App))
 	form.SAMLStatus = newSetupStatusView(samlSetupStatus(form.App))
 	form.SCIMStatus = newSetupStatusView(scimSetupStatus(form.App))

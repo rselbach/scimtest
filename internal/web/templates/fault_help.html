@@ -32,7 +32,7 @@
       </label>
       <label class="field"><span class="label">Assertion TTL</span><input name="fault_assertion_ttl" placeholder="-10m" autocomplete="off"><span class="hint">Negative issues an already-expired assertion</span></label>
       {{end}}
-      <label class="field"><span class="label">Signature</span><span class="checkbox-row"><input type="checkbox" name="fault_break_signature" value="1"> Corrupt the token or assertion signature</span></label>
+      <label class="field"><span class="label">Signature</span><span class="checkbox-row"><input type="checkbox" name="fault_break_signature" value="1"> Corrupt the token signature or every SAML signature</span></label>
       {{with tamperFaultsFor .App.Protocol}}
       <div class="field full"><span class="label">Tamper</span>
         <div class="checkbox-group">

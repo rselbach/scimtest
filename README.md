@@ -147,8 +147,11 @@ Each environment can expose OIDC, SAML, or both, under its endpoint name
 - SAML certificate: `/saml/{slug}/certificate.pem`
 - SAML SSO: `/saml/{slug}/sso`
 
-The OIDC flow signs RS256 ID tokens. SAML responses include a signed
-assertion. Signing material is generated on first run and stored in the
+The OIDC flow signs RS256 ID tokens. SAML setup's **Signed parts** chooses
+what scimtest signs: the assertion (the default), the Response, or both. An SP
+that needs a signed Response can sign in, and an SP that accepts less than it
+should can be caught. The broken-signature fault corrupts every signature the
+response carries. Signing material is generated on first run and stored in the
 SQLite state database. Every environment starts with this shared key, whose
 `kid` is `scimtest-dev`.
 
@@ -189,10 +192,11 @@ with `login_required`. A refreshed ID token keeps the original `auth_time`,
 `acr`, and `amr`.
 
 Paste the service provider's RSA encryption certificate into SAML setup to
-wrap that signed assertion in `EncryptedAssertion` (AES-128-GCM, AES-192-GCM,
-or AES-256-GCM, RSA-OAEP). AES-256-GCM is the default.
-Leave the field empty to post the signed assertion in the clear. The SAML
-inspector still shows the signed assertion this IDP produced.
+wrap the assertion in `EncryptedAssertion` (AES-128-GCM, AES-192-GCM, or
+AES-256-GCM, RSA-OAEP). AES-256-GCM is the default. The assertion is signed
+before it is encrypted, and the Response after, so the Response signature
+covers the `EncryptedAssertion`. Leave the field empty to post the assertion in
+the clear. The SAML inspector still shows the assertion before encryption.
 
 To require signed AuthnRequests, paste the service provider's RSA X.509
 certificate into the request-signing certificate field. Leave the field empty

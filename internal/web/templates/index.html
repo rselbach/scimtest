@@ -842,6 +842,15 @@
               <summary>Signing and Encryption</summary>
               <div class="form-grid">
               <label class="field full">
+                <span class="label">Signed parts</span>
+                <select name="saml_signing_mode">
+                  <option value="assertion" {{if eq .AppForm.App.SAMLSigningMode "assertion"}}selected{{end}}>Assertion</option>
+                  <option value="response" {{if eq .AppForm.App.SAMLSigningMode "response"}}selected{{end}}>Response</option>
+                  <option value="both" {{if eq .AppForm.App.SAMLSigningMode "both"}}selected{{end}}>Response and assertion</option>
+                </select>
+                <span class="hint">Choose what the SP requires. With encryption, the assertion is signed before it is encrypted and the Response after.</span>
+              </label>
+              <label class="field full">
                 <span class="label">SP request-signing certificate</span>
                 <textarea name="saml_request_certificate_pem" rows="7" spellcheck="false" autocomplete="off" placeholder="-----BEGIN CERTIFICATE-----&#10;MIIC...&#10;-----END CERTIFICATE-----">{{.AppForm.App.SAMLRequestCertPEM}}</textarea>
                 <span class="hint">When present, scimtest requires signed AuthnRequests and checks Redirect query signatures and POST XML signatures. Leave empty to accept unsigned requests. SHA-1 is rejected.</span>
