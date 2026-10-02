@@ -401,6 +401,9 @@ skipped with the reason.
   user, and records the groups each one carried. Each check passes when the
   groups match the user's new groups. The environment must send the groups
   claim, and an OIDC app must request the `groups` scope.
+  Okta checks include its `Everyone` group. Entra ID groups overage keeps
+  the check waiting until the app calls the group source endpoint; the
+  returned groups then settle it. SAML checks use directory groups.
 - **Leaver** deactivates the user, which ends their IdP sessions and sends a
   back-channel logout token for each session that issued ID tokens. The
   checklist records each token and the app's answer. The leaver also revokes
