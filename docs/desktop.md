@@ -21,8 +21,10 @@ window and server lifecycle.
 
 ## Try a PR build
 
-The **Desktop spike** workflow attaches four packages to each relevant pull
-request run for 14 days:
+The **Desktop packaging** workflow runs on pull requests and pushes to `main`
+that change `cmd/scimtest-desktop`, `packaging`, `go.mod`, or `go.sum`. To build
+packages for any other branch, run the workflow manually from the **Actions**
+tab. Each run keeps four packages for 14 days:
 
 - an ad-hoc-signed macOS arm64 ZIP
 - an Ubuntu 24.04 amd64 `.deb` package
