@@ -207,6 +207,10 @@ type App struct {
 	SCIMCapabilitiesKnown   bool                  `json:"scim_capabilities_known,omitempty"`
 	SCIMPatchSupported      bool                  `json:"scim_patch_supported,omitempty"`
 	SCIMFilterSupported     bool                  `json:"scim_filter_supported,omitempty"`
+
+	// OpenID Connect Back-Channel Logout 1.0 client metadata.
+	OIDCBackchannelLogoutURI             string `json:"oidc_backchannel_logout_uri,omitempty"`
+	OIDCBackchannelLogoutSessionRequired bool   `json:"oidc_backchannel_logout_session_required,omitempty"`
 }
 
 const (

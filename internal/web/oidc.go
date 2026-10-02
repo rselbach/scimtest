@@ -109,6 +109,8 @@ func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 		"introspection_endpoint":                issuer + "/introspect",
 		"revocation_endpoint":                   issuer + "/revoke",
 		"end_session_endpoint":                  issuer + "/logout",
+		"backchannel_logout_supported":          true,
+		"backchannel_logout_session_supported":  true,
 		"response_types_supported":              []string{"code"},
 		"grant_types_supported":                 grantTypes,
 		"subject_types_supported":               []string{"public"},
@@ -462,6 +464,9 @@ func (a *webApp) issueOIDCTokens(r *http.Request, state appState, app app, user 
 	idToken, err := a.signJWT(state, idTokenJWT, claims, grant.Faults)
 	if err != nil {
 		return nil, err
+	}
+	if grant.SessionID != "" {
+		a.noteIDTokenIssued(grant.SessionID, issuer)
 	}
 	if grant.Faults.BreakSignature {
 		idToken = corruptJWTSignature(idToken)

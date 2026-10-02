@@ -84,6 +84,7 @@ type webApp struct {
 	refreshTokens    map[string]refreshToken
 	sessionMu        sync.Mutex            // guards idpSessions
 	idpSessions      map[string]idpSession // by session ID
+	logoutDeliveries sync.WaitGroup        // in-flight back-channel logout requests
 	oidcInspectorMu  sync.Mutex
 	oidcInspections  map[string][]oidcInspection
 	samlInspectorMu  sync.Mutex
@@ -2131,6 +2132,8 @@ func applyFormDraft(data *pageData, draft formDraft) {
 		data.AppForm.App.OIDCRedirectURIs = lines(values.Get("oidc_redirect_uris"))
 		data.AppForm.App.OIDCPublicClient = values.Get("oidc_public_client") == "on"
 		data.AppForm.App.AllowAnyOIDCRedirect = values.Get("allow_any_oidc_redirect") == "on"
+		data.AppForm.App.OIDCBackchannelLogoutURI = values.Get("oidc_backchannel_logout_uri")
+		data.AppForm.App.OIDCBackchannelLogoutSessionRequired = values.Get("oidc_backchannel_logout_session_required") == "on"
 		data.AppForm.App.OIDCJWTAccessTokens = values.Get("oidc_jwt_access_tokens") == "on"
 		data.AppForm.App.OIDCAccessTokenAudience = values.Get("oidc_access_token_audience")
 		data.AppForm.App.SAMLEntityID = values.Get("saml_entity_id")

@@ -107,7 +107,7 @@ func (a *webApp) handleAPIOIDCPlayground(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		for _, fault := range faults.Tamper {
-			if info, _ := tamperFaultInfoByID(fault); info.Protocol == "saml" {
+			if info, _ := tamperFaultInfoByID(fault); info.Protocol == "saml" || info.Logout {
 				apiError(w, http.StatusBadRequest, "tamper "+string(fault)+" is not valid for an OIDC playground flow")
 				return
 			}

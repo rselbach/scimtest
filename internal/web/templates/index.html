@@ -750,6 +750,15 @@
 				{{end}}
 			  </label>
 			  <label class="field full">
+				<span class="label">Back-channel logout URI</span>
+				<input name="oidc_backchannel_logout_uri" value="{{.AppForm.App.OIDCBackchannelLogoutURI}}" placeholder="http://localhost:3000/backchannel-logout" autocomplete="off">
+				<span class="hint">When an IdP session ends, scimtest POSTs a signed logout token here. It must be reachable from this machine.</span>
+			  </label>
+			  <label class="field full">
+				<span class="label">Logout token session</span>
+				<span class="checkbox-row"><input type="checkbox" name="oidc_backchannel_logout_session_required" {{if .AppForm.App.OIDCBackchannelLogoutSessionRequired}}checked{{end}}> Session required (send sid with sub)</span>
+			  </label>
+			  <label class="field full">
 				<span class="label">Access tokens</span>
 				<span class="checkbox-row"><input type="checkbox" name="oidc_jwt_access_tokens" {{if .AppForm.App.OIDCJWTAccessTokens}}checked{{end}}> Issue JWT access tokens (RFC 9068)</span>
 				<span class="hint">APIs can validate them locally against the JWKS. Off issues opaque tokens.</span>

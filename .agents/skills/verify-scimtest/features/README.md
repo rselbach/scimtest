@@ -57,7 +57,8 @@ exactly four H2 sections in this order.
 - [Edit user attributes](./user-attributes.md) covers enterprise fields, the
   manager picker, custom attributes, and the resulting claims.
 - [Run the OIDC playground](./oidc-playground.md) covers the built-in relying
-  party, chooser, token exchange, claims, inspector, and IdP session end.
+  party, chooser, token exchange, claims, inspector, IdP session end, and
+  back-channel logout.
 - [Export environment config](./config-export.md) covers the setup link and the
   machine-readable OIDC bundle.
 - [Use the OAuth client endpoints](./oauth-client-endpoints.md) covers

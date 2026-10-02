@@ -129,6 +129,15 @@ from `GET /environments/{ENV_ID}/sessions`. `DELETE` on the same path with
 `?session_id=` ends one session as an administrator would. Deactivating or
 deleting the user also ends that user's sessions. None of these revoke tokens.
 
+To test back-channel logout, set `oidc_backchannel_logout_uri` to the app's
+logout endpoint, and `oidc_backchannel_logout_session_required: true` when the
+app needs `sid`. The app must be reachable from the machine that runs
+scimtest. Exchange a code first: only sessions that issued an ID token send a
+logout token. Then end the session by any route above. Delivery is
+asynchronous, so poll `GET /environments/{ENV_ID}/flows` for the
+`backchannel-logout` stage, which records the app's status, and check that the
+app ended its own session.
+
 ## SAML
 
 Create or patch an environment with `saml_enabled: true`, `saml_entity_id`,
@@ -215,7 +224,11 @@ otherwise valid response. `wrong_issuer` and `wrong_audience` apply to both
 protocols. OIDC adds `unknown_kid`, `alg_none`, and `nonce_mismatch`. SAML
 adds `wrong_destination`, `wrong_recipient`, `in_response_to_mismatch`, and
 `replayed_assertion`. Replay needs an earlier SAML sign-in in the same
-environment. With JWT access tokens, tamper values, `break_signature`, and
+environment. Logout token tamper values `logout_alg_none`,
+`logout_wrong_audience`, `logout_missing_events`, and `logout_repeated_jti`
+apply only through `PUT /faults`: sign-ins leave them armed, and the next
+back-channel logout token consumes them. A safe app answers `400`.
+With JWT access tokens, tamper values, `break_signature`, and
 `clock_skew` change the access token as well as the ID token.
 
 To affect the next incoming protocol flow, `PUT /environments/{ENV_ID}/faults`.

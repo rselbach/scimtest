@@ -110,6 +110,8 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 			FamilyName: strings.TrimSpace(r.FormValue("oidc_claim_family_name")), Username: strings.TrimSpace(r.FormValue("oidc_claim_username")),
 			Email: strings.TrimSpace(r.FormValue("oidc_claim_email")), Groups: strings.TrimSpace(r.FormValue("oidc_claim_groups")),
 		},
+		OIDCBackchannelLogoutURI:             strings.TrimSpace(r.FormValue("oidc_backchannel_logout_uri")),
+		OIDCBackchannelLogoutSessionRequired: r.FormValue("oidc_backchannel_logout_session_required") == "on",
 		SAMLAttributeMappings: samlAttributeMappings{
 			GivenName: strings.TrimSpace(r.FormValue("saml_attribute_given_name")), FamilyName: strings.TrimSpace(r.FormValue("saml_attribute_family_name")),
 			Username: strings.TrimSpace(r.FormValue("saml_attribute_username")), Email: strings.TrimSpace(r.FormValue("saml_email_attribute_name")),
@@ -233,6 +235,8 @@ func clearAppProtocol(app *app, protocol string) {
 		app.OIDCPublicClient = false
 		app.OIDCRedirectURIs = nil
 		app.AllowAnyOIDCRedirect = false
+		app.OIDCBackchannelLogoutURI = ""
+		app.OIDCBackchannelLogoutSessionRequired = false
 		app.OIDCJWTAccessTokens = false
 		app.OIDCAccessTokenAudience = ""
 	case "saml":

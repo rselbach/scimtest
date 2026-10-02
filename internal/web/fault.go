@@ -43,6 +43,11 @@ const (
 	tamperWrongRecipient       tamperFault = "wrong_recipient"
 	tamperInResponseToMismatch tamperFault = "in_response_to_mismatch"
 	tamperReplayedAssertion    tamperFault = "replayed_assertion"
+
+	tamperLogoutAlgNone       tamperFault = "logout_alg_none"
+	tamperLogoutWrongAudience tamperFault = "logout_wrong_audience"
+	tamperLogoutMissingEvents tamperFault = "logout_missing_events"
+	tamperLogoutRepeatedJTI   tamperFault = "logout_repeated_jti"
 )
 
 // tamperFaultInfo describes a tamper fault for forms and descriptions.
@@ -50,6 +55,7 @@ type tamperFaultInfo struct {
 	ID       tamperFault
 	Protocol string // oidc, saml, or both, like app.Protocol
 	Label    string
+	Logout   bool // breaks back-channel logout tokens instead of sign-ins
 }
 
 var tamperFaults = []tamperFaultInfo{
@@ -62,6 +68,10 @@ var tamperFaults = []tamperFaultInfo{
 	{ID: tamperWrongRecipient, Protocol: "saml", Label: "Wrong recipient"},
 	{ID: tamperInResponseToMismatch, Protocol: "saml", Label: "InResponseTo mismatch"},
 	{ID: tamperReplayedAssertion, Protocol: "saml", Label: "Replayed assertion ID"},
+	{ID: tamperLogoutAlgNone, Protocol: "oidc", Label: "Logout token: unsigned (alg none)", Logout: true},
+	{ID: tamperLogoutWrongAudience, Protocol: "oidc", Label: "Logout token: wrong audience", Logout: true},
+	{ID: tamperLogoutMissingEvents, Protocol: "oidc", Label: "Logout token: missing events", Logout: true},
+	{ID: tamperLogoutRepeatedJTI, Protocol: "oidc", Label: "Logout token: repeated jti", Logout: true},
 }
 
 func tamperFaultInfoByID(id tamperFault) (tamperFaultInfo, bool) {
@@ -167,6 +177,21 @@ func (f faultOptions) tampers(fault tamperFault) bool {
 	return slices.Contains(f.Tamper, fault)
 }
 
+// splitLogout separates the tamper faults that break back-channel logout
+// tokens from the faults that apply to sign-ins.
+func (f faultOptions) splitLogout() (signIn, logout faultOptions) {
+	signIn = f
+	signIn.Tamper = nil
+	for _, fault := range f.Tamper {
+		if info, _ := tamperFaultInfoByID(fault); info.Logout {
+			logout.Tamper = append(logout.Tamper, fault)
+			continue
+		}
+		signIn.Tamper = append(signIn.Tamper, fault)
+	}
+	return signIn, logout
+}
+
 // describe renders the requested faults for banners and flow records.
 func (f faultOptions) describe() string {
 	var parts []string
@@ -222,12 +247,33 @@ func (a *webApp) peekArmedFaults(slug string) faultOptions {
 }
 
 // takeArmedFaults consumes the armed faults so they apply to one flow only.
+// Logout token faults stay armed for the next back-channel logout.
 func (a *webApp) takeArmedFaults(slug string) faultOptions {
 	a.faultMu.Lock()
 	defer a.faultMu.Unlock()
-	faults := a.armedFaults[slug]
-	delete(a.armedFaults, slug)
-	return faults
+	signIn, logout := a.armedFaults[slug].splitLogout()
+	a.rearmFaults(slug, logout)
+	return signIn
+}
+
+// takeArmedLogoutFaults consumes the armed logout token faults so they apply
+// to one logout token only. Sign-in faults stay armed.
+func (a *webApp) takeArmedLogoutFaults(slug string) faultOptions {
+	a.faultMu.Lock()
+	defer a.faultMu.Unlock()
+	signIn, logout := a.armedFaults[slug].splitLogout()
+	a.rearmFaults(slug, signIn)
+	return logout
+}
+
+// rearmFaults leaves faults armed for slug, or disarms it when none remain.
+// The caller holds faultMu.
+func (a *webApp) rearmFaults(slug string, faults faultOptions) {
+	if !faults.active() {
+		delete(a.armedFaults, slug)
+		return
+	}
+	a.armedFaults[slug] = faults
 }
 
 func (a *webApp) disarmFaults(slug string) {
@@ -239,7 +285,7 @@ func (a *webApp) disarmFaults(slug string) {
 // flowFaults resolves the faults for a flow: explicit fault_* parameters
 // win, otherwise armed faults are consumed.
 func (a *webApp) flowFaults(slug string, values url.Values) faultOptions {
-	faults := parseFaultOptions(values)
+	faults, _ := parseFaultOptions(values).splitLogout()
 	if faults.active() {
 		return faults
 	}
