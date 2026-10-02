@@ -3,9 +3,11 @@ package web
 import (
 	"encoding/base64"
 	"encoding/json"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -136,6 +138,12 @@ func TestChooserOffersReusableSignIn(t *testing.T) {
 			}
 
 			form := url.Values{"continue_session": {"1"}}
+			if tc.wantReuse {
+				form = chooserSubmitForm(t, body, "Reuse session")
+				r.Equal("1", form.Get("continue_session"))
+				r.Empty(form.Get("authn_strength"))
+				r.Empty(form.Get("user_id"))
+			}
 			for key, values := range tc.extra {
 				form[key] = values
 			}
@@ -159,6 +167,138 @@ func TestChooserPreselectsRequestedStrength(t *testing.T) {
 	r.Equal(http.StatusOK, rec.Code)
 	r.Contains(rec.Body.String(), `<option value="mfa" selected>`)
 	r.NotContains(rec.Body.String(), `<option value="password" selected>`)
+}
+
+func TestOIDCChooserEnterUsesChangedUserAndStrength(t *testing.T) {
+	for mode, selection := range map[string]url.Values{
+		chooserModeList:       {"user_id": {"usr-abed"}},
+		chooserModeIdentifier: {"login_identifier": {"anadir"}},
+	} {
+		t.Run(mode, func(t *testing.T) {
+			for strength, tc := range map[string]struct {
+				remembered string
+				wantACR    string
+				wantAMR    []any
+			}{
+				"mfa":      {"password", mfaContext, []any{"pwd", "otp", "mfa"}},
+				"password": {"mfa", passwordContext, []any{"pwd"}},
+			} {
+				t.Run(strength, func(t *testing.T) {
+					r := require.New(t)
+					svc := oidcFaultTestApp(t)
+					state, err := loadState()
+					r.NoError(err)
+					state.Apps[0].ChooserMode = mode
+					state.Users = append(state.Users, user{ID: "usr-abed", GivenName: "Abed", FamilyName: "Nadir", Username: "anadir", Email: "abed@greendale.edu", Active: true})
+					r.NoError(saveState(state))
+					hourAgo := time.Now().Add(-time.Hour).Truncate(time.Second)
+					cookie := signInCookie(t, "example", "usr-1", hourAgo, tc.remembered)
+					chooser := oidcAuthorize(t, svc, http.MethodGet, nil, cookie)
+					r.Equal(http.StatusOK, chooser.Code)
+					r.Contains(chooser.Body.String(), "Reuse session")
+
+					// Enter activates the first submit button owned by chooser-form.
+					form := chooserSubmitForm(t, chooser.Body.String(), "Continue")
+					for key, values := range selection {
+						form[key] = values
+					}
+					form.Set("authn_strength", strength)
+					before := time.Now().Unix()
+					result := httptest.NewRecorder()
+					req := httptest.NewRequest(http.MethodPost, "/oidc/example/authorize", strings.NewReader(form.Encode()))
+					req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+					req.AddCookie(cookie)
+					svc.routes().ServeHTTP(result, req)
+					claims := idTokenClaimsForCode(t, svc, redirectQuery(t, result).Get("code"))
+					r.Equal("usr-abed", claims["sub"])
+					r.Equal(tc.wantACR, claims["acr"])
+					r.Equal(tc.wantAMR, claims["amr"])
+					r.GreaterOrEqual(claims["auth_time"], float64(before))
+					r.Greater(claims["auth_time"], float64(hourAgo.Unix()))
+				})
+			}
+		})
+	}
+}
+
+func TestSAMLChooserEnterUsesChangedUserAndStrength(t *testing.T) {
+	for mode, selection := range map[string]url.Values{
+		chooserModeList:       {"user_id": {"usr-abed"}},
+		chooserModeIdentifier: {"login_identifier": {"anadir"}},
+	} {
+		t.Run(mode, func(t *testing.T) {
+			for strength, tc := range map[string]struct {
+				remembered string
+				wantClass  string
+			}{
+				"mfa":      {"password", mfaContext},
+				"password": {"mfa", passwordContext},
+			} {
+				t.Run(strength, func(t *testing.T) {
+					r := require.New(t)
+					setTestStateFile(t)
+					svc := newTestIDPApp(t)
+					state, troy := troyGreendaleSAMLState("")
+					state.Apps[0].ChooserMode = mode
+					state.Users = append(state.Users, user{ID: "usr-abed", GivenName: "Abed", FamilyName: "Nadir", Username: "anadir", Email: "abed@greendale.edu", Active: true})
+					r.NoError(saveState(state))
+					hourAgo := time.Now().Add(-time.Hour).Truncate(time.Second)
+					cookie := signInCookie(t, "greendale", troy.ID, hourAgo, tc.remembered)
+					request := url.Values{"SAMLRequest": {greendaleAuthnRequest("", false)}, "RelayState": {"study-group"}}
+					chooser := postSAMLSSO(t, svc, request, cookie)
+					r.Equal(http.StatusOK, chooser.Code)
+					r.Contains(chooser.Body.String(), "Reuse session")
+
+					form := chooserSubmitForm(t, chooser.Body.String(), "Continue")
+					for key, values := range selection {
+						form[key] = values
+					}
+					form.Set("authn_strength", strength)
+					before := time.Now().UTC().Truncate(time.Second)
+					result := postSAMLSSO(t, svc, form, cookie)
+					assertion := postedSAMLAssertion(t, result)
+					r.Equal("abed@greendale.edu", firstElementTextByLocalName(assertion, "NameID"))
+					statement := findElementByLocalName(assertion, "AuthnStatement")
+					r.Equal(tc.wantClass, firstElementTextByLocalName(statement, "AuthnContextClassRef"))
+					r.False(parseSAMLInstant(t, statement.SelectAttrValue("AuthnInstant", "")).Before(before))
+					r.Equal("study-group", hiddenInputValue(result.Body.String(), "RelayState"))
+				})
+			}
+		})
+	}
+}
+
+// chooserSubmitForm reads the rendered form's protocol fields and submitter.
+// The Continue checks enforce native implicit submission, including external
+// buttons that can otherwise take precedence over buttons inside the form.
+func chooserSubmitForm(t *testing.T, body, submitter string) url.Values {
+	t.Helper()
+	forms := regexp.MustCompile(`(?s)<form\b[^>]*>.*?</form>`).FindAllString(body, -1)
+	for _, form := range forms {
+		buttons := regexp.MustCompile(`(?s)<button\b([^>]*)>([^<]*)</button>`).FindAllStringSubmatch(form, -1)
+		for _, button := range buttons {
+			if button[2] != submitter {
+				continue
+			}
+			if submitter == "Continue" {
+				require.Contains(t, form, `id="chooser-form"`)
+				require.Equal(t, "Continue", buttons[0][2], "Enter must activate Continue")
+				require.NotContains(t, body, `form="chooser-form"`, "external submitters must not take precedence")
+			}
+			values := url.Values{}
+			inputs := regexp.MustCompile(`<input type="hidden" name="([^"]+)" value="([^"]*)">`).FindAllStringSubmatch(form, -1)
+			for _, input := range inputs {
+				values.Add(html.UnescapeString(input[1]), html.UnescapeString(input[2]))
+			}
+			attrs := regexp.MustCompile(`name="([^"]+)" value="([^"]*)"`).FindStringSubmatch(button[1])
+			if attrs != nil {
+				values.Add(attrs[1], attrs[2])
+			}
+			return values
+		}
+	}
+	t.Fatalf("no form owns submit button %q", submitter)
+	return nil
 }
 
 func TestDiscoveryAdvertisesAuthnContexts(t *testing.T) {
@@ -230,7 +370,13 @@ func TestSAMLForceAuthnRulesOutRememberedSignIn(t *testing.T) {
 			r.Equal(tc.wantReuse, strings.Contains(chooser.Body.String(), `name="continue_session"`))
 			r.Equal(tc.force, strings.Contains(chooser.Body.String(), "requires a fresh sign-in (ForceAuthn)"))
 
-			reuse := postSAMLSSO(t, svc, url.Values{"SAMLRequest": {request}, "continue_session": {"1"}}, cookie)
+			form := url.Values{"SAMLRequest": {request}, "continue_session": {"1"}}
+			if tc.wantReuse {
+				form = chooserSubmitForm(t, chooser.Body.String(), "Reuse session")
+				r.Equal(request, form.Get("SAMLRequest"))
+				r.Equal("1", form.Get("continue_session"))
+			}
+			reuse := postSAMLSSO(t, svc, form, cookie)
 			if !tc.wantReuse {
 				r.Equal(http.StatusBadRequest, reuse.Code)
 				r.Contains(reuse.Body.String(), "requires a fresh sign-in (ForceAuthn)")

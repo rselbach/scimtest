@@ -270,6 +270,8 @@ var chooserTemplate = template.Must(template.New("chooser").Funcs(template.FuncM
     button:hover { background:var(--accent-strong); border-color:var(--accent-strong); }
     button:disabled { opacity:.5; cursor:not-allowed; }
     .chooser-actions { display:grid; grid-template-columns:auto 1fr; gap:10px; }
+    .chooser-actions .secondary { grid-column:1; grid-row:2; }
+    .chooser-actions button:not(.secondary) { grid-column:2; grid-row:2; }
     button.secondary { background:#fff; color:var(--muted); border-color:var(--line); }
     button.secondary:hover { background:#f9fafb; border-color:var(--muted); color:var(--text); }
     .empty { color:var(--muted); padding:18px 20px 20px; }
@@ -281,6 +283,7 @@ var chooserTemplate = template.Must(template.New("chooser").Funcs(template.FuncM
     .fresh-note { color:#9a6700; }
     .session-option { margin-top:12px; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 12px; border:1px solid var(--accent); border-radius:6px; background:#f5f8ff; }
     .session-option p { margin:0; }
+    .session-option form { margin:0; padding:0; display:block; }
     .session-option button { padding:0 12px; white-space:nowrap; }
   </style>
 </head>
@@ -293,7 +296,10 @@ var chooserTemplate = template.Must(template.New("chooser").Funcs(template.FuncM
       {{with .Session}}
       <div class="session-option" data-session>
         <div><strong>Signed in as {{.User}}</strong><p class="user-meta">{{.Strength}}, {{.Age}} ago</p></div>
-        <button type="submit" form="chooser-form" formnovalidate name="continue_session" value="1">Reuse session</button>
+        <form method="post" action="{{$.Action}}">
+          {{range $key, $values := $.Hidden}}{{range $values}}<input type="hidden" name="{{$key}}" value="{{.}}">{{end}}{{end}}
+          <button type="submit" name="continue_session" value="1">Reuse session</button>
+        </form>
       </div>
       {{end}}
     </header>
@@ -305,8 +311,8 @@ var chooserTemplate = template.Must(template.New("chooser").Funcs(template.FuncM
 	  </label>
 	  <div class="chooser-actions">
 	    {{template "strength" .}}
-	    <button type="submit" formnovalidate name="deny" value="1" class="secondary">Deny</button>
 	    <button type="submit">Continue</button>
+	    <button type="submit" formnovalidate name="deny" value="1" class="secondary">Deny</button>
 	  </div>
 	</form>
 	{{else if .Users}}
@@ -327,8 +333,8 @@ var chooserTemplate = template.Must(template.New("chooser").Funcs(template.FuncM
       </div>
       <div class="chooser-actions">
         {{template "strength" .}}
-        <button type="submit" formnovalidate name="deny" value="1" class="secondary" data-deny>Deny</button>
         <button type="submit" data-continue>Continue</button>
+        <button type="submit" formnovalidate name="deny" value="1" class="secondary" data-deny>Deny</button>
       </div>
     </form>
     {{else}}
