@@ -102,7 +102,8 @@ steps, the authentication design, and release packaging details.
 - **Flow inspectors.** Per-environment OIDC and SAML inspectors keep the
   last ten flows, including decoded claims, the raw ID token, and the
   base64 `SAMLResponse` exactly as posted, plus a per-hop activity log
-  that records failures too.
+  that records failures too. The OIDC inspector also lists live IdP
+  sessions and can end them.
 - **Traffic view.** Request/response transcripts of every OIDC and SAML
   exchange, recorded by default into a bounded in-memory ring, with
   optional raw-secret capture. `--debug` additionally prints transcripts
@@ -142,6 +143,7 @@ Each environment can expose OIDC, SAML, or both, under its endpoint name
 - OIDC authorize: `/oidc/{slug}/authorize`
 - OIDC token: `/oidc/{slug}/token`
 - OIDC userinfo: `/oidc/{slug}/userinfo`
+- OIDC end session (RP-initiated logout): `/oidc/{slug}/logout`
 - OIDC JWKS: `/oidc/{slug}/jwks`
 - SAML metadata: `/saml/{slug}/metadata` (`?download=1` for a file)
 - SAML certificate: `/saml/{slug}/certificate.pem`
@@ -191,15 +193,32 @@ echoes that value. Password matches the OASIS `PasswordProtectedTransport` and
 PAPE `multi-factor`, and Microsoft `multipleauthn`. Discovery lists these
 values in `acr_values_supported`. Other values leave Password selected.
 
-scimtest remembers each environment's last sign-in in a browser cookie. The
-chooser's **Reuse session** button answers with that sign-in's original user,
-method, and time, so the app receives an older `auth_time` or `AuthnInstant`.
+Each sign-in starts or joins an IdP session for that browser and environment.
+OIDC and SAML sign-ins from the same browser share the session, and ID tokens
+carry its ID in `sid`. Signing in again as the same user keeps the session;
+signing in as another user ends it and starts a new one. The chooser's
+**Reuse session** button answers with the session's original user, method,
+and time, so the app receives an older `auth_time` or `AuthnInstant`.
 `prompt=login`, `max_age=0`, and SAML `ForceAuthn` hide the button and require
-a fresh sign-in. So does a `max_age` shorter than the remembered sign-in's age.
-With `prompt=none`, authorize skips the chooser and answers from the remembered
-sign-in. If there is none, or it is older than `max_age`, authorize redirects
-with `login_required`. A refreshed ID token keeps the original `auth_time`,
-`acr`, and `amr`.
+a fresh sign-in. So does a `max_age` shorter than the session's age. With
+`prompt=none`, authorize skips the chooser and answers from the session. If
+there is none, or it is older than `max_age`, authorize redirects with
+`login_required`. A refreshed ID token keeps the original `auth_time`, `acr`,
+`amr`, and `sid`.
+
+A session ends when the app sends the browser to the end session endpoint,
+when the tester ends it in the OIDC inspector, or when its user is
+deactivated or deleted. The endpoint implements OpenID Connect RP-Initiated
+Logout 1.0: it accepts `id_token_hint`, `client_id`, `post_logout_redirect_uri`,
+and `state` by GET or POST. The hint must be an ID token this environment
+issued to the app; an expired one is accepted. The `post_logout_redirect_uri`
+must be one of the environment's registered redirect URIs and needs a hint or
+`client_id`. scimtest ends the session that the hint's `sid` names, or the
+browser's session when the hint has no `sid`, then redirects to
+`post_logout_redirect_uri` with `state`. Without a hint for the browser's own
+session, it asks the user to confirm first. Invalid requests show an error and never redirect.
+Ending a session does not revoke tokens. Sessions last 30 days after their
+latest sign-in and are kept in memory, so restarting scimtest ends them.
 
 Paste the service provider's RSA encryption certificate into SAML setup to
 wrap the assertion in `EncryptedAssertion` (AES-128-GCM, AES-192-GCM, or
@@ -271,6 +290,7 @@ GET /oidc/{slug}/jwks
 GET,POST /oidc/{slug}/authorize
 POST /oidc/{slug}/token
 GET,POST /oidc/{slug}/userinfo
+GET,POST /oidc/{slug}/logout
 GET /saml/{slug}/metadata
 GET /saml/{slug}/certificate.pem
 GET,POST /saml/{slug}/sso

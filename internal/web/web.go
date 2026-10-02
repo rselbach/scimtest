@@ -82,6 +82,8 @@ type webApp struct {
 	authCodes        map[string]authCode
 	accessTokens     map[string]accessToken
 	refreshTokens    map[string]refreshToken
+	sessionMu        sync.Mutex            // guards idpSessions
+	idpSessions      map[string]idpSession // by session ID
 	oidcInspectorMu  sync.Mutex
 	oidcInspections  map[string][]oidcInspection
 	samlInspectorMu  sync.Mutex
@@ -859,14 +861,19 @@ func loadRequestState(r *http.Request) (appState, error) {
 	return loadStateForApp(environmentID)
 }
 
-// saveRequestState persists a single environment's state. Whole-database
-// writes are reserved for the legacy-state migration: refusing them here
-// keeps a mis-scoped request from rewriting every environment.
-func saveRequestState(state appState) error {
+// saveRequestState persists a single environment's state, then ends the IdP
+// sessions of users it deactivated or removed. Whole-database writes are
+// reserved for the legacy-state migration: refusing them here keeps a
+// mis-scoped request from rewriting every environment.
+func (a *webApp) saveRequestState(state appState) error {
 	if state.Environment.ID == "" {
 		return errors.New("no environment selected")
 	}
-	return saveEnvironmentState(state)
+	if err := saveEnvironmentState(state); err != nil {
+		return err
+	}
+	a.endInactiveUserSessions(state)
+	return nil
 }
 
 func rememberEnvironment(w http.ResponseWriter, environmentID string) {
@@ -994,6 +1001,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /inspect/oidc/{slug}/playground/callback", a.handleOIDCPlaygroundCallback)
 	mux.HandleFunc("POST /inspect/oidc/{slug}/playground/refresh", a.handleOIDCPlaygroundRefresh)
 	mux.HandleFunc("POST /inspect/oidc/{slug}/revoke", a.handleOIDCTokenRevoke)
+	mux.HandleFunc("POST /inspect/oidc/{slug}/sessions/end", a.handleOIDCSessionEnd)
 	mux.HandleFunc("GET /inspect/saml/{slug}", a.handleSAMLInspector)
 	mux.HandleFunc("GET /inspect/resilience/{slug}", a.handleResilience)
 	mux.HandleFunc("POST /inspect/resilience/{slug}/arm", a.handleResilienceArm)
@@ -1052,6 +1060,8 @@ func (a *webApp) registerIDPRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /oidc/{slug}/token", a.debugRPHandler(a.handleOIDCToken))
 	mux.HandleFunc("GET /oidc/{slug}/userinfo", a.debugRPHandler(a.handleOIDCUserinfo))
 	mux.HandleFunc("POST /oidc/{slug}/userinfo", a.debugRPHandler(a.handleOIDCUserinfo))
+	mux.HandleFunc("GET /oidc/{slug}/logout", a.debugRPHandler(a.handleOIDCLogout))
+	mux.HandleFunc("POST /oidc/{slug}/logout", a.debugRPHandler(a.handleOIDCLogout))
 	mux.HandleFunc("GET /saml/{slug}/metadata", a.debugRPHandler(a.handleSAMLMetadata))
 	mux.HandleFunc("GET /saml/{slug}/certificate.pem", a.debugRPHandler(a.handleSAMLCertificate))
 	mux.HandleFunc("GET /saml/{slug}/sso", a.debugRPHandler(a.handleSAMLSSO))
@@ -1882,7 +1892,7 @@ func (a *webApp) handleToolsDeleteAll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if changed > 0 {
-		if err := saveRequestState(state); err != nil {
+		if err := a.saveRequestState(state); err != nil {
 			a.redirectError(w, r, tab, err)
 			return
 		}
@@ -1909,7 +1919,7 @@ func (a *webApp) handleToolsClearDirectoryLocal(w http.ResponseWriter, r *http.R
 	state.GroupOperations = make(map[string][]operationLog)
 	state.UserSync = nil
 	state.GroupSync = nil
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
@@ -1951,7 +1961,7 @@ func (a *webApp) handleToolsSetAllActive(w http.ResponseWriter, r *http.Request,
 	}
 
 	if changed > 0 {
-		if err := saveRequestState(state); err != nil {
+		if err := a.saveRequestState(state); err != nil {
 			a.redirectError(w, r, tab, err)
 			return
 		}
@@ -1999,7 +2009,7 @@ func (a *webApp) handleToolsCreateUsers(w http.ResponseWriter, r *http.Request) 
 	for _, createdUser := range state.Users[firstNewUser:] {
 		markUserDirty(&state, createdUser.ID, false)
 	}
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}

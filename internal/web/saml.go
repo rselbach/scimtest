@@ -144,11 +144,11 @@ func (a *webApp) serveSAMLSSO(w http.ResponseWriter, r *http.Request, post bool)
 		(!post || values.Get("SAMLRequest") != "" || values.Get("login_hint") != "" || values.Get("RelayState") != "")
 	if needsChooser {
 		data := newChooserData("SAML sign-in", app, publicRequestURI(r), state.Users, loginHintFromValues(values), hiddenValues(values), "Create an active user before starting a SAML flow.")
-		data.applySignIn(r, state.Users, app.Slug, values, responseContext.Requested, now)
+		a.applySignIn(&data, r, state.Users, app.Slug, values, responseContext.Requested, now)
 		renderChooser(w, data)
 		return
 	}
-	found, session, err := chooserSignIn(r, state.Users, app, values, responseContext.Requested, now)
+	found, session, err := a.chooserSignIn(r, state.Users, app, values, responseContext.Requested, now)
 	if err != nil {
 		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
 		return
@@ -171,6 +171,10 @@ func (a *webApp) completeSAMLSSO(w http.ResponseWriter, r *http.Request, state a
 		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
 		return
 	}
+	if _, err := a.joinIdPSession(w, r, app.Slug, user, session, "saml"); err != nil {
+		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
+		return
+	}
 	posted, err := a.buildSignedSAMLResponse(state, baseURL, app, user, responseContext, encryption, faults)
 	if err != nil {
 		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
@@ -183,7 +187,6 @@ func (a *webApp) completeSAMLSSO(w http.ResponseWriter, r *http.Request, state a
 		ssoDetail = "Response posted to " + responseContext.ACSURL + " (faults injected)"
 	}
 	a.recordFlowEvent(app.Slug, "saml", "sso", "ok", userLabel(user), ssoDetail)
-	rememberSignIn(w, app.Slug, session)
 	if wantsAPIProtocolResponse(r) {
 		writeJSON(w, map[string]string{"acs_url": responseContext.ACSURL, "saml_response": encodedResponse, "relay_state": values.Get("RelayState")})
 		return

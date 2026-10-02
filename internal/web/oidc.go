@@ -29,6 +29,7 @@ type authCode struct {
 	Scope         string
 	CodeChallenge string
 	Authn         authnStatement
+	SessionID     string // the IdP session the sign-in joined, sent as sid
 	ExpiresAt     time.Time
 	Faults        faultOptions
 	Redeeming     bool
@@ -54,6 +55,7 @@ type refreshToken struct {
 	RedirectURI   string
 	CodeChallenge string
 	Authn         authnStatement
+	SessionID     string
 	ExpiresAt     time.Time
 	Redeeming     bool // an injected delay holds the token
 }
@@ -86,6 +88,7 @@ func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 		"token_endpoint":                        issuer + "/token",
 		"userinfo_endpoint":                     issuer + "/userinfo",
 		"jwks_uri":                              issuer + "/jwks",
+		"end_session_endpoint":                  issuer + "/logout",
 		"response_types_supported":              []string{"code"},
 		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
 		"subject_types_supported":               []string{"public"},
@@ -167,7 +170,7 @@ func (a *webApp) serveOIDCAuthorize(w http.ResponseWriter, r *http.Request, post
 	}
 	now := time.Now()
 	if request.Passive {
-		found, session, ok := rememberedSignIn(r, state.Users, app.Slug)
+		found, session, ok := a.rememberedSignIn(r, state.Users, app.Slug)
 		if !ok {
 			a.failAuthorize(w, r, app, values, &authorizeError{code: "login_required", description: "prompt=none requires a remembered sign-in"})
 			return
@@ -181,11 +184,11 @@ func (a *webApp) serveOIDCAuthorize(w http.ResponseWriter, r *http.Request, post
 	}
 	if !post && !chooserSelectionProvided(app, values) {
 		data := newChooserData("OIDC sign-in", app, publicRequestURI(r), state.Users, loginHintFromValues(values), hiddenValues(values), "Create an active user before starting an OIDC flow.")
-		data.applySignIn(r, state.Users, app.Slug, values, request, now)
+		a.applySignIn(&data, r, state.Users, app.Slug, values, request, now)
 		renderChooser(w, data)
 		return
 	}
-	found, session, err := chooserSignIn(r, state.Users, app, values, request, now)
+	found, session, err := a.chooserSignIn(r, state.Users, app, values, request, now)
 	if err != nil {
 		a.failFlow(w, app, "oidc", "authorize", http.StatusBadRequest, err.Error())
 		return
@@ -200,6 +203,11 @@ func (a *webApp) issueOIDCCode(w http.ResponseWriter, r *http.Request, app app, 
 	redirectURI, err := parseOIDCRedirectURI(values.Get("redirect_uri"))
 	if err != nil {
 		a.failFlow(w, app, "oidc", "authorize", http.StatusBadRequest, err.Error())
+		return
+	}
+	sessionID, err := a.joinIdPSession(w, r, app.Slug, user, session, "oidc")
+	if err != nil {
+		a.failFlow(w, app, "oidc", "authorize", http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -222,6 +230,7 @@ func (a *webApp) issueOIDCCode(w http.ResponseWriter, r *http.Request, app app, 
 		Scope:         values.Get("scope"),
 		CodeChallenge: values.Get("code_challenge"),
 		Authn:         session.statement(request.Contexts),
+		SessionID:     sessionID,
 		ExpiresAt:     now.Add(5 * time.Minute),
 		Faults:        a.flowFaults(app.Slug, values),
 	}
@@ -231,7 +240,6 @@ func (a *webApp) issueOIDCCode(w http.ResponseWriter, r *http.Request, app app, 
 		return
 	}
 	a.recordFlowEvent(app.Slug, "oidc", "authorize", "ok", userLabel(user), "Authorization code issued to "+authCode.ClientID)
-	rememberSignIn(w, app.Slug, session)
 
 	query := redirectURI.Query()
 	query.Set("code", code)
@@ -349,6 +357,7 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 			Scope:         code.Scope,
 			CodeChallenge: code.CodeChallenge,
 			Authn:         code.Authn,
+			SessionID:     code.SessionID,
 		}, now)
 		if err != nil {
 			a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
@@ -415,6 +424,9 @@ func (a *webApp) issueOIDCTokens(r *http.Request, state appState, app app, user 
 	grant.Authn.addClaims(claims, grant.Faults.ClockSkew)
 	if grant.Nonce != "" {
 		claims["nonce"] = grant.Nonce
+	}
+	if grant.SessionID != "" {
+		claims["sid"] = grant.SessionID
 	}
 	grant.Faults.applyToClaims(claims, now)
 	idToken, err := a.signJWT(state, idTokenJWT, claims, grant.Faults)
@@ -569,6 +581,7 @@ func (a *webApp) refreshOIDCTokens(w http.ResponseWriter, r *http.Request, app a
 		Scope:         scope,
 		CodeChallenge: grant.CodeChallenge,
 		Authn:         grant.Authn,
+		SessionID:     grant.SessionID,
 	}, "Tokens refreshed", now)
 	if err != nil {
 		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
@@ -919,7 +932,7 @@ func oidcClaimsSupported(app app) []string {
 	return []string{
 		"sub", mappings.Name, mappings.GivenName, mappings.FamilyName,
 		mappings.Username, mappings.Email, "email_verified", mappings.Groups,
-		"auth_time", "acr", "amr",
+		"auth_time", "acr", "amr", "sid",
 	}
 }
 
