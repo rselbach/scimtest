@@ -1,0 +1,235 @@
+package web
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"slices"
+	"strings"
+	"time"
+)
+
+// backchannelLogoutEvent is the events member that marks a JWT as a logout
+// token (OpenID Connect Back-Channel Logout 1.0, section 2.4).
+const backchannelLogoutEvent = "http://schemas.openid.net/event/backchannel-logout"
+
+const (
+	logoutTokenLifetime        = 2 * time.Minute
+	maxLogoutResponseBytes     = 64 << 10
+	maxLogoutFlowDetailRunes   = 200
+	backchannelLogoutFlowStage = "backchannel-logout"
+)
+
+// backchannelLogoutTimeout bounds each logout request, so an app that hangs
+// delays only its own logout. Tests shorten it.
+var backchannelLogoutTimeout = 5 * time.Second
+
+// backchannelLogoutClient never follows redirects: the logout token must
+// reach the registered URI itself.
+var backchannelLogoutClient = &http.Client{
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
+
+// sendBackchannelLogouts posts a logout token for each ended session that
+// issued ID tokens. Delivery runs in the background, so a slow or unreachable
+// app never stalls the request that ended the session.
+func (a *webApp) sendBackchannelLogouts(ended []idpSession) {
+	var pending []idpSession
+	for _, session := range ended {
+		if session.OIDCIssuer != "" {
+			pending = append(pending, session)
+		}
+	}
+	if len(pending) == 0 {
+		return
+	}
+	a.logoutDeliveries.Add(1)
+	go func() {
+		defer a.logoutDeliveries.Done()
+		for _, session := range pending {
+			a.sendBackchannelLogout(session)
+		}
+	}()
+}
+
+// sendBackchannelLogout posts session's logout token to its environment's
+// back-channel logout URI, if one is set. Armed logout token faults apply to
+// this token and are consumed by it.
+func (a *webApp) sendBackchannelLogout(session idpSession) {
+	state, err := loadStateForAppSlug(session.AppSlug)
+	if err != nil {
+		if !errors.Is(err, errAppNotFound) {
+			log.Printf("back-channel logout for session %s: %v", session.ID, err)
+		}
+		return
+	}
+	found, ok := appBySlug(state.Apps, session.AppSlug)
+	if !ok || !supportsOIDC(found) || found.OIDCBackchannelLogoutURI == "" {
+		return
+	}
+	faults := a.takeArmedLogoutFaults(found.Slug)
+	token, err := a.logoutToken(state, found, session, faults, time.Now())
+	if err != nil {
+		a.recordFlowEvent(found.Slug, "oidc", backchannelLogoutFlowStage, "failed", session.User, "Logout token for session "+session.ID+": "+err.Error())
+		return
+	}
+	tampers := slices.DeleteFunc(slices.Clone(faults.Tamper), func(fault tamperFault) bool { return fault == tamperLogoutRepeatedJTI })
+	a.postLogoutToken(found, session, token, tampers)
+	if faults.tampers(tamperLogoutRepeatedJTI) {
+		a.postLogoutToken(found, session, token, append(tampers, tamperLogoutRepeatedJTI))
+	}
+}
+
+// logoutToken builds and signs session's logout token. It carries sub, and
+// sid too when the environment requires the session. Tamper faults leave it
+// unsigned, aim it at another audience, or drop events.
+func (a *webApp) logoutToken(state appState, found app, session idpSession, faults faultOptions, now time.Time) (string, error) {
+	jti, err := randomSecret(16)
+	if err != nil {
+		return "", err
+	}
+	claims := map[string]any{
+		"iss":    session.OIDCIssuer,
+		"sub":    session.SignIn.UserID,
+		"aud":    found.OIDCClientID,
+		"iat":    now.Unix(),
+		"exp":    now.Add(logoutTokenLifetime).Unix(),
+		"jti":    jti,
+		"events": map[string]any{backchannelLogoutEvent: map[string]any{}},
+	}
+	if found.OIDCBackchannelLogoutSessionRequired {
+		claims["sid"] = session.ID
+	}
+	if faults.tampers(tamperLogoutWrongAudience) {
+		claims["aud"] = nearMiss(claims["aud"])
+	}
+	if faults.tampers(tamperLogoutMissingEvents) {
+		delete(claims, "events")
+	}
+	signingFaults := faultOptions{}
+	if faults.tampers(tamperLogoutAlgNone) {
+		signingFaults.Tamper = []tamperFault{tamperAlgNone}
+	}
+	return a.signJWT(state, jwtKind{typ: "logout+jwt", name: "logout token"}, claims, signingFaults)
+}
+
+// postLogoutToken delivers token and records the request and the app's
+// response in flow activity and the traffic view. A tampered token should be
+// rejected, so the flow event fails when the app accepts one.
+func (a *webApp) postLogoutToken(found app, session idpSession, token string, tampers []tamperFault) {
+	ctx, cancel := context.WithTimeout(context.Background(), backchannelLogoutTimeout)
+	defer cancel()
+	body := url.Values{"logout_token": {token}}.Encode()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, found.OIDCBackchannelLogoutURI, strings.NewReader(body))
+	if err != nil {
+		a.recordFlowEvent(found.Slug, "oidc", backchannelLogoutFlowStage, "failed", session.User, "Logout token for session "+session.ID+": "+err.Error())
+		return
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response, err := backchannelLogoutClient.Do(request)
+	var responseBody []byte
+	if err == nil {
+		responseBody, err = readAndCloseAPIResponse(response, maxLogoutResponseBytes)
+	}
+	a.recordLogoutTraffic(request, body, token, response, responseBody, err)
+
+	subject := "Logout token for session " + session.ID
+	if len(tampers) > 0 {
+		names := make([]string, len(tampers))
+		for i, fault := range tampers {
+			names[i] = string(fault)
+		}
+		subject = "Tampered logout token (" + strings.Join(names, ", ") + ") for session " + session.ID
+	}
+	if err != nil {
+		a.recordFlowEvent(found.Slug, "oidc", backchannelLogoutFlowStage, "failed", session.User, subject+" to "+found.OIDCBackchannelLogoutURI+" failed: "+err.Error())
+		return
+	}
+	outcome, verdict := logoutResponseVerdict(response.StatusCode, len(tampers) > 0)
+	detail := fmt.Sprintf("%s sent to %s: HTTP %d %s", subject, found.OIDCBackchannelLogoutURI, response.StatusCode, http.StatusText(response.StatusCode))
+	if verdict != "" {
+		detail += "; " + verdict
+	}
+	if excerpt := strings.TrimSpace(string(responseBody)); outcome == "failed" && excerpt != "" {
+		if runes := []rune(excerpt); len(runes) > maxLogoutFlowDetailRunes {
+			excerpt = string(runes[:maxLogoutFlowDetailRunes]) + "…"
+		}
+		detail += ": " + excerpt
+	}
+	a.recordFlowEvent(found.Slug, "oidc", backchannelLogoutFlowStage, outcome, session.User, detail)
+}
+
+// logoutResponseVerdict judges the app's response. An app must accept a
+// valid logout token with 200 and reject a tampered one with 400.
+func logoutResponseVerdict(status int, tampered bool) (outcome, verdict string) {
+	accepted := status >= 200 && status < 300
+	rejected := status >= 400 && status < 500
+	switch {
+	case !tampered && accepted:
+		return "ok", ""
+	case !tampered:
+		return "failed", "the app did not accept it"
+	case accepted:
+		return "failed", "the app accepted a tampered logout token"
+	case rejected:
+		return "ok", "the app rejected it"
+	}
+	return "failed", "the app did not reject it with a 4xx status"
+}
+
+// recordLogoutTraffic renders the logout request and the app's response, or
+// the delivery error, for --debug and the Traffic view.
+func (a *webApp) recordLogoutTraffic(request *http.Request, body, token string, response *http.Response, responseBody []byte, deliveryErr error) {
+	stdout := a.debugRPEnabled()
+	record := a.trafficRecordEnabled()
+	if !stdout && !record {
+		return
+	}
+	secrets := a.debugSecretsEnabled()
+	var transcript bytes.Buffer
+	writeDebugf(&transcript, "===== Back-channel logout %s =====\n", time.Now().Format(time.RFC3339))
+	writeDebugln(&transcript, "----- request to app -----")
+	writeDebugf(&transcript, "%s %s %s\n", request.Method, request.URL.String(), request.Proto)
+	writeDebugf(&transcript, "Host: %s\n", request.URL.Host)
+	writeDebugHeaders(&transcript, request.Header, secrets)
+	writeDebugln(&transcript)
+	writeDebugln(&transcript, debugBody(request.Header.Get("Content-Type"), []byte(body), secrets))
+	if parts := strings.Split(token, "."); len(parts) == 3 {
+		writeDebugln(&transcript, "\n----- decoded logout token -----")
+		for _, part := range parts[:2] {
+			decoded, err := base64.RawURLEncoding.DecodeString(part)
+			if err != nil {
+				decoded = []byte("unavailable")
+			}
+			writeDebugln(&transcript, string(decoded))
+		}
+	}
+	if deliveryErr != nil {
+		writeDebugf(&transcript, "----- no response: %v -----\n", deliveryErr)
+	} else {
+		writeDebugln(&transcript, "----- response from app -----")
+		writeDebugf(&transcript, "HTTP %d %s\n", response.StatusCode, http.StatusText(response.StatusCode))
+		writeDebugHeaders(&transcript, response.Header, secrets)
+		if len(responseBody) > 0 {
+			writeDebugln(&transcript)
+			writeDebugln(&transcript, debugResponseBody(response.Header.Get("Content-Type"), string(responseBody), secrets))
+		}
+	}
+	writeDebugln(&transcript, "===== end back-channel logout =====")
+
+	rpDebugLogMu.Lock()
+	defer rpDebugLogMu.Unlock()
+	if stdout {
+		writeDebugln(os.Stdout)
+		writeDebugln(os.Stdout, transcript.String())
+	}
+	if record {
+		a.traffic.add(transcript.String())
+	}
+}

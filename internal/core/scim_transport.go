@@ -160,9 +160,9 @@ func (c *SCIMClient) replaceUser(u User, directory scimUserDirectory) error {
 // scimUserDirectory holds what a user payload needs from the rest of the
 // directory during one sync pass.
 type scimUserDirectory struct {
-	// enterprise is set when any live user has enterprise values. Every
-	// payload then carries the extension, so clearing a value reaches the
-	// remote, while directories that never use it send nothing new.
+	// enterprise is set for directories that manage enterprise values. Sync
+	// also retains the environment's history so clearing the last value
+	// still sends the extension.
 	enterprise bool
 	// remoteIDs maps live users to their remote IDs, or "" before they are
 	// created. Sync passes update it as they create and delete users.

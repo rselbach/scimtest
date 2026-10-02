@@ -44,6 +44,36 @@
     <p>Run an OIDC sign-in for this environment, then return here to inspect the latest flow.</p>
   </section>
   {{end}}
+  {{if .Sessions}}
+  <section class="card inspector-card" aria-labelledby="idp-sessions-heading">
+    <h2 id="idp-sessions-heading">IdP sessions</h2>
+    <p class="hint">Each browser that signs in to this environment over OIDC or SAML gets one session, and ID tokens carry its ID as sid. Ending a session signs that browser out: the chooser stops offering Reuse session and prompt=none returns login_required. Tokens already issued stay valid. Sessions are kept in memory, so restarting scimtest ends them.{{if .App.OIDCBackchannelLogoutURI}} Ending a session that issued ID tokens also POSTs a logout token to <span class="mono">{{.App.OIDCBackchannelLogoutURI}}</span>; Recent activity shows the app's response.{{end}}</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>User</th><th>Session ID (sid)</th><th>Signed in</th><th>Protocols</th><th></th></tr></thead>
+      <tbody>
+        {{range .Sessions}}
+        <tr>
+          <td>{{.User}}</td>
+          <td class="mono">{{.SessionID}}</td>
+          <td>{{.SignedInAt}} · {{.Method}}</td>
+          <td>{{join .Protocols ", "}}</td>
+          <td>
+            <form method="post" action="/inspect/oidc/{{$.App.Slug}}/sessions/end">
+              <input type="hidden" name="return_tab" value="{{$.ReturnTab}}">
+              <input type="hidden" name="session_id" value="{{.SessionID}}">
+              <button class="btn btn-sm" type="submit" aria-label="End {{.User}}'s session">End session</button>
+            </form>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table></div>
+    <form method="post" action="/inspect/oidc/{{.App.Slug}}/sessions/end" class="form-actions">
+      <input type="hidden" name="return_tab" value="{{.ReturnTab}}">
+      <button class="btn" type="submit">End all sessions</button>
+    </form>
+  </section>
+  {{end}}
   {{if .Tokens}}
   <section class="card inspector-card" aria-labelledby="active-tokens-heading">
     <h2 id="active-tokens-heading">Active tokens</h2>
@@ -73,6 +103,7 @@
     </form>
   </section>
   {{end}}
+  {{template "signing-keys" .}}
   {{template "flow-activity" .Events}}
   {{template "fault-help" .}}
 </div>

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -254,4 +255,107 @@ func TestImportStateFromSCIMReadsEnterpriseExtension(t *testing.T) {
 	r.Equal(map[string]string{"role": "student"}, troy.Attributes, "custom attributes are local-only")
 	r.Empty(imported.Users[1].ManagerID)
 	r.Empty(imported.Users[2].ManagerID, "managers outside the import are dropped")
+}
+
+func TestClearingLastEnterpriseValueSurvivesReloadAndReconcile(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	troy := User{ID: "troy", GivenName: "Troy", Username: "troy", Email: "troy@greendale.edu", Active: true, RemoteID: "remote-troy", Department: "Air Conditioning Repair"}
+	remote := newSCIMUserResource(troy, newSCIMUserDirectory([]User{troy}))
+	remote.ID = troy.RemoteID
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/scim+json")
+		if req.Method == http.MethodGet {
+			if err := json.NewEncoder(w).Encode(remote); err != nil {
+				t.Error(err)
+			}
+			return
+		}
+		var patch struct {
+			Operations []struct{ Value SCIMUserResource }
+		}
+		if err := json.NewDecoder(req.Body).Decode(&patch); err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		for _, op := range patch.Operations {
+			if op.Value.Enterprise != nil {
+				remote.Enterprise = op.Value.Enterprise
+			}
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	state := AppState{
+		Apps:     []App{{ID: "greendale", Name: "Greendale", Slug: "greendale", SCIMEnabled: true, SCIMBaseURL: server.URL, SCIMBearerToken: "study-group-secret", SCIMPatchSupported: true}},
+		Users:    []User{troy},
+		UserSync: map[string]map[string]ResourceSyncState{"greendale": {"troy": {RemoteID: troy.RemoteID, Dirty: true}}},
+	}
+	r.NoError(SaveState(state))
+	state, err := LoadStateForApp("greendale")
+	r.NoError(err)
+	projected, err := StateForApp(state, "greendale")
+	r.NoError(err)
+	first := SyncDirtyState(projected)
+	r.NoError(first.Fatal)
+	r.False(first.Failed)
+	MergeAppSyncState(&state, "greendale", first.State)
+	state.Users[0].Department = ""
+	MarkUserDirty(&state, "troy", false)
+	r.NoError(SaveEnvironmentState(state))
+	state, err = LoadStateForApp("greendale")
+	r.NoError(err)
+	projected, err = StateForApp(state, "greendale")
+	r.NoError(err)
+	cleared := SyncDirtyState(projected)
+	r.NoError(cleared.Fatal)
+	r.False(cleared.Failed)
+	r.Empty(remote.Enterprise.Department, "the last enterprise value must be explicitly cleared")
+	r.False(cleared.State.Users[0].Dirty)
+	remote.Enterprise.Department = "Study Room F"
+	reconciled := ReconcileState(cleared.State)
+	r.NoError(reconciled.Fatal)
+	r.False(reconciled.Failed)
+	r.Empty(remote.Enterprise.Department, "reconcile must repair a reintroduced enterprise value")
+}
+
+func TestDeletingManagerSchedulesReportsForSync(t *testing.T) {
+	r := require.New(t)
+	manager := "remote-dean"
+	var sent []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		sent = append(sent, req.Method+" "+req.URL.Path)
+		if req.Method == http.MethodPut {
+			var resource SCIMUserResource
+			if err := json.NewDecoder(req.Body).Decode(&resource); err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if resource.Enterprise != nil {
+				manager = scimManagerValue(resource.Enterprise.Manager)
+			}
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	state := AppState{
+		Apps: []App{{ID: "greendale", SCIMEnabled: true, SCIMBaseURL: server.URL, SCIMBearerToken: "study-group-secret"}},
+		Users: []User{
+			{ID: "troy", GivenName: "Troy", Username: "troy", Email: "troy@greendale.edu", Active: true, ManagerID: "dean"},
+			{ID: "dean", GivenName: "Craig", Username: "dean", Email: "dean@greendale.edu", Deleted: true},
+		},
+		UserSync: map[string]map[string]ResourceSyncState{"greendale": {"troy": {RemoteID: "remote-troy"}, "dean": {RemoteID: "remote-dean"}}},
+	}
+	MarkUserDirty(&state, "dean", true)
+	r.True(state.UserSync["greendale"]["troy"].Dirty)
+	projected, err := StateForApp(state, "greendale")
+	r.NoError(err)
+	result := SyncDirtyState(projected)
+	r.NoError(result.Fatal)
+	r.False(result.Failed)
+	r.Empty(manager)
+	r.Contains(sent, "PUT /Users/remote-troy")
+	r.Contains(sent, "DELETE /Users/remote-dean")
 }

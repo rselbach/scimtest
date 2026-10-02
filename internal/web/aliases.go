@@ -17,6 +17,7 @@ type (
 	syncPlanEntry         = core.SyncPlanEntry
 	oidcClaimMappings     = core.OIDCClaimMappings
 	samlAttributeMappings = core.SAMLAttributeMappings
+	storedSigningKey      = core.SigningKey
 )
 
 var errAppNotFound = core.ErrAppNotFound
@@ -73,6 +74,7 @@ var (
 	samlNameIDFormatForField         = core.SAMLNameIDFormatForField
 	samlNameIDValue                  = core.SAMLNameIDValue
 	normalizeSAMLEncryptionAlgorithm = core.NormalizeSAMLEncryptionAlgorithm
+	normalizeSAMLSigningMode         = core.NormalizeSAMLSigningMode
 	appBySlug                        = core.AppBySlug
 	stateForApp                      = core.StateForApp
 	markUserDirty                    = core.MarkUserDirty
@@ -111,6 +113,9 @@ const (
 	samlEncryptionAlgorithmAES128GCM = core.SAMLEncryptionAlgorithmAES128GCM
 	samlEncryptionAlgorithmAES192GCM = core.SAMLEncryptionAlgorithmAES192GCM
 	samlEncryptionAlgorithmAES256GCM = core.SAMLEncryptionAlgorithmAES256GCM
+	samlSigningModeAssertion         = core.SAMLSigningModeAssertion
+	samlSigningModeResponse          = core.SAMLSigningModeResponse
+	samlSigningModeBoth              = core.SAMLSigningModeBoth
 	chooserModeList                  = core.ChooserModeList
 	chooserModeIdentifier            = core.ChooserModeIdentifier
 	setupStatusNotSetUp              = core.SetupStatusNotSetUp

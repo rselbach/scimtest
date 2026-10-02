@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"strings"
+	"time"
 )
 
 type Environment struct {
@@ -25,6 +26,23 @@ type Config struct {
 	PatchSupported        bool   `json:"patch_supported,omitempty"`
 	// Persona is the app's provider persona, projected for the SCIM client.
 	Persona string `json:"-"`
+	// SCIMEnterpriseUsed remembers that this environment manages enterprise
+	// values, so clearing its last value still sends the extension.
+	SCIMEnterpriseUsed bool `json:"scim_enterprise_used,omitempty"`
+	// SigningKeys is one environment's signing key ring, oldest first. The
+	// last key signs. An empty ring signs with the shared key above.
+	SigningKeys []SigningKey `json:"signing_keys,omitempty"`
+}
+
+// SigningKey is one RSA key pair in an environment's signing key ring.
+type SigningKey struct {
+	ID             string    `json:"kid"`
+	PrivateKeyPEM  string    `json:"private_key_pem"`
+	CertificatePEM string    `json:"certificate_pem"`
+	CreatedAt      time.Time `json:"created_at,omitzero"`
+	// PublishedUntil is when a retired key leaves the JWKS and SAML
+	// metadata. It is zero for the active key.
+	PublishedUntil time.Time `json:"published_until,omitzero"`
 }
 
 func (c *Config) UnmarshalJSON(data []byte) error {
@@ -168,6 +186,8 @@ type App struct {
 	OIDCPublicClient        bool                  `json:"oidc_public_client,omitempty"`
 	OIDCRedirectURIs        []string              `json:"oidc_redirect_uris,omitempty"`
 	AllowAnyOIDCRedirect    bool                  `json:"allow_any_oidc_redirect,omitempty"`
+	OIDCJWTAccessTokens     bool                  `json:"oidc_jwt_access_tokens,omitempty"`
+	OIDCAccessTokenAudience string                `json:"oidc_access_token_audience,omitempty"`
 	SAMLEntityID            string                `json:"saml_entity_id,omitempty"`
 	SAMLACSURL              string                `json:"saml_acs_url,omitempty"`
 	SAMLAudience            string                `json:"saml_audience,omitempty"`
@@ -177,6 +197,7 @@ type App struct {
 	SAMLRequestCertPEM      string                `json:"saml_request_certificate_pem,omitempty"`
 	SAMLEncryptionCertPEM   string                `json:"saml_encryption_certificate_pem,omitempty"`
 	SAMLEncryptionAlgorithm string                `json:"saml_encryption_algorithm,omitempty"`
+	SAMLSigningMode         string                `json:"saml_signing_mode,omitempty"`
 	IncludeGroupsClaim      bool                  `json:"include_groups_claim"`
 	OIDCClaimMappings       OIDCClaimMappings     `json:"oidc_claim_mappings,omitempty"`
 	SAMLAttributeMappings   SAMLAttributeMappings `json:"saml_attribute_mappings,omitempty"`
@@ -193,6 +214,10 @@ type App struct {
 	// GroupsOverageThreshold is the Entra ID group count above which tokens
 	// carry the groups overage form. Zero means Entra ID's default.
 	GroupsOverageThreshold int `json:"groups_overage_threshold,omitempty"`
+
+	// OpenID Connect Back-Channel Logout 1.0 client metadata.
+	OIDCBackchannelLogoutURI             string `json:"oidc_backchannel_logout_uri,omitempty"`
+	OIDCBackchannelLogoutSessionRequired bool   `json:"oidc_backchannel_logout_session_required,omitempty"`
 }
 
 const (

@@ -290,3 +290,26 @@ func TestGenericDialectKeepsLookupAndReplace(t *testing.T) {
 	r.Contains(fake.bodies["PATCH /Users/remote-abed"], `"Operations":[{"op":"replace","value":{`)
 	r.Contains(fake.bodies["PATCH /Users/remote-abed"], `"active":false`)
 }
+
+func TestEntraClearsLastEnterpriseValue(t *testing.T) {
+	r := require.New(t)
+	fake, server := newEntraSCIMServer(t)
+	troy := User{ID: "troy", GivenName: "Troy", Username: "troy", Email: "troy@greendale.edu", Active: true, RemoteID: "remote-troy", Dirty: true, Department: "Air Conditioning Repair"}
+	remote := newSCIMUserResource(troy, newSCIMUserDirectory([]User{troy}))
+	remote.ID = troy.RemoteID
+	fake.users = []SCIMUserResource{remote}
+	first := SyncDirtyState(AppState{
+		Config: Config{BaseURL: server.URL, BearerToken: "study-group-secret", Persona: PersonaEntra},
+		Users:  []User{troy},
+	})
+	r.NoError(first.Fatal)
+	r.False(first.Failed)
+	state := first.State
+	state.Users[0].Department = ""
+	state.Users[0].Dirty = true
+	cleared := SyncDirtyState(state)
+	r.NoError(cleared.Fatal)
+	r.False(cleared.Failed)
+	r.False(cleared.State.Users[0].Dirty)
+	r.JSONEq(`{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"Remove","path":"urn:ietf:params:scim:schemas:extension:enterprise:2.0:User:department"}]}`, fake.bodies["PATCH /Users/remote-troy"])
+}

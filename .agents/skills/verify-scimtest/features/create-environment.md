@@ -47,7 +47,8 @@ Preconditions:
   link `Discovery JSON`. Read its `href`, then request that exact URL with curl.
   Capture the JSON body and headers. The issuer ends with
   `/oidc/greendale-portal`; `authorization_endpoint`, `token_endpoint`,
-  `userinfo_endpoint`, and `jwks_uri` use the run origin.
+  `userinfo_endpoint`, `jwks_uri`, `introspection_endpoint`, and
+  `revocation_endpoint` use the run origin.
 - **Check other entry points.** Return to Environments and confirm `Add
   environment`. Follow it only far enough to observe a new `Add environment`
   dialog, then close it without saving. The getting-started entry is present

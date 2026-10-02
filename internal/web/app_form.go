@@ -105,6 +105,8 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		OIDCPublicClient:        r.FormValue("oidc_public_client") == "on",
 		OIDCRedirectURIs:        lines(r.FormValue("oidc_redirect_uris")),
 		AllowAnyOIDCRedirect:    r.FormValue("allow_any_oidc_redirect") == "on",
+		OIDCJWTAccessTokens:     r.FormValue("oidc_jwt_access_tokens") == "on",
+		OIDCAccessTokenAudience: strings.TrimSpace(r.FormValue("oidc_access_token_audience")),
 		SAMLEntityID:            strings.TrimSpace(r.FormValue("saml_entity_id")),
 		SAMLACSURL:              strings.TrimSpace(r.FormValue("saml_acs_url")),
 		SAMLAudience:            strings.TrimSpace(r.FormValue("saml_audience")),
@@ -113,6 +115,7 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		SAMLRequestCertPEM:      strings.TrimSpace(r.FormValue("saml_request_certificate_pem")),
 		SAMLEncryptionCertPEM:   strings.TrimSpace(r.FormValue("saml_encryption_certificate_pem")),
 		SAMLEncryptionAlgorithm: strings.TrimSpace(r.FormValue("saml_encryption_algorithm")),
+		SAMLSigningMode:         strings.TrimSpace(r.FormValue("saml_signing_mode")),
 		IncludeGroupsClaim:      r.FormValue("include_groups_claim") == "on",
 		ChooserMode:             normalizeChooserMode(r.FormValue("chooser_mode")),
 		Persona:                 persona,
@@ -122,6 +125,8 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 			FamilyName: strings.TrimSpace(r.FormValue("oidc_claim_family_name")), Username: strings.TrimSpace(r.FormValue("oidc_claim_username")),
 			Email: strings.TrimSpace(r.FormValue("oidc_claim_email")), Groups: strings.TrimSpace(r.FormValue("oidc_claim_groups")),
 		},
+		OIDCBackchannelLogoutURI:             strings.TrimSpace(r.FormValue("oidc_backchannel_logout_uri")),
+		OIDCBackchannelLogoutSessionRequired: r.FormValue("oidc_backchannel_logout_session_required") == "on",
 		SAMLAttributeMappings: samlAttributeMappings{
 			GivenName: strings.TrimSpace(r.FormValue("saml_attribute_given_name")), FamilyName: strings.TrimSpace(r.FormValue("saml_attribute_family_name")),
 			Username: strings.TrimSpace(r.FormValue("saml_attribute_username")), Email: strings.TrimSpace(r.FormValue("saml_email_attribute_name")),
@@ -172,6 +177,7 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 			app.SAMLEmailAttributeName = defaultSAMLEmailAttributeName
 		}
 		app.SAMLEncryptionAlgorithm = normalizeSAMLEncryptionAlgorithm(app.SAMLEncryptionAlgorithm)
+		app.SAMLSigningMode = normalizeSAMLSigningMode(app.SAMLSigningMode)
 	}
 	if err := validateHTTPBaseURL("SCIM base URL", app.SCIMBaseURL, false); err != nil {
 		a.redirectFormError(w, r, tab, "app", err)
@@ -244,6 +250,10 @@ func clearAppProtocol(app *app, protocol string) {
 		app.OIDCPublicClient = false
 		app.OIDCRedirectURIs = nil
 		app.AllowAnyOIDCRedirect = false
+		app.OIDCBackchannelLogoutURI = ""
+		app.OIDCBackchannelLogoutSessionRequired = false
+		app.OIDCJWTAccessTokens = false
+		app.OIDCAccessTokenAudience = ""
 	case "saml":
 		app.SAMLEntityID = ""
 		app.SAMLACSURL = ""
@@ -251,6 +261,7 @@ func clearAppProtocol(app *app, protocol string) {
 		app.SAMLRequestCertPEM = ""
 		app.SAMLEncryptionCertPEM = ""
 		app.SAMLEncryptionAlgorithm = ""
+		app.SAMLSigningMode = ""
 	case "scim":
 		app.SCIMBaseURL = ""
 		app.SCIMBearerToken = ""

@@ -567,6 +567,8 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 	nextUsers := make([]User, 0, len(state.Users))
 	counts := syncCounts{}
 	directory := newSCIMUserDirectory(state.Users)
+	directory.enterprise = directory.enterprise || state.Config.SCIMEnterpriseUsed
+	state.Config.SCIMEnterpriseUsed = directory.enterprise
 	var awaitingManager []int
 
 	for i, u := range state.Users {
@@ -820,6 +822,8 @@ func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 	nextUsers := make([]User, 0, len(state.Users))
 	counts := syncCounts{}
 	directory := newSCIMUserDirectory(state.Users)
+	directory.enterprise = directory.enterprise || state.Config.SCIMEnterpriseUsed
+	state.Config.SCIMEnterpriseUsed = directory.enterprise
 	var awaitingManager []int
 
 	for i, u := range state.Users {
