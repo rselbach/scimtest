@@ -23,6 +23,8 @@ type Config struct {
 	SigningCertificatePEM string `json:"signing_certificate_pem,omitempty"`
 	FilterSupported       bool   `json:"filter_supported,omitempty"`
 	PatchSupported        bool   `json:"patch_supported,omitempty"`
+	// Persona is the app's provider persona, projected for the SCIM client.
+	Persona string `json:"-"`
 }
 
 func (c *Config) UnmarshalJSON(data []byte) error {
@@ -186,6 +188,11 @@ type App struct {
 	SCIMCapabilitiesKnown   bool                  `json:"scim_capabilities_known,omitempty"`
 	SCIMPatchSupported      bool                  `json:"scim_patch_supported,omitempty"`
 	SCIMFilterSupported     bool                  `json:"scim_filter_supported,omitempty"`
+	// Persona shapes OIDC claims and SCIM requests like a real provider.
+	Persona string `json:"persona,omitempty"`
+	// GroupsOverageThreshold is the Entra ID group count above which tokens
+	// carry the groups overage form. Zero means Entra ID's default.
+	GroupsOverageThreshold int `json:"groups_overage_threshold,omitempty"`
 }
 
 const (

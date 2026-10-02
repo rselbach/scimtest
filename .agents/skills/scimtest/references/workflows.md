@@ -48,6 +48,19 @@ add enterprise fields and custom attributes:
 the enterprise fields in the enterprise extension but never the custom
 attributes.
 
+To test an app against a specific provider's shape, `PATCH` the environment
+with `{"persona":"entra"}`, `"okta"`, or `"google"`. `"generic"` restores
+scimtest's own shape. Entra ID adds `tid`, `oid`, and `upn`, sets
+`preferred_username` to the UPN, and drops `email_verified`. Above
+`groups_overage_threshold` groups (default 200; set a small value such as
+`1` to trigger it with a few groups), the token replaces `groups` with
+`_claim_names` and `_claim_sources`. Call the source endpoint with
+`POST` and the user's access token, with `{"securityEnabledOnly":false}` as
+the body. Okta adds `ver` and an `Everyone` group. Google adds `hd`. The Entra
+ID persona also switches SCIM sync to Entra ID's dialect: externalId filter
+lookups before every write, `PATCH` updates with capitalized `op` values, and
+`active` as `"True"` or `"False"`.
+
 Use local user IDs in a group's
 `member_ids` array when posting to `/environments/{ENV_ID}/groups` with a
 `display_name`. These are IDs within that environment, not remote SCIM IDs.

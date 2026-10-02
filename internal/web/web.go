@@ -1059,6 +1059,7 @@ func (a *webApp) registerIDPRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /oidc/{slug}/token", a.debugRPHandler(a.handleOIDCToken))
 	mux.HandleFunc("GET /oidc/{slug}/userinfo", a.debugRPHandler(a.handleOIDCUserinfo))
 	mux.HandleFunc("POST /oidc/{slug}/userinfo", a.debugRPHandler(a.handleOIDCUserinfo))
+	mux.HandleFunc("POST /oidc/{slug}/users/{oid}/getMemberObjects", a.debugRPHandler(a.handleEntraMemberObjects))
 	mux.HandleFunc("GET /saml/{slug}/metadata", a.debugRPHandler(a.handleSAMLMetadata))
 	mux.HandleFunc("GET /saml/{slug}/certificate.pem", a.debugRPHandler(a.handleSAMLCertificate))
 	mux.HandleFunc("GET /saml/{slug}/sso", a.debugRPHandler(a.handleSAMLSSO))
@@ -2121,6 +2122,10 @@ func applyFormDraft(data *pageData, draft formDraft) {
 		}
 		data.AppForm.App.IncludeGroupsClaim = values.Get("include_groups_claim") == "on"
 		data.AppForm.App.ChooserMode = normalizeChooserMode(values.Get("chooser_mode"))
+		data.AppForm.App.Persona = normalizePersona(values.Get("persona"))
+		if threshold, err := strconv.Atoi(strings.TrimSpace(values.Get("groups_overage_threshold"))); err == nil {
+			data.AppForm.App.GroupsOverageThreshold = threshold
+		}
 		data.AppForm.App.SCIMBaseURL = values.Get("scim_base_url")
 		data.AppForm.App.SCIMAutoOpenTrace = values.Get("scim_auto_open_trace") == "on"
 		data.AppForm.Section = normalizeSetupSection(values.Get("setup_section"))
@@ -2644,6 +2649,7 @@ func buildAppFormView(state appState, tab string, id string, baseURL string, cer
 			SAMLEmailAttributeName: defaultSAMLEmailAttributeName,
 			IncludeGroupsClaim:     true,
 			ChooserMode:            chooserModeList,
+			Persona:                personaGeneric,
 			OIDCClaimMappings:      defaultOIDCClaimMappings(),
 			SAMLAttributeMappings:  defaultSAMLAttributeMappings(),
 		},

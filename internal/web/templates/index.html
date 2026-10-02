@@ -648,6 +648,21 @@
 				</select>
 				<span class="hint">Identifier mode prevents the sign-in page from listing directory users.</span>
 			  </label>
+			  <label class="field">
+				<span class="label">Provider persona</span>
+				<select name="persona">
+				  <option value="generic" {{if eq .AppForm.App.Persona "generic"}}selected{{end}}>Generic</option>
+				  <option value="entra" {{if eq .AppForm.App.Persona "entra"}}selected{{end}}>Microsoft Entra ID</option>
+				  <option value="okta" {{if eq .AppForm.App.Persona "okta"}}selected{{end}}>Okta</option>
+				  <option value="google" {{if eq .AppForm.App.Persona "google"}}selected{{end}}>Google</option>
+				</select>
+				<span class="hint">Shapes OIDC claims like the real provider. Entra ID also changes SCIM requests.</span>
+			  </label>
+			  <label class="field">
+				<span class="label">Entra ID groups overage threshold</span>
+				<input type="number" name="groups_overage_threshold" min="0" step="1" inputmode="numeric" value="{{if .AppForm.App.GroupsOverageThreshold}}{{.AppForm.App.GroupsOverageThreshold}}{{end}}" placeholder="200" autocomplete="off">
+				<span class="hint">Above this many groups, Entra ID tokens point to an overage endpoint instead of listing groups.</span>
+			  </label>
 			  <label class="field full">
 				<span class="label">Groups in sign-in responses</span>
 				<span class="checkbox-row"><input type="checkbox" name="include_groups_claim" {{if .AppForm.App.IncludeGroupsClaim}}checked{{end}}> Include groups in OIDC claims and SAML attributes</span>

@@ -58,5 +58,7 @@ exactly four H2 sections in this order.
   manager picker, custom attributes, and the resulting claims.
 - [Run the OIDC playground](./oidc-playground.md) covers the built-in relying
   party, chooser, token exchange, claims, and inspector.
+- [Choose a provider persona](./provider-personas.md) covers the persona
+  setting, persona claims, Entra ID groups overage, and Entra ID SCIM requests.
 - [Export environment config](./config-export.md) covers the setup link and the
   machine-readable OIDC bundle.

@@ -397,8 +397,9 @@ func (a *webApp) injectTokenFault(w http.ResponseWriter, r *http.Request, app ap
 // records the inspection under stage, and returns the token response. The
 // caller holds oidcMu.
 func (a *webApp) issueOIDCTokens(r *http.Request, state appState, app app, user user, grant authCode, stage string, now time.Time) (map[string]any, error) {
-	claims := userClaims(state, app, user, grant.Scope)
-	claims["iss"] = oidcIssuer(a.effectiveIDPBaseURL(r, state), app)
+	issuer := oidcIssuer(a.effectiveIDPBaseURL(r, state), app)
+	claims := userClaims(state, app, user, grant.Scope, issuer)
+	claims["iss"] = issuer
 	claims["aud"] = app.OIDCClientID
 	claims["iat"] = now.Unix()
 	grant.Authn.addClaims(claims, grant.Faults.ClockSkew)
@@ -549,7 +550,7 @@ func (a *webApp) handleOIDCUserinfo(w http.ResponseWriter, r *http.Request) {
 		a.failOAuth(w, app, "userinfo", http.StatusUnauthorized, "invalid_token", "user is inactive or missing")
 		return
 	}
-	claims := userClaims(state, app, user, token.Scope)
+	claims := userClaims(state, app, user, token.Scope, oidcIssuer(a.effectiveIDPBaseURL(r, state), app))
 	token.Faults.dropClaims(claims)
 	a.recordFlowEvent(app.Slug, "oidc", "userinfo", "ok", userLabel(user), "Userinfo claims served")
 	writeJSON(w, claims)
@@ -835,7 +836,9 @@ func clientAuthenticated(r *http.Request, app app) bool {
 	return clientID == app.OIDCClientID && subtle.ConstantTimeCompare([]byte(secret), []byte(app.OIDCClientSecret)) == 1
 }
 
-func userClaims(state appState, app app, user user, scope string) map[string]any {
+// userClaims builds the ID token and userinfo claims for user. issuer locates
+// the Entra ID persona's groups overage endpoint.
+func userClaims(state appState, app app, user user, scope string, issuer string) map[string]any {
 	claims := map[string]any{"sub": user.ID}
 	mappings := oidcClaimMappingsForApp(app)
 	if hasOIDCScope(scope, "profile") {
@@ -851,6 +854,7 @@ func userClaims(state appState, app app, user user, scope string) map[string]any
 	if app.IncludeGroupsClaim && hasOIDCScope(scope, "groups") {
 		claims[mappings.Groups] = userGroups(state, user.ID)
 	}
+	addPersonaClaims(claims, state, app, user, scope, issuer)
 	if hasOIDCScope(scope, "profile") {
 		addUserAttributeClaims(claims, state, user)
 	}
@@ -878,13 +882,13 @@ func addUserAttributeClaims(claims map[string]any, state appState, user user) {
 
 func oidcClaimsSupported(app app) []string {
 	mappings := oidcClaimMappingsForApp(app)
-	return []string{
+	return personaClaimsSupported(app, []string{
 		"sub", mappings.Name, mappings.GivenName, mappings.FamilyName,
 		mappings.Username, mappings.Email, "email_verified", mappings.Groups,
 		"auth_time", "acr", "amr",
 		enterpriseEmployeeNumber, enterpriseCostCenter, enterpriseOrganization,
 		enterpriseDivision, enterpriseDepartment, enterpriseManager,
-	}
+	})
 }
 
 func hasOIDCScope(scope string, target string) bool {

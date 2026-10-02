@@ -83,6 +83,9 @@ in the operation catalog.
   objects whose keys are directory field names and whose values are claim or
   attribute names.
 - SCIM uses `scim_base_url`, `scim_bearer_token`, and `scim_auto_open_trace`.
+- Provider personas use `persona` (`generic`, `entra`, `okta`, or `google`)
+  and `groups_overage_threshold`, the Entra ID group count above which tokens
+  carry the groups overage form. `0` uses Entra ID's default of 200.
 
 `regenerate_oidc_secret: true` generates a new confidential-client secret.
 An empty `oidc_client_secret` preserves an existing secret or generates one

@@ -99,6 +99,8 @@ var (
 	oidcClaimMappingsForApp          = core.OIDCClaimMappingsForApp
 	samlAttributeMappingsForApp      = core.SAMLAttributeMappingsForApp
 	normalizeChooserMode             = core.NormalizeChooserMode
+	normalizePersona                 = core.NormalizePersona
+	groupsOverageThresholdForApp     = core.GroupsOverageThresholdForApp
 )
 
 const (
@@ -120,4 +122,8 @@ const (
 	enterpriseDivision               = core.EnterpriseDivision
 	enterpriseDepartment             = core.EnterpriseDepartment
 	enterpriseManager                = core.EnterpriseManager
+	personaGeneric                   = core.PersonaGeneric
+	personaEntra                     = core.PersonaEntra
+	personaOkta                      = core.PersonaOkta
+	personaGoogle                    = core.PersonaGoogle
 )

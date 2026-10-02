@@ -35,6 +35,7 @@ func StateForApp(state AppState, appID string) (AppState, error) {
 	projected.Config.SCIMDisabled = !app.SCIMEnabled
 	projected.Config.FilterSupported = app.SCIMFilterSupported
 	projected.Config.PatchSupported = app.SCIMPatchSupported
+	projected.Config.Persona = app.Persona
 	projected.UserOperations = operationLogsForApp(state.UserOperations, appID)
 	projected.GroupOperations = operationLogsForApp(state.GroupOperations, appID)
 	if !app.SCIMEnabled {
