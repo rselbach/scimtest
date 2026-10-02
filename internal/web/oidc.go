@@ -43,12 +43,17 @@ const refreshTokenLifetime = 24 * time.Hour
 // refresh can re-check the user and issue tokens for the original scope and
 // sign-in.
 type refreshToken struct {
-	AppSlug   string
-	ClientID  string
-	UserID    string
-	Scope     string
-	Authn     authnStatement
-	ExpiresAt time.Time
+	AppSlug  string
+	ClientID string
+	UserID   string
+	Scope    string
+	// RedirectURI and CodeChallenge come from the authorization code, so a
+	// refresh inspection shows how the grant started.
+	RedirectURI   string
+	CodeChallenge string
+	Authn         authnStatement
+	ExpiresAt     time.Time
+	Redeeming     bool // an injected delay holds the token
 }
 
 type accessToken struct {
@@ -234,7 +239,7 @@ func (a *webApp) issueOIDCCode(w http.ResponseWriter, r *http.Request, app app, 
 func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
-	state, app, ok := appForProtocol(w, r, supportsOIDC)
+	_, app, ok := appForProtocol(w, r, supportsOIDC)
 	if !ok {
 		return
 	}
@@ -257,81 +262,59 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if grantType == "refresh_token" {
-		a.refreshOIDCTokens(w, r, state, app)
+		a.refreshOIDCTokens(w, r, app)
 		return
 	}
 
 	a.oidcMu.Lock()
-	now := time.Now()
-	a.pruneExpiredOIDCCredentials(now)
+	defer a.oidcMu.Unlock()
+	a.pruneExpiredOIDCCredentials(time.Now())
 
 	codeValue := r.FormValue("code")
 	code, ok := a.authCodes[codeValue]
 	if !ok || code.Redeeming {
-		a.oidcMu.Unlock()
 		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "authorization code is invalid or expired")
 		return
 	}
 
 	if code.AppSlug != app.Slug || code.ClientID != app.OIDCClientID || code.RedirectURI != r.FormValue("redirect_uri") {
-		a.oidcMu.Unlock()
 		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "authorization code does not match this request")
 		return
 	}
 	if code.CodeChallenge != "" && !validPKCEVerifier(code.CodeChallenge, r.FormValue("code_verifier")) {
-		a.oidcMu.Unlock()
 		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "PKCE code verifier is invalid")
 		return
 	}
 	// OAuth 2.0 Security BCP: a verifier for a code issued without a
 	// challenge signals a confused or attacked client - reject it.
 	if code.CodeChallenge == "" && r.FormValue("code_verifier") != "" {
-		a.oidcMu.Unlock()
 		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "code_verifier provided but the authorization request used no code_challenge")
 		return
 	}
-	action, inject := a.reserveResilienceEndpointAction(app.Slug, "token", time.Now())
-	injectionCompleted := false
-	if inject && action.Delay > 0 {
-		code.Redeeming = true
-		a.authCodes[codeValue] = code
-		a.oidcMu.Unlock()
-		if !waitForResilienceDelay(r.Context(), action.Delay) {
-			a.oidcMu.Lock()
-			if current, found := a.authCodes[codeValue]; found && current.Redeeming {
-				current.Redeeming = false
-				a.authCodes[codeValue] = current
-			}
-			a.oidcMu.Unlock()
-			a.cancelResilienceEndpointAction(app.Slug, "token", action, time.Now())
-			return
+	setRedeeming := func(redeeming bool) {
+		if current, found := a.authCodes[codeValue]; found {
+			current.Redeeming = redeeming
+			a.authCodes[codeValue] = current
 		}
-		injectionCompleted = a.completeResilienceEndpointAction(app.Slug, "token", action, time.Now())
-		if injectionCompleted {
-			a.recordFlowEvent(app.Slug, "oidc", "token", "ok", "", "Injected "+action.describe())
-		}
-		a.oidcMu.Lock()
-		current, found := a.authCodes[codeValue]
-		if !found || !current.Redeeming {
-			a.oidcMu.Unlock()
-			a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "authorization code is invalid or expired")
-			return
-		}
-		code = current
 	}
-	if inject && action.Delay == 0 {
-		injectionCompleted = a.completeResilienceEndpointAction(app.Slug, "token", action, time.Now())
+	if !a.injectTokenFault(w, r, app, grantType, setRedeeming) {
+		return
 	}
-	if injectionCompleted && action.Status != 0 {
-		a.oidcMu.Unlock()
-		a.writeResilienceEndpointFailure(w, app.Slug, "oidc", "token", action)
+	code, ok = a.authCodes[codeValue]
+	if !ok || !code.ExpiresAt.After(time.Now()) {
+		delete(a.authCodes, codeValue)
+		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "authorization code is invalid or expired")
 		return
 	}
 	delete(a.authCodes, codeValue)
-	defer a.oidcMu.Unlock()
 	// Fault injection: fail the exchange on demand before doing any work.
 	if code.Faults.TokenError != "" {
 		a.failOAuth(w, app, "token", http.StatusBadRequest, code.Faults.TokenError, "injected token error")
+		return
+	}
+	state, err := loadStateForApp(app.ID)
+	if err != nil {
+		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
 		return
 	}
 	user, ok := userByID(state.Users, code.UserID)
@@ -340,50 +323,23 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims := userClaims(state, app, user, code.Scope)
-	claims["iss"] = oidcIssuer(a.effectiveIDPBaseURL(r, state), app)
-	claims["aud"] = app.OIDCClientID
-	claims["iat"] = now.Unix()
-	claims["exp"] = now.Add(time.Hour).Unix()
-	code.Authn.addClaims(claims, code.Faults.ClockSkew)
-	if code.Nonce != "" {
-		claims["nonce"] = code.Nonce
-	}
-	code.Faults.applyToClaims(claims, now)
-	idToken, err := a.signJWT(claims, code.Faults)
+	now := time.Now()
+	response, err := a.issueOIDCTokens(r, state, app, user, code, "Tokens issued", now)
 	if err != nil {
 		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
 		return
-	}
-	if code.Faults.BreakSignature {
-		idToken = corruptJWTSignature(idToken)
-	}
-	access, err := randomSecret(32)
-	if err != nil {
-		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
-		return
-	}
-	if err := a.rememberOIDCInspection(app, user, code, "Tokens issued", claims, idToken, now); err != nil {
-		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
-		return
-	}
-	a.accessTokens[access] = accessToken{
-		AppSlug:   app.Slug,
-		UserID:    user.ID,
-		Scope:     code.Scope,
-		ExpiresAt: now.Add(time.Hour),
-		Faults:    code.Faults,
-	}
-	response := map[string]any{
-		"access_token": access,
-		"token_type":   "Bearer",
-		"expires_in":   3600,
-		"id_token":     idToken,
-		"scope":        code.Scope,
 	}
 	tokenDetail := "ID and access tokens issued to " + app.OIDCClientID
 	if hasOIDCScope(code.Scope, "offline_access") {
-		refresh, err := a.issueRefreshToken(refreshToken{AppSlug: app.Slug, ClientID: code.ClientID, UserID: user.ID, Scope: code.Scope, Authn: code.Authn}, now)
+		refresh, err := a.issueRefreshToken(refreshToken{
+			AppSlug:       app.Slug,
+			ClientID:      code.ClientID,
+			UserID:        user.ID,
+			RedirectURI:   code.RedirectURI,
+			Scope:         code.Scope,
+			CodeChallenge: code.CodeChallenge,
+			Authn:         code.Authn,
+		}, now)
 		if err != nil {
 			a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
 			return
@@ -396,6 +352,88 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 	}
 	a.recordFlowEvent(app.Slug, "oidc", "token", "ok", userLabel(user), tokenDetail)
 	writeJSON(w, response)
+}
+
+// injectTokenFault delivers an armed token-phase scenario action to a
+// grantType request. The caller holds oidcMu and has validated the presented
+// grant. A delay releases oidcMu while it runs, and setRedeeming marks the
+// grant meanwhile so a concurrent request cannot redeem it. It returns with
+// oidcMu held, and false once it has finished the response. On true the
+// caller must look the grant up again: it may have expired or been revoked
+// during a delay.
+func (a *webApp) injectTokenFault(w http.ResponseWriter, r *http.Request, app app, grantType string, setRedeeming func(bool)) bool {
+	action, inject := a.reserveResilienceEndpointAction(app.Slug, "token", time.Now())
+	if !inject {
+		return true
+	}
+	label := "token (" + grantType + ")"
+	completed := false
+	if action.Delay > 0 {
+		setRedeeming(true)
+		a.oidcMu.Unlock()
+		delivered := waitForResilienceDelay(r.Context(), action.Delay)
+		a.oidcMu.Lock()
+		setRedeeming(false)
+		if !delivered {
+			a.cancelResilienceEndpointAction(app.Slug, label, action, time.Now())
+			return false
+		}
+		completed = a.completeResilienceEndpointAction(app.Slug, label, action, time.Now())
+		if completed {
+			a.recordFlowEvent(app.Slug, "oidc", "token", "ok", "", "Injected "+action.describe())
+		}
+	}
+	if action.Delay == 0 {
+		completed = a.completeResilienceEndpointAction(app.Slug, label, action, time.Now())
+	}
+	if completed && action.Status != 0 {
+		a.writeResilienceEndpointFailure(w, app.Slug, "oidc", "token", action)
+		return false
+	}
+	return true
+}
+
+// issueOIDCTokens signs an ID token and stores an access token for grant,
+// records the inspection under stage, and returns the token response. The
+// caller holds oidcMu.
+func (a *webApp) issueOIDCTokens(r *http.Request, state appState, app app, user user, grant authCode, stage string, now time.Time) (map[string]any, error) {
+	claims := userClaims(state, app, user, grant.Scope)
+	claims["iss"] = oidcIssuer(a.effectiveIDPBaseURL(r, state), app)
+	claims["aud"] = app.OIDCClientID
+	claims["iat"] = now.Unix()
+	grant.Authn.addClaims(claims, grant.Faults.ClockSkew)
+	if grant.Nonce != "" {
+		claims["nonce"] = grant.Nonce
+	}
+	grant.Faults.applyToClaims(claims, now)
+	idToken, err := a.signJWT(claims, grant.Faults)
+	if err != nil {
+		return nil, err
+	}
+	if grant.Faults.BreakSignature {
+		idToken = corruptJWTSignature(idToken)
+	}
+	access, err := randomSecret(32)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.rememberOIDCInspection(app, user, grant, stage, claims, idToken, now); err != nil {
+		return nil, err
+	}
+	a.accessTokens[access] = accessToken{
+		AppSlug:   app.Slug,
+		UserID:    user.ID,
+		Scope:     grant.Scope,
+		ExpiresAt: now.Add(time.Hour),
+		Faults:    grant.Faults,
+	}
+	return map[string]any{
+		"access_token": access,
+		"token_type":   "Bearer",
+		"expires_in":   3600,
+		"id_token":     idToken,
+		"scope":        grant.Scope,
+	}, nil
 }
 
 // issueRefreshToken stores grant under a new refresh token value. The caller
@@ -414,15 +452,14 @@ func (a *webApp) issueRefreshToken(grant refreshToken, now time.Time) (string, e
 // rotates: the presented value stops working and the response carries its
 // replacement. A narrower scope applies to the new access and ID tokens
 // only; the replacement refresh token keeps the original scope.
-func (a *webApp) refreshOIDCTokens(w http.ResponseWriter, r *http.Request, state appState, app app) {
+func (a *webApp) refreshOIDCTokens(w http.ResponseWriter, r *http.Request, app app) {
 	a.oidcMu.Lock()
 	defer a.oidcMu.Unlock()
-	now := time.Now()
-	a.pruneExpiredOIDCCredentials(now)
+	a.pruneExpiredOIDCCredentials(time.Now())
 
 	presented := r.FormValue("refresh_token")
 	grant, ok := a.refreshTokens[presented]
-	if !ok || grant.AppSlug != app.Slug || grant.ClientID != app.OIDCClientID {
+	if !ok || grant.Redeeming || grant.AppSlug != app.Slug || grant.ClientID != app.OIDCClientID {
 		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "refresh token is invalid, expired, or revoked")
 		return
 	}
@@ -436,6 +473,26 @@ func (a *webApp) refreshOIDCTokens(w http.ResponseWriter, r *http.Request, state
 		}
 		scope = requested
 	}
+	setRedeeming := func(redeeming bool) {
+		if current, found := a.refreshTokens[presented]; found {
+			current.Redeeming = redeeming
+			a.refreshTokens[presented] = current
+		}
+	}
+	if !a.injectTokenFault(w, r, app, "refresh_token", setRedeeming) {
+		return
+	}
+	grant, ok = a.refreshTokens[presented]
+	if !ok || !grant.ExpiresAt.After(time.Now()) {
+		delete(a.refreshTokens, presented)
+		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "refresh token is invalid, expired, or revoked")
+		return
+	}
+	state, err := loadStateForApp(app.ID)
+	if err != nil {
+		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
+		return
+	}
 	user, ok := userByID(state.Users, grant.UserID)
 	if !ok || !user.Active || user.Deleted {
 		delete(a.refreshTokens, presented)
@@ -445,18 +502,14 @@ func (a *webApp) refreshOIDCTokens(w http.ResponseWriter, r *http.Request, state
 
 	// OIDC Core section 12.2: same iss, sub, and aud, a new iat, the original
 	// auth_time, and no nonce.
-	claims := userClaims(state, app, user, scope)
-	claims["iss"] = oidcIssuer(a.effectiveIDPBaseURL(r, state), app)
-	claims["aud"] = app.OIDCClientID
-	claims["iat"] = now.Unix()
-	claims["exp"] = now.Add(time.Hour).Unix()
-	grant.Authn.addClaims(claims, 0)
-	idToken, err := a.signJWT(claims, faultOptions{})
-	if err != nil {
-		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
-		return
-	}
-	access, err := randomSecret(32)
+	now := time.Now()
+	response, err := a.issueOIDCTokens(r, state, app, user, authCode{
+		ClientID:      grant.ClientID,
+		RedirectURI:   grant.RedirectURI,
+		Scope:         scope,
+		CodeChallenge: grant.CodeChallenge,
+		Authn:         grant.Authn,
+	}, "Tokens refreshed", now)
 	if err != nil {
 		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
 		return
@@ -467,25 +520,9 @@ func (a *webApp) refreshOIDCTokens(w http.ResponseWriter, r *http.Request, state
 		return
 	}
 	delete(a.refreshTokens, presented)
-	a.accessTokens[access] = accessToken{
-		AppSlug:   app.Slug,
-		UserID:    user.ID,
-		Scope:     scope,
-		ExpiresAt: now.Add(time.Hour),
-	}
-	if err := a.rememberOIDCInspection(app, user, authCode{ClientID: grant.ClientID, Scope: scope}, "Tokens refreshed", claims, idToken, now); err != nil {
-		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
-		return
-	}
+	response["refresh_token"] = replacement
 	a.recordFlowEvent(app.Slug, "oidc", "token", "ok", userLabel(user), "Tokens refreshed for "+grant.ClientID+"; refresh token rotated")
-	writeJSON(w, map[string]any{
-		"access_token":  access,
-		"token_type":    "Bearer",
-		"expires_in":    3600,
-		"id_token":      idToken,
-		"refresh_token": replacement,
-		"scope":         scope,
-	})
+	writeJSON(w, response)
 }
 
 func (a *webApp) handleOIDCUserinfo(w http.ResponseWriter, r *http.Request) {
