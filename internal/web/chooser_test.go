@@ -86,12 +86,14 @@ func TestChooserRemembersLastUser(t *testing.T) {
 
 	var rememberCookie *http.Cookie
 	for _, c := range postRec.Result().Cookies() {
-		if c.Name == chooserCookieName("example") {
+		if c.Name == signInCookieName("example") {
 			rememberCookie = c
 		}
 	}
 	r.NotNil(rememberCookie)
-	r.Equal("usr-1", rememberCookie.Value)
+	remembered, err := url.ParseQuery(rememberCookie.Value)
+	r.NoError(err)
+	r.Equal("usr-1", remembered.Get("user"))
 
 	// The next chooser render pre-checks the remembered user.
 	getReq := httptest.NewRequest(http.MethodGet, "/oidc/example/authorize?response_type=code&client_id=example-client&redirect_uri=http://client.test/callback&scope=openid", nil)

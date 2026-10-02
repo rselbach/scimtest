@@ -251,7 +251,7 @@ func TestOIDCPKCEValidation(t *testing.T) {
 	digest := sha256.Sum256([]byte(verifier))
 	challenge := base64.RawURLEncoding.EncodeToString(digest[:])
 
-	r.NoError(validateAuthorizeRequest(app{
+	_, err := parseAuthorizeRequest(app{
 		OIDCClientID:         "greendale-client",
 		OIDCPublicClient:     true,
 		OIDCRedirectURIs:     []string{"http://localhost/callback"},
@@ -263,11 +263,12 @@ func TestOIDCPKCEValidation(t *testing.T) {
 		"scope":                 {"openid"},
 		"code_challenge":        {challenge},
 		"code_challenge_method": {"S256"},
-	}))
+	})
+	r.NoError(err)
 	r.True(validPKCEVerifier(challenge, verifier))
 	r.False(validPKCEVerifier(challenge, "chang-cheated"))
 
-	err := validateAuthorizeRequest(app{
+	_, err = parseAuthorizeRequest(app{
 		OIDCClientID:         "greendale-client",
 		OIDCPublicClient:     true,
 		OIDCRedirectURIs:     []string{"http://localhost/callback"},

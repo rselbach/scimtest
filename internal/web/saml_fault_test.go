@@ -131,10 +131,13 @@ func parseSAMLInstant(t *testing.T, value string) time.Time {
 	return instant
 }
 
-func postSAMLSSO(t *testing.T, svc *webApp, form url.Values) *httptest.ResponseRecorder {
+func postSAMLSSO(t *testing.T, svc *webApp, form url.Values, cookies ...*http.Cookie) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/saml/greendale/sso", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for _, cookie := range cookies {
+		req.AddCookie(cookie)
+	}
 	rec := httptest.NewRecorder()
 	svc.routes().ServeHTTP(rec, req)
 	return rec

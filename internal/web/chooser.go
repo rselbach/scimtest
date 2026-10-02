@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 )
 
 type chooserData struct {
@@ -19,6 +20,18 @@ type chooserData struct {
 	NoUsersHint     string
 	IdentifierOnly  bool
 	LoginIdentifier string
+
+	Strengths        []authnStrength
+	SelectedStrength string
+	Session          *chooserSession // a remembered sign-in the request allows reusing
+	FreshReason      string          // why the request rules out reusing a sign-in
+}
+
+// chooserSession describes the remembered sign-in the chooser offers to reuse.
+type chooserSession struct {
+	User     string
+	Strength string
+	Age      string
 }
 
 func newChooserData(title string, app app, action string, users []user, loginHint string, hidden map[string][]string, noUsersHint string) chooserData {
@@ -36,37 +49,36 @@ func newChooserData(title string, app app, action string, users []user, loginHin
 	return data
 }
 
-func chooserCookieName(slug string) string { return "scimtest_chooser_" + slug }
-
-// rememberChooserUser records the last user signed in for an environment so the
-// chooser can pre-select them on the next flow.
-func rememberChooserUser(w http.ResponseWriter, slug, userID string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     chooserCookieName(slug),
-		Value:    userID,
-		Path:     "/",
-		MaxAge:   30 * 24 * 60 * 60,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-	})
-}
-
-// applyRememberedChooserUser pre-selects the last-used user when nothing else
-// already selected one.
-func (a *webApp) applyRememberedChooserUser(data *chooserData, r *http.Request, state appState, app app) {
-	if data.SelectedUserID != "" || data.IdentifierOnly {
+// applySignIn preselects the strength and the remembered user, and offers to
+// reuse the remembered sign-in when the request allows it.
+func (data *chooserData) applySignIn(r *http.Request, users []user, slug string, values url.Values, request authnRequest, now time.Time) {
+	data.Strengths = authnStrengths
+	if strength, err := chosenAuthnStrength(values, request.Contexts); err == nil {
+		data.SelectedStrength = strength.ID
+	}
+	data.FreshReason = request.FreshReason
+	found, session, ok := rememberedSignIn(r, users, slug)
+	if !ok {
 		return
 	}
-	cookie, err := r.Cookie(chooserCookieName(app.Slug))
-	if err != nil {
+	if data.SelectedUserID == "" && !data.IdentifierOnly {
+		data.SelectedUserID = found.ID
+	}
+	if reason := request.reuseBlocker(session, now); reason != "" {
+		data.FreshReason = reason
 		return
 	}
-	if user, ok := userByID(state.Users, cookie.Value); ok && user.Active && !user.Deleted {
-		data.SelectedUserID = user.ID
+	data.Session = &chooserSession{
+		User:     userLabel(found),
+		Strength: session.Strength.Label,
+		Age:      now.Sub(session.Time).Round(time.Second).String(),
 	}
 }
 
 func chooserSelectionProvided(app app, values url.Values) bool {
+	if isTruthy(values.Get("continue_session")) {
+		return true
+	}
 	if normalizeChooserMode(app.ChooserMode) == chooserModeIdentifier {
 		return strings.TrimSpace(values.Get("login_identifier")) != ""
 	}
@@ -209,7 +221,8 @@ func loginHintFromURLOrQuery(value string) string {
 func hiddenValues(values url.Values) map[string][]string {
 	out := make(map[string][]string)
 	for key, value := range values {
-		if key == "user_id" || key == "login_identifier" {
+		switch key {
+		case "user_id", "login_identifier", "authn_strength", "continue_session":
 			continue
 		}
 		out[key] = value
@@ -263,6 +276,12 @@ var chooserTemplate = template.Must(template.New("chooser").Funcs(template.FuncM
 	.identifier-form { grid-template-rows:auto auto; }
 	.identifier-field { display:grid; gap:6px; color:var(--muted); }
 	.identifier-field input { width:100%; height:38px; padding:0 11px; border:1px solid var(--line); border-radius:6px; color:var(--text); font:inherit; }
+    .strength-field { grid-column:1 / -1; display:flex; align-items:center; justify-content:space-between; gap:10px; color:var(--muted); }
+    .strength-field select { height:34px; padding:0 8px; border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--text); font:inherit; }
+    .fresh-note { color:#9a6700; }
+    .session-option { margin-top:12px; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 12px; border:1px solid var(--accent); border-radius:6px; background:#f5f8ff; }
+    .session-option p { margin:0; }
+    .session-option button { padding:0 12px; white-space:nowrap; }
   </style>
 </head>
 <body>
@@ -270,20 +289,28 @@ var chooserTemplate = template.Must(template.New("chooser").Funcs(template.FuncM
     <header>
       <h1>{{.Title}}</h1>
       <p>{{.AppName}}</p>
+      {{if .FreshReason}}<p class="fresh-note">{{.AppName}} requires a fresh sign-in ({{.FreshReason}}).</p>{{end}}
+      {{with .Session}}
+      <div class="session-option" data-session>
+        <div><strong>Signed in as {{.User}}</strong><p class="user-meta">{{.Strength}}, {{.Age}} ago</p></div>
+        <button type="submit" form="chooser-form" formnovalidate name="continue_session" value="1">Reuse session</button>
+      </div>
+      {{end}}
     </header>
     {{if .IdentifierOnly}}
-	<form class="identifier-form" method="post" action="{{.Action}}">
+	<form id="chooser-form" class="identifier-form" method="post" action="{{.Action}}">
 	  {{range $key, $values := .Hidden}}{{range $values}}<input type="hidden" name="{{$key}}" value="{{.}}">{{end}}{{end}}
 	  <label class="identifier-field">Username or email
 		<input name="login_identifier" value="{{.LoginIdentifier}}" autocomplete="username" required autofocus>
 	  </label>
 	  <div class="chooser-actions">
+	    {{template "strength" .}}
 	    <button type="submit" formnovalidate name="deny" value="1" class="secondary">Deny</button>
 	    <button type="submit">Continue</button>
 	  </div>
 	</form>
 	{{else if .Users}}
-    <form method="post" action="{{.Action}}">
+    <form id="chooser-form" method="post" action="{{.Action}}">
       {{range $key, $values := .Hidden}}{{range $values}}<input type="hidden" name="{{$key}}" value="{{.}}">{{end}}{{end}}
       <div class="search-row">
         <input type="search" placeholder="Search name, username, or email" aria-label="Search users" aria-controls="user-list" autocomplete="off" autofocus data-user-search>
@@ -299,6 +326,7 @@ var chooserTemplate = template.Must(template.New("chooser").Funcs(template.FuncM
         <div class="no-matches" hidden data-no-matches>No users match your search.</div>
       </div>
       <div class="chooser-actions">
+        {{template "strength" .}}
         <button type="submit" formnovalidate name="deny" value="1" class="secondary" data-deny>Deny</button>
         <button type="submit" data-continue>Continue</button>
       </div>
@@ -338,4 +366,7 @@ var chooserTemplate = template.Must(template.New("chooser").Funcs(template.FuncM
   </script>
   {{end}}
 </body>
-</html>`))
+</html>
+{{define "strength"}}<label class="strength-field">Sign-in method
+          <select name="authn_strength">{{range .Strengths}}<option value="{{.ID}}"{{if eq .ID $.SelectedStrength}} selected{{end}}>{{.Label}}</option>{{end}}</select>
+        </label>{{end}}`))

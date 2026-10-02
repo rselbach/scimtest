@@ -19,7 +19,7 @@ type faultOptions struct {
 	IDTokenTTLSet   bool
 	AssertionTTL    time.Duration // overrides the SAML assertion lifetime
 	AssertionTTLSet bool
-	ClockSkew       time.Duration // added to iat/exp and SAML instants
+	ClockSkew       time.Duration // added to iat, exp, auth_time, and SAML instants
 	BreakSignature  bool          // corrupt the ID token / assertion signature
 	DropClaims      []string      // claims omitted from the ID token and userinfo
 	TokenError      string        // force this OAuth error at the token endpoint

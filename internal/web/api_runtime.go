@@ -441,6 +441,8 @@ type apiOIDCAuthorizeRequest struct {
 	Nonce               string `json:"nonce"`
 	CodeChallenge       string `json:"code_challenge"`
 	CodeChallengeMethod string `json:"code_challenge_method"`
+	ACRValues           string `json:"acr_values"`
+	AuthnStrength       string `json:"authn_strength"`
 }
 
 func (a *webApp) handleAPIOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
@@ -458,7 +460,7 @@ func (a *webApp) handleAPIOIDCAuthorize(w http.ResponseWriter, r *http.Request) 
 		apiError(w, http.StatusBadRequest, "OIDC is not enabled")
 		return
 	}
-	values := url.Values{"client_id": {request.ClientID}, "redirect_uri": {request.RedirectURI}, "response_type": {request.ResponseType}, "user_id": {request.UserID}, "login_identifier": {request.LoginIdentifier}, "state": {request.State}, "scope": {request.Scope}, "nonce": {request.Nonce}, "code_challenge": {request.CodeChallenge}, "code_challenge_method": {request.CodeChallengeMethod}}
+	values := url.Values{"client_id": {request.ClientID}, "redirect_uri": {request.RedirectURI}, "response_type": {request.ResponseType}, "user_id": {request.UserID}, "login_identifier": {request.LoginIdentifier}, "state": {request.State}, "scope": {request.Scope}, "nonce": {request.Nonce}, "code_challenge": {request.CodeChallenge}, "code_challenge_method": {request.CodeChallengeMethod}, "acr_values": {request.ACRValues}, "authn_strength": {request.AuthnStrength}}
 	if values.Get("client_id") == "" {
 		values.Set("client_id", found.OIDCClientID)
 	}
@@ -469,16 +471,17 @@ func (a *webApp) handleAPIOIDCAuthorize(w http.ResponseWriter, r *http.Request) 
 		apiError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := validateAuthorizeRequest(found, values); err != nil {
+	authn, err := parseAuthorizeRequest(found, values)
+	if err != nil {
 		apiError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	selected, ok := chooserUser(state.Users, found, values)
-	if !ok || !selected.Active || selected.Deleted {
-		apiError(w, http.StatusBadRequest, "active user is required")
+	selected, session, err := chooserSignIn(r, state.Users, found, values, authn, time.Now())
+	if err != nil {
+		apiError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	a.issueOIDCCode(w, r.WithContext(withAPIProtocolResponse(r.Context())), state, found, values)
+	a.issueOIDCCode(w, r.WithContext(withAPIProtocolResponse(r.Context())), found, values, selected, session, authn)
 }
 
 type apiSAMLSignInRequest struct {
@@ -489,6 +492,7 @@ type apiSAMLSignInRequest struct {
 	SigAlg          string `json:"sig_alg"`
 	Signature       string `json:"signature"`
 	RedirectQuery   string `json:"redirect_query"`
+	AuthnStrength   string `json:"authn_strength"`
 }
 
 func (a *webApp) handleAPISAMLSignIn(w http.ResponseWriter, r *http.Request) {
@@ -537,11 +541,7 @@ func (a *webApp) handleAPISAMLSignIn(w http.ResponseWriter, r *http.Request) {
 	if request.Signature != "" {
 		values.Set("Signature", request.Signature)
 	}
-	selected, ok := chooserUser(state.Users, found, values)
-	if !ok || !selected.Active || selected.Deleted {
-		apiError(w, http.StatusBadRequest, "active user is required")
-		return
-	}
+	values.Set("authn_strength", request.AuthnStrength)
 	if _, err := samlAssertionEncryptionForApp(found); err != nil {
 		apiError(w, http.StatusBadRequest, err.Error())
 		return
@@ -552,7 +552,12 @@ func (a *webApp) handleAPISAMLSignIn(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	a.completeSAMLSSO(w, protocolRequest.WithContext(withAPIProtocolResponse(protocolRequest.Context())), state, found, baseURL, responseContext, values)
+	selected, session, err := chooserSignIn(r, state.Users, found, values, responseContext.Requested, time.Now())
+	if err != nil {
+		apiError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	a.completeSAMLSSO(w, protocolRequest.WithContext(withAPIProtocolResponse(protocolRequest.Context())), state, found, baseURL, responseContext, values, selected, session)
 }
 
 type apiToolRequest struct {
