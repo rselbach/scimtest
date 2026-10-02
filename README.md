@@ -105,7 +105,8 @@ steps, the authentication design, and release packaging details.
   that records failures too. The OIDC inspector also lists live IdP
   sessions and can end them.
 - **Traffic view.** Request/response transcripts of every OIDC and SAML
-  exchange, recorded by default into a bounded in-memory ring, with
+  exchange, including the back-channel logout requests scimtest sends,
+  recorded by default into a bounded in-memory ring, with
   optional raw-secret capture. `--debug` additionally prints transcripts
   to stdout.
 - **Fault Injection.** Choose **Fault Injection** in an environment's sidebar to
@@ -121,8 +122,10 @@ steps, the authentication design, and release packaging details.
   audience, an unknown signing key ID, an unsigned `alg: none` token, and a
   nonce mismatch. SAML tamper faults cover a wrong issuer, audience,
   destination, or recipient, an `InResponseTo` mismatch, and a replayed
-  assertion ID. The same one-shot effects are available as `fault_*` URL
-  parameters, such as `fault_tamper=wrong_issuer,alg_none`.
+  assertion ID. Logout token tamper faults cover an unsigned token, a wrong
+  audience, a missing `events` claim, and a repeated `jti`. The same one-shot
+  sign-in effects are available as `fault_*` URL parameters, such as
+  `fault_tamper=wrong_issuer,alg_none`.
 - **SCIM sync.** Push the directory to your app's SCIM endpoint, reconcile
   drift, import an existing remote directory with a preview, and inspect
   every request in the sync trace and per-resource history.
@@ -197,6 +200,29 @@ browser's session when the hint has no `sid`, then redirects to
 session, it asks the user to confirm first. Invalid requests show an error and never redirect.
 Ending a session does not revoke tokens. Sessions last 30 days after their
 latest sign-in and are kept in memory, so restarting scimtest ends them.
+
+Set a **Back-channel logout URI** in OIDC setup to test OpenID Connect
+Back-Channel Logout 1.0. When a session that issued ID tokens ends, for any of
+the reasons above, scimtest POSTs a signed `logout_token` to that URI. The
+token is typed `logout+jwt` and carries `iss`, `aud`, `iat`, `exp`, `jti`,
+`sub`, and the back-channel logout `events` claim, and never a `nonce`. With
+**Session required** (`backchannel_logout_session_required`), it also carries
+the session's `sid`; without it, the app should end every session for `sub`.
+Discovery advertises `backchannel_logout_supported` and
+`backchannel_logout_session_supported`. scimtest sends the request in the
+background with a 5-second timeout and does not follow redirects, so ending a
+session never waits for the app. The URI must be reachable from the machine
+that runs scimtest; no tunnel route is involved. The OIDC inspector's Recent
+activity and the Traffic view record each request and the app's response.
+
+Arm logout token faults from the inspector's **Simulate a failure** panel or
+the API's `PUT /faults`. `logout_alg_none` sends an unsigned `alg: none`
+token, `logout_wrong_audience` changes `aud`, `logout_missing_events` drops
+`events`, and `logout_repeated_jti` delivers the same token, with the same
+`jti`, a second time. Sign-ins leave these faults armed, and the next logout
+token consumes them. A safe app answers each tampered token with `400 Bad
+Request` and keeps the user's session. Recent activity marks a tampered token
+that the app accepted with a 2xx status as failed.
 
 Paste the service provider's RSA encryption certificate into SAML setup to
 wrap that signed assertion in `EncryptedAssertion` (AES-128-GCM, AES-192-GCM,

@@ -87,6 +87,8 @@ func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 		"userinfo_endpoint":                     issuer + "/userinfo",
 		"jwks_uri":                              issuer + "/jwks",
 		"end_session_endpoint":                  issuer + "/logout",
+		"backchannel_logout_supported":          true,
+		"backchannel_logout_session_supported":  true,
 		"response_types_supported":              []string{"code"},
 		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
 		"subject_types_supported":               []string{"public"},
@@ -407,7 +409,8 @@ func (a *webApp) injectTokenFault(w http.ResponseWriter, r *http.Request, app ap
 // caller holds oidcMu.
 func (a *webApp) issueOIDCTokens(r *http.Request, state appState, app app, user user, grant authCode, stage string, now time.Time) (map[string]any, error) {
 	claims := userClaims(state, app, user, grant.Scope)
-	claims["iss"] = oidcIssuer(a.effectiveIDPBaseURL(r, state), app)
+	issuer := oidcIssuer(a.effectiveIDPBaseURL(r, state), app)
+	claims["iss"] = issuer
 	claims["aud"] = app.OIDCClientID
 	claims["iat"] = now.Unix()
 	grant.Authn.addClaims(claims, grant.Faults.ClockSkew)
@@ -421,6 +424,9 @@ func (a *webApp) issueOIDCTokens(r *http.Request, state appState, app app, user 
 	idToken, err := a.signJWT(claims, grant.Faults)
 	if err != nil {
 		return nil, err
+	}
+	if grant.SessionID != "" {
+		a.noteIDTokenIssued(grant.SessionID, issuer)
 	}
 	if grant.Faults.BreakSignature {
 		idToken = corruptJWTSignature(idToken)

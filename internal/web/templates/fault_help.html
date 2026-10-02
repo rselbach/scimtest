@@ -11,7 +11,7 @@
   {{end}}
   <details {{if .ArmedFaults}}open{{end}}>
     <summary><strong>Simulate a failure</strong></summary>
-    <p class="hint">Arm faults for the next sign-in, wherever it starts — including SP-initiated flows. They apply to one flow and disarm automatically. Explicit fault_* URL parameters still override them.</p>
+    <p class="hint">Arm faults for the next sign-in, wherever it starts — including SP-initiated flows. They apply to one flow and disarm automatically. Explicit fault_* URL parameters still override them. Logout token faults wait for the next back-channel logout instead, and apply to one logout token.</p>
     <form method="post" action="/inspect/faults/{{.App.Slug}}/arm" class="form-grid">
       <input type="hidden" name="return_tab" value="{{.ReturnTab}}">
       {{if or (eq .App.Protocol "oidc") (eq .App.Protocol "both")}}

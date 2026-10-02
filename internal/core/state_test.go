@@ -1442,6 +1442,72 @@ func TestSchemaMigrationWritesPreMigrationCopy(t *testing.T) {
 	r.Contains(entries[0].Name(), "pre-migrate-v000-")
 }
 
+func TestSchemaMigrationAddsBackchannelLogoutSettings(t *testing.T) {
+	r := require.New(t)
+	path := filepath.Join(t.TempDir(), "state.db")
+	t.Setenv("SCIMTEST_STATE_FILE", path)
+	r.NoError(SaveState(AppState{Apps: []App{{
+		ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "oidc",
+		OIDCClientID: "greendale", OIDCClientSecret: "secret", OIDCRedirectURIs: []string{"https://greendale.test/callback"},
+	}}}))
+
+	db, err := openStateDB()
+	r.NoError(err)
+	for _, column := range []string{"oidc_backchannel_logout_uri", "oidc_backchannel_logout_session_required"} {
+		_, err = db.Exec(`ALTER TABLE apps DROP COLUMN ` + column)
+		r.NoError(err)
+	}
+	_, err = db.Exec(`PRAGMA user_version = 2`)
+	r.NoError(err)
+	r.NoError(resetStateDBCache())
+
+	state, err := LoadState()
+	r.NoError(err)
+	r.Len(state.Apps, 1)
+	r.Empty(state.Apps[0].OIDCBackchannelLogoutURI)
+	r.False(state.Apps[0].OIDCBackchannelLogoutSessionRequired)
+
+	state.Apps[0].OIDCBackchannelLogoutURI = "https://greendale.test/backchannel-logout"
+	state.Apps[0].OIDCBackchannelLogoutSessionRequired = true
+	r.NoError(SaveState(state))
+	r.NoError(resetStateDBCache())
+	state, err = LoadState()
+	r.NoError(err)
+	r.Equal("https://greendale.test/backchannel-logout", state.Apps[0].OIDCBackchannelLogoutURI)
+	r.True(state.Apps[0].OIDCBackchannelLogoutSessionRequired)
+}
+
+func TestValidateAppBackchannelLogoutURI(t *testing.T) {
+	tests := map[string]struct {
+		uri     string
+		wantErr string
+	}{
+		"empty":         {},
+		"https":         {uri: "https://greendale.test/backchannel-logout"},
+		"with a query":  {uri: "http://localhost:3000/logout?tenant=greendale"},
+		"relative":      {uri: "/backchannel-logout", wantErr: "must be an absolute HTTP(S) URL"},
+		"other scheme":  {uri: "ftp://greendale.test/logout", wantErr: "must be an absolute HTTP(S) URL"},
+		"with fragment": {uri: "https://greendale.test/logout#study-group", wantErr: "without a fragment"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			app := App{
+				ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "oidc",
+				OIDCClientID: "greendale", OIDCClientSecret: "secret", OIDCRedirectURIs: []string{"https://greendale.test/callback"},
+				OIDCBackchannelLogoutURI: tc.uri,
+			}
+			err := ValidateApp(app, nil)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				require.Equal(t, SetupStatusConfigured, OIDCSetupStatus(app))
+				return
+			}
+			require.ErrorContains(t, err, tc.wantErr)
+			require.Equal(t, SetupStatusIncomplete, OIDCSetupStatus(app))
+		})
+	}
+}
+
 func TestSchemaMigrationDefaultsSAMLEncryptionAlgorithm(t *testing.T) {
 	r := require.New(t)
 	path := filepath.Join(t.TempDir(), "state.db")

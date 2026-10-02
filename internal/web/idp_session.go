@@ -22,6 +22,11 @@ type idpSession struct {
 	Started   time.Time
 	Protocols []string // protocols that signed in through it, in first-use order
 	EndReason string   // why it ended; empty while it is live
+
+	// OIDCIssuer is the iss of the ID tokens issued in the session. It stays
+	// empty until the app redeems a code, and ending a session that has it
+	// sends a back-channel logout token.
+	OIDCIssuer string
 }
 
 // idpSessionView is a live session as the OIDC inspector and the API show it.
@@ -132,6 +137,18 @@ func (a *webApp) joinIdPSession(w http.ResponseWriter, r *http.Request, slug str
 	return session.ID, nil
 }
 
+// noteIDTokenIssued records that sessionID issued an ID token under issuer.
+func (a *webApp) noteIDTokenIssued(sessionID, issuer string) {
+	a.sessionMu.Lock()
+	defer a.sessionMu.Unlock()
+	session, ok := a.idpSessions[sessionID]
+	if !ok {
+		return
+	}
+	session.OIDCIssuer = issuer
+	a.idpSessions[sessionID] = session
+}
+
 // handleOIDCSessionEnd ends one IdP session, or every session in the
 // environment, as an administrator would.
 func (a *webApp) handleOIDCSessionEnd(w http.ResponseWriter, r *http.Request) {
@@ -159,10 +176,11 @@ func forgetIdPSession(w http.ResponseWriter, slug string) {
 }
 
 // endIdPSessions ends every live session for which reason returns a non-empty
-// reason, records each in the environment's flow activity, and returns them
-// with EndReason set. Every way a session ends goes through here: the end
-// session endpoint, the inspector and the API, user deactivation or deletion,
-// a sign-in that replaces the browser's session, and expiry.
+// reason, records each in the environment's flow activity, sends back-channel
+// logout tokens for them, and returns them with EndReason set. Every way a
+// session ends goes through here: the end session endpoint, the inspector and
+// the API, user deactivation or deletion, a sign-in that replaces the
+// browser's session, and expiry.
 func (a *webApp) endIdPSessions(reason func(idpSession) string) []idpSession {
 	a.sessionMu.Lock()
 	var ended []idpSession
@@ -179,6 +197,7 @@ func (a *webApp) endIdPSessions(reason func(idpSession) string) []idpSession {
 	for _, session := range ended {
 		a.recordFlowEvent(session.AppSlug, "idp", "session", "ok", session.User, "Session "+session.ID+" ended: "+session.EndReason)
 	}
+	a.sendBackchannelLogouts(ended)
 	return ended
 }
 
