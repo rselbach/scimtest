@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -96,21 +95,29 @@ func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleOIDCJWKS publishes the environment's active key and any retired keys
+// still inside their grace period. A stale-JWKS scenario leaves out the
+// active key, the way a cached or lagging JWKS would.
 func (a *webApp) handleOIDCJWKS(w http.ResponseWriter, r *http.Request) {
-	if _, _, ok := appForProtocol(w, r, supportsOIDC); !ok {
+	state, app, ok := appForProtocol(w, r, supportsOIDC)
+	if !ok {
 		return
 	}
-	pub := a.signingKey.PublicKey
-	writeJSON(w, map[string]any{
-		"keys": []map[string]string{{
-			"kty": "RSA",
-			"use": "sig",
-			"kid": "scimtest-dev",
-			"alg": "RS256",
-			"n":   base64.RawURLEncoding.EncodeToString(pub.N.Bytes()),
-			"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pub.E)).Bytes()),
-		}},
-	})
+	now := time.Now()
+	keys, err := a.publishedSigningKeys(state, now)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if action, inject := a.reserveResilienceEndpointAction(app.Slug, "jwks", now); inject && a.completeResilienceEndpointAction(app.Slug, "jwks", action, now) {
+		a.recordFlowEvent(app.Slug, "oidc", "jwks", "ok", "", "Injected JWKS without the current signing key "+keys[0].ID)
+		keys = keys[1:]
+	}
+	jwks := make([]map[string]string, 0, len(keys))
+	for _, key := range keys {
+		jwks = append(jwks, signingKeyJWK(key))
+	}
+	writeJSON(w, map[string]any{"keys": jwks})
 }
 
 func (a *webApp) handleOIDCAuthorize(w http.ResponseWriter, r *http.Request) {
@@ -406,7 +413,7 @@ func (a *webApp) issueOIDCTokens(r *http.Request, state appState, app app, user 
 		claims["nonce"] = grant.Nonce
 	}
 	grant.Faults.applyToClaims(claims, now)
-	idToken, err := a.signJWT(claims, grant.Faults)
+	idToken, err := a.signJWT(state, claims, grant.Faults)
 	if err != nil {
 		return nil, err
 	}
@@ -867,10 +874,15 @@ func hasOIDCScope(scope string, target string) bool {
 	return slices.Contains(strings.Fields(scope), target)
 }
 
-// signJWT signs claims as an RS256 compact JWS. Tamper faults can name a key
-// the JWKS does not publish or emit an unsecured alg none token.
-func (a *webApp) signJWT(claims map[string]any, faults faultOptions) (string, error) {
-	header := map[string]any{"typ": "JWT", "alg": "RS256", "kid": "scimtest-dev"}
+// signJWT signs claims as an RS256 compact JWS with the environment's active
+// key. Tamper faults can name a key the JWKS does not publish or emit an
+// unsecured alg none token.
+func (a *webApp) signJWT(state appState, claims map[string]any, faults faultOptions) (string, error) {
+	key, err := a.activeSigningKey(state)
+	if err != nil {
+		return "", err
+	}
+	header := map[string]any{"typ": "JWT", "alg": "RS256", "kid": key.ID}
 	if faults.tampers(tamperUnknownKeyID) {
 		header["kid"] = "scimtest-unknown"
 	}
@@ -891,7 +903,7 @@ func (a *webApp) signJWT(claims map[string]any, faults faultOptions) (string, er
 		return unsigned + ".", nil
 	}
 	digest := sha256.Sum256([]byte(unsigned))
-	sig, err := rsa.SignPKCS1v15(rand.Reader, a.signingKey, crypto.SHA256, digest[:])
+	sig, err := rsa.SignPKCS1v15(rand.Reader, key.PrivateKey, crypto.SHA256, digest[:])
 	if err != nil {
 		return "", err
 	}

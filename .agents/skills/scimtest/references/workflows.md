@@ -95,7 +95,10 @@ a browser, because they depend on the chooser's remembered sign-in cookie.
 Create or patch an environment with `saml_enabled: true`, `saml_entity_id`,
 and `saml_acs_url` matching the service provider. Read the SAML connection
 export for the IDP entity ID, SSO URL, metadata URL, and certificate. Metadata
-and certificate requests use those exported protocol URLs.
+and certificate requests use those exported protocol URLs. Set
+`saml_signing_mode` to `assertion` (the default), `response`, or `both` to match
+what the service provider requires. To check that it rejects a weaker form,
+set a mode that leaves out the signature it should require.
 
 `POST /environments/{ENV_ID}/saml/sign-in` accepts `user_id`, optional
 `relay_state`, and optional base64 `saml_request`. It returns `acs_url`, base64
@@ -184,6 +187,15 @@ For repeated faults, read `/environments/{ENV_ID}/scenarios` for available
 presets, then `POST /scenarios/arm` under the same environment with `preset_id`
 and an optional integer `count`. Inspect the returned run and disarm with
 `POST /scenarios/disarm`. These scenarios expire after fifteen minutes.
+
+To test signing key rollover, `GET /environments/{ENV_ID}/signing-keys`, then
+`POST /signing-keys/rotate` under the same environment with an optional
+`grace_period` such as `1h` or `0s`. New tokens and assertions use the new
+`kid` at once, and the old key stays in the JWKS and SAML metadata for the
+grace period. Rotation cannot be undone except by restoring a backup, so
+rotate only an environment the user named. To test JWKS refetch logic, arm
+the `stale-jwks` scenario; its `count` JWKS responses leave out the active
+key.
 
 To test refresh handling, include `offline_access` in the OIDC scope and redeem
 the returned `refresh_token` with `grant_type=refresh_token`. Each refresh

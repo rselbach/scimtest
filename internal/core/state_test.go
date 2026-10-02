@@ -222,6 +222,43 @@ func TestSaveEnvironmentStatePreservesGlobalConfig(t *testing.T) {
 	r.Equal(want.SigningCertificatePEM, got.Config.SigningCertificatePEM)
 }
 
+func TestSigningKeysStayWithTheirEnvironment(t *testing.T) {
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r := require.New(t)
+	// The global state takes its config from the last environment, so the
+	// ring goes there to prove LoadState drops it.
+	r.NoError(SaveState(AppState{Apps: []App{
+		{ID: "city-college", Name: "City College", Slug: "city-college", Protocol: "saml"},
+		{ID: "greendale", Name: "Greendale", Slug: "greendale", Protocol: "oidc"},
+	}}))
+	rotated := []SigningKey{
+		{ID: "scimtest-dev", PrivateKeyPEM: "shared-private-key", CertificatePEM: "shared-certificate", PublishedUntil: time.Date(2026, 10, 3, 9, 0, 0, 0, time.UTC)},
+		{ID: "scimtest_new", PrivateKeyPEM: "new-private-key", CertificatePEM: "new-certificate", CreatedAt: time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)},
+	}
+
+	greendale, err := LoadStateForApp("greendale")
+	r.NoError(err)
+	r.Empty(greendale.Config.SigningKeys)
+	greendale.Config.SigningKeys = rotated
+	r.NoError(SaveEnvironmentState(greendale))
+
+	greendale, err = LoadStateForApp("greendale")
+	r.NoError(err)
+	r.Equal(rotated, greendale.Config.SigningKeys)
+	greendale.Users = append(greendale.Users, User{ID: "troy", GivenName: "Troy", Email: "troy@greendale.edu", Username: "troy", Active: true})
+	r.NoError(SaveEnvironmentState(greendale))
+	greendale, err = LoadStateForApp("greendale")
+	r.NoError(err)
+	r.Equal(rotated, greendale.Config.SigningKeys, "unrelated saves keep the key ring")
+
+	cityCollege, err := LoadStateForApp("city-college")
+	r.NoError(err)
+	r.Empty(cityCollege.Config.SigningKeys)
+	global, err := LoadState()
+	r.NoError(err)
+	r.Empty(global.Config.SigningKeys, "new environments start from global state and must not inherit a ring")
+}
+
 func TestEnsureTunnelInstanceIDGeneratesAndReusesUUID(t *testing.T) {
 	r := require.New(t)
 	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
@@ -1469,6 +1506,39 @@ func TestSchemaMigrationDefaultsSAMLEncryptionAlgorithm(t *testing.T) {
 	version, err := schemaVersion(db)
 	r.NoError(err)
 	r.Equal(currentSchemaVersion, version)
+}
+
+func TestSchemaMigrationDefaultsSAMLSigningMode(t *testing.T) {
+	r := require.New(t)
+	path := filepath.Join(t.TempDir(), "state.db")
+	t.Setenv("SCIMTEST_STATE_FILE", path)
+	r.NoError(SaveState(AppState{Apps: []App{{
+		ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "saml",
+		SAMLACSURL: "https://greendale.test/saml/acs",
+	}}}))
+
+	db, err := openStateDB()
+	r.NoError(err)
+	_, err = db.Exec(`ALTER TABLE apps DROP COLUMN saml_signing_mode`)
+	r.NoError(err)
+	_, err = db.Exec(`PRAGMA user_version = 2`)
+	r.NoError(err)
+	r.NoError(resetStateDBCache())
+
+	state, err := LoadState()
+	r.NoError(err)
+	r.Len(state.Apps, 1)
+	r.Equal(SAMLSigningModeAssertion, state.Apps[0].SAMLSigningMode)
+
+	db, err = openStateDB()
+	r.NoError(err)
+	version, err := schemaVersion(db)
+	r.NoError(err)
+	r.Equal(currentSchemaVersion, version)
+	entries, err := os.ReadDir(filepath.Join(filepath.Dir(path), "backups"))
+	r.NoError(err)
+	r.Len(entries, 1)
+	r.Contains(entries[0].Name(), "pre-migrate-v002-")
 }
 
 func TestPlanSync(t *testing.T) {

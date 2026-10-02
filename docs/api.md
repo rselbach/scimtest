@@ -76,8 +76,9 @@ in the operation catalog.
   `regenerate_oidc_secret`. Redirect URIs are an array of strings.
 - SAML uses `saml_entity_id`, `saml_acs_url`, `saml_audience`,
   `saml_name_id_field`, `saml_email_attribute_name`,
-  `saml_request_certificate_pem`, `saml_encryption_certificate_pem`, and
-  `saml_encryption_algorithm`.
+  `saml_request_certificate_pem`, `saml_encryption_certificate_pem`,
+  `saml_encryption_algorithm`, and `saml_signing_mode`. The signing mode is
+  `assertion` (the default), `response`, or `both`.
 - Directory claims use `include_groups_claim`, `chooser_mode`,
   `oidc_claim_mappings`, and `saml_attribute_mappings`. Claim mappings are
   objects whose keys are directory field names and whose values are claim or
@@ -164,6 +165,8 @@ All paths in this section are relative to `/environments/{id}`.
 | GET | `/oidc/tokens` | Users holding live access or refresh tokens, with counts. |
 | DELETE | `/oidc/tokens` | Revoke every token, or one user's with `?user_id=`. Returns `revoked`. |
 | POST | `/saml/sign-in` | Return `acs_url`, base64 `saml_response`, and `relay_state`. |
+| GET | `/signing-keys` | Published signing keys, active key first. |
+| POST | `/signing-keys/rotate` | Sign with a new key and keep the old key published for `grace_period`. |
 | GET | `/inspections/oidc`, `/inspections/saml` | Recent protocol inspections. |
 | GET | `/flows` | Recent flow activity, including failures. |
 | GET, PUT, DELETE | `/faults` | Read, replace, or disarm one-shot faults. |
@@ -206,18 +209,29 @@ string as `redirect_query` instead of splitting its signed fields. This keeps
 the exact encoding needed for signature validation. API URL query parameters
 are not SAML signing inputs.
 
+Each signing key has `kid`, `active`, `created_at`, `published_until`, and
+`certificate_pem`. The shared key that every environment starts with has the
+`kid` `scimtest-dev` and no `created_at`. Rotation accepts an optional
+`grace_period` duration from `0s` to `168h`; the default is `24h`, and `0s`
+removes the old key at once. It returns the new key list. Rotation changes
+only the selected environment. Backups include the environment's keys.
+Restoring a backup made before key rotation existed returns the environment
+to the shared key.
+
 In identifier chooser mode, use `login_identifier` instead of `user_id` for
 OIDC authorization, the playground, and SAML sign-in.
 
 Fault writes accept duration strings in `id_token_ttl`, `assertion_ttl`, and
-`clock_skew`, a `break_signature` boolean, a `drop_claims` string array,
+`clock_skew`, a `break_signature` boolean that corrupts the ID token signature
+or every SAML signature, a `drop_claims` string array,
 `token_error`, `saml_status`, and a `tamper` string array. Tamper values for
 both protocols are `wrong_issuer` and `wrong_audience`. OIDC adds
 `unknown_kid`, `alg_none`, and `nonce_mismatch`. SAML adds
 `wrong_destination`, `wrong_recipient`, `in_response_to_mismatch`, and
 `replayed_assertion`, which reuses the newest assertion ID the environment
 sent. Invalid fault values are rejected. Fault scenarios expire after
-15 minutes.
+15 minutes. The `stale-jwks` scenario serves `count` JWKS responses without
+the active signing key.
 
 Traffic, inspections, flow activity, faults, and jobs are in memory. They
 disappear when the app restarts. Traffic retains 100 entries, inspectors retain
