@@ -43,6 +43,10 @@ const (
 	tamperWrongRecipient       tamperFault = "wrong_recipient"
 	tamperInResponseToMismatch tamperFault = "in_response_to_mismatch"
 	tamperReplayedAssertion    tamperFault = "replayed_assertion"
+
+	tamperSignatureWrappingAssertion tamperFault = "xsw_assertion"
+	tamperSignatureWrappingResponse  tamperFault = "xsw_response"
+	tamperNameIDComment              tamperFault = "nameid_comment"
 )
 
 // tamperFaultInfo describes a tamper fault for forms and descriptions.
@@ -62,6 +66,9 @@ var tamperFaults = []tamperFaultInfo{
 	{ID: tamperWrongRecipient, Protocol: "saml", Label: "Wrong recipient"},
 	{ID: tamperInResponseToMismatch, Protocol: "saml", Label: "InResponseTo mismatch"},
 	{ID: tamperReplayedAssertion, Protocol: "saml", Label: "Replayed assertion ID"},
+	{ID: tamperSignatureWrappingAssertion, Protocol: "saml", Label: "Signature wrapping (signed assertion)"},
+	{ID: tamperSignatureWrappingResponse, Protocol: "saml", Label: "Signature wrapping (signed response)"},
+	{ID: tamperNameIDComment, Protocol: "saml", Label: "NameID comment injection"},
 }
 
 func tamperFaultInfoByID(id tamperFault) (tamperFaultInfo, bool) {

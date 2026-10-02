@@ -176,7 +176,11 @@ otherwise valid response. `wrong_issuer` and `wrong_audience` apply to both
 protocols. OIDC adds `unknown_kid`, `alg_none`, and `nonce_mismatch`. SAML
 adds `wrong_destination`, `wrong_recipient`, `in_response_to_mismatch`, and
 `replayed_assertion`. Replay needs an earlier SAML sign-in in the same
-environment.
+environment. SAML also adds `xsw_assertion`, `xsw_response`, and
+`nameid_comment`: forgery faults that keep the genuine signature valid while
+asserting a second directory user's identity. They need another active user,
+refuse assertion encryption, and `xsw_assertion`/`xsw_response` need that part
+signed (set `saml_signing_mode`).
 
 To affect the next incoming protocol flow, `PUT /environments/{ENV_ID}/faults`.
 Read or disarm it with `GET` or `DELETE` on the same path. Disarming returns

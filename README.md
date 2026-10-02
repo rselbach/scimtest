@@ -120,7 +120,13 @@ steps, the authentication design, and release packaging details.
   audience, an unknown signing key ID, an unsigned `alg: none` token, and a
   nonce mismatch. SAML tamper faults cover a wrong issuer, audience,
   destination, or recipient, an `InResponseTo` mismatch, and a replayed
-  assertion ID. The same one-shot effects are available as `fault_*` URL
+  assertion ID. Two XML signature wrapping variants and a `NameID` comment
+  injection keep the genuine IdP signature valid while presenting a different
+  directory user's identity: a safe SP binds the signature to the exact element
+  it processes and reads the whole `NameID` text node, so it rejects all three,
+  while a vulnerable one signs in as the forged user. These forgery faults need
+  a second active directory user, and scimtest still posts only to the
+  configured ACS URL. The same one-shot effects are available as `fault_*` URL
   parameters, such as `fault_tamper=wrong_issuer,alg_none`.
 - **SCIM sync.** Push the directory to your app's SCIM endpoint, reconcile
   drift, import an existing remote directory with a preview, and inspect
