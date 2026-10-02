@@ -203,7 +203,7 @@ func TestAPIAcceptanceSignInProtocols(t *testing.T) {
 	troy := acceptanceUser(t, handler, environment.ID)
 	acceptanceRequest(t, handler, http.MethodPost, base+"/groups", fmt.Sprintf(`{"display_name":"Study Group","member_ids":[%q]}`, troy.ID), http.StatusCreated)
 
-	authorize := acceptanceRequest(t, handler, http.MethodPost, base+"/oidc/authorize", fmt.Sprintf(`{"user_id":%q,"response_type":"code","client_id":"greendale-client","redirect_uri":"http://greendale.test/callback","scope":"openid profile email groups","state":"greendale-state","nonce":"greendale-nonce"}`, troy.ID), http.StatusOK)
+	authorize := acceptanceRequest(t, handler, http.MethodPost, base+"/oidc/authorize", fmt.Sprintf(`{"user_id":%q,"response_type":"code","client_id":"greendale-client","redirect_uri":"http://greendale.test/callback","scope":"openid profile email groups","state":"greendale-state","nonce":"greendale-nonce","acr_values":"https://refeds.org/profile/mfa"}`, troy.ID), http.StatusOK)
 	var authorization struct {
 		Code        string `json:"code"`
 		RedirectURI string `json:"redirect_uri"`
@@ -240,6 +240,8 @@ func TestAPIAcceptanceSignInProtocols(t *testing.T) {
 	require.Equal(t, "troy@greendale.edu", claims["email"])
 	require.Equal(t, "greendale-nonce", claims["nonce"])
 	require.Contains(t, claims["groups"], "Study Group")
+	require.Equal(t, "https://refeds.org/profile/mfa", claims["acr"])
+	require.Equal(t, []any{"pwd", "otp", "mfa"}, claims["amr"])
 
 	req = httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/oidc/greendale/userinfo", nil)
 	req.Header.Set("Authorization", "Bearer "+tokenResponse.AccessToken)
@@ -248,7 +250,8 @@ func TestAPIAcceptanceSignInProtocols(t *testing.T) {
 	require.Equal(t, http.StatusOK, userinfo.Code)
 	require.Contains(t, userinfo.Body.String(), "troy@greendale.edu")
 
-	saml := acceptanceRequest(t, handler, http.MethodPost, base+"/saml/sign-in", fmt.Sprintf(`{"user_id":%q,"relay_state":"study-session"}`, troy.ID), http.StatusOK)
+	acceptanceRequest(t, handler, http.MethodPost, base+"/saml/sign-in", fmt.Sprintf(`{"user_id":%q,"authn_strength":"retina"}`, troy.ID), http.StatusBadRequest)
+	saml := acceptanceRequest(t, handler, http.MethodPost, base+"/saml/sign-in", fmt.Sprintf(`{"user_id":%q,"relay_state":"study-session","authn_strength":"mfa"}`, troy.ID), http.StatusOK)
 	var samlResponse struct {
 		ACSURL       string `json:"acs_url"`
 		SAMLResponse string `json:"saml_response"`
@@ -261,6 +264,7 @@ func TestAPIAcceptanceSignInProtocols(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(assertion), "troy@greendale.edu")
 	require.Contains(t, string(assertion), "SignatureValue")
+	require.Contains(t, string(assertion), "<saml:AuthnContextClassRef>https://refeds.org/profile/mfa</saml:AuthnContextClassRef>")
 
 	for _, endpoint := range []string{"inspections/oidc", "inspections/saml", "flows"} {
 		rec := acceptanceRequest(t, handler, http.MethodGet, base+"/"+endpoint, "", http.StatusOK)

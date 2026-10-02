@@ -158,6 +158,26 @@ The OIDC inspector lists users with live tokens and can revoke one user's
 tokens or all of them, as an administrator would. Refresh tokens last 24
 hours and are kept in memory, so restarting scimtest revokes them.
 
+The chooser's **Sign-in method** sets how the user authenticated: **Password**
+or **Password + MFA**. ID tokens report the method in `acr`, `amr`, and
+`auth_time`. SAML assertions report it in `AuthnContextClassRef` and
+`AuthnInstant`. When an app's `acr_values` or `RequestedAuthnContext` names a
+recognized value, the chooser preselects the matching method and the response
+echoes that value. Password matches the OASIS `PasswordProtectedTransport` and
+`Password` classes and REFEDS SFA. Password + MFA matches REFEDS MFA, OpenID
+PAPE `multi-factor`, and Microsoft `multipleauthn`. Discovery lists these
+values in `acr_values_supported`. Other values leave Password selected.
+
+scimtest remembers each environment's last sign-in in a browser cookie. The
+chooser's **Reuse session** button answers with that sign-in's original user,
+method, and time, so the app receives an older `auth_time` or `AuthnInstant`.
+`prompt=login`, `max_age=0`, and SAML `ForceAuthn` hide the button and require
+a fresh sign-in. So does a `max_age` shorter than the remembered sign-in's age.
+With `prompt=none`, authorize skips the chooser and answers from the remembered
+sign-in. If there is none, or it is older than `max_age`, authorize redirects
+with `login_required`. A refreshed ID token keeps the original `auth_time`,
+`acr`, and `amr`.
+
 Paste the service provider's RSA encryption certificate into SAML setup to
 wrap that signed assertion in `EncryptedAssertion` (AES-128-GCM, AES-192-GCM,
 or AES-256-GCM, RSA-OAEP). AES-256-GCM is the default.

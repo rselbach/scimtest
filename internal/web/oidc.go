@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -28,6 +29,7 @@ type authCode struct {
 	Nonce         string
 	Scope         string
 	CodeChallenge string
+	Authn         authnStatement
 	ExpiresAt     time.Time
 	Faults        faultOptions
 	Redeeming     bool
@@ -38,12 +40,14 @@ type authCode struct {
 const refreshTokenLifetime = 24 * time.Hour
 
 // refreshToken keeps the grant an offline_access authorization started, so a
-// refresh can re-check the user and issue tokens for the original scope.
+// refresh can re-check the user and issue tokens for the original scope and
+// sign-in.
 type refreshToken struct {
 	AppSlug   string
 	ClientID  string
 	UserID    string
 	Scope     string
+	Authn     authnStatement
 	ExpiresAt time.Time
 }
 
@@ -81,6 +85,7 @@ func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 		"id_token_signing_alg_values_supported": []string{"RS256"},
 		"scopes_supported":                      scopes,
 		"claims_supported":                      oidcClaimsSupported(app),
+		"acr_values_supported":                  supportedAuthnContexts(),
 		"code_challenge_methods_supported":      []string{"S256"},
 		"token_endpoint_auth_methods_supported": authMethods,
 	})
@@ -136,7 +141,8 @@ func (a *webApp) serveOIDCAuthorize(w http.ResponseWriter, r *http.Request, post
 		a.failFlow(w, app, "oidc", "authorize", http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := validateAuthorizeRequest(app, values); err != nil {
+	request, err := parseAuthorizeRequest(app, values)
+	if err != nil {
 		a.failAuthorize(w, r, app, values, err)
 		return
 	}
@@ -144,26 +150,41 @@ func (a *webApp) serveOIDCAuthorize(w http.ResponseWriter, r *http.Request, post
 		a.failAuthorize(w, r, app, values, &authorizeError{code: "access_denied", description: "the user denied the request"})
 		return
 	}
+	now := time.Now()
+	if request.Passive {
+		found, session, ok := rememberedSignIn(r, state.Users, app.Slug)
+		if !ok {
+			a.failAuthorize(w, r, app, values, &authorizeError{code: "login_required", description: "prompt=none requires a remembered sign-in"})
+			return
+		}
+		if reason := request.reuseBlocker(session, now); reason != "" {
+			a.failAuthorize(w, r, app, values, &authorizeError{code: "login_required", description: "the remembered sign-in does not satisfy " + reason})
+			return
+		}
+		a.issueOIDCCode(w, r, app, values, found, session, request)
+		return
+	}
 	if !post && !chooserSelectionProvided(app, values) {
 		data := newChooserData("OIDC sign-in", app, publicRequestURI(r), state.Users, loginHintFromValues(values), hiddenValues(values), "Create an active user before starting an OIDC flow.")
-		a.applyRememberedChooserUser(&data, r, state, app)
+		data.applySignIn(r, state.Users, app.Slug, values, request, now)
 		renderChooser(w, data)
 		return
 	}
-	a.issueOIDCCode(w, r, state, app, values)
-}
-
-// issueOIDCCode mints an authorization code for the selected user and redirects
-// to the RP. It is shared by the chooser POST and the user_id GET shortcut.
-func (a *webApp) issueOIDCCode(w http.ResponseWriter, r *http.Request, state appState, app app, values url.Values) {
-	redirectURI, err := parseOIDCRedirectURI(values.Get("redirect_uri"))
+	found, session, err := chooserSignIn(r, state.Users, app, values, request, now)
 	if err != nil {
 		a.failFlow(w, app, "oidc", "authorize", http.StatusBadRequest, err.Error())
 		return
 	}
-	user, ok := chooserUser(state.Users, app, values)
-	if !ok || !user.Active || user.Deleted {
-		a.failFlow(w, app, "oidc", "authorize", http.StatusBadRequest, "active user is required")
+	a.issueOIDCCode(w, r, app, values, found, session, request)
+}
+
+// issueOIDCCode mints an authorization code for a sign-in and redirects to the
+// RP. It is shared by the chooser POST, the user_id GET shortcut, and
+// prompt=none.
+func (a *webApp) issueOIDCCode(w http.ResponseWriter, r *http.Request, app app, values url.Values, user user, session signIn, request authnRequest) {
+	redirectURI, err := parseOIDCRedirectURI(values.Get("redirect_uri"))
+	if err != nil {
+		a.failFlow(w, app, "oidc", "authorize", http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -185,6 +206,7 @@ func (a *webApp) issueOIDCCode(w http.ResponseWriter, r *http.Request, state app
 		Nonce:         values.Get("nonce"),
 		Scope:         values.Get("scope"),
 		CodeChallenge: values.Get("code_challenge"),
+		Authn:         session.statement(request.Contexts),
 		ExpiresAt:     now.Add(5 * time.Minute),
 		Faults:        a.flowFaults(app.Slug, values),
 	}
@@ -194,7 +216,7 @@ func (a *webApp) issueOIDCCode(w http.ResponseWriter, r *http.Request, state app
 		return
 	}
 	a.recordFlowEvent(app.Slug, "oidc", "authorize", "ok", userLabel(user), "Authorization code issued to "+authCode.ClientID)
-	rememberChooserUser(w, app.Slug, user.ID)
+	rememberSignIn(w, app.Slug, session)
 
 	query := redirectURI.Query()
 	query.Set("code", code)
@@ -323,6 +345,7 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 	claims["aud"] = app.OIDCClientID
 	claims["iat"] = now.Unix()
 	claims["exp"] = now.Add(time.Hour).Unix()
+	code.Authn.addClaims(claims, code.Faults.ClockSkew)
 	if code.Nonce != "" {
 		claims["nonce"] = code.Nonce
 	}
@@ -360,7 +383,7 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 	}
 	tokenDetail := "ID and access tokens issued to " + app.OIDCClientID
 	if hasOIDCScope(code.Scope, "offline_access") {
-		refresh, err := a.issueRefreshToken(refreshToken{AppSlug: app.Slug, ClientID: code.ClientID, UserID: user.ID, Scope: code.Scope}, now)
+		refresh, err := a.issueRefreshToken(refreshToken{AppSlug: app.Slug, ClientID: code.ClientID, UserID: user.ID, Scope: code.Scope, Authn: code.Authn}, now)
 		if err != nil {
 			a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
 			return
@@ -420,12 +443,14 @@ func (a *webApp) refreshOIDCTokens(w http.ResponseWriter, r *http.Request, state
 		return
 	}
 
-	// OIDC Core section 12.2: same iss, sub, and aud, a new iat, and no nonce.
+	// OIDC Core section 12.2: same iss, sub, and aud, a new iat, the original
+	// auth_time, and no nonce.
 	claims := userClaims(state, app, user, scope)
 	claims["iss"] = oidcIssuer(a.effectiveIDPBaseURL(r, state), app)
 	claims["aud"] = app.OIDCClientID
 	claims["iat"] = now.Unix()
 	claims["exp"] = now.Add(time.Hour).Unix()
+	grant.Authn.addClaims(claims, 0)
 	idToken, err := a.signJWT(claims, faultOptions{})
 	if err != nil {
 		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
@@ -648,28 +673,53 @@ type authorizeError struct {
 
 func (e *authorizeError) Error() string { return e.description }
 
-// validateAuthorizeRequest checks the authorize parameters whose failures
-// are delivered to the already-validated redirect_uri.
-func validateAuthorizeRequest(app app, values url.Values) error {
+// parseAuthorizeRequest checks the authorize parameters whose failures are
+// delivered to the already-validated redirect_uri, and returns what the
+// request asks of the sign-in.
+func parseAuthorizeRequest(app app, values url.Values) (authnRequest, error) {
 	if values.Get("response_type") != "code" {
-		return &authorizeError{code: "unsupported_response_type", description: "response_type must be code"}
+		return authnRequest{}, &authorizeError{code: "unsupported_response_type", description: "response_type must be code"}
 	}
 	if !strings.Contains(" "+values.Get("scope")+" ", " openid ") {
-		return &authorizeError{code: "invalid_scope", description: "scope must include openid"}
+		return authnRequest{}, &authorizeError{code: "invalid_scope", description: "scope must include openid"}
 	}
 	challenge := values.Get("code_challenge")
 	method := values.Get("code_challenge_method")
 	switch {
 	case app.OIDCPublicClient && challenge == "":
-		return &authorizeError{code: "invalid_request", description: "public clients must use PKCE"}
+		return authnRequest{}, &authorizeError{code: "invalid_request", description: "public clients must use PKCE"}
 	case challenge != "" && method != "S256":
-		return &authorizeError{code: "invalid_request", description: "code_challenge_method must be S256"}
+		return authnRequest{}, &authorizeError{code: "invalid_request", description: "code_challenge_method must be S256"}
 	case challenge != "" && len(challenge) != 43:
-		return &authorizeError{code: "invalid_request", description: "code_challenge must be a valid S256 challenge"}
+		return authnRequest{}, &authorizeError{code: "invalid_request", description: "code_challenge must be a valid S256 challenge"}
 	case challenge == "" && method != "":
-		return &authorizeError{code: "invalid_request", description: "code_challenge is required when code_challenge_method is set"}
+		return authnRequest{}, &authorizeError{code: "invalid_request", description: "code_challenge is required when code_challenge_method is set"}
 	}
-	return nil
+
+	request := authnRequest{Contexts: strings.Fields(values.Get("acr_values"))}
+	// consent and select_account need nothing extra: the chooser always
+	// shows the account list and the Deny button.
+	prompts := strings.Fields(values.Get("prompt"))
+	switch {
+	case slices.Contains(prompts, "none") && len(prompts) > 1:
+		return authnRequest{}, &authorizeError{code: "invalid_request", description: "prompt=none cannot be combined with other prompt values"}
+	case slices.Contains(prompts, "none"):
+		request.Passive = true
+	case slices.Contains(prompts, "login"):
+		request.FreshReason = "prompt=login"
+	}
+	if raw := values.Get("max_age"); raw != "" {
+		seconds, err := strconv.ParseUint(raw, 10, 32)
+		if err != nil {
+			return authnRequest{}, &authorizeError{code: "invalid_request", description: "max_age must be a non-negative number of seconds"}
+		}
+		request.MaxAge = time.Duration(seconds) * time.Second
+		// OIDC Core section 3.1.2.1: max_age=0 is equivalent to prompt=login.
+		if seconds == 0 && request.FreshReason == "" {
+			request.FreshReason = "max_age=0"
+		}
+	}
+	return request, nil
 }
 
 // redirectAuthorizeError delivers an authorize failure to the RP on the
@@ -772,6 +822,7 @@ func oidcClaimsSupported(app app) []string {
 	return []string{
 		"sub", mappings.Name, mappings.GivenName, mappings.FamilyName,
 		mappings.Username, mappings.Email, "email_verified", mappings.Groups,
+		"auth_time", "acr", "amr",
 	}
 }
 

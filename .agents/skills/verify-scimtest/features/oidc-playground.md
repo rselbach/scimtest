@@ -9,6 +9,10 @@ userinfo.
 - `playground-card-entry` starts from the environment action card.
 - `playground-inspector-entry` starts from OIDC Inspector.
 - `playground-chooser` lists active users and signs in as Troy Barnes.
+- `playground-sign-in-method` sends the chooser's sign-in method as `acr` and
+  `amr`.
+- `playground-session-reuse` offers the remembered sign-in on the next run and
+  keeps its `auth_time`.
 - `playground-result` shows the authorization and token results.
 - `playground-inspector` records the completed flow.
 
@@ -37,12 +41,21 @@ Preconditions:
   users`. It lists Troy Barnes and omits inactive Señor Chang. Capture
   `oidc-playground/chooser.aria.txt` and a screenshot.
 - **Choose Troy.** Check the radio whose accessible name starts with `Troy
-  Barnes`, then choose `Continue` and expect navigation.
+  Barnes`. The combobox `Sign-in method` shows `Password` selected. Select
+  `Password + MFA`, then choose `Continue` and expect navigation.
 - **Inspect the result.** The page heading is `OIDC playground`. It has headings
   `Authorization response`, `Token response 200 OK`, `Decoded ID token`, and
   `Userinfo`. Claims include name `Troy Barnes`, email
   `troy.barnes@greendale.edu`, username `tbarnes`, and groups `Study Group` and
-  `Air Conditioning Repair Annex`. Capture the result DOM and screenshot.
+  `Air Conditioning Repair Annex`. They also include `acr`
+  `https://refeds.org/profile/mfa`, `amr` `pwd`, `otp`, and `mfa`, and an
+  `auth_time`. Capture the result DOM and screenshot.
+- **Refresh.** Choose `Refresh tokens`. The refreshed claims keep the same
+  `auth_time` and `acr` with a later `iat`.
+- **Reuse the session.** Start the playground again in the same tab. The
+  chooser header shows `Signed in as Troy Barnes`, `Password + MFA`, the
+  session age, and button `Reuse session`. Choose it. The new claims keep the
+  first run's `auth_time`.
 - **Confirm the inspector.** Choose `Flow inspector`. The OIDC inspector shows
   the completed Troy flow and its successful hops. Capture it as the second
   view.
@@ -59,5 +72,9 @@ Preconditions:
   Stay in the same tab through the chooser and callback.
 - A discovery response or readiness check does not prove the playground. The
   proof requires chooser, code exchange, decoded token, and userinfo.
+- After any sign-in, the chooser preselects that user and offers `Reuse
+  session`. Use a fresh browser profile to see the first-run chooser.
+- Adding `prompt=login` or a short `max_age` to an authorize URL replaces the
+  `Reuse session` card with `requires a fresh sign-in (...)`.
 - Token artifacts contain short-lived credentials. Keep them in the ignored
   artifact directory and do not paste the raw token into chat.

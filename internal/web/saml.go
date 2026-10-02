@@ -40,12 +40,15 @@ type samlAuthnRequest struct {
 	Destination     string
 	ACSURL          string
 	ProtocolBinding string
+	Authn           authnRequest
 }
 
 type samlResponseContext struct {
 	ACSURL       string
 	InResponseTo string
 	AssertionID  string // generated when empty
+	Requested    authnRequest
+	Authn        authnStatement
 }
 
 func (a *webApp) handleSAMLMetadata(w http.ResponseWriter, r *http.Request) {
@@ -126,25 +129,27 @@ func (a *webApp) serveSAMLSSO(w http.ResponseWriter, r *http.Request, post bool)
 		a.denySAML(w, r, app, baseURL, responseContext, values)
 		return
 	}
+	now := time.Now()
 	needsChooser := !chooserSelectionProvided(app, values) &&
 		(!post || values.Get("SAMLRequest") != "" || values.Get("login_hint") != "" || values.Get("RelayState") != "")
 	if needsChooser {
 		data := newChooserData("SAML sign-in", app, publicRequestURI(r), state.Users, loginHintFromValues(values), hiddenValues(values), "Create an active user before starting a SAML flow.")
-		a.applyRememberedChooserUser(&data, r, state, app)
+		data.applySignIn(r, state.Users, app.Slug, values, responseContext.Requested, now)
 		renderChooser(w, data)
 		return
 	}
-	a.completeSAMLSSO(w, r, state, app, baseURL, responseContext, values)
-}
-
-// completeSAMLSSO signs and posts back a SAML response for the selected user.
-// It is shared by the chooser POST and the user_id GET shortcut.
-func (a *webApp) completeSAMLSSO(w http.ResponseWriter, r *http.Request, state appState, app app, baseURL string, responseContext samlResponseContext, values url.Values) {
-	user, ok := chooserUser(state.Users, app, values)
-	if !ok || !user.Active || user.Deleted {
-		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, "active user is required")
+	found, session, err := chooserSignIn(r, state.Users, app, values, responseContext.Requested, now)
+	if err != nil {
+		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
 		return
 	}
+	a.completeSAMLSSO(w, r, state, app, baseURL, responseContext, values, found, session)
+}
+
+// completeSAMLSSO signs and posts back a SAML response for a sign-in. It is
+// shared by the chooser POST and the user_id GET shortcut.
+func (a *webApp) completeSAMLSSO(w http.ResponseWriter, r *http.Request, state appState, app app, baseURL string, responseContext samlResponseContext, values url.Values, user user, session signIn) {
+	responseContext.Authn = session.statement(responseContext.Requested.Contexts)
 	encryption, err := samlAssertionEncryptionForApp(app)
 	if err != nil {
 		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
@@ -168,7 +173,7 @@ func (a *webApp) completeSAMLSSO(w http.ResponseWriter, r *http.Request, state a
 		ssoDetail = "Response posted to " + responseContext.ACSURL + " (faults injected)"
 	}
 	a.recordFlowEvent(app.Slug, "saml", "sso", "ok", userLabel(user), ssoDetail)
-	rememberChooserUser(w, app.Slug, user.ID)
+	rememberSignIn(w, app.Slug, session)
 	if wantsAPIProtocolResponse(r) {
 		writeJSON(w, map[string]string{"acs_url": responseContext.ACSURL, "saml_response": encodedResponse, "relay_state": values.Get("RelayState")})
 		return
@@ -256,6 +261,7 @@ func resolveSAMLResponseContext(r *http.Request, values url.Values, app app, bas
 			return samlResponseContext{}, fmt.Errorf("SAML AuthnRequest must request the HTTP-POST response binding")
 		}
 		context.InResponseTo = request.ID
+		context.Requested = request.Authn
 	}
 	return context, nil
 }
@@ -269,12 +275,27 @@ func parseSAMLAuthnRequest(encodedRequest string) (samlAuthnRequest, error) {
 	if elementLocalName(root) != "AuthnRequest" || root.NamespaceURI() != samlProtocolXMLNS {
 		return samlAuthnRequest{}, fmt.Errorf("SAMLRequest must contain an AuthnRequest")
 	}
+	authn := authnRequest{}
+	if isTruthy(root.SelectAttrValue("ForceAuthn", "")) {
+		authn.FreshReason = "ForceAuthn"
+	}
+	// The Comparison attribute is ignored: the first recognized class
+	// preselects its strength.
+	if requested := childElementByLocalName(root, "RequestedAuthnContext"); requested != nil {
+		for _, child := range requested.ChildElements() {
+			text := strings.TrimSpace(child.Text())
+			if elementLocalName(child) == "AuthnContextClassRef" && text != "" {
+				authn.Contexts = append(authn.Contexts, text)
+			}
+		}
+	}
 	return samlAuthnRequest{
 		ID:              strings.TrimSpace(root.SelectAttrValue("ID", "")),
 		Issuer:          childElementTextByLocalName(root, "Issuer"),
 		Destination:     strings.TrimSpace(root.SelectAttrValue("Destination", "")),
 		ACSURL:          strings.TrimSpace(root.SelectAttrValue("AssertionConsumerServiceURL", "")),
 		ProtocolBinding: strings.TrimSpace(root.SelectAttrValue("ProtocolBinding", "")),
+		Authn:           authn,
 	}, nil
 }
 
@@ -589,7 +610,7 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user, respo
       </saml:SubjectConfirmation>
     </saml:Subject>
     <saml:Conditions NotBefore="%s" NotOnOrAfter="%s"><saml:AudienceRestriction><saml:Audience>%s</saml:Audience></saml:AudienceRestriction></saml:Conditions>
-    <saml:AuthnStatement AuthnInstant="%s"><saml:AuthnContext><saml:AuthnContextClassRef>urn:oasis:names:tc:SAML:2.0:ac:classes:PasswordProtectedTransport</saml:AuthnContextClassRef></saml:AuthnContext></saml:AuthnStatement>
+    <saml:AuthnStatement AuthnInstant="%s"><saml:AuthnContext><saml:AuthnContextClassRef>%s</saml:AuthnContextClassRef></saml:AuthnContext></saml:AuthnStatement>
     <saml:AttributeStatement>
       %s
     </saml:AttributeStatement>
@@ -599,7 +620,7 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user, respo
 		xmlEscape(assertionID), now.Format(time.RFC3339), xmlEscape(issuer),
 		xmlEscape(nameIDFormat), xmlEscape(nameIDValue), subjectInResponseTo, notOnOrAfter.Format(time.RFC3339), xmlEscape(recipient),
 		notBefore.Format(time.RFC3339), notOnOrAfter.Format(time.RFC3339), xmlEscape(audience),
-		now.Format(time.RFC3339), attributeStatement), nil
+		responseContext.Authn.Time.UTC().Add(faults.ClockSkew).Format(time.RFC3339), xmlEscape(responseContext.Authn.Context), attributeStatement), nil
 }
 
 func samlAttributeStatement(state appState, app app, user user) string {

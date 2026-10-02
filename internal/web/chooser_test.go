@@ -86,12 +86,14 @@ func TestChooserRemembersLastUser(t *testing.T) {
 
 	var rememberCookie *http.Cookie
 	for _, c := range postRec.Result().Cookies() {
-		if c.Name == chooserCookieName("example") {
+		if c.Name == signInCookieName("example") {
 			rememberCookie = c
 		}
 	}
 	r.NotNil(rememberCookie)
-	r.Equal("usr-1", rememberCookie.Value)
+	remembered, err := url.ParseQuery(rememberCookie.Value)
+	r.NoError(err)
+	r.Equal("usr-1", remembered.Get("user"))
 
 	// The next chooser render pre-checks the remembered user.
 	getReq := httptest.NewRequest(http.MethodGet, "/oidc/example/authorize?response_type=code&client_id=example-client&redirect_uri=http://client.test/callback&scope=openid", nil)
@@ -100,4 +102,35 @@ func TestChooserRemembersLastUser(t *testing.T) {
 	svc.routes().ServeHTTP(getRec, getReq)
 	r.Equal(http.StatusOK, getRec.Code)
 	r.Contains(getRec.Body.String(), `value="usr-1" required checked`)
+}
+
+func TestChooserContinueIsDefaultSubmitter(t *testing.T) {
+	for mode, data := range map[string]chooserData{
+		"list":       {Users: []user{{ID: "usr-troy", Username: "tbarnes", Active: true}}},
+		"identifier": {IdentifierOnly: true},
+	} {
+		t.Run(mode, func(t *testing.T) {
+			for name, session := range map[string]*chooserSession{
+				"without session": nil,
+				"with session":    {User: "Troy Barnes", Strength: "Password", Age: "1h"},
+			} {
+				t.Run(name, func(t *testing.T) {
+					data.Session = session
+					data.Strengths = authnStrengths
+					data.Hidden = map[string][]string{"state": {"study&group", "greendale"}}
+					rec := httptest.NewRecorder()
+					renderChooser(rec, data)
+					form := chooserSubmitForm(t, rec.Body.String(), "Continue")
+					require.Equal(t, []string{"study&group", "greendale"}, form["state"])
+					require.Empty(t, form.Get("continue_session"))
+					require.Empty(t, form.Get("deny"))
+					if session != nil {
+						reuse := chooserSubmitForm(t, rec.Body.String(), "Reuse session")
+						require.Equal(t, form["state"], reuse["state"])
+						require.Equal(t, "1", reuse.Get("continue_session"))
+					}
+				})
+			}
+		})
+	}
 }
