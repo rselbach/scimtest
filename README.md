@@ -96,7 +96,7 @@ steps, the authentication design, and release packaging details.
   selector in the top bar sets the context for the whole admin UI.
 - **OIDC playground.** A built-in relying party that runs the full
   authorization-code exchange and shows the token response, decoded and
-  raw ID token, and userinfo on one page. It requests `offline_access`, so
+  raw ID token, decoded JWT access token, and userinfo on one page. It requests `offline_access`, so
   the page can also redeem the refresh token, optionally with a narrower
   scope, and show the refreshed claims beside the ones they replace.
 - **Flow inspectors.** Per-environment OIDC and SAML inspectors keep the
@@ -170,6 +170,16 @@ it. It fails with `invalid_grant` once the user is deactivated or deleted.
 The OIDC inspector lists users with live tokens and can revoke one user's
 tokens or all of them, as an administrator would. Refresh tokens last 24
 hours and are kept in memory, so restarting scimtest revokes them.
+
+Access tokens are opaque by default. Turn on **Issue JWT access tokens** in
+OIDC setup to receive RFC 9068 JWT access tokens instead, so an API can
+validate them locally against the JWKS. They carry the header `typ: at+jwt`
+and the claims `iss`, `sub`, `aud`, `client_id`, `scope`, `iat`, `exp`,
+`jti`, `auth_time`, `acr`, and `amr`. `aud` is the **Access token audience**,
+or the client ID when that field is empty. Code exchanges and refreshes issue
+the same format, and userinfo accepts it. Tamper faults, broken signatures,
+and clock skew apply to JWT access tokens as they do to ID tokens. The ID token
+lifetime, dropped claims, and nonce mismatch faults change only the ID token.
 
 The chooser's **Sign-in method** sets how the user authenticated: **Password**
 or **Password + MFA**. ID tokens report the method in `acr`, `amr`, and

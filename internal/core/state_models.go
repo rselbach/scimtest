@@ -170,6 +170,8 @@ type App struct {
 	OIDCPublicClient        bool                  `json:"oidc_public_client,omitempty"`
 	OIDCRedirectURIs        []string              `json:"oidc_redirect_uris,omitempty"`
 	AllowAnyOIDCRedirect    bool                  `json:"allow_any_oidc_redirect,omitempty"`
+	OIDCJWTAccessTokens     bool                  `json:"oidc_jwt_access_tokens,omitempty"`
+	OIDCAccessTokenAudience string                `json:"oidc_access_token_audience,omitempty"`
 	SAMLEntityID            string                `json:"saml_entity_id,omitempty"`
 	SAMLACSURL              string                `json:"saml_acs_url,omitempty"`
 	SAMLAudience            string                `json:"saml_audience,omitempty"`

@@ -1814,3 +1814,35 @@ func testRSAPEMCertificate(t *testing.T, notBefore, notAfter time.Time) string {
 	require.NoError(t, err)
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 }
+
+func TestSchemaMigrationDefaultsJWTAccessTokens(t *testing.T) {
+	r := require.New(t)
+	path := filepath.Join(t.TempDir(), "state.db")
+	t.Setenv("SCIMTEST_STATE_FILE", path)
+	r.NoError(SaveState(AppState{Apps: []App{{ID: "greendale", Name: "Greendale", Slug: "greendale", Protocol: "oidc"}}}))
+	db, err := openStateDB()
+	r.NoError(err)
+	_, err = db.Exec(`ALTER TABLE apps DROP COLUMN oidc_jwt_access_tokens`)
+	r.NoError(err)
+	_, err = db.Exec(`ALTER TABLE apps DROP COLUMN oidc_access_token_audience`)
+	r.NoError(err)
+	_, err = db.Exec(`PRAGMA user_version = 3`)
+	r.NoError(err)
+	r.NoError(resetStateDBCache())
+	state, err := LoadState()
+	r.NoError(err)
+	r.Len(state.Apps, 1)
+	r.False(state.Apps[0].OIDCJWTAccessTokens)
+	r.Empty(state.Apps[0].OIDCAccessTokenAudience)
+	state.Apps[0].OIDCJWTAccessTokens = true
+	state.Apps[0].OIDCAccessTokenAudience = "https://api.greendale.edu"
+	r.NoError(SaveState(state))
+	loaded, err := LoadState()
+	r.NoError(err)
+	r.True(loaded.Apps[0].OIDCJWTAccessTokens)
+	r.Equal("https://api.greendale.edu", loaded.Apps[0].OIDCAccessTokenAudience)
+	entries, err := os.ReadDir(filepath.Join(filepath.Dir(path), "backups"))
+	r.NoError(err)
+	r.Len(entries, 1)
+	r.Contains(entries[0].Name(), "pre-migrate-v003-")
+}

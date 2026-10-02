@@ -640,7 +640,7 @@ func openStateDBAt(path string) (*sql.DB, error) {
 // is initialized. Bump it whenever initStateDB's schema or migrations
 // change, so older builds refuse newer state files instead of silently
 // dropping columns they do not know.
-const currentSchemaVersion = 3
+const currentSchemaVersion = 4
 
 // maxPreMigrationCopies bounds the pre-migration snapshots kept next to the
 // state database.
@@ -819,7 +819,9 @@ func initStateDB(db *sql.DB) error {
 			scim_filter_supported INTEGER NOT NULL DEFAULT 0,
 			oidc_claim_mappings TEXT NOT NULL DEFAULT '',
 			saml_attribute_mappings TEXT NOT NULL DEFAULT '',
-			chooser_mode TEXT NOT NULL DEFAULT 'list'
+			chooser_mode TEXT NOT NULL DEFAULT 'list',
+			oidc_jwt_access_tokens INTEGER NOT NULL DEFAULT 0,
+			oidc_access_token_audience TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE TABLE IF NOT EXISTS app_user_sync (
 			app_id TEXT NOT NULL,
@@ -901,6 +903,8 @@ func initStateDB(db *sql.DB) error {
 		`ALTER TABLE apps ADD COLUMN saml_encryption_certificate_pem TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE apps ADD COLUMN saml_encryption_algorithm TEXT NOT NULL DEFAULT 'aes256-gcm'`,
 		`ALTER TABLE apps ADD COLUMN saml_signing_mode TEXT NOT NULL DEFAULT 'assertion'`,
+		`ALTER TABLE apps ADD COLUMN oidc_jwt_access_tokens INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE apps ADD COLUMN oidc_access_token_audience TEXT NOT NULL DEFAULT ''`,
 	}
 	for _, migration := range migrations {
 		if _, err := db.Exec(migration); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -1418,7 +1422,7 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 		return AppState{}, fmt.Errorf("iterate sqlite group member rows: %w", err)
 	}
 
-	appRows, err := db.Query(`SELECT id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, saml_verify_requests, saml_request_certificate_pem, saml_encryption_certificate_pem, saml_encryption_algorithm, saml_signing_mode, include_groups_claim, allow_any_oidc_redirect, scim_enabled, scim_base_url, scim_bearer_token, scim_auto_open_trace, scim_capabilities_known, scim_patch_supported, scim_filter_supported, oidc_claim_mappings, saml_attribute_mappings, chooser_mode FROM apps WHERE environment_id = ? ORDER BY rowid`, environmentID)
+	appRows, err := db.Query(`SELECT id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, saml_verify_requests, saml_request_certificate_pem, saml_encryption_certificate_pem, saml_encryption_algorithm, saml_signing_mode, include_groups_claim, allow_any_oidc_redirect, scim_enabled, scim_base_url, scim_bearer_token, scim_auto_open_trace, scim_capabilities_known, scim_patch_supported, scim_filter_supported, oidc_claim_mappings, saml_attribute_mappings, chooser_mode, oidc_jwt_access_tokens, oidc_access_token_audience FROM apps WHERE environment_id = ? ORDER BY rowid`, environmentID)
 	if err != nil {
 		return AppState{}, fmt.Errorf("load apps from sqlite: %w", err)
 	}
@@ -1438,12 +1442,14 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 		var scimFilterSupported int
 		var oidcClaimMappings string
 		var samlAttributeMappings string
-		if err := appRows.Scan(&app.ID, &app.Name, &app.Slug, &app.Protocol, &app.OIDCClientID, &app.OIDCClientSecret, &publicClient, &redirectURIs, &app.SAMLEntityID, &app.SAMLACSURL, &app.SAMLAudience, &app.SAMLNameIDField, &app.SAMLNameIDFormat, &app.SAMLEmailAttributeName, &legacyVerifySAMLRequests, &app.SAMLRequestCertPEM, &app.SAMLEncryptionCertPEM, &app.SAMLEncryptionAlgorithm, &app.SAMLSigningMode, &includeGroups, &allowAnyRedirect, &scimEnabled, &app.SCIMBaseURL, &app.SCIMBearerToken, &scimAutoOpenTrace, &scimCapabilitiesKnown, &scimPatchSupported, &scimFilterSupported, &oidcClaimMappings, &samlAttributeMappings, &app.ChooserMode); err != nil {
+		var jwtAccessTokens int
+		if err := appRows.Scan(&app.ID, &app.Name, &app.Slug, &app.Protocol, &app.OIDCClientID, &app.OIDCClientSecret, &publicClient, &redirectURIs, &app.SAMLEntityID, &app.SAMLACSURL, &app.SAMLAudience, &app.SAMLNameIDField, &app.SAMLNameIDFormat, &app.SAMLEmailAttributeName, &legacyVerifySAMLRequests, &app.SAMLRequestCertPEM, &app.SAMLEncryptionCertPEM, &app.SAMLEncryptionAlgorithm, &app.SAMLSigningMode, &includeGroups, &allowAnyRedirect, &scimEnabled, &app.SCIMBaseURL, &app.SCIMBearerToken, &scimAutoOpenTrace, &scimCapabilitiesKnown, &scimPatchSupported, &scimFilterSupported, &oidcClaimMappings, &samlAttributeMappings, &app.ChooserMode, &jwtAccessTokens, &app.OIDCAccessTokenAudience); err != nil {
 			return AppState{}, fmt.Errorf("scan sqlite app row: %w", err)
 		}
 		app.OIDCRedirectURIs = Lines(redirectURIs)
 		app.IncludeGroupsClaim = includeGroups != 0
 		app.AllowAnyOIDCRedirect = allowAnyRedirect != 0
+		app.OIDCJWTAccessTokens = jwtAccessTokens != 0
 		app.OIDCPublicClient = publicClient != 0
 		app.SCIMEnabled = scimEnabled != 0
 		app.SCIMAutoOpenTrace = scimAutoOpenTrace != 0
@@ -1790,7 +1796,7 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 		}
 	}
 
-	appStmt, err := tx.Prepare(`INSERT INTO apps(id, environment_id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, saml_verify_requests, saml_request_certificate_pem, saml_encryption_certificate_pem, saml_encryption_algorithm, saml_signing_mode, include_groups_claim, allow_any_oidc_redirect, scim_enabled, scim_base_url, scim_bearer_token, scim_auto_open_trace, scim_capabilities_known, scim_patch_supported, scim_filter_supported, oidc_claim_mappings, saml_attribute_mappings, chooser_mode) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET environment_id = excluded.environment_id, name = excluded.name, slug = excluded.slug, protocol = excluded.protocol, oidc_client_id = excluded.oidc_client_id, oidc_client_secret = excluded.oidc_client_secret, oidc_public_client = excluded.oidc_public_client, oidc_redirect_uris = excluded.oidc_redirect_uris, saml_entity_id = excluded.saml_entity_id, saml_acs_url = excluded.saml_acs_url, saml_audience = excluded.saml_audience, saml_name_id_field = excluded.saml_name_id_field, saml_name_id_format = excluded.saml_name_id_format, saml_email_attribute_name = excluded.saml_email_attribute_name, saml_verify_requests = excluded.saml_verify_requests, saml_request_certificate_pem = excluded.saml_request_certificate_pem, saml_encryption_certificate_pem = excluded.saml_encryption_certificate_pem, saml_encryption_algorithm = excluded.saml_encryption_algorithm, saml_signing_mode = excluded.saml_signing_mode, include_groups_claim = excluded.include_groups_claim, allow_any_oidc_redirect = excluded.allow_any_oidc_redirect, scim_enabled = excluded.scim_enabled, scim_base_url = excluded.scim_base_url, scim_bearer_token = excluded.scim_bearer_token, scim_auto_open_trace = excluded.scim_auto_open_trace, scim_capabilities_known = excluded.scim_capabilities_known, scim_patch_supported = excluded.scim_patch_supported, scim_filter_supported = excluded.scim_filter_supported, oidc_claim_mappings = excluded.oidc_claim_mappings, saml_attribute_mappings = excluded.saml_attribute_mappings, chooser_mode = excluded.chooser_mode`)
+	appStmt, err := tx.Prepare(`INSERT INTO apps(id, environment_id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, saml_verify_requests, saml_request_certificate_pem, saml_encryption_certificate_pem, saml_encryption_algorithm, saml_signing_mode, include_groups_claim, allow_any_oidc_redirect, scim_enabled, scim_base_url, scim_bearer_token, scim_auto_open_trace, scim_capabilities_known, scim_patch_supported, scim_filter_supported, oidc_claim_mappings, saml_attribute_mappings, chooser_mode, oidc_jwt_access_tokens, oidc_access_token_audience) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET environment_id = excluded.environment_id, name = excluded.name, slug = excluded.slug, protocol = excluded.protocol, oidc_client_id = excluded.oidc_client_id, oidc_client_secret = excluded.oidc_client_secret, oidc_public_client = excluded.oidc_public_client, oidc_redirect_uris = excluded.oidc_redirect_uris, saml_entity_id = excluded.saml_entity_id, saml_acs_url = excluded.saml_acs_url, saml_audience = excluded.saml_audience, saml_name_id_field = excluded.saml_name_id_field, saml_name_id_format = excluded.saml_name_id_format, saml_email_attribute_name = excluded.saml_email_attribute_name, saml_verify_requests = excluded.saml_verify_requests, saml_request_certificate_pem = excluded.saml_request_certificate_pem, saml_encryption_certificate_pem = excluded.saml_encryption_certificate_pem, saml_encryption_algorithm = excluded.saml_encryption_algorithm, saml_signing_mode = excluded.saml_signing_mode, include_groups_claim = excluded.include_groups_claim, allow_any_oidc_redirect = excluded.allow_any_oidc_redirect, scim_enabled = excluded.scim_enabled, scim_base_url = excluded.scim_base_url, scim_bearer_token = excluded.scim_bearer_token, scim_auto_open_trace = excluded.scim_auto_open_trace, scim_capabilities_known = excluded.scim_capabilities_known, scim_patch_supported = excluded.scim_patch_supported, scim_filter_supported = excluded.scim_filter_supported, oidc_claim_mappings = excluded.oidc_claim_mappings, saml_attribute_mappings = excluded.saml_attribute_mappings, chooser_mode = excluded.chooser_mode, oidc_jwt_access_tokens = excluded.oidc_jwt_access_tokens, oidc_access_token_audience = excluded.oidc_access_token_audience`)
 	if err != nil {
 		return fmt.Errorf("prepare sqlite app insert: %w", err)
 	}
@@ -1806,7 +1812,7 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 			return fmt.Errorf("encode SAML attribute mappings for app %s: %w", app.ID, err)
 		}
 		verifySAMLRequests := strings.TrimSpace(app.SAMLRequestCertPEM) != ""
-		if _, err := appStmt.Exec(app.ID, environmentID, app.Name, app.Slug, app.Protocol, app.OIDCClientID, app.OIDCClientSecret, boolToInt(app.OIDCPublicClient), JoinLines(app.OIDCRedirectURIs), app.SAMLEntityID, app.SAMLACSURL, app.SAMLAudience, app.SAMLNameIDField, app.SAMLNameIDFormat, app.SAMLEmailAttributeName, boolToInt(verifySAMLRequests), app.SAMLRequestCertPEM, app.SAMLEncryptionCertPEM, app.SAMLEncryptionAlgorithm, app.SAMLSigningMode, boolToInt(app.IncludeGroupsClaim), boolToInt(app.AllowAnyOIDCRedirect), boolToInt(app.SCIMEnabled), app.SCIMBaseURL, app.SCIMBearerToken, boolToInt(app.SCIMAutoOpenTrace), boolToInt(app.SCIMCapabilitiesKnown), boolToInt(app.SCIMPatchSupported), boolToInt(app.SCIMFilterSupported), string(oidcClaimMappings), string(samlAttributeMappings), app.ChooserMode); err != nil {
+		if _, err := appStmt.Exec(app.ID, environmentID, app.Name, app.Slug, app.Protocol, app.OIDCClientID, app.OIDCClientSecret, boolToInt(app.OIDCPublicClient), JoinLines(app.OIDCRedirectURIs), app.SAMLEntityID, app.SAMLACSURL, app.SAMLAudience, app.SAMLNameIDField, app.SAMLNameIDFormat, app.SAMLEmailAttributeName, boolToInt(verifySAMLRequests), app.SAMLRequestCertPEM, app.SAMLEncryptionCertPEM, app.SAMLEncryptionAlgorithm, app.SAMLSigningMode, boolToInt(app.IncludeGroupsClaim), boolToInt(app.AllowAnyOIDCRedirect), boolToInt(app.SCIMEnabled), app.SCIMBaseURL, app.SCIMBearerToken, boolToInt(app.SCIMAutoOpenTrace), boolToInt(app.SCIMCapabilitiesKnown), boolToInt(app.SCIMPatchSupported), boolToInt(app.SCIMFilterSupported), string(oidcClaimMappings), string(samlAttributeMappings), app.ChooserMode, boolToInt(app.OIDCJWTAccessTokens), app.OIDCAccessTokenAudience); err != nil {
 			return fmt.Errorf("insert sqlite app %s: %w", app.ID, err)
 		}
 	}

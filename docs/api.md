@@ -72,8 +72,11 @@ in the operation catalog.
 - Identity uses `name` and `slug`.
 - Protocol switches use `oidc_enabled`, `saml_enabled`, and `scim_enabled`.
 - OIDC uses `oidc_client_id`, `oidc_client_secret`, `oidc_public_client`,
-  `oidc_redirect_uris`, `allow_any_oidc_redirect`, and
-  `regenerate_oidc_secret`. Redirect URIs are an array of strings.
+  `oidc_redirect_uris`, `allow_any_oidc_redirect`, `oidc_jwt_access_tokens`,
+  `oidc_access_token_audience`, and `regenerate_oidc_secret`. Redirect URIs
+  are an array of strings. `oidc_jwt_access_tokens: true` issues RFC 9068 JWT
+  access tokens whose `aud` is `oidc_access_token_audience`, or the client ID
+  when the audience is empty.
 - SAML uses `saml_entity_id`, `saml_acs_url`, `saml_audience`,
   `saml_name_id_field`, `saml_email_attribute_name`,
   `saml_request_certificate_pem`, `saml_encryption_certificate_pem`,
@@ -193,6 +196,8 @@ The headless playground accepts `{"user_id":"..."}` and optional `faults`
 using the fields below. It handles confidential-client authentication or
 public-client PKCE. Its result includes `authorize_status`, `token_status`,
 `token`, `id_token_header`, `id_token_claims`, `userinfo_status`, and `userinfo`.
+With JWT access tokens, it also includes `access_token_header` and
+`access_token_claims`.
 With `"refresh": true`, it also requests `offline_access`, redeems the refresh
 token once, and adds `refresh_status`, `refresh`, and
 `refreshed_id_token_claims`.
@@ -229,7 +234,9 @@ both protocols are `wrong_issuer` and `wrong_audience`. OIDC adds
 `unknown_kid`, `alg_none`, and `nonce_mismatch`. SAML adds
 `wrong_destination`, `wrong_recipient`, `in_response_to_mismatch`, and
 `replayed_assertion`, which reuses the newest assertion ID the environment
-sent. Invalid fault values are rejected. Fault scenarios expire after
+sent. With JWT access tokens, tamper values, `break_signature`, and
+`clock_skew` also apply to the access token. Invalid fault values are
+rejected. Fault scenarios expire after
 15 minutes. The `stale-jwks` scenario serves `count` JWKS responses without
 the active signing key.
 

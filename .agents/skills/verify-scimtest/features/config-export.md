@@ -34,6 +34,9 @@ Preconditions:
   `greendale-portal`, and OIDC values for `issuer`, `discovery_url`,
   `authorization_endpoint`, `token_endpoint`, `userinfo_endpoint`, `jwks_uri`,
   `client_id`, and `client_secret`.
+- **Check JWT access tokens.** With `Issue JWT access tokens (RFC 9068)` on,
+  the OIDC values also include `jwt_access_tokens: true` and
+  `access_token_audience`, which is the client ID when the audience is empty.
 - **Confirm the origin.** Every OIDC URL starts with the exact loopback run URL.
   The admin route is not a public tunnel path.
 - **Check a missing ID.** Request `/apps/does-not-exist/config.json` with curl on

@@ -116,7 +116,7 @@ func writeDebugf(w io.Writer, format string, args ...any) {
 	}
 }
 
-func (a *webApp) writeDebugOIDCTokenPayload(w io.Writer, payload []byte) {
+func (a *webApp) writeDebugOIDCTokenPayload(w io.Writer, name string, payload []byte) {
 	if !a.debugRPEnabled() {
 		return
 	}
@@ -124,9 +124,9 @@ func (a *webApp) writeDebugOIDCTokenPayload(w io.Writer, payload []byte) {
 	defer rpDebugLogMu.Unlock()
 
 	writeDebugln(w)
-	writeDebugln(w, "===== OIDC ID token payload =====")
+	writeDebugln(w, "===== OIDC "+name+" payload =====")
 	writeDebugln(w, string(payload))
-	writeDebugln(w, "===== end OIDC ID token payload =====")
+	writeDebugln(w, "===== end OIDC "+name+" payload =====")
 }
 
 func (a *webApp) writeDebugHTTPRequest(w io.Writer, r *http.Request, body []byte) {

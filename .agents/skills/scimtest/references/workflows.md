@@ -76,7 +76,13 @@ authentication or PKCE verifier. Read `userinfo_url` with the resulting
 access token. The instance-token header belongs only on local API calls.
 
 The connection export also contains `issuer`, `discovery_url`, `authorize_url`,
-and `jwks_url`. Configure the relying party from these values. A manually
+and `jwks_url`. Configure the relying party from these values.
+
+To test an API that validates JWT access tokens, set
+`oidc_jwt_access_tokens: true` and `oidc_access_token_audience` to the API's
+expected audience. The connection export then reports `jwt_access_tokens` and
+`access_token_audience`, and the playground adds `access_token_header` and
+`access_token_claims`. Without an audience, `aud` is the client ID. A manually
 exchanged code does not prove the app's callback or login session; exercise
 that path separately when it is the test's goal.
 
@@ -176,7 +182,8 @@ otherwise valid response. `wrong_issuer` and `wrong_audience` apply to both
 protocols. OIDC adds `unknown_kid`, `alg_none`, and `nonce_mismatch`. SAML
 adds `wrong_destination`, `wrong_recipient`, `in_response_to_mismatch`, and
 `replayed_assertion`. Replay needs an earlier SAML sign-in in the same
-environment.
+environment. With JWT access tokens, tamper values, `break_signature`, and
+`clock_skew` change the access token as well as the ID token.
 
 To affect the next incoming protocol flow, `PUT /environments/{ENV_ID}/faults`.
 Read or disarm it with `GET` or `DELETE` on the same path. Disarming returns

@@ -25,6 +25,10 @@ type oidcConfigExport struct {
 	ClientSecret string   `json:"client_secret,omitempty"`
 	PublicClient bool     `json:"public_client"`
 	RedirectURIs []string `json:"redirect_uris,omitempty"`
+	// JWTAccessTokens reports RFC 9068 access tokens, which carry
+	// AccessTokenAudience in aud.
+	JWTAccessTokens     bool   `json:"jwt_access_tokens"`
+	AccessTokenAudience string `json:"access_token_audience,omitempty"`
 }
 
 type samlConfigExport struct {
@@ -78,6 +82,10 @@ func (a *webApp) appConfigExport(r *http.Request, state appState, foundApp app) 
 			ClientSecret: foundApp.OIDCClientSecret,
 			PublicClient: foundApp.OIDCPublicClient,
 			RedirectURIs: foundApp.OIDCRedirectURIs,
+		}
+		if foundApp.OIDCJWTAccessTokens {
+			export.OIDC.JWTAccessTokens = true
+			export.OIDC.AccessTokenAudience = accessTokenAudience(foundApp)
 		}
 		if foundApp.OIDCPublicClient {
 			export.OIDC.ClientSecret = ""
