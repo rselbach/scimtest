@@ -84,6 +84,12 @@ In `chooser_mode: "identifier"`, supply `login_identifier` instead of `user_id`
 to authorization, playground, and SAML requests. Use an active user's username
 or email.
 
+To test an app's step-up check, set `authn_strength` to `mfa` or `password` in
+the authorization or SAML sign-in request. The ID token reports the choice in
+`acr` and `amr`. The SAML assertion reports it in `AuthnContextClassRef`. Each
+API call is a fresh sign-in. `prompt=none`, `max_age`, and session reuse need
+a browser, because they depend on the chooser's remembered sign-in cookie.
+
 ## SAML
 
 Create or patch an environment with `saml_enabled: true`, `saml_entity_id`,

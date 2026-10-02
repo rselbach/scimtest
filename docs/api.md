@@ -172,8 +172,12 @@ All paths in this section are relative to `/environments/{id}`.
 | POST | `/scenarios/disarm` | Disarm the current run. |
 
 OIDC authorization accepts `user_id` and standard authorization fields,
-including `client_id`, `redirect_uri`, `scope`, `state`, `nonce`, and PKCE
-parameters. Codes are redeemed at the standard `/oidc/{slug}/token` endpoint.
+including `client_id`, `redirect_uri`, `scope`, `state`, `nonce`,
+`acr_values`, and PKCE parameters. `authn_strength` sets the sign-in method to
+`password` or `mfa`. Without it, the first recognized `acr_values` entry sets
+the method, and `password` is the default. The ID token reports the method in
+`acr` and `amr`. Each API call is a fresh sign-in, so `auth_time` is the time
+of the call. Codes are redeemed at the standard `/oidc/{slug}/token` endpoint.
 With `offline_access` in the scope, the token response includes a
 `refresh_token`. Redeem it at the same endpoint with
 `grant_type=refresh_token`. Each refresh returns a replacement and
@@ -192,8 +196,12 @@ token once, and adds `refresh_status`, `refresh`, and
 Protocol failures appear in those statuses and an `error` field; the enclosing
 API response remains `200` when the experiment itself ran successfully.
 
-SAML sign-in accepts `user_id`, optional `relay_state`, and optional base64
-`saml_request`. For a signed Redirect-binding request, pass the original query
+SAML sign-in accepts `user_id`, optional `relay_state`, optional
+`authn_strength`, and optional base64 `saml_request`. Without
+`authn_strength`, a recognized class in the request's `RequestedAuthnContext`
+sets the method. The assertion's `AuthnContextClassRef` reports the method,
+and its `AuthnInstant` is the time of the call. For a signed Redirect-binding
+request, pass the original query
 string as `redirect_query` instead of splitting its signed fields. This keeps
 the exact encoding needed for signature validation. API URL query parameters
 are not SAML signing inputs.
