@@ -19,11 +19,11 @@ import (
 	dsig "github.com/russellhaering/goxmldsig"
 )
 
-// samlPostedResponse is what successful SSO posts, plus the plaintext signed
+// samlPostedResponse is what successful SSO posts, plus the plaintext
 // Assertion when encryption ran. Status-only builders do not use this type.
 type samlPostedResponse struct {
-	XML             string
-	SignedAssertion string
+	XML                string
+	PlaintextAssertion string
 }
 
 const (
@@ -63,18 +63,28 @@ func (a *webApp) handleSAMLMetadata(w http.ResponseWriter, r *http.Request) {
 	if nameIDFormat == "" {
 		nameIDFormat = samlNameIDFormatForField(app.SAMLNameIDField)
 	}
-	cert := base64.StdEncoding.EncodeToString(a.certDER)
+	// During a rollover the metadata lists the retired certificate after the
+	// active one, so an SP that refreshes metadata trusts both.
+	keys, err := a.publishedSigningKeys(state, time.Now())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var keyDescriptors strings.Builder
+	for _, key := range keys {
+		fmt.Fprintf(&keyDescriptors, `
+    <KeyDescriptor use="signing"><KeyInfo xmlns="http://www.w3.org/2000/09/xmldsig#"><X509Data><X509Certificate>%s</X509Certificate></X509Data></KeyInfo></KeyDescriptor>`, base64.StdEncoding.EncodeToString(key.CertDER))
+	}
 	metadata := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <EntityDescriptor xmlns="urn:oasis:names:tc:SAML:2.0:metadata" entityID="%s">
-  <IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
-    <KeyDescriptor use="signing"><KeyInfo xmlns="http://www.w3.org/2000/09/xmldsig#"><X509Data><X509Certificate>%s</X509Certificate></X509Data></KeyInfo></KeyDescriptor>
+  <IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">%s
     <SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="%s/saml/%s/slo"/>
     <SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="%s/saml/%s/slo"/>
     <NameIDFormat>%s</NameIDFormat>
     <SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="%s/saml/%s/sso"/>
     <SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="%s/saml/%s/sso"/>
   </IDPSSODescriptor>
-</EntityDescriptor>`, xmlEscape(entityID), cert, xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(nameIDFormat), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(baseURL), xmlEscape(app.Slug))
+</EntityDescriptor>`, xmlEscape(entityID), keyDescriptors.String(), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(nameIDFormat), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(baseURL), xmlEscape(app.Slug))
 	if r.URL.Query().Get("download") == "1" {
 		w.Header().Set("Content-Disposition", `attachment; filename="scimtest-`+app.Slug+`-idp-metadata.xml"`)
 	}
@@ -414,49 +424,91 @@ func (a *webApp) buildSignedSAMLResponse(state appState, baseURL string, app app
 	if assertion == nil {
 		return samlPostedResponse{}, fmt.Errorf("SAML assertion not found")
 	}
-	ctx, err := dsig.NewSigningContext(a.signingKey, [][]byte{a.certDER})
+	key, err := a.activeSigningKey(state)
+	if err != nil {
+		return samlPostedResponse{}, err
+	}
+	ctx, err := dsig.NewSigningContext(key.PrivateKey, [][]byte{key.CertDER})
 	if err != nil {
 		return samlPostedResponse{}, fmt.Errorf("create SAML signing context: %w", err)
 	}
 	ctx.Canonicalizer = dsig.MakeC14N10ExclusiveCanonicalizerWithPrefixList("")
-	signature, err := ctx.ConstructSignature(assertion, true)
-	if err != nil {
-		return samlPostedResponse{}, fmt.Errorf("sign SAML assertion: %w", err)
-	}
-	signedAssertion := assertion.Copy()
-	if err := placeSAMLAssertionSignature(signedAssertion, signature); err != nil {
-		return samlPostedResponse{}, err
-	}
-	parent := assertion.Parent()
-	if parent == nil {
-		return samlPostedResponse{}, fmt.Errorf("SAML assertion has no parent")
-	}
-	parent.RemoveChild(assertion)
-	parent.AddChild(signedAssertion)
-
-	if faults.BreakSignature {
-		corruptSAMLSignatureValue(signedAssertion)
+	var signAssertion, signResponse bool
+	switch normalizeSAMLSigningMode(app.SAMLSigningMode) {
+	case samlSigningModeAssertion:
+		signAssertion = true
+	case samlSigningModeResponse:
+		signResponse = true
+	case samlSigningModeBoth:
+		signAssertion, signResponse = true, true
+	default:
+		return samlPostedResponse{}, fmt.Errorf("unknown SAML signing mode %q", app.SAMLSigningMode)
 	}
 
-	var signedXML string
+	if signAssertion {
+		assertion, err = signSAMLElement(ctx, assertion)
+		if err != nil {
+			return samlPostedResponse{}, fmt.Errorf("sign SAML assertion: %w", err)
+		}
+		if faults.BreakSignature {
+			corruptSAMLSignatureValue(assertion)
+		}
+	}
+
+	var plaintextXML string
 	if encryption != nil {
-		signedXML, err = serializeElement(signedAssertion)
+		plaintextXML, err = serializeElement(assertion)
 		if err != nil {
 			return samlPostedResponse{}, err
 		}
-		encrypted, err := encryptSAMLAssertion(signedAssertion, *encryption)
+		encrypted, err := encryptSAMLAssertion(assertion, *encryption)
 		if err != nil {
 			return samlPostedResponse{}, fmt.Errorf("encrypt SAML assertion: %w", err)
 		}
-		parent.RemoveChild(signedAssertion)
-		parent.AddChild(encrypted)
+		replaceSAMLElement(assertion, encrypted)
+	}
+
+	// the Response signature covers the assertion as posted, so it comes after
+	// encryption
+	if signResponse {
+		root, err := signSAMLElement(ctx, doc.Root())
+		if err != nil {
+			return samlPostedResponse{}, fmt.Errorf("sign SAML response: %w", err)
+		}
+		if faults.BreakSignature {
+			corruptSAMLSignatureValue(root)
+		}
 	}
 
 	responseXML, err := doc.WriteToString()
 	if err != nil {
 		return samlPostedResponse{}, fmt.Errorf("serialize signed SAML response: %w", err)
 	}
-	return samlPostedResponse{XML: responseXML, SignedAssertion: signedXML}, nil
+	return samlPostedResponse{XML: responseXML, PlaintextAssertion: plaintextXML}, nil
+}
+
+// signSAMLElement replaces el with a copy that carries an enveloped signature
+// after its Issuer, as the SAML schema requires, and returns the copy.
+func signSAMLElement(ctx *dsig.SigningContext, el *etree.Element) (*etree.Element, error) {
+	signature, err := ctx.ConstructSignature(el, true)
+	if err != nil {
+		return nil, err
+	}
+	signed := el.Copy()
+	if err := placeSAMLSignature(signed, signature); err != nil {
+		return nil, err
+	}
+	replaceSAMLElement(el, signed)
+	return signed, nil
+}
+
+// replaceSAMLElement puts replacement where el sits in its parent, which for
+// a document root is the document itself.
+func replaceSAMLElement(el *etree.Element, replacement *etree.Element) {
+	parent := el.Parent()
+	index := el.Index()
+	parent.RemoveChildAt(index)
+	parent.InsertChildAt(index, replacement)
 }
 
 // buildSAMLStatusResponse produces an unsigned non-success SAML Response so an
@@ -481,8 +533,10 @@ func buildSAMLStatusResponse(baseURL string, app app, responseContext samlRespon
 		xmlEscape(issuer), xmlEscape(faults.SAMLStatus)), nil
 }
 
-func corruptSAMLSignatureValue(assertion *etree.Element) {
-	value := findElementByLocalName(assertion, "SignatureValue")
+// corruptSAMLSignatureValue breaks the signature that signed carries itself,
+// leaving any signature on a nested element alone.
+func corruptSAMLSignatureValue(signed *etree.Element) {
+	value := childElementByLocalName(childElementByLocalName(signed, "Signature"), "SignatureValue")
 	if value == nil || value.Text() == "" {
 		return
 	}
@@ -506,9 +560,9 @@ func childElementByLocalName(parent *etree.Element, localName string) *etree.Ele
 	return nil
 }
 
-func placeSAMLAssertionSignature(assertion *etree.Element, signature *etree.Element) error {
+func placeSAMLSignature(signed *etree.Element, signature *etree.Element) error {
 	issuerIndex := -1
-	for index, child := range assertion.Child {
+	for index, child := range signed.Child {
 		element, ok := child.(*etree.Element)
 		if !ok {
 			continue
@@ -518,9 +572,9 @@ func placeSAMLAssertionSignature(assertion *etree.Element, signature *etree.Elem
 		}
 	}
 	if issuerIndex < 0 {
-		return fmt.Errorf("signed SAML assertion issuer not found")
+		return fmt.Errorf("signed SAML %s issuer not found", elementLocalName(signed))
 	}
-	assertion.InsertChildAt(issuerIndex+1, signature)
+	signed.InsertChildAt(issuerIndex+1, signature)
 	return nil
 }
 
@@ -646,10 +700,38 @@ func samlAttributeStatement(state appState, app app, user user) string {
 	writeSAMLAttribute(&attributes, mappings.Username, []string{user.Username})
 	writeSAMLAttribute(&attributes, mappings.GivenName, []string{user.GivenName})
 	writeSAMLAttribute(&attributes, mappings.FamilyName, []string{user.FamilyName})
+	written := map[string]bool{mappings.Email: true, mappings.Username: true, mappings.GivenName: true, mappings.FamilyName: true}
 	if app.IncludeGroupsClaim {
 		writeSAMLAttribute(&attributes, mappings.Groups, userGroups(state, user.ID))
+		written[mappings.Groups] = true
 	}
+	writeSAMLUserAttributes(&attributes, written, state, app, user)
 	return attributes.String()
+}
+
+// writeSAMLUserAttributes writes non-empty enterprise values, the manager's
+// NameID value, and custom attributes, skipping names already written.
+func writeSAMLUserAttributes(attributes *strings.Builder, written map[string]bool, state appState, app app, user user) {
+	write := func(name string, value string) {
+		if written[name] {
+			return
+		}
+		written[name] = true
+		writeSAMLAttribute(attributes, name, []string{value})
+	}
+	for _, value := range enterpriseValues(user) {
+		if value.Value != "" {
+			write(value.Name, value.Value)
+		}
+	}
+	if manager, ok := userManager(state.Users, user); ok {
+		write(enterpriseManager, samlNameIDValue(app, manager))
+	}
+	for _, name := range customAttributeNames(user.Attributes) {
+		if !isReservedAttributeName(name) {
+			write(name, user.Attributes[name])
+		}
+	}
 }
 
 func writeSAMLAttribute(attributes *strings.Builder, name string, values []string) {

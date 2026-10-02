@@ -369,10 +369,18 @@ type directoryOptionView struct {
 }
 
 type userFormView struct {
-	Title string
-	ID    string
-	User  user
-	Close string
+	Title      string
+	ID         string
+	User       user
+	Attributes string
+	Managers   []managerOptionView
+	Close      string
+}
+
+type managerOptionView struct {
+	ID       string
+	Label    string
+	Selected bool
 }
 
 type memberOptionView struct {
@@ -1013,6 +1021,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /inspect/resilience/{slug}/disarm", a.handleResilienceDisarm)
 	mux.HandleFunc("POST /inspect/faults/{slug}/arm", a.handleFaultArm)
 	mux.HandleFunc("POST /inspect/faults/{slug}/disarm", a.handleFaultDisarm)
+	mux.HandleFunc("POST /inspect/signing-keys/{slug}/rotate", a.rejectWhileSyncing(a.handleSigningKeyRotate))
 	mux.HandleFunc("POST /restore", a.rejectWhileSyncing(a.handleBackupRestore))
 	mux.HandleFunc("GET /sync/status", a.handleSyncStatus)
 	mux.HandleFunc("POST /sync", a.handleSync)
@@ -1064,6 +1073,9 @@ func (a *webApp) registerIDPRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /oidc/{slug}/token", a.debugRPHandler(a.handleOIDCToken))
 	mux.HandleFunc("GET /oidc/{slug}/userinfo", a.debugRPHandler(a.handleOIDCUserinfo))
 	mux.HandleFunc("POST /oidc/{slug}/userinfo", a.debugRPHandler(a.handleOIDCUserinfo))
+	mux.HandleFunc("POST /oidc/{slug}/users/{oid}/getMemberObjects", a.debugRPHandler(a.handleEntraMemberObjects))
+	mux.HandleFunc("POST /oidc/{slug}/introspect", a.debugRPHandler(a.handleOIDCIntrospect))
+	mux.HandleFunc("POST /oidc/{slug}/revoke", a.debugRPHandler(a.handleOIDCRevoke))
 	mux.HandleFunc("GET /oidc/{slug}/logout", a.debugRPHandler(a.handleOIDCLogout))
 	mux.HandleFunc("POST /oidc/{slug}/logout", a.debugRPHandler(a.handleOIDCLogout))
 	mux.HandleFunc("GET /saml/{slug}/metadata", a.debugRPHandler(a.handleSAMLMetadata))
@@ -1200,11 +1212,20 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if tab == "resilience" && data.HasIDP {
 		data.Resilience = a.buildResiliencePageData(activeEnvironment, strings.TrimSpace(r.URL.Query().Get("error")))
 	}
-	if tab == "oidc-inspector" && data.HasOIDC {
-		data.OIDCInspector = a.buildOIDCInspectorPageData(activeEnvironment, state.Users)
-	}
-	if tab == "saml-inspector" && data.HasSAML {
-		data.SAMLInspector = a.buildSAMLInspectorPageData(activeEnvironment)
+	if (tab == "oidc-inspector" && data.HasOIDC) || (tab == "saml-inspector" && data.HasSAML) {
+		signingKeys, err := a.signingKeyViews(state, time.Now())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		switch tab {
+		case "oidc-inspector":
+			data.OIDCInspector = a.buildOIDCInspectorPageData(activeEnvironment, state.Users)
+			data.OIDCInspector.SigningKeys = signingKeys
+		case "saml-inspector":
+			data.SAMLInspector = a.buildSAMLInspectorPageData(activeEnvironment)
+			data.SAMLInspector.SigningKeys = signingKeys
+		}
 	}
 	if !data.SCIMEnabled {
 		data.Errors = nil
@@ -1249,7 +1270,14 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 				formState = selectedState
 			}
 		}
-		if form, formErr := buildAppFormView(formState, tab, r.URL.Query().Get("id"), data.IDPBaseURL, certificatePEM(a.certDER)); formErr == nil {
+		// formState is the edited environment's own state, or the global
+		// state for a new environment, which signs with the shared key.
+		key, err := a.activeSigningKey(formState)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if form, formErr := buildAppFormView(formState, tab, r.URL.Query().Get("id"), data.IDPBaseURL, certificatePEM(key.CertDER)); formErr == nil {
 			form.AllowAnyOIDCRedirectDisabled = a.tunnelPublicURL() != ""
 			data.AppForm = form
 		}
@@ -2079,6 +2107,16 @@ func applyFormDraft(data *pageData, draft formDraft) {
 		data.UserForm.User.Email = values.Get("email")
 		data.UserForm.User.GivenName = values.Get("given_name")
 		data.UserForm.User.FamilyName = values.Get("family_name")
+		data.UserForm.User.EmployeeNumber = values.Get("employee_number")
+		data.UserForm.User.CostCenter = values.Get("cost_center")
+		data.UserForm.User.Organization = values.Get("organization")
+		data.UserForm.User.Division = values.Get("division")
+		data.UserForm.User.Department = values.Get("department")
+		data.UserForm.Attributes = values.Get("attributes")
+		managerID := values.Get("manager_id")
+		for i := range data.UserForm.Managers {
+			data.UserForm.Managers[i].Selected = data.UserForm.Managers[i].ID == managerID
+		}
 	case "group":
 		if data.GroupForm == nil {
 			return
@@ -2103,6 +2141,8 @@ func applyFormDraft(data *pageData, draft formDraft) {
 		data.AppForm.App.AllowAnyOIDCRedirect = values.Get("allow_any_oidc_redirect") == "on"
 		data.AppForm.App.OIDCBackchannelLogoutURI = values.Get("oidc_backchannel_logout_uri")
 		data.AppForm.App.OIDCBackchannelLogoutSessionRequired = values.Get("oidc_backchannel_logout_session_required") == "on"
+		data.AppForm.App.OIDCJWTAccessTokens = values.Get("oidc_jwt_access_tokens") == "on"
+		data.AppForm.App.OIDCAccessTokenAudience = values.Get("oidc_access_token_audience")
 		data.AppForm.App.SAMLEntityID = values.Get("saml_entity_id")
 		data.AppForm.App.SAMLACSURL = values.Get("saml_acs_url")
 		data.AppForm.App.SAMLSLOURL = values.Get("saml_slo_url")
@@ -2112,6 +2152,7 @@ func applyFormDraft(data *pageData, draft formDraft) {
 		data.AppForm.App.SAMLRequestCertPEM = values.Get("saml_request_certificate_pem")
 		data.AppForm.App.SAMLEncryptionCertPEM = values.Get("saml_encryption_certificate_pem")
 		data.AppForm.App.SAMLEncryptionAlgorithm = values.Get("saml_encryption_algorithm")
+		data.AppForm.App.SAMLSigningMode = values.Get("saml_signing_mode")
 		data.AppForm.App.OIDCClaimMappings = oidcClaimMappings{
 			Name: values.Get("oidc_claim_name"), GivenName: values.Get("oidc_claim_given_name"),
 			FamilyName: values.Get("oidc_claim_family_name"), Username: values.Get("oidc_claim_username"),
@@ -2123,6 +2164,10 @@ func applyFormDraft(data *pageData, draft formDraft) {
 		}
 		data.AppForm.App.IncludeGroupsClaim = values.Get("include_groups_claim") == "on"
 		data.AppForm.App.ChooserMode = normalizeChooserMode(values.Get("chooser_mode"))
+		data.AppForm.App.Persona = normalizePersona(values.Get("persona"))
+		if threshold, err := strconv.Atoi(strings.TrimSpace(values.Get("groups_overage_threshold"))); err == nil {
+			data.AppForm.App.GroupsOverageThreshold = threshold
+		}
 		data.AppForm.App.SCIMBaseURL = values.Get("scim_base_url")
 		data.AppForm.App.SCIMAutoOpenTrace = values.Get("scim_auto_open_trace") == "on"
 		data.AppForm.Section = normalizeSetupSection(values.Get("setup_section"))
@@ -2569,16 +2614,36 @@ func buildHistoryView(state appState, tab string, page int, pageSize int, search
 }
 
 func buildUserFormView(state appState, tab string, page int, pageSize int, search string, statusFilter string, sortOrder string, id string) (*userFormView, error) {
-	if strings.TrimSpace(id) == "" {
-		return &userFormView{Title: "Add User", Close: dashboardURLWithDirectory(tab, page, pageSize, search, statusFilter, sortOrder, nil)}, nil
+	form := &userFormView{Title: "Add User", Close: dashboardURLWithDirectory(tab, page, pageSize, search, statusFilter, sortOrder, nil)}
+	if strings.TrimSpace(id) != "" {
+		u, ok := userByID(state.Users, id)
+		if !ok {
+			return nil, fmt.Errorf("user %s not found", id)
+		}
+		form.Title = "Edit User"
+		form.ID = id
+		form.User = u
+		form.Attributes = formatCustomAttributes(u.Attributes)
 	}
+	form.Managers = managerOptions(state.Users, form.ID, form.User.ManagerID)
+	return form, nil
+}
 
-	u, ok := userByID(state.Users, id)
-	if !ok {
-		return nil, fmt.Errorf("user %s not found", id)
+// managerOptions lists users who can manage userID. A current manager that
+// was deleted stays listed so saving the form keeps it.
+func managerOptions(users []user, userID string, managerID string) []managerOptionView {
+	options := make([]managerOptionView, 0, len(users))
+	for _, u := range users {
+		if u.ID == userID || (u.Deleted && u.ID != managerID) {
+			continue
+		}
+		label := userLabel(u) + " (" + u.Email + ")"
+		if u.Deleted {
+			label += " — deleted"
+		}
+		options = append(options, managerOptionView{ID: u.ID, Label: label, Selected: u.ID == managerID})
 	}
-
-	return &userFormView{Title: "Edit User", ID: id, User: u, Close: dashboardURLWithDirectory(tab, page, pageSize, search, statusFilter, sortOrder, nil)}, nil
+	return options
 }
 
 func buildGroupFormView(state appState, tab string, page int, pageSize int, search string, statusFilter string, sortOrder string, id string) (*groupFormView, error) {
@@ -2626,6 +2691,7 @@ func buildAppFormView(state appState, tab string, id string, baseURL string, cer
 			SAMLEmailAttributeName: defaultSAMLEmailAttributeName,
 			IncludeGroupsClaim:     true,
 			ChooserMode:            chooserModeList,
+			Persona:                personaGeneric,
 			OIDCClaimMappings:      defaultOIDCClaimMappings(),
 			SAMLAttributeMappings:  defaultSAMLAttributeMappings(),
 		},
@@ -2663,6 +2729,7 @@ func buildAppFormView(state appState, tab string, id string, baseURL string, cer
 
 func populateAppFormStatuses(form *appFormView) {
 	form.App.SAMLEncryptionAlgorithm = normalizeSAMLEncryptionAlgorithm(form.App.SAMLEncryptionAlgorithm)
+	form.App.SAMLSigningMode = normalizeSAMLSigningMode(form.App.SAMLSigningMode)
 	form.OIDCStatus = newSetupStatusView(oidcSetupStatus(form.App))
 	form.SAMLStatus = newSetupStatusView(samlSetupStatus(form.App))
 	form.SCIMStatus = newSetupStatusView(scimSetupStatus(form.App))

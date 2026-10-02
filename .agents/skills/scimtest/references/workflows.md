@@ -35,7 +35,33 @@ Create Troy with `POST /environments/{ENV_ID}/users`:
 {"given_name":"Troy","family_name":"Barnes","email":"troy@greendale.edu","username":"tbarnes","active":true}
 ```
 
-Save the returned `id` as `USER_ID`. Use local user IDs in a group's
+Save the returned `id` as `USER_ID`. To test attribute-based role mapping,
+add enterprise fields and custom attributes:
+
+```json
+{"department":"Air Conditioning Repair","employee_number":"GC-1001","manager_id":"DEAN_USER_ID","attributes":{"role":"student"}}
+```
+
+`manager_id` is another local user ID. OIDC returns these values with the
+`profile` scope as `department`, `employeeNumber`, `manager` (the manager's
+`sub`), and `role`. SAML assertions carry the same attribute names. SCIM sends
+the enterprise fields in the enterprise extension but never the custom
+attributes.
+
+To test an app against a specific provider's shape, `PATCH` the environment
+with `{"persona":"entra"}`, `"okta"`, or `"google"`. `"generic"` restores
+scimtest's own shape. Entra ID adds `tid`, `oid`, and `upn`, sets
+`preferred_username` to the UPN, and drops `email_verified`. Above
+`groups_overage_threshold` groups (default 200; set a small value such as
+`1` to trigger it with a few groups), the token replaces `groups` with
+`_claim_names` and `_claim_sources`. Call the source endpoint with
+`POST` and the user's access token, with `{"securityEnabledOnly":false}` as
+the body. Okta adds `ver` and an `Everyone` group. Google adds `hd`. The Entra
+ID persona also switches SCIM sync to Entra ID's dialect: externalId filter
+lookups before every write, `PATCH` updates with capitalized `op` values, and
+`active` as `"True"` or `"False"`.
+
+Use local user IDs in a group's
 `member_ids` array when posting to `/environments/{ENV_ID}/groups` with a
 `display_name`. These are IDs within that environment, not remote SCIM IDs.
 Use `PATCH` on an individual resource for edits. `{"member_ids":[]}` removes
@@ -43,8 +69,10 @@ all group memberships.
 
 For a larger directory, `POST /environments/{ENV_ID}/tools/seed-sample` with
 `{}` adds ten Greendale users and three groups. Repeating it adds no duplicate
-sample records. One sample user is deliberately inactive. Read environment
-`/users` and `/groups` afterward instead of assuming IDs or active states.
+sample records. One sample user is deliberately inactive. Sample users have
+enterprise fields, a manager (except the Dean), and a `role` attribute. Read
+environment `/users` and `/groups` afterward instead of assuming IDs or active
+states.
 
 Environment `tools/create-users` accepts `count` and `email_domain`. The catalog
 also offers activation, deletion, and local-clear actions. With SCIM configured,
@@ -76,7 +104,24 @@ authentication or PKCE verifier. Read `userinfo_url` with the resulting
 access token. The instance-token header belongs only on local API calls.
 
 The connection export also contains `issuer`, `discovery_url`, `authorize_url`,
-and `jwks_url`. Configure the relying party from these values. A manually
+`jwks_url`, `introspection_url`, and `revocation_url`. Configure the relying
+party from these values.
+
+For a service-to-service client, POST `grant_type=client_credentials` to
+`token_url` with the client's secret. Only confidential clients qualify. The
+response has an access token and no ID or refresh token, and userinfo rejects
+that token. A resource server checks tokens by POSTing `token` to
+`introspection_url` with the same client authentication; `active: false`
+covers unknown, expired, revoked, and deactivated-user tokens. An app revokes
+its own token at `revocation_url`, which always returns `200` with an empty
+body. Revoking a refresh token also revokes that authorization's access
+tokens.
+
+To test an API that validates JWT access tokens, set
+`oidc_jwt_access_tokens: true` and `oidc_access_token_audience` to the API's
+expected audience. The connection export then reports `jwt_access_tokens` and
+`access_token_audience`, and the playground adds `access_token_header` and
+`access_token_claims`. Without an audience, `aud` is the client ID. A manually
 exchanged code does not prove the app's callback or login session; exercise
 that path separately when it is the test's goal.
 
@@ -111,7 +156,10 @@ app ended its own session.
 Create or patch an environment with `saml_enabled: true`, `saml_entity_id`,
 and `saml_acs_url` matching the service provider. Read the SAML connection
 export for the IDP entity ID, SSO URL, metadata URL, and certificate. Metadata
-and certificate requests use those exported protocol URLs.
+and certificate requests use those exported protocol URLs. Set
+`saml_signing_mode` to `assertion` (the default), `response`, or `both` to match
+what the service provider requires. To check that it rejects a weaker form,
+set a mode that leaves out the signature it should require.
 
 `POST /environments/{ENV_ID}/saml/sign-in` accepts `user_id`, optional
 `relay_state`, and optional base64 `saml_request`. It returns `acs_url`, base64
@@ -209,6 +257,8 @@ environment. Logout token tamper values `logout_alg_none`,
 `logout_wrong_audience`, `logout_missing_events`, and `logout_repeated_jti`
 apply only through `PUT /faults`: sign-ins leave them armed, and the next
 back-channel logout token consumes them. A safe app answers `400`.
+With JWT access tokens, tamper values, `break_signature`, and
+`clock_skew` change the access token as well as the ID token.
 
 To affect the next incoming protocol flow, `PUT /environments/{ENV_ID}/faults`.
 Read or disarm it with `GET` or `DELETE` on the same path. Disarming returns
@@ -219,6 +269,15 @@ For repeated faults, read `/environments/{ENV_ID}/scenarios` for available
 presets, then `POST /scenarios/arm` under the same environment with `preset_id`
 and an optional integer `count`. Inspect the returned run and disarm with
 `POST /scenarios/disarm`. These scenarios expire after fifteen minutes.
+
+To test signing key rollover, `GET /environments/{ENV_ID}/signing-keys`, then
+`POST /signing-keys/rotate` under the same environment with an optional
+`grace_period` such as `1h` or `0s`. New tokens and assertions use the new
+`kid` at once, and the old key stays in the JWKS and SAML metadata for the
+grace period. Rotation cannot be undone except by restoring a backup, so
+rotate only an environment the user named. To test JWKS refetch logic, arm
+the `stale-jwks` scenario; its `count` JWKS responses leave out the active
+key.
 
 To test refresh handling, include `offline_access` in the OIDC scope and redeem
 the returned `refresh_token` with `grant_type=refresh_token`. Each refresh

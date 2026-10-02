@@ -357,15 +357,15 @@ func TestUserClaimsHonorScopes(t *testing.T) {
 	configuredApp := app{IncludeGroupsClaim: true}
 	troy := user{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Username: "troy", Email: "troy@greendale.edu"}
 
-	minimal := userClaims(state, configuredApp, troy, "openid")
+	minimal := userClaims(state, configuredApp, troy, "openid", "")
 	r.Equal(map[string]any{"sub": "troy"}, minimal)
 
-	all := userClaims(state, configuredApp, troy, "openid profile email groups")
+	all := userClaims(state, configuredApp, troy, "openid profile email groups", "")
 	r.Equal("Troy Barnes", all["name"])
 	r.Equal("troy@greendale.edu", all["email"])
 	r.Equal([]string{"Study Group"}, all["groups"])
 
-	withoutConfiguredGroups := userClaims(state, app{}, troy, "openid groups")
+	withoutConfiguredGroups := userClaims(state, app{}, troy, "openid groups", "")
 	r.NotContains(withoutConfiguredGroups, "groups")
 
 	custom := userClaims(state, app{
@@ -374,7 +374,7 @@ func TestUserClaimsHonorScopes(t *testing.T) {
 			Name: "display_name", GivenName: "first_name", FamilyName: "last_name",
 			Username: "login", Email: "mail", Groups: "roles",
 		},
-	}, troy, "openid profile email groups")
+	}, troy, "openid profile email groups", "")
 	r.Equal("Troy Barnes", custom["display_name"])
 	r.Equal("troy", custom["login"])
 	r.Equal("troy@greendale.edu", custom["mail"])
@@ -1145,7 +1145,7 @@ func TestSignedSAMLResponseUsesEnvironmentGroups(t *testing.T) {
 	r.Contains(posted.XML, `Name="groups"`)
 	r.Contains(posted.XML, "Engineering")
 	r.Contains(posted.XML, `Name="http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress"`)
-	r.Empty(posted.SignedAssertion)
+	r.Empty(posted.PlaintextAssertion)
 	r.NotContains(posted.XML, "EncryptedAssertion")
 
 	doc := etree.NewDocument()
@@ -1201,7 +1201,7 @@ func TestSignedSAMLResponseUsesConfiguredNameIDField(t *testing.T) {
 	r.Contains(posted.XML, `<saml:Attribute Name="mail"><saml:AttributeValue>troy@example.test</saml:AttributeValue></saml:Attribute>`)
 	r.Contains(posted.XML, `<saml:Attribute Name="login"><saml:AttributeValue>tbarnes</saml:AttributeValue></saml:Attribute>`)
 	r.NotContains(posted.XML, `Name="username"`)
-	r.Empty(posted.SignedAssertion)
+	r.Empty(posted.PlaintextAssertion)
 }
 
 func newTestIDPApp(t *testing.T) *webApp {

@@ -18,20 +18,25 @@ func isRateLimitError(err error) bool {
 	return errors.As(err, &rateLimitErr)
 }
 
-func (c *SCIMClient) createUser(u User) (string, bool, error) {
-	remoteID, found, err := c.findUserByExternalID(u)
+func (c *SCIMClient) createUser(u User, directory scimUserDirectory) (string, bool, error) {
+	remote, found, err := c.findUserByExternalID(u)
 	switch {
 	case err != nil:
 		return "", false, err
 	case err == nil && found:
-		u.RemoteID = remoteID
-		if err := c.replaceUser(u); err != nil {
+		u.RemoteID = remote.ID
+		if c.entra {
+			err = c.patchEntraUser(u, directory, remote)
+		} else {
+			err = c.replaceUser(u, directory)
+		}
+		if err != nil {
 			return "", false, err
 		}
-		return remoteID, true, nil
+		return remote.ID, true, nil
 	}
 
-	resource := newSCIMUserResource(u)
+	resource := newSCIMUserResource(u, directory)
 
 	var response SCIMUserResource
 	if err := c.doJSON(http.MethodPost, "/Users", resource, &response, traceTargetForUser(u, "create")); err != nil {
@@ -47,7 +52,7 @@ func (c *SCIMClient) createUser(u User) (string, bool, error) {
 	return response.ID, false, nil
 }
 
-func (c *SCIMClient) findUserByExternalID(u User) (string, bool, error) {
+func (c *SCIMClient) findUserByExternalID(u User) (SCIMUserResource, bool, error) {
 	return findByExternalID(c, "user", "/Users", u.ID, UserLabel(u),
 		func(resource SCIMUserResource) string { return resource.ExternalID },
 		func(resource SCIMUserResource) string { return resource.ID },
@@ -127,8 +132,18 @@ func (c *SCIMClient) getGroup(g Group) (SCIMGroupResource, error) {
 	return resource, err
 }
 
-func (c *SCIMClient) replaceUser(u User) error {
-	resource := newSCIMUserResource(u)
+func (c *SCIMClient) replaceUser(u User, directory scimUserDirectory) error {
+	if c.entra {
+		remote, found, err := c.findUserByExternalID(u)
+		if err == nil && !found {
+			err = c.entraMatchError("user", u.ID)
+		}
+		if err != nil {
+			return err
+		}
+		return c.patchEntraUser(u, directory, remote)
+	}
+	resource := newSCIMUserResource(u, directory)
 	resource.ID = u.RemoteID
 	method := http.MethodPut
 	body := any(resource)
@@ -142,7 +157,40 @@ func (c *SCIMClient) replaceUser(u User) error {
 	return c.doJSON(method, "/Users/"+url.PathEscape(u.RemoteID), body, nil, traceTargetForUser(u, "update"))
 }
 
-func newSCIMUserResource(u User) SCIMUserResource {
+// scimUserDirectory holds what a user payload needs from the rest of the
+// directory during one sync pass.
+type scimUserDirectory struct {
+	// enterprise is set for directories that manage enterprise values. Sync
+	// also retains the environment's history so clearing the last value
+	// still sends the extension.
+	enterprise bool
+	// remoteIDs maps live users to their remote IDs, or "" before they are
+	// created. Sync passes update it as they create and delete users.
+	remoteIDs map[string]string
+}
+
+func newSCIMUserDirectory(users []User) scimUserDirectory {
+	directory := scimUserDirectory{remoteIDs: make(map[string]string, len(users))}
+	for _, u := range users {
+		if u.Deleted {
+			continue
+		}
+		directory.remoteIDs[u.ID] = u.RemoteID
+		if HasEnterpriseValues(u) {
+			directory.enterprise = true
+		}
+	}
+	return directory
+}
+
+// awaitsManager reports whether u names a live manager that has no remote ID
+// yet, so u's manager reference must be sent again once it does.
+func (d scimUserDirectory) awaitsManager(u User) bool {
+	remoteID, live := d.remoteIDs[u.ManagerID]
+	return d.enterprise && u.ManagerID != "" && live && remoteID == ""
+}
+
+func newSCIMUserResource(u User, directory scimUserDirectory) SCIMUserResource {
 	active := u.Active
 	formattedName := FullName(u)
 	resource := SCIMUserResource{
@@ -164,6 +212,21 @@ func newSCIMUserResource(u User) SCIMUserResource {
 		Formatted:  formattedName,
 	}
 
+	if !directory.enterprise {
+		return resource
+	}
+	resource.Schemas = append(resource.Schemas, scimEnterpriseUserSchema)
+	resource.Enterprise = &SCIMEnterpriseUser{
+		EmployeeNumber: strings.TrimSpace(u.EmployeeNumber),
+		CostCenter:     strings.TrimSpace(u.CostCenter),
+		Organization:   strings.TrimSpace(u.Organization),
+		Division:       strings.TrimSpace(u.Division),
+		Department:     strings.TrimSpace(u.Department),
+	}
+	if managerRemoteID := directory.remoteIDs[u.ManagerID]; u.ManagerID != "" && managerRemoteID != "" {
+		resource.Enterprise.Manager = &SCIMManager{Value: managerRemoteID}
+	}
+
 	return resource
 }
 
@@ -177,16 +240,21 @@ func (c *SCIMClient) createGroup(g Group, users []User) (string, bool, error) {
 		return "", false, err
 	}
 
-	remoteID, found, err := c.findGroupByExternalID(g)
+	remote, found, err := c.findGroupByExternalID(g)
 	switch {
 	case err != nil:
 		return "", false, err
 	case err == nil && found:
-		g.RemoteID = remoteID
-		if err := c.replaceGroup(g, users); err != nil {
+		g.RemoteID = remote.ID
+		if c.entra {
+			err = c.patchEntraGroup(g, users, remote)
+		} else {
+			err = c.replaceGroup(g, users)
+		}
+		if err != nil {
 			return "", false, err
 		}
-		return remoteID, true, nil
+		return remote.ID, true, nil
 	}
 
 	var response SCIMGroupResource
@@ -203,7 +271,7 @@ func (c *SCIMClient) createGroup(g Group, users []User) (string, bool, error) {
 	return response.ID, false, nil
 }
 
-func (c *SCIMClient) findGroupByExternalID(g Group) (string, bool, error) {
+func (c *SCIMClient) findGroupByExternalID(g Group) (SCIMGroupResource, bool, error) {
 	return findByExternalID(c, "group", "/Groups", g.ID, g.DisplayName,
 		func(resource SCIMGroupResource) string { return resource.ExternalID },
 		func(resource SCIMGroupResource) string { return resource.ID },
@@ -211,10 +279,11 @@ func (c *SCIMClient) findGroupByExternalID(g Group) (string, bool, error) {
 }
 
 // findByExternalID looks one resource up by its externalId filter and
-// returns its remote id. Providers without filtering support fall back to
-// walking the full collection.
-func findByExternalID[T any](c *SCIMClient, resourceType string, resourcePath string, externalID string, label string, externalIDOf func(T) string, idOf func(T) string) (string, bool, error) {
-	path := externalIDFilterPath(resourcePath, externalID)
+// returns it. Providers without filtering support fall back to walking the
+// full collection, except in Entra ID's dialect, which only filters.
+func findByExternalID[T any](c *SCIMClient, resourceType string, resourcePath string, externalID string, label string, externalIDOf func(T) string, idOf func(T) string) (T, bool, error) {
+	var none T
+	path := c.externalIDFilterPath(resourcePath, externalID)
 	var response SCIMListResponse[T]
 	if err := c.doJSON(http.MethodGet, path, nil, &response, TraceTarget{
 		ResourceType: resourceType,
@@ -222,64 +291,68 @@ func findByExternalID[T any](c *SCIMClient, resourceType string, resourcePath st
 		Label:        label,
 		Operation:    "adopt",
 	}); err != nil {
-		if c.filter || isStoppingSCIMError(err) {
-			return "", false, err
+		if c.filter || c.entra || isStoppingSCIMError(err) {
+			return none, false, err
 		}
 		return findByExternalIDWithoutFilter(c, resourceType, resourcePath, externalID, externalIDOf, idOf, err)
 	}
 	if err := validateExternalIDMatches(response.TotalResults, len(response.Resources), externalID); err != nil {
 		c.setLastTraceError(err)
-		return "", false, err
+		return none, false, err
 	}
 	if len(response.Resources) == 0 {
-		return "", false, nil
+		return none, false, nil
 	}
 	resource := response.Resources[0]
 	if externalIDOf(resource) != externalID {
 		err := fmt.Errorf("SCIM %s filter for externalId %q returned externalId %q", resourceType, externalID, externalIDOf(resource))
 		c.setLastTraceError(err)
-		return "", false, err
+		return none, false, err
 	}
-	remoteID := idOf(resource)
-	if strings.TrimSpace(remoteID) == "" {
+	if strings.TrimSpace(idOf(resource)) == "" {
 		err := fmt.Errorf("SCIM %s matched by externalId %q is missing id", resourceType, externalID)
 		c.setLastTraceError(err)
-		return "", false, err
+		return none, false, err
 	}
-	return remoteID, true, nil
+	return resource, true, nil
 }
 
-func findByExternalIDWithoutFilter[T any](c *SCIMClient, resourceType string, resourcePath string, externalID string, externalIDOf func(T) string, idOf func(T) string, filterErr error) (string, bool, error) {
+func findByExternalIDWithoutFilter[T any](c *SCIMClient, resourceType string, resourcePath string, externalID string, externalIDOf func(T) string, idOf func(T) string, filterErr error) (T, bool, error) {
+	var match T
 	resources, err := listResources[T](c, resourceType, resourcePath, "adopt")
 	if err != nil {
-		return "", false, fmt.Errorf("find SCIM %s by externalId %q after filtered lookup failed (%v): %w", resourceType, externalID, filterErr, err)
+		return match, false, fmt.Errorf("find SCIM %s by externalId %q after filtered lookup failed (%v): %w", resourceType, externalID, filterErr, err)
 	}
 
-	remoteID := ""
+	found := false
 	for _, resource := range resources {
 		if externalIDOf(resource) != externalID {
 			continue
 		}
-		if remoteID != "" {
+		if found {
 			err := fmt.Errorf("SCIM %s list returned multiple resources for externalId %q", resourceType, externalID)
 			c.setLastTraceError(err)
-			return "", false, err
+			return match, false, err
 		}
-		remoteID = strings.TrimSpace(idOf(resource))
-		if remoteID == "" {
+		if strings.TrimSpace(idOf(resource)) == "" {
 			err := fmt.Errorf("SCIM %s matched by externalId %q is missing id", resourceType, externalID)
 			c.setLastTraceError(err)
-			return "", false, err
+			return match, false, err
 		}
+		match, found = resource, true
 	}
-	return remoteID, remoteID != "", nil
+	return match, found, nil
 }
 
-func externalIDFilterPath(resourcePath string, externalID string) string {
+// externalIDFilterPath builds an externalId lookup. Entra ID sends the filter
+// alone, without paging parameters.
+func (c *SCIMClient) externalIDFilterPath(resourcePath string, externalID string) string {
 	value := strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(externalID)
 	query := url.Values{
-		"count":  {"2"},
 		"filter": {fmt.Sprintf(`externalId eq "%s"`, value)},
+	}
+	if !c.entra {
+		query.Set("count", "2")
 	}
 	return resourcePath + "?" + query.Encode()
 }
@@ -296,6 +369,16 @@ func validateExternalIDMatches(totalResults int, resourceCount int, externalID s
 }
 
 func (c *SCIMClient) replaceGroup(g Group, users []User) error {
+	if c.entra {
+		remote, found, err := c.findGroupByExternalID(g)
+		if err == nil && !found {
+			err = c.entraMatchError("group", g.ID)
+		}
+		if err != nil {
+			return err
+		}
+		return c.patchEntraGroup(g, users, remote)
+	}
 	resource, err := newSCIMGroupResource(g, users)
 	if err != nil {
 		return err
@@ -320,7 +403,8 @@ type scimPatchRequest struct {
 
 type scimPatchOperation struct {
 	Op    string `json:"op"`
-	Value any    `json:"value"`
+	Path  string `json:"path,omitempty"`
+	Value any    `json:"value,omitempty"`
 }
 
 func newSCIMPatchRequest(value any) scimPatchRequest {

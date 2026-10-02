@@ -497,6 +497,32 @@
               <span class="label field-label">Family name<span class="hint">Optional</span></span>
               <input name="family_name" value="{{.UserForm.User.FamilyName}}" autocomplete="off">
             </label>
+            <details class="field full form-disclosure" {{if or .UserForm.User.EmployeeNumber .UserForm.User.CostCenter .UserForm.User.Organization .UserForm.User.Division .UserForm.User.Department .UserForm.User.ManagerID}}open{{end}}>
+              <summary>Enterprise attributes</summary>
+              <div class="form-grid">
+                <label class="field"><span class="label">Employee number</span><input name="employee_number" value="{{.UserForm.User.EmployeeNumber}}" autocomplete="off"></label>
+                <label class="field"><span class="label">Department</span><input name="department" value="{{.UserForm.User.Department}}" autocomplete="off"></label>
+                <label class="field"><span class="label">Division</span><input name="division" value="{{.UserForm.User.Division}}" autocomplete="off"></label>
+                <label class="field"><span class="label">Organization</span><input name="organization" value="{{.UserForm.User.Organization}}" autocomplete="off"></label>
+                <label class="field"><span class="label">Cost center</span><input name="cost_center" value="{{.UserForm.User.CostCenter}}" autocomplete="off"></label>
+                <label class="field">
+                  <span class="label">Manager</span>
+                  <select name="manager_id">
+                    <option value="">No manager</option>
+                    {{range .UserForm.Managers}}<option value="{{.ID}}" {{if .Selected}}selected{{end}}>{{.Label}}</option>{{end}}
+                  </select>
+                </label>
+                <span class="hint field full">Sent in the SCIM enterprise extension, as OIDC claims with the profile scope, and as SAML attributes.</span>
+              </div>
+            </details>
+            <details class="field full form-disclosure" {{if .UserForm.Attributes}}open{{end}}>
+              <summary>Custom attributes</summary>
+              <label class="field full">
+                <span class="label">Attributes</span>
+                <textarea name="attributes" rows="4" spellcheck="false" autocomplete="off" placeholder="role=student&#10;campus=Greendale">{{.UserForm.Attributes}}</textarea>
+                <span class="hint">One name=value per line. Sent as OIDC claims with the profile scope and as SAML attributes. SCIM does not send them.</span>
+              </label>
+            </details>
           </div>
           <div class="form-actions">
             <a class="btn btn-ghost" href="{{.UserForm.Close}}">Cancel</a>
@@ -622,6 +648,21 @@
 				</select>
 				<span class="hint">Identifier mode prevents the sign-in page from listing directory users.</span>
 			  </label>
+			  <label class="field">
+				<span class="label">Provider persona</span>
+				<select name="persona">
+				  <option value="generic" {{if eq .AppForm.App.Persona "generic"}}selected{{end}}>Generic</option>
+				  <option value="entra" {{if eq .AppForm.App.Persona "entra"}}selected{{end}}>Microsoft Entra ID</option>
+				  <option value="okta" {{if eq .AppForm.App.Persona "okta"}}selected{{end}}>Okta</option>
+				  <option value="google" {{if eq .AppForm.App.Persona "google"}}selected{{end}}>Google</option>
+				</select>
+				<span class="hint">Shapes OIDC claims like the real provider. Entra ID also changes SCIM requests.</span>
+			  </label>
+			  <label class="field">
+				<span class="label">Entra ID groups overage threshold</span>
+				<input type="number" name="groups_overage_threshold" min="0" step="1" inputmode="numeric" value="{{if .AppForm.App.GroupsOverageThreshold}}{{.AppForm.App.GroupsOverageThreshold}}{{end}}" placeholder="200" autocomplete="off">
+				<span class="hint">Above this many groups, Entra ID tokens point to an overage endpoint instead of listing groups.</span>
+			  </label>
 			  <label class="field full">
 				<span class="label">Groups in sign-in responses</span>
 				<span class="checkbox-row"><input type="checkbox" name="include_groups_claim" {{if .AppForm.App.IncludeGroupsClaim}}checked{{end}}> Include groups in OIDC claims and SAML attributes</span>
@@ -731,6 +772,16 @@
 			  <label class="field full">
 				<span class="label">Logout token session</span>
 				<span class="checkbox-row"><input type="checkbox" name="oidc_backchannel_logout_session_required" {{if .AppForm.App.OIDCBackchannelLogoutSessionRequired}}checked{{end}}> Session required (send sid with sub)</span>
+			  </label>
+			  <label class="field full">
+				<span class="label">Access tokens</span>
+				<span class="checkbox-row"><input type="checkbox" name="oidc_jwt_access_tokens" {{if .AppForm.App.OIDCJWTAccessTokens}}checked{{end}}> Issue JWT access tokens (RFC 9068)</span>
+				<span class="hint">APIs can validate them locally against the JWKS. Off issues opaque tokens.</span>
+			  </label>
+			  <label class="field full">
+				<span class="label">Access token audience</span>
+				<input name="oidc_access_token_audience" value="{{.AppForm.App.OIDCAccessTokenAudience}}" placeholder="Defaults to the client ID" autocomplete="off">
+				<span class="hint">The aud claim of JWT access tokens. Use the identifier your API expects.</span>
 			  </label>
 			  <details class="field full form-disclosure">
 			  <summary>OIDC claim mappings</summary>
@@ -855,6 +906,15 @@
               <details class="field full form-disclosure">
               <summary>Signing and Encryption</summary>
               <div class="form-grid">
+              <label class="field full">
+                <span class="label">Signed parts</span>
+                <select name="saml_signing_mode">
+                  <option value="assertion" {{if eq .AppForm.App.SAMLSigningMode "assertion"}}selected{{end}}>Assertion</option>
+                  <option value="response" {{if eq .AppForm.App.SAMLSigningMode "response"}}selected{{end}}>Response</option>
+                  <option value="both" {{if eq .AppForm.App.SAMLSigningMode "both"}}selected{{end}}>Response and assertion</option>
+                </select>
+                <span class="hint">Choose what the SP requires. With encryption, the assertion is signed before it is encrypted and the Response after.</span>
+              </label>
               <label class="field full">
                 <span class="label">SP request-signing certificate</span>
                 <textarea name="saml_request_certificate_pem" rows="7" spellcheck="false" autocomplete="off" placeholder="-----BEGIN CERTIFICATE-----&#10;MIIC...&#10;-----END CERTIFICATE-----">{{.AppForm.App.SAMLRequestCertPEM}}</textarea>

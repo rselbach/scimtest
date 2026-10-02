@@ -245,7 +245,7 @@ func (a *webApp) serveSAMLLogoutRequest(w http.ResponseWriter, r *http.Request, 
 	responseXML, err := buildSAMLLogoutResponse(samlIDPEntityID(baseURL, app.Slug), app.SAMLSLOURL, request.ID, status, time.Now())
 	if err == nil {
 		var response samlOutboundMessage
-		response, err = a.encodeSAMLLogoutMessage(message.Binding, "SAMLResponse", app.SAMLSLOURL, responseXML, message.RelayState)
+		response, err = a.encodeSAMLLogoutMessage(app, message.Binding, "SAMLResponse", app.SAMLSLOURL, responseXML, message.RelayState)
 		if err == nil {
 			a.recordSPInitiatedLogout(app, request, message, response, status, ended)
 			response.deliver(w, r)
@@ -447,10 +447,14 @@ func (a *webApp) serveSAMLLogoutResponse(w http.ResponseWriter, r *http.Request,
 	requestID := strings.TrimSpace(root.SelectAttrValue("InResponseTo", ""))
 	binding := samlBindingName(message.Binding)
 	status, err := checkSAMLLogoutResponse(r, app, baseURL, message, time.Now())
+	if err != nil {
+		problem := "SAML LogoutResponse rejected: " + err.Error()
+		a.recordSAMLLogoutTraffic("Rejected with HTTP 400: "+problem, samlLogoutTraffic{"LogoutResponse from SP (" + binding + ")", message.XML})
+		a.failFlow(w, app, "saml", "logout", http.StatusBadRequest, problem)
+		return
+	}
 	outcome, statusCode, detail := "failed", "", ""
 	switch {
-	case err != nil:
-		detail = "rejected: " + err.Error()
 	case status.success():
 		outcome, statusCode, detail = "ok", status.Code, "the SP answered "+status.String()
 	default:
@@ -466,10 +470,6 @@ func (a *webApp) serveSAMLLogoutResponse(w http.ResponseWriter, r *http.Request,
 	summary := fmt.Sprintf("LogoutResponse to %s via %s: %s", requestID, binding, detail)
 	a.recordSAMLLogoutTraffic(summary, samlLogoutTraffic{"LogoutResponse from SP (" + binding + ")", message.XML})
 	a.recordFlowEvent(app.Slug, "saml", "logout", outcome, logout.User, summary)
-	if err != nil {
-		http.Error(w, "SAML LogoutResponse "+detail, http.StatusBadRequest)
-		return
-	}
 	renderLogoutPage(w, logoutPage{AppName: app.Name, User: logout.User, Detail: "The service provider answered " + status.String() + "."})
 }
 
@@ -555,7 +555,7 @@ func (a *webApp) startSAMLLogout(app app, baseURL string, session idpSession, bi
 	if err != nil {
 		return samlOutboundMessage{}, err
 	}
-	message, err := a.encodeSAMLLogoutMessage(binding, "SAMLRequest", app.SAMLSLOURL, requestXML, "")
+	message, err := a.encodeSAMLLogoutMessage(app, binding, "SAMLRequest", app.SAMLSLOURL, requestXML, "")
 	if err != nil {
 		return samlOutboundMessage{}, err
 	}
@@ -608,10 +608,18 @@ func buildSAMLLogoutResponse(issuer, destination, inResponseTo string, status sa
 // encodeSAMLLogoutMessage signs messageXML for binding and encodes it as
 // param. HTTP-POST carries an enveloped XML signature. HTTP-Redirect deflates
 // the message and signs the query string instead.
-func (a *webApp) encodeSAMLLogoutMessage(binding, param, destination, messageXML, relayState string) (samlOutboundMessage, error) {
+func (a *webApp) encodeSAMLLogoutMessage(app app, binding, param, destination, messageXML, relayState string) (samlOutboundMessage, error) {
+	state, err := loadStateForApp(app.ID)
+	if err != nil {
+		return samlOutboundMessage{}, err
+	}
+	key, err := a.activeSigningKey(state)
+	if err != nil {
+		return samlOutboundMessage{}, err
+	}
 	message := samlOutboundMessage{Binding: binding, Param: param, Destination: destination, XML: messageXML, RelayState: relayState}
 	if binding == samlHTTPPostBinding {
-		signed, err := a.signSAMLLogoutXML(messageXML)
+		signed, err := signSAMLLogoutXML(key, messageXML)
 		if err != nil {
 			return samlOutboundMessage{}, err
 		}
@@ -635,7 +643,7 @@ func (a *webApp) encodeSAMLLogoutMessage(binding, param, destination, messageXML
 		query += "&RelayState=" + url.QueryEscape(relayState)
 	}
 	query += "&SigAlg=" + url.QueryEscape(rsaSHA256SignatureMethod)
-	signature, err := a.signSAMLRedirectQuery(query)
+	signature, err := signSAMLRedirectQuery(key, query)
 	if err != nil {
 		return samlOutboundMessage{}, err
 	}
@@ -654,33 +662,27 @@ func (a *webApp) encodeSAMLLogoutMessage(binding, param, destination, messageXML
 
 // signSAMLLogoutXML adds an enveloped signature after the message's Issuer,
 // as the HTTP-POST binding carries it.
-func (a *webApp) signSAMLLogoutXML(messageXML string) (string, error) {
+func signSAMLLogoutXML(key signingKey, messageXML string) (string, error) {
 	doc := etree.NewDocument()
 	if err := doc.ReadFromString(messageXML); err != nil {
 		return "", fmt.Errorf("parse SAML logout message for signing: %w", err)
 	}
-	ctx, err := dsig.NewSigningContext(a.signingKey, [][]byte{a.certDER})
+	ctx, err := dsig.NewSigningContext(key.PrivateKey, [][]byte{key.CertDER})
 	if err != nil {
 		return "", fmt.Errorf("create SAML signing context: %w", err)
 	}
 	ctx.Canonicalizer = dsig.MakeC14N10ExclusiveCanonicalizerWithPrefixList("")
-	signature, err := ctx.ConstructSignature(doc.Root(), true)
-	if err != nil {
+	if _, err := signSAMLElement(ctx, doc.Root()); err != nil {
 		return "", fmt.Errorf("sign SAML logout message: %w", err)
 	}
-	signed := doc.Root().Copy()
-	if err := placeSAMLAssertionSignature(signed, signature); err != nil {
-		return "", err
-	}
-	doc.SetRoot(signed)
 	return doc.WriteToString()
 }
 
 // signSAMLRedirectQuery signs an HTTP-Redirect binding query that ends with
 // SigAlg, and returns the base64 Signature value.
-func (a *webApp) signSAMLRedirectQuery(query string) (string, error) {
+func signSAMLRedirectQuery(key signingKey, query string) (string, error) {
 	digest := sha256.Sum256([]byte(query))
-	signature, err := rsa.SignPKCS1v15(rand.Reader, a.signingKey, crypto.SHA256, digest[:])
+	signature, err := rsa.SignPKCS1v15(rand.Reader, key.PrivateKey, crypto.SHA256, digest[:])
 	if err != nil {
 		return "", fmt.Errorf("sign SAML Redirect query: %w", err)
 	}

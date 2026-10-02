@@ -79,7 +79,8 @@ steps, the authentication design, and release packaging details.
    OIDC and SAML connection values (issuer, discovery, metadata, and
    certificate) appear as you type and can be copied or downloaded.
 3. Load the Greendale sample (from the empty users list or Bulk tools) to
-   get ten named users and three overlapping groups instantly.
+   get ten named users and three overlapping groups instantly. The users
+   come with departments, managers, and a `role` attribute.
 4. Test: use **Test sign-in** for a real flow against your app, the
    built-in **playground** for an instant OIDC round trip with no relying
    party required, or **Sync** to push the directory to your app's SCIM
@@ -96,7 +97,7 @@ steps, the authentication design, and release packaging details.
   selector in the top bar sets the context for the whole admin UI.
 - **OIDC playground.** A built-in relying party that runs the full
   authorization-code exchange and shows the token response, decoded and
-  raw ID token, and userinfo on one page. It requests `offline_access`, so
+  raw ID token, decoded JWT access token, and userinfo on one page. It requests `offline_access`, so
   the page can also redeem the refresh token, optionally with a narrower
   scope, and show the refreshed claims beside the ones they replace.
 - **Flow inspectors.** Per-environment OIDC and SAML inspectors keep the
@@ -112,12 +113,13 @@ steps, the authentication design, and release packaging details.
   optional raw-secret capture. `--debug` additionally prints transcripts
   to stdout.
 - **Fault Injection.** Choose **Fault Injection** in an environment's sidebar to
-  arm a preset such as a temporary token outage, a slow token endpoint, an
+  arm a preset such as a temporary token outage, a slow token endpoint, a stale JWKS, an
   expired token, a broken signature, an unsigned token, a wrong audience, a
   missing claim, a replayed SAML assertion, or a SAML failure. The page waits
   for RP-initiated and SP-initiated flows, records each injection, and
-  disarms active scenarios after 15 minutes. Token endpoint presets hit both
-  code exchanges and refresh requests, and each injection names the grant. Inspector controls still provide
+  disarms active scenarios after 15 minutes. Token endpoint presets hit code
+  exchanges, refresh requests, and `client_credentials` requests, and each
+  injection names the grant. Inspector controls still provide
   one-shot clock skew, token and assertion lifetime, claim, signature, and
   error faults, plus tamper faults that break one validation rule in an
   otherwise valid response. OIDC tamper faults cover a wrong issuer or
@@ -131,6 +133,12 @@ steps, the authentication design, and release packaging details.
 - **SCIM sync.** Push the directory to your app's SCIM endpoint, reconcile
   drift, import an existing remote directory with a preview, and inspect
   every request in the sync trace and per-resource history.
+- **User attributes.** Give users enterprise fields (employee number, cost
+  center, organization, division, department, and manager) and custom
+  attributes such as `role=student`, to test attribute-based role mapping.
+- **Provider personas.** Shape an environment's claims and SCIM requests like
+  Microsoft Entra ID, Okta, or Google, to catch breaks before moving an app
+  from one provider to another.
 - **Config export.** Download SAML IDP metadata and the signing
   certificate as files, or fetch `GET /apps/{id}/config.json` for a
   machine-readable connection bundle to use in CI.
@@ -150,14 +158,29 @@ Each environment can expose OIDC, SAML, or both, under its endpoint name
 - OIDC userinfo: `/oidc/{slug}/userinfo`
 - OIDC end session (RP-initiated logout): `/oidc/{slug}/logout`
 - OIDC JWKS: `/oidc/{slug}/jwks`
+- Entra ID groups overage: `/oidc/{slug}/users/{oid}/getMemberObjects`
+- OIDC token introspection: `/oidc/{slug}/introspect`
+- OIDC token revocation: `/oidc/{slug}/revoke`
 - SAML metadata: `/saml/{slug}/metadata` (`?download=1` for a file)
 - SAML certificate: `/saml/{slug}/certificate.pem`
 - SAML SSO: `/saml/{slug}/sso`
 - SAML Single Logout: `/saml/{slug}/slo`
 
-The OIDC flow signs RS256 ID tokens. SAML responses include a signed
-assertion. Signing material is generated on first run and stored in the
-SQLite state database.
+The OIDC flow signs RS256 ID tokens. SAML setup's **Signed parts** chooses
+what scimtest signs: the assertion (the default), the Response, or both. An SP
+that needs a signed Response can sign in, and an SP that accepts less than it
+should can be caught. The broken-signature fault corrupts every signature the
+response carries. Signing material is generated on first run and stored in the
+SQLite state database. Every environment starts with this shared key, whose
+`kid` is `scimtest-dev`.
+
+Select **Rotate signing key** in either inspector to give one environment a
+new key. New ID tokens and assertions use it at once. The old key stays in
+the JWKS and the SAML metadata for the grace period you choose: 24 hours by
+default, 1 hour, or none. Other environments keep their keys. The setup panel,
+the certificate download, and the config export show the active certificate.
+To test how an app refetches keys, arm the **Stale JWKS** scenario. The next
+JWKS responses leave out the active key, as a cached or lagging key set would.
 
 Add `offline_access` to the OIDC scope to receive a refresh token. Each
 refresh rotates the token: the response carries a replacement, and the
@@ -166,6 +189,33 @@ it. It fails with `invalid_grant` once the user is deactivated or deleted.
 The OIDC inspector lists users with live tokens and can revoke one user's
 tokens or all of them, as an administrator would. Refresh tokens last 24
 hours and are kept in memory, so restarting scimtest revokes them.
+
+Access tokens are opaque by default. Turn on **Issue JWT access tokens** in
+OIDC setup to receive RFC 9068 JWT access tokens instead, so an API can
+validate them locally against the JWKS. They carry the header `typ: at+jwt`
+and the claims `iss`, `sub`, `aud`, `client_id`, `scope`, `iat`, `exp`,
+`jti`, `auth_time`, `acr`, and `amr`. `aud` is the **Access token audience**,
+or the client ID when that field is empty. Code exchanges and refreshes issue
+the same format, and userinfo accepts it. Tamper faults, broken signatures,
+and clock skew apply to JWT access tokens as they do to ID tokens. The ID token
+lifetime, dropped claims, and nonce mismatch faults change only the ID token.
+
+A confidential client can request a token for itself with
+`grant_type=client_credentials`. The response has an access token with the
+requested scope, and no ID token or refresh token. As a JWT, its `sub` is the
+client ID and it has no `auth_time`, `acr`, or `amr`. Userinfo rejects it
+because it has no user. Public clients get `unauthorized_client`.
+
+`/oidc/{slug}/introspect` (RFC 7662) and `/oidc/{slug}/revoke` (RFC 7009)
+authenticate the client the same way the token endpoint does. Introspection
+reports `active`, `scope`, `client_id`, `sub`, `username`, `iss`, `iat`, and
+`exp`, plus `token_type` for access tokens and `aud` for JWT access tokens. A
+token is inactive once it expires, is revoked, or its user is deactivated or
+deleted. Revoking an access token ends only that token. Revoking a refresh
+token also ends every access token issued from the same authorization, across
+refreshes. Unknown tokens get `200`, as RFC 7009 requires. The inspector's
+token list counts only user tokens; **Revoke all** also ends
+`client_credentials` tokens.
 
 The chooser's **Sign-in method** sets how the user authenticated: **Password**
 or **Password + MFA**. ID tokens report the method in `acr`, `amr`, and
@@ -256,11 +306,71 @@ inspector lists each request and the SP's answer. Ending a session any other
 way does not notify the SP, because both bindings need a browser to carry the
 message. Recent activity and the Traffic view record every logout message.
 
+A user's enterprise fields and custom attributes reach the app through every
+protocol:
+
+- **OIDC.** ID tokens and userinfo include them when the scope has `profile`.
+  Enterprise claims use the SCIM names `employeeNumber`, `costCenter`,
+  `organization`, `division`, `department`, and `manager`. The `manager` claim
+  is the manager's `sub`. Empty fields are left out.
+- **SAML.** Assertions carry them as attributes with the same names. The
+  `manager` attribute is the manager's NameID value.
+- **SCIM.** Once any user in the environment has an enterprise field, every
+  user payload carries the
+  `urn:ietf:params:scim:schemas:extension:enterprise:2.0:User` extension. The
+  environment remembers this after its last value is cleared, including across
+  restarts, so updates and reconciliation remove stale remote values.
+  Cleared fields are sent as empty strings and a removed manager as `null`.
+  `manager.value` is the manager's ID in the app. When a sync creates a
+  manager after one of their reports, scimtest updates the report with the
+  manager once the manager exists. Import reads the extension back.
+
+Custom attributes use their own names, such as `role` or a claim URI. They
+never replace a claim or attribute that scimtest already sends. SCIM does not
+send them, and SCIM import keeps the local values. A deleted manager stops
+appearing in claims, attributes, and SCIM payloads.
+
+An environment's **Provider persona** shapes its OIDC claims, and for Entra
+ID its SCIM requests, the way that provider sends them. **Generic** is
+scimtest's own shape. ID tokens and userinfo change as follows:
+
+- **Microsoft Entra ID.** Every token carries `tid`, a tenant GUID that stays
+  the same for the environment. With `profile`, tokens also carry `oid`, a
+  GUID that stays the same for the user, and `upn`. `preferred_username` is
+  the UPN: the username, or the username at the email's domain when the
+  username has no `@`. `email_verified` is left out, as Entra ID leaves it
+  out. When a user has more groups than the **groups overage threshold**
+  (200 by default), the token drops `groups` and carries `_claim_names` and
+  `_claim_sources` instead. The source endpoint,
+  `POST /oidc/{slug}/users/{oid}/getMemberObjects`, answers like Microsoft
+  Graph: send the user's access token and `{"securityEnabledOnly": false}`,
+  and the response's `value` lists the groups. The token must have the
+  `groups` scope and belong to that user.
+- **Okta.** Tokens carry `ver: 1`. The `groups` claim starts with
+  `Everyone`, the group Okta puts every user in.
+- **Google.** Tokens carry `hd`, the email's domain, except for `gmail.com`
+  addresses. `email_verified` stays.
+
+Claim mappings still apply. When a mapping renames a field to a claim that
+the persona also sends, the mapped value wins. Personas do not change SAML
+assertions.
+
+The Entra ID persona also changes SCIM sync to match Entra ID's default
+dialect. Before every user or group write, scimtest looks the resource up
+with `filter=externalId eq "..."` and nothing else. If the filter fails,
+scimtest does not fall back to listing the collection. Updates are always
+`PATCH`, with one operation per changed attribute. Operations use capitalized
+`op` values (`Add`, `Replace`, `Remove`) and paths such as
+`emails[type eq "work"].value`. `active` is sent as the string `"True"` or
+`"False"`. The manager is sent as a bare ID. Group updates add and remove
+only the members that changed. Creates use `POST` as before.
+
 Paste the service provider's RSA encryption certificate into SAML setup to
-wrap that signed assertion in `EncryptedAssertion` (AES-128-GCM, AES-192-GCM,
-or AES-256-GCM, RSA-OAEP). AES-256-GCM is the default.
-Leave the field empty to post the signed assertion in the clear. The SAML
-inspector still shows the signed assertion this IDP produced.
+wrap the assertion in `EncryptedAssertion` (AES-128-GCM, AES-192-GCM, or
+AES-256-GCM, RSA-OAEP). AES-256-GCM is the default. The assertion is signed
+before it is encrypted, and the Response after, so the Response signature
+covers the `EncryptedAssertion`. Leave the field empty to post the assertion in
+the clear. The SAML inspector still shows the assertion before encryption.
 
 To require signed AuthnRequests, paste the service provider's RSA X.509
 certificate into the request-signing certificate field. Leave the field empty
@@ -326,6 +436,9 @@ GET /oidc/{slug}/jwks
 GET,POST /oidc/{slug}/authorize
 POST /oidc/{slug}/token
 GET,POST /oidc/{slug}/userinfo
+POST /oidc/{slug}/users/{oid}/getMemberObjects
+POST /oidc/{slug}/introspect
+POST /oidc/{slug}/revoke
 GET,POST /oidc/{slug}/logout
 GET /saml/{slug}/metadata
 GET /saml/{slug}/certificate.pem
