@@ -239,7 +239,7 @@ func (a *webApp) issueOIDCCode(w http.ResponseWriter, r *http.Request, app app, 
 func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
-	state, app, ok := appForProtocol(w, r, supportsOIDC)
+	_, app, ok := appForProtocol(w, r, supportsOIDC)
 	if !ok {
 		return
 	}
@@ -301,7 +301,8 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	code, ok = a.authCodes[codeValue]
-	if !ok {
+	if !ok || !code.ExpiresAt.After(time.Now()) {
+		delete(a.authCodes, codeValue)
 		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_grant", "authorization code is invalid or expired")
 		return
 	}
@@ -309,6 +310,11 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 	// Fault injection: fail the exchange on demand before doing any work.
 	if code.Faults.TokenError != "" {
 		a.failOAuth(w, app, "token", http.StatusBadRequest, code.Faults.TokenError, "injected token error")
+		return
+	}
+	state, err := loadStateForApp(app.ID)
+	if err != nil {
+		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
 		return
 	}
 	user, ok := userByID(state.Users, code.UserID)
