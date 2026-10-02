@@ -29,6 +29,10 @@ type oidcConfigExport struct {
 	// AccessTokenAudience in aud.
 	JWTAccessTokens     bool   `json:"jwt_access_tokens"`
 	AccessTokenAudience string `json:"access_token_audience,omitempty"`
+
+	// IntrospectionURL and RevocationURL serve RFC 7662 and RFC 7009.
+	IntrospectionURL string `json:"introspection_url"`
+	RevocationURL    string `json:"revocation_url"`
 }
 
 type samlConfigExport struct {
@@ -77,6 +81,8 @@ func (a *webApp) appConfigExport(r *http.Request, state appState, foundApp app) 
 			PublicClient: foundApp.OIDCPublicClient,
 			RedirectURIs: foundApp.OIDCRedirectURIs,
 		}
+		export.OIDC.IntrospectionURL = issuer + "/introspect"
+		export.OIDC.RevocationURL = issuer + "/revoke"
 		if foundApp.OIDCJWTAccessTokens {
 			export.OIDC.JWTAccessTokens = true
 			export.OIDC.AccessTokenAudience = accessTokenAudience(foundApp)

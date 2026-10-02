@@ -58,3 +58,5 @@ exactly four H2 sections in this order.
   party, chooser, token exchange, claims, and inspector.
 - [Export environment config](./config-export.md) covers the setup link and the
   machine-readable OIDC bundle.
+- [Use the OAuth client endpoints](./oauth-client-endpoints.md) covers
+  `client_credentials`, token introspection, and token revocation.

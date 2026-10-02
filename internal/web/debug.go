@@ -276,7 +276,7 @@ func redactJSONValue(value any) {
 // redacted mode prints them decoded anyway.
 func isSensitiveDebugKey(key string) bool {
 	switch strings.ToLower(key) {
-	case "client_secret", "code", "code_verifier", "access_token", "id_token", "refresh_token", "assertion", "samlresponse":
+	case "client_secret", "code", "code_verifier", "access_token", "id_token", "refresh_token", "token", "assertion", "samlresponse":
 		return true
 	default:
 		return false

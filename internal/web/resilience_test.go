@@ -179,7 +179,7 @@ func TestInvalidTokenRequestsDoNotConsumeScenario(t *testing.T) {
 		wantStatus int
 	}{
 		"bad client credentials": {code: code, grantType: "authorization_code", secret: "wrong", wantStatus: http.StatusUnauthorized},
-		"unsupported grant":      {code: code, grantType: "client_credentials", secret: "secret", wantStatus: http.StatusBadRequest},
+		"unsupported grant":      {code: code, grantType: "password", secret: "secret", wantStatus: http.StatusBadRequest},
 		"unknown code":           {code: "unknown", grantType: "authorization_code", secret: "secret", wantStatus: http.StatusBadRequest},
 	}
 	for name, tc := range tests {

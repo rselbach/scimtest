@@ -114,6 +114,10 @@ func TestDebugRedaction(t *testing.T) {
 			}.Encode()), false),
 			want: "client_id=greendale&client_secret=%5BREDACTED%5D&code=%5BREDACTED%5D",
 		},
+		"introspected or revoked token": {
+			got:  debugBody("application/x-www-form-urlencoded", []byte("token=paintball&token_type_hint=access_token"), false),
+			want: "token=%5BREDACTED%5D&token_type_hint=access_token",
+		},
 		"JSON tokens": {
 			got:  debugResponseBody("application/json", `{"access_token":"paintball","token_type":"Bearer"}`, false),
 			want: "{\n  \"access_token\": \"[REDACTED]\",\n  \"token_type\": \"Bearer\"\n}",
