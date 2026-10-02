@@ -163,6 +163,8 @@ All paths in this section are relative to `/environments/{id}`.
 | POST | `/oidc/playground` | Run authorization, code exchange, and userinfo locally and return the results. |
 | GET | `/oidc/tokens` | Users holding live access or refresh tokens, with counts. |
 | DELETE | `/oidc/tokens` | Revoke every token, or one user's with `?user_id=`. Returns `revoked`. |
+| GET | `/sessions` | Live IdP sessions, newest sign-in first. |
+| DELETE | `/sessions` | End every IdP session, or one with `?session_id=`. Returns `ended`. |
 | POST | `/saml/sign-in` | Return `acs_url`, base64 `saml_response`, and `relay_state`. |
 | GET | `/inspections/oidc`, `/inspections/saml` | Recent protocol inspections. |
 | GET | `/flows` | Recent flow activity, including failures. |
@@ -185,6 +187,16 @@ invalidates the presented token. After a revocation, refreshes fail with
 `invalid_grant` and userinfo calls fail with `invalid_token`.
 Userinfo remains at `/oidc/{slug}/userinfo`. The
 [automation example](automation.md) performs both requests.
+
+API calls normally carry no browser cookie, so each OIDC authorization,
+playground run, and SAML sign-in through the API starts its own IdP session. ID
+tokens carry the session ID in `sid`, and refreshed ID tokens keep it. Each
+session in `GET /sessions` has `session_id`, `user_id`, `user`,
+`signed_in_at`, `authn_strength`, `protocols` (`oidc`, `saml`, or both), and
+`started_at`. Ending a session signs that browser out, as the end session
+endpoint `/oidc/{slug}/logout` does, but leaves its tokens valid. Ending an
+unknown `session_id` returns `404`. Deactivating or deleting a user ends that
+user's sessions.
 
 The headless playground accepts `{"user_id":"..."}` and optional `faults`
 using the fields below. It handles confidential-client authentication or
@@ -219,9 +231,10 @@ both protocols are `wrong_issuer` and `wrong_audience`. OIDC adds
 sent. Invalid fault values are rejected. Fault scenarios expire after
 15 minutes.
 
-Traffic, inspections, flow activity, faults, and jobs are in memory. They
-disappear when the app restarts. Traffic retains 100 entries, inspectors retain
-ten flows, and flow activity retains 20 events per environment.
+Traffic, inspections, flow activity, IdP sessions, faults, and jobs are in
+memory. They disappear when the app restarts. Traffic retains 100 entries,
+inspectors retain ten flows, and flow activity retains 20 events per
+environment.
 
 Diagnostics preserve their existing field names, including capitalized names
 such as `Summary` and `CreatedAt` in operation history. Disabling traffic

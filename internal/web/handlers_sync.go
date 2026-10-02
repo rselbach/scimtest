@@ -299,7 +299,7 @@ func (a *webApp) runSyncJob(ctx context.Context, id string, appID string, kind s
 	}
 	appendOperationLogs(&state, appID, result.Traces)
 	purgeFullySyncedDeletions(&state)
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		a.finishSyncJob(appID, id, false, err.Error(), len(result.Traces) > 0)
 		return
 	}
@@ -575,7 +575,7 @@ func (a *webApp) applyImport(w http.ResponseWriter, r *http.Request, tab string)
 	mergeAppImportState(&state, appID, preview.State)
 	appendOperationLogs(&state, appID, preview.Traces)
 	purgeFullySyncedDeletions(&state)
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
@@ -708,7 +708,7 @@ func (a *webApp) handleReset(w http.ResponseWriter, r *http.Request) {
 	resetGroups := len(state.Groups)
 	initializeAppSync(&state, appID)
 
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}

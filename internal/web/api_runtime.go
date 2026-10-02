@@ -86,6 +86,38 @@ func (a *webApp) handleAPIOIDCTokensRevoke(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, map[string]int{"revoked": revoked})
 }
 
+func (a *webApp) handleAPISessions(w http.ResponseWriter, r *http.Request) {
+	found, ok := a.apiEnvironmentApp(w, r)
+	if !ok {
+		return
+	}
+	if !supportsAnyIDP(found) {
+		apiError(w, http.StatusBadRequest, "environment has no OIDC or SAML configuration")
+		return
+	}
+	writeJSON(w, map[string]any{"sessions": a.liveIdPSessions(found.Slug)})
+}
+
+// handleAPISessionsEnd ends every IdP session for the environment, or only
+// the one named by the session_id query parameter.
+func (a *webApp) handleAPISessionsEnd(w http.ResponseWriter, r *http.Request) {
+	found, ok := a.apiEnvironmentApp(w, r)
+	if !ok {
+		return
+	}
+	if !supportsAnyIDP(found) {
+		apiError(w, http.StatusBadRequest, "environment has no OIDC or SAML configuration")
+		return
+	}
+	sessionID := r.URL.Query().Get("session_id")
+	if _, live := a.liveIdPSession(found.Slug, sessionID); sessionID != "" && !live {
+		apiError(w, http.StatusNotFound, fmt.Sprintf("session %q not found", sessionID))
+		return
+	}
+	ended := a.endAppIdPSessions(found.Slug, sessionID, "ended through the API")
+	writeJSON(w, map[string]int{"ended": len(ended)})
+}
+
 func (a *webApp) handleAPIFaultGet(w http.ResponseWriter, r *http.Request) {
 	found, ok := a.apiEnvironmentApp(w, r)
 	if !ok {
@@ -344,7 +376,7 @@ func (a *webApp) handleAPIImportApply(w http.ResponseWriter, r *http.Request) {
 	mergeAppImportState(&state, id, preview.State)
 	appendOperationLogs(&state, id, preview.Traces)
 	purgeFullySyncedDeletions(&state)
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -387,7 +419,7 @@ func (a *webApp) handleAPIRestore(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := saveRequestState(restored); err != nil {
+	if err := a.saveRequestState(restored); err != nil {
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -476,7 +508,7 @@ func (a *webApp) handleAPIOIDCAuthorize(w http.ResponseWriter, r *http.Request) 
 		apiError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	selected, session, err := chooserSignIn(r, state.Users, found, values, authn, time.Now())
+	selected, session, err := a.chooserSignIn(r, state.Users, found, values, authn, time.Now())
 	if err != nil {
 		apiError(w, http.StatusBadRequest, err.Error())
 		return
@@ -552,7 +584,7 @@ func (a *webApp) handleAPISAMLSignIn(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	selected, session, err := chooserSignIn(r, state.Users, found, values, responseContext.Requested, time.Now())
+	selected, session, err := a.chooserSignIn(r, state.Users, found, values, responseContext.Requested, time.Now())
 	if err != nil {
 		apiError(w, http.StatusBadRequest, err.Error())
 		return
@@ -657,7 +689,7 @@ func (a *webApp) handleAPIToolAction(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

@@ -122,9 +122,9 @@ func (r authnRequest) reuseBlocker(session signIn, now time.Time) string {
 	return ""
 }
 
-// signIn records who authenticated, when, and how strongly. The chooser
-// cookie remembers the latest one per environment so a later flow can reuse
-// it instead of signing in again.
+// signIn records who authenticated, when, and how strongly. The browser's IdP
+// session keeps the latest one per environment so a later flow can reuse it
+// instead of signing in again.
 type signIn struct {
 	UserID   string
 	Time     time.Time
@@ -153,56 +153,29 @@ func (s authnStatement) addClaims(claims map[string]any, skew time.Duration) {
 	claims["amr"] = s.Methods
 }
 
+// signInCookieName names the cookie that holds the browser's IdP session ID
+// for an environment.
 func signInCookieName(slug string) string { return "scimtest_chooser_" + slug }
 
-// rememberSignIn records the sign-in for an environment so the chooser can
-// preselect its user and offer to reuse it.
-func rememberSignIn(w http.ResponseWriter, slug string, session signIn) {
-	http.SetCookie(w, &http.Cookie{
-		Name: signInCookieName(slug),
-		Value: url.Values{
-			"user":     {session.UserID},
-			"time":     {strconv.FormatInt(session.Time.Unix(), 10)},
-			"strength": {session.Strength.ID},
-		}.Encode(),
-		Path:     "/",
-		MaxAge:   30 * 24 * 60 * 60,
-		HttpOnly: true,
-		SameSite: http.SameSiteLaxMode,
-	})
-}
-
-// rememberedSignIn returns the browser's last sign-in for an environment
-// while its user is still active.
-func rememberedSignIn(r *http.Request, users []user, slug string) (user, signIn, bool) {
-	cookie, err := r.Cookie(signInCookieName(slug))
-	if err != nil {
-		return user{}, signIn{}, false
-	}
-	values, err := url.ParseQuery(cookie.Value)
-	if err != nil {
-		return user{}, signIn{}, false
-	}
-	seconds, err := strconv.ParseInt(values.Get("time"), 10, 64)
-	if err != nil {
-		return user{}, signIn{}, false
-	}
-	strength, ok := authnStrengthByID(values.Get("strength"))
+// rememberedSignIn returns the sign-in of the browser's live IdP session for
+// an environment while its user is still active.
+func (a *webApp) rememberedSignIn(r *http.Request, users []user, slug string) (user, signIn, bool) {
+	session, ok := a.browserIdPSession(r, slug)
 	if !ok {
 		return user{}, signIn{}, false
 	}
-	found, ok := userByID(users, values.Get("user"))
+	found, ok := userByID(users, session.SignIn.UserID)
 	if !ok || !found.Active || found.Deleted {
 		return user{}, signIn{}, false
 	}
-	return found, signIn{UserID: found.ID, Time: time.Unix(seconds, 0), Strength: strength}, true
+	return found, session.SignIn, true
 }
 
 // chooserSignIn turns a chooser selection into a sign-in: the remembered one
 // when continue_session is set, otherwise a fresh one at the chosen strength.
-func chooserSignIn(r *http.Request, users []user, app app, values url.Values, request authnRequest, now time.Time) (user, signIn, error) {
+func (a *webApp) chooserSignIn(r *http.Request, users []user, app app, values url.Values, request authnRequest, now time.Time) (user, signIn, error) {
 	if isTruthy(values.Get("continue_session")) {
-		found, session, ok := rememberedSignIn(r, users, app.Slug)
+		found, session, ok := a.rememberedSignIn(r, users, app.Slug)
 		if !ok {
 			return user{}, signIn{}, errors.New("there is no remembered sign-in to reuse")
 		}

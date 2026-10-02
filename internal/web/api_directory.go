@@ -207,7 +207,7 @@ func (a *webApp) saveAPIUser(environmentID, id string, request apiUserRequest) (
 		appendLocalOperationLog(&state, "user", id, summary)
 	}
 	markUserDirty(&state, found.ID, false)
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		return user{}, err
 	}
 	return found, nil
@@ -248,7 +248,7 @@ func (a *webApp) setAPIUserDeleted(w http.ResponseWriter, r *http.Request, delet
 		apiError(w, http.StatusConflict, "SCIM is disabled")
 		return
 	}
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -316,7 +316,7 @@ func (a *webApp) handleAPIUsersBulkDelete(w http.ResponseWriter, r *http.Request
 			}
 		}
 	}
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -447,7 +447,7 @@ func (a *webApp) saveAPIGroup(environmentID, id string, request apiGroupRequest)
 		appendLocalOperationLog(&state, "group", id, summary)
 	}
 	markGroupDirty(&state, found.ID, false)
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		return group{}, err
 	}
 	return found, nil
@@ -484,7 +484,7 @@ func (a *webApp) setAPIGroupDeleted(w http.ResponseWriter, r *http.Request, dele
 		apiError(w, http.StatusConflict, "SCIM is disabled")
 		return
 	}
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -542,7 +542,7 @@ func (a *webApp) handleAPIGroupsBulkDelete(w http.ResponseWriter, r *http.Reques
 		}
 		state.Groups = kept
 	}
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

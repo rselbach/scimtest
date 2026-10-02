@@ -31,6 +31,7 @@ type oidcInspectorPageData struct {
 	History     []oidcInspection
 	Events      []flowEvent
 	Tokens      []oidcTokenHolder
+	Sessions    []idpSessionView
 	ArmedFaults string
 	ReturnTab   string
 }
@@ -98,6 +99,7 @@ func (a *webApp) buildOIDCInspectorPageData(foundApp app, users []user) *oidcIns
 		App:         foundApp,
 		Events:      a.flowEvents(foundApp.Slug),
 		Tokens:      a.oidcTokenHolders(foundApp.Slug, users),
+		Sessions:    a.liveIdPSessions(foundApp.Slug),
 		ArmedFaults: a.peekArmedFaults(foundApp.Slug).describe(),
 		ReturnTab:   "oidc-inspector",
 	}

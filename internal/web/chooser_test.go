@@ -70,7 +70,7 @@ func TestAuthorizeDenyReturnsAccessDenied(t *testing.T) {
 func TestChooserRemembersLastUser(t *testing.T) {
 	r := require.New(t)
 	svc := oidcChooserTestApp(t)
-	// A successful sign-in sets the remember cookie.
+	// A successful sign-in sets the cookie that names its IdP session.
 	form := url.Values{
 		"response_type": {"code"},
 		"client_id":     {"example-client"},
@@ -91,9 +91,9 @@ func TestChooserRemembersLastUser(t *testing.T) {
 		}
 	}
 	r.NotNil(rememberCookie)
-	remembered, err := url.ParseQuery(rememberCookie.Value)
-	r.NoError(err)
-	r.Equal("usr-1", remembered.Get("user"))
+	session, live := svc.liveIdPSession("example", rememberCookie.Value)
+	r.True(live)
+	r.Equal("usr-1", session.SignIn.UserID)
 
 	// The next chooser render pre-checks the remembered user.
 	getReq := httptest.NewRequest(http.MethodGet, "/oidc/example/authorize?response_type=code&client_id=example-client&redirect_uri=http://client.test/callback&scope=openid", nil)

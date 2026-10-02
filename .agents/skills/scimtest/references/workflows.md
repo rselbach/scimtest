@@ -87,8 +87,15 @@ or email.
 To test an app's step-up check, set `authn_strength` to `mfa` or `password` in
 the authorization or SAML sign-in request. The ID token reports the choice in
 `acr` and `amr`. The SAML assertion reports it in `AuthnContextClassRef`. Each
-API call is a fresh sign-in. `prompt=none`, `max_age`, and session reuse need
-a browser, because they depend on the chooser's remembered sign-in cookie.
+API call is a fresh sign-in with its own IdP session. `prompt=none`, `max_age`,
+session reuse, and the end session confirmation need a browser, because they
+depend on the cookie that names the browser's IdP session.
+
+To test an app's logout, read the ID token's `sid`, send the app's
+RP-initiated logout to `/oidc/{slug}/logout`, and confirm the session is gone
+from `GET /environments/{ENV_ID}/sessions`. `DELETE` on the same path with
+`?session_id=` ends one session as an administrator would. Deactivating or
+deleting the user also ends that user's sessions. None of these revoke tokens.
 
 ## SAML
 

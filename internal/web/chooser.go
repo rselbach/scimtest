@@ -51,13 +51,13 @@ func newChooserData(title string, app app, action string, users []user, loginHin
 
 // applySignIn preselects the strength and the remembered user, and offers to
 // reuse the remembered sign-in when the request allows it.
-func (data *chooserData) applySignIn(r *http.Request, users []user, slug string, values url.Values, request authnRequest, now time.Time) {
+func (a *webApp) applySignIn(data *chooserData, r *http.Request, users []user, slug string, values url.Values, request authnRequest, now time.Time) {
 	data.Strengths = authnStrengths
 	if strength, err := chosenAuthnStrength(values, request.Contexts); err == nil {
 		data.SelectedStrength = strength.ID
 	}
 	data.FreshReason = request.FreshReason
-	found, session, ok := rememberedSignIn(r, users, slug)
+	found, session, ok := a.rememberedSignIn(r, users, slug)
 	if !ok {
 		return
 	}
