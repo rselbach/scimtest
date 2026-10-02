@@ -181,6 +181,9 @@ func (a *webApp) completeSAMLSSO(w http.ResponseWriter, r *http.Request, state a
 	}
 	encodedResponse := base64.StdEncoding.EncodeToString([]byte(posted.XML))
 	a.rememberSAMLInspection(app, user, responseContext, posted, encodedResponse, faults, time.Now())
+	if groups, carried, issued := samlAssertionGroups(posted, samlAttributeMappingsForApp(app).Groups); issued {
+		a.noteIssuedGroups(app.Slug, user.ID, "saml", "SAML assertion", responseContext.ACSURL, groups, carried)
+	}
 	ssoDetail := "Signed response posted to " + responseContext.ACSURL
 	if faults.active() {
 		ssoDetail = "Response posted to " + responseContext.ACSURL + " (faults injected)"

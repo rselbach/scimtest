@@ -367,6 +367,23 @@
     .resilience-preset form { display: grid; gap: 12px; margin-top: auto; }
     .resilience-preset form > .btn { justify-self: start; }
     .resilience-count input { width: 100%; }
+    .lifecycle-groups { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; border: 0; }
+    .lifecycle-groups legend { margin-bottom: 6px; padding: 0; }
+    .lifecycle-groups .checkbox-row { padding: 6px 9px; }
+    .lifecycle-run-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 12px; }
+    .lifecycle-run-heading h2 { margin: 0; }
+    .lifecycle-run-heading p { margin: 3px 0 0; }
+    .lifecycle-run-heading .status,
+    .lifecycle-checklist .status { min-width: auto; white-space: nowrap; }
+    .lifecycle-checklist th:nth-child(1) { width: 24%; }
+    .lifecycle-checklist th:nth-child(2) { width: 11%; }
+    .lifecycle-checklist th:nth-child(3) { width: 13%; }
+    .lifecycle-checklist td { vertical-align: top; white-space: normal; overflow-wrap: anywhere; }
+    .lifecycle-checklist td.mono { white-space: nowrap; overflow-wrap: normal; }
+    .lifecycle-checklist td p { margin: 0 0 6px; }
+    .lifecycle-messages { display: grid; gap: 6px; margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
+    .lifecycle-messages details { margin-top: 4px; }
+    .lifecycle-action { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
     .resilience-run { position: relative; display: grid; grid-template-columns: 5px minmax(0, 1fr); }
     .resilience-run-marker { background: var(--muted-2); }
     .resilience-run.is-active .resilience-run-marker { background: var(--warn-text); }

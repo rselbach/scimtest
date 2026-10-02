@@ -251,13 +251,13 @@ func (a *webApp) endAppIdPSessions(slug, sessionID, reason string) []idpSession 
 }
 
 // endInactiveUserSessions ends the environment's sessions whose user state no
-// longer has as active.
-func (a *webApp) endInactiveUserSessions(state appState) {
+// longer has as active, and returns them.
+func (a *webApp) endInactiveUserSessions(state appState) []idpSession {
 	found, ok := appByID(state.Apps, state.Environment.ID)
 	if !ok {
-		return
+		return nil
 	}
-	a.endIdPSessions(func(session idpSession) string {
+	return a.endIdPSessions(func(session idpSession) string {
 		if session.AppSlug != found.Slug {
 			return ""
 		}

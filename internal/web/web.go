@@ -85,6 +85,11 @@ type webApp struct {
 	sessionMu        sync.Mutex            // guards idpSessions
 	idpSessions      map[string]idpSession // by session ID
 	logoutDeliveries sync.WaitGroup        // in-flight back-channel logout requests
+	logoutResultMu   sync.Mutex
+	logoutResults    map[string][]backchannelLogoutResult // by session ID
+	lifecycleMu      sync.Mutex
+	lifecycleRuns    map[string][]lifecycleRun // by environment slug, newest first
+	lifecycleWork    sync.WaitGroup            // in-flight lifecycle SCIM pushes
 	oidcInspectorMu  sync.Mutex
 	oidcInspections  map[string][]oidcInspection
 	samlInspectorMu  sync.Mutex
@@ -448,6 +453,7 @@ type pageData struct {
 	GroupsURL              string
 	AppsURL                string
 	ResilienceURL          string
+	LifecycleURL           string
 	OIDCInspectorURL       string
 	SAMLInspectorURL       string
 	EnvironmentSettingsURL string
@@ -479,6 +485,7 @@ type pageData struct {
 	HasSAML                bool
 	ResilienceActive       bool
 	Resilience             *resiliencePageData
+	Lifecycle              *lifecyclePageData
 	OIDCInspector          *oidcInspectorPageData
 	SAMLInspector          *samlInspectorPageData
 	HasSCIMEnvironments    bool
@@ -870,14 +877,20 @@ func loadRequestState(r *http.Request) (appState, error) {
 // reserved for the legacy-state migration: refusing them here keeps a
 // mis-scoped request from rewriting every environment.
 func (a *webApp) saveRequestState(state appState) error {
+	_, err := a.saveRequestStateEndingSessions(state)
+	return err
+}
+
+// saveRequestStateEndingSessions is saveRequestState, and also returns the
+// sessions it ended.
+func (a *webApp) saveRequestStateEndingSessions(state appState) ([]idpSession, error) {
 	if state.Environment.ID == "" {
-		return errors.New("no environment selected")
+		return nil, errors.New("no environment selected")
 	}
 	if err := saveEnvironmentState(state); err != nil {
-		return err
+		return nil, err
 	}
-	a.endInactiveUserSessions(state)
-	return nil
+	return a.endInactiveUserSessions(state), nil
 }
 
 func rememberEnvironment(w http.ResponseWriter, environmentID string) {
@@ -1011,6 +1024,9 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /inspect/resilience/{slug}", a.handleResilience)
 	mux.HandleFunc("POST /inspect/resilience/{slug}/arm", a.handleResilienceArm)
 	mux.HandleFunc("POST /inspect/resilience/{slug}/disarm", a.handleResilienceDisarm)
+	mux.HandleFunc("GET /inspect/lifecycle/{slug}", a.handleLifecycle)
+	mux.HandleFunc("POST /inspect/lifecycle/{slug}/run", a.rejectWhileSyncing(a.handleLifecycleRun))
+	mux.HandleFunc("POST /inspect/lifecycle/{slug}/saml-logout", a.handleLifecycleSAMLLogout)
 	mux.HandleFunc("POST /inspect/faults/{slug}/arm", a.handleFaultArm)
 	mux.HandleFunc("POST /inspect/faults/{slug}/disarm", a.handleFaultDisarm)
 	mux.HandleFunc("POST /restore", a.rejectWhileSyncing(a.handleBackupRestore))
@@ -1168,6 +1184,7 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		GroupsURL:              dashboardURL("groups", nil),
 		AppsURL:                dashboardURL("apps", nil),
 		ResilienceURL:          dashboardURL("resilience", nil),
+		LifecycleURL:           dashboardURL("lifecycle", nil),
 		OIDCInspectorURL:       dashboardURL("oidc-inspector", nil),
 		SAMLInspectorURL:       dashboardURL("saml-inspector", nil),
 		EnvironmentSettingsURL: dashboardURL("apps", map[string]string{"modal": "app", "id": environmentID}),
@@ -1183,7 +1200,7 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		TraceContent:           a.traceContent(environmentID),
 		SyncJob:                a.currentSyncJob(environmentID),
 		ImportPreview:          a.importPreviewView(environmentID),
-		ShowSetupGuide:         tab != "resilience" && tab != "oidc-inspector" && tab != "saml-inspector" && (len(state.Users) == 0 || len(globalState.Apps) == 0),
+		ShowSetupGuide:         tab != "resilience" && tab != "lifecycle" && tab != "oidc-inspector" && tab != "saml-inspector" && (len(state.Users) == 0 || len(globalState.Apps) == 0),
 		HasLocalUsers:          len(state.Users) > 0,
 		HasApps:                len(globalState.Apps) > 0,
 		HasIDP:                 activeEnvironment.ID != "" && supportsAnyIDP(activeEnvironment),
@@ -1200,6 +1217,9 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if tab == "resilience" && data.HasIDP {
 		data.Resilience = a.buildResiliencePageData(activeEnvironment, strings.TrimSpace(r.URL.Query().Get("error")))
 	}
+	if tab == "lifecycle" && activeEnvironment.ID != "" {
+		data.Lifecycle = a.buildLifecyclePageData(activeEnvironment, state, r.URL.Query().Get("error"))
+	}
 	if tab == "oidc-inspector" && data.HasOIDC {
 		data.OIDCInspector = a.buildOIDCInspectorPageData(activeEnvironment, state.Users)
 	}
@@ -1211,7 +1231,7 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		data.ShowTrace = false
 		data.HasTrace = false
 	}
-	if tab == "resilience" || tab == "oidc-inspector" || tab == "saml-inspector" {
+	if tab == "resilience" || tab == "lifecycle" || tab == "oidc-inspector" || tab == "saml-inspector" {
 		data.Errors = nil
 	}
 	if data.SCIMEnabled {
@@ -2887,6 +2907,8 @@ func normalizedTab(tab string) string {
 		return "apps"
 	case "resilience":
 		return "resilience"
+	case "lifecycle":
+		return "lifecycle"
 	case "oidc-inspector":
 		return "oidc-inspector"
 	case "saml-inspector":
@@ -3130,6 +3152,7 @@ func scopePageDataURLs(data *pageData, environmentID string) {
 		&data.GroupsURL,
 		&data.AppsURL,
 		&data.ResilienceURL,
+		&data.LifecycleURL,
 		&data.OIDCInspectorURL,
 		&data.SAMLInspectorURL,
 		&data.EnvironmentSettingsURL,

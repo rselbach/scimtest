@@ -438,6 +438,8 @@ func (a *webApp) issueOIDCTokens(r *http.Request, state appState, app app, user 
 	if err := a.rememberOIDCInspection(app, user, grant, stage, claims, idToken, now); err != nil {
 		return nil, err
 	}
+	groups, carried := claimGroups(claims, oidcClaimMappingsForApp(app).Groups)
+	a.noteIssuedGroups(app.Slug, user.ID, "oidc", "ID token", app.OIDCClientID, groups, carried)
 	a.accessTokens[access] = accessToken{
 		AppSlug:   app.Slug,
 		UserID:    user.ID,
@@ -570,6 +572,8 @@ func (a *webApp) handleOIDCUserinfo(w http.ResponseWriter, r *http.Request) {
 	}
 	claims := userClaims(state, app, user, token.Scope)
 	token.Faults.dropClaims(claims)
+	groups, carried := claimGroups(claims, oidcClaimMappingsForApp(app).Groups)
+	a.noteIssuedGroups(app.Slug, user.ID, "oidc", "userinfo response", app.OIDCClientID, groups, carried)
 	a.recordFlowEvent(app.Slug, "oidc", "userinfo", "ok", userLabel(user), "Userinfo claims served")
 	writeJSON(w, claims)
 }
