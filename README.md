@@ -79,7 +79,8 @@ steps, the authentication design, and release packaging details.
    OIDC and SAML connection values (issuer, discovery, metadata, and
    certificate) appear as you type and can be copied or downloaded.
 3. Load the Greendale sample (from the empty users list or Bulk tools) to
-   get ten named users and three overlapping groups instantly.
+   get ten named users and three overlapping groups instantly. The users
+   come with departments, managers, and a `role` attribute.
 4. Test: use **Test sign-in** for a real flow against your app, the
    built-in **playground** for an instant OIDC round trip with no relying
    party required, or **Sync** to push the directory to your app's SCIM
@@ -126,6 +127,9 @@ steps, the authentication design, and release packaging details.
 - **SCIM sync.** Push the directory to your app's SCIM endpoint, reconcile
   drift, import an existing remote directory with a preview, and inspect
   every request in the sync trace and per-resource history.
+- **User attributes.** Give users enterprise fields (employee number, cost
+  center, organization, division, department, and manager) and custom
+  attributes such as `role=student`, to test attribute-based role mapping.
 - **Config export.** Download SAML IDP metadata and the signing
   certificate as files, or fetch `GET /apps/{id}/config.json` for a
   machine-readable connection bundle to use in CI.
@@ -219,6 +223,30 @@ browser's session when the hint has no `sid`, then redirects to
 session, it asks the user to confirm first. Invalid requests show an error and never redirect.
 Ending a session does not revoke tokens. Sessions last 30 days after their
 latest sign-in and are kept in memory, so restarting scimtest ends them.
+
+A user's enterprise fields and custom attributes reach the app through every
+protocol:
+
+- **OIDC.** ID tokens and userinfo include them when the scope has `profile`.
+  Enterprise claims use the SCIM names `employeeNumber`, `costCenter`,
+  `organization`, `division`, `department`, and `manager`. The `manager` claim
+  is the manager's `sub`. Empty fields are left out.
+- **SAML.** Assertions carry them as attributes with the same names. The
+  `manager` attribute is the manager's NameID value.
+- **SCIM.** Once any user in the environment has an enterprise field, every
+  user payload carries the
+  `urn:ietf:params:scim:schemas:extension:enterprise:2.0:User` extension. The
+  environment remembers this after its last value is cleared, including across
+  restarts, so updates and reconciliation remove stale remote values.
+  Cleared fields are sent as empty strings and a removed manager as `null`.
+  `manager.value` is the manager's ID in the app. When a sync creates a
+  manager after one of their reports, scimtest updates the report with the
+  manager once the manager exists. Import reads the extension back.
+
+Custom attributes use their own names, such as `role` or a claim URI. They
+never replace a claim or attribute that scimtest already sends. SCIM does not
+send them, and SCIM import keeps the local values. A deleted manager stops
+appearing in claims, attributes, and SCIM payloads.
 
 Paste the service provider's RSA encryption certificate into SAML setup to
 wrap the assertion in `EncryptedAssertion` (AES-128-GCM, AES-192-GCM, or

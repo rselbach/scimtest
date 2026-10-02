@@ -27,6 +27,14 @@ func replaceStateFromSCIM(state AppState, userResources []SCIMUserResource, grou
 			remoteToLocalUserID[importedUser.RemoteID] = importedUser.ID
 		}
 	}
+	// Managers are remote IDs, so they resolve once every user is known.
+	// References to users outside the import are dropped.
+	for i, resource := range userResources {
+		managerID := remoteToLocalUserID[scimManagerValue(enterpriseManager(resource.Enterprise))]
+		if managerID != importedUsers[i].ID {
+			importedUsers[i].ManagerID = managerID
+		}
+	}
 
 	importedGroups := make([]Group, 0, len(groupResources))
 	seenGroupIDs := make(map[string]bool, len(groupResources))
@@ -98,7 +106,7 @@ func importedUserFromSCIM(existingUsers []User, resource SCIMUserResource) (User
 		}
 	}
 
-	return User{
+	imported := User{
 		ID:         localID,
 		GivenName:  givenName,
 		FamilyName: familyName,
@@ -109,7 +117,26 @@ func importedUserFromSCIM(existingUsers []User, resource SCIMUserResource) (User
 		Dirty:      false,
 		Deleted:    false,
 		LastError:  "",
-	}, nil
+	}
+	if enterprise := resource.Enterprise; enterprise != nil {
+		imported.EmployeeNumber = strings.TrimSpace(enterprise.EmployeeNumber)
+		imported.CostCenter = strings.TrimSpace(enterprise.CostCenter)
+		imported.Organization = strings.TrimSpace(enterprise.Organization)
+		imported.Division = strings.TrimSpace(enterprise.Division)
+		imported.Department = strings.TrimSpace(enterprise.Department)
+	}
+	// Custom attributes never travel over SCIM, so keep the local ones.
+	if existing, ok := importedUserMatch(existingUsers, resource); ok {
+		imported.Attributes = existing.Attributes
+	}
+	return imported, nil
+}
+
+func enterpriseManager(enterprise *SCIMEnterpriseUser) *SCIMManager {
+	if enterprise == nil {
+		return nil
+	}
+	return enterprise.Manager
 }
 
 func importedGroupFromSCIM(existingGroups []Group, resource SCIMGroupResource, remoteToLocalUserID map[string]string) (Group, int, error) {

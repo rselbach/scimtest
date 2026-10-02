@@ -172,11 +172,19 @@ type apiEnvironmentRequest struct {
 }
 
 type apiUserRequest struct {
-	GivenName  *string `json:"given_name"`
-	FamilyName *string `json:"family_name"`
-	Email      *string `json:"email"`
-	Username   *string `json:"username"`
-	Active     *bool   `json:"active"`
+	GivenName      *string `json:"given_name"`
+	FamilyName     *string `json:"family_name"`
+	Email          *string `json:"email"`
+	Username       *string `json:"username"`
+	Active         *bool   `json:"active"`
+	EmployeeNumber *string `json:"employee_number"`
+	CostCenter     *string `json:"cost_center"`
+	Organization   *string `json:"organization"`
+	Division       *string `json:"division"`
+	Department     *string `json:"department"`
+	ManagerID      *string `json:"manager_id"`
+	// Attributes replaces every custom attribute when present.
+	Attributes *map[string]string `json:"attributes"`
 }
 
 type apiGroupRequest struct {

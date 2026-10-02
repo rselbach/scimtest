@@ -640,7 +640,7 @@ func openStateDBAt(path string) (*sql.DB, error) {
 // is initialized. Bump it whenever initStateDB's schema or migrations
 // change, so older builds refuse newer state files instead of silently
 // dropping columns they do not know.
-const currentSchemaVersion = 4
+const currentSchemaVersion = 5
 
 // maxPreMigrationCopies bounds the pre-migration snapshots kept next to the
 // state database.
@@ -775,6 +775,13 @@ func initStateDB(db *sql.DB) error {
 			dirty INTEGER NOT NULL,
 			deleted INTEGER NOT NULL,
 			last_error TEXT NOT NULL DEFAULT '',
+			employee_number TEXT NOT NULL DEFAULT '',
+			cost_center TEXT NOT NULL DEFAULT '',
+			organization TEXT NOT NULL DEFAULT '',
+			division TEXT NOT NULL DEFAULT '',
+			department TEXT NOT NULL DEFAULT '',
+			manager_id TEXT NOT NULL DEFAULT '',
+			attributes TEXT NOT NULL DEFAULT '',
 			PRIMARY KEY (environment_id, id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS groups (
@@ -913,6 +920,22 @@ func initStateDB(db *sql.DB) error {
 	}
 	if err := migrateEnvironmentScopedDirectoryKeys(db); err != nil {
 		return err
+	}
+	// The users table is rebuilt above for old databases, so its newer
+	// columns are added afterwards.
+	userMigrations := []string{
+		`ALTER TABLE users ADD COLUMN employee_number TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN cost_center TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN organization TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN division TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN department TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN manager_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN attributes TEXT NOT NULL DEFAULT ''`,
+	}
+	for _, migration := range userMigrations {
+		if _, err := db.Exec(migration); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("migrate sqlite users schema: %w", err)
+		}
 	}
 	indexes := []string{
 		`CREATE INDEX IF NOT EXISTS users_environment_id ON users(environment_id)`,
@@ -1202,8 +1225,8 @@ func distributeDirectoryRowsToApps(db *sql.DB, markMigrated bool) error {
 			return fmt.Errorf("create environment %s for directory migration: %w", app.id, err)
 		}
 		if app.sourceID != app.id {
-			if _, err := tx.Exec(`INSERT OR IGNORE INTO users(id, environment_id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error)
-				SELECT id, ?, given_name, family_name, email, username, active, '', 0, deleted, '' FROM users WHERE environment_id = ?`, app.id, app.sourceID); err != nil {
+			if _, err := tx.Exec(`INSERT OR IGNORE INTO users(id, environment_id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error, employee_number, cost_center, organization, division, department, manager_id, attributes)
+				SELECT id, ?, given_name, family_name, email, username, active, '', 0, deleted, '', employee_number, cost_center, organization, division, department, manager_id, attributes FROM users WHERE environment_id = ?`, app.id, app.sourceID); err != nil {
 				return fmt.Errorf("copy users into environment %s: %w", app.id, err)
 			}
 			if _, err := tx.Exec(`INSERT OR IGNORE INTO groups(id, environment_id, display_name, remote_id, dirty, deleted, last_error)
@@ -1343,6 +1366,8 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 			state.Config.AutoOpenSyncTrace = value == "1"
 		case "scim_disabled":
 			state.Config.SCIMDisabled = value == "1"
+		case "scim_enterprise_used":
+			state.Config.SCIMEnterpriseUsed = value == "1"
 		case "signing_keys":
 			if err := json.Unmarshal([]byte(value), &state.Config.SigningKeys); err != nil {
 				return AppState{}, fmt.Errorf("decode signing keys for environment %q: %w", environmentID, err)
@@ -1353,7 +1378,7 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 		return AppState{}, fmt.Errorf("iterate environment config rows: %w", err)
 	}
 
-	userRows, err := db.Query(`SELECT id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error FROM users WHERE environment_id = ? ORDER BY rowid`, environmentID)
+	userRows, err := db.Query(`SELECT id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error, employee_number, cost_center, organization, division, department, manager_id, attributes FROM users WHERE environment_id = ? ORDER BY rowid`, environmentID)
 	if err != nil {
 		return AppState{}, fmt.Errorf("load users from sqlite: %w", err)
 	}
@@ -1364,12 +1389,18 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 		var active int
 		var dirty int
 		var deleted int
-		if err := userRows.Scan(&u.ID, &u.GivenName, &u.FamilyName, &u.Email, &u.Username, &active, &u.RemoteID, &dirty, &deleted, &u.LastError); err != nil {
+		var attributes string
+		if err := userRows.Scan(&u.ID, &u.GivenName, &u.FamilyName, &u.Email, &u.Username, &active, &u.RemoteID, &dirty, &deleted, &u.LastError, &u.EmployeeNumber, &u.CostCenter, &u.Organization, &u.Division, &u.Department, &u.ManagerID, &attributes); err != nil {
 			return AppState{}, fmt.Errorf("scan sqlite user row: %w", err)
 		}
 		u.Active = active != 0
 		u.Dirty = dirty != 0
 		u.Deleted = deleted != 0
+		if attributes != "" {
+			if err := json.Unmarshal([]byte(attributes), &u.Attributes); err != nil {
+				return AppState{}, fmt.Errorf("decode attributes for user %s: %w", u.ID, err)
+			}
+		}
 		state.Users = append(state.Users, u)
 	}
 	if err := userRows.Err(); err != nil {
@@ -1618,6 +1649,7 @@ func loadGlobalStateFromDB(db *sql.DB) (AppState, error) {
 	state.Config.AutoOpenSyncTrace = false
 	state.Config.SCIMDisabled = false
 	state.Config.SigningKeys = nil
+	state.Config.SCIMEnterpriseUsed = false
 	if len(state.UserSync) == 0 {
 		state.UserSync = nil
 	}
@@ -1729,6 +1761,7 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 			"bearer_token":         state.Config.BearerToken,
 			"auto_open_sync_trace": BoolString(state.Config.AutoOpenSyncTrace),
 			"scim_disabled":        BoolString(state.Config.SCIMDisabled),
+			"scim_enterprise_used": BoolString(state.Config.SCIMEnterpriseUsed),
 		}
 		if len(state.Config.SigningKeys) > 0 {
 			signingKeys, err := json.Marshal(state.Config.SigningKeys)
@@ -1744,7 +1777,7 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 		}
 	}
 
-	userStmt, err := tx.Prepare(`INSERT INTO users(id, environment_id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(environment_id, id) DO UPDATE SET given_name = excluded.given_name, family_name = excluded.family_name, email = excluded.email, username = excluded.username, active = excluded.active, remote_id = excluded.remote_id, dirty = excluded.dirty, deleted = excluded.deleted, last_error = excluded.last_error`)
+	userStmt, err := tx.Prepare(`INSERT INTO users(id, environment_id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error, employee_number, cost_center, organization, division, department, manager_id, attributes) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(environment_id, id) DO UPDATE SET given_name = excluded.given_name, family_name = excluded.family_name, email = excluded.email, username = excluded.username, active = excluded.active, remote_id = excluded.remote_id, dirty = excluded.dirty, deleted = excluded.deleted, last_error = excluded.last_error, employee_number = excluded.employee_number, cost_center = excluded.cost_center, organization = excluded.organization, division = excluded.division, department = excluded.department, manager_id = excluded.manager_id, attributes = excluded.attributes`)
 	if err != nil {
 		return fmt.Errorf("prepare sqlite user insert: %w", err)
 	}
@@ -1756,7 +1789,15 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 			u.Dirty = false
 			u.LastError = ""
 		}
-		if _, err := userStmt.Exec(u.ID, environmentID, u.GivenName, u.FamilyName, u.Email, u.Username, boolToInt(u.Active), u.RemoteID, boolToInt(u.Dirty), boolToInt(u.Deleted), u.LastError); err != nil {
+		attributes := ""
+		if len(u.Attributes) > 0 {
+			data, err := json.Marshal(u.Attributes)
+			if err != nil {
+				return fmt.Errorf("encode attributes for user %s: %w", u.ID, err)
+			}
+			attributes = string(data)
+		}
+		if _, err := userStmt.Exec(u.ID, environmentID, u.GivenName, u.FamilyName, u.Email, u.Username, boolToInt(u.Active), u.RemoteID, boolToInt(u.Dirty), boolToInt(u.Deleted), u.LastError, u.EmployeeNumber, u.CostCenter, u.Organization, u.Division, u.Department, u.ManagerID, attributes); err != nil {
 			return fmt.Errorf("insert sqlite user %s: %w", u.ID, err)
 		}
 	}
@@ -1974,6 +2015,12 @@ func StateEmpty(state AppState) bool {
 const maxOperationLogsPerResource = 100
 
 func NormalizeState(state *AppState) {
+	for _, user := range state.Users {
+		if !user.Deleted && HasEnterpriseValues(user) {
+			state.Config.SCIMEnterpriseUsed = true
+			break
+		}
+	}
 	migrateLegacySCIMConfig(state)
 	capOperationLogs(state.UserOperations)
 	capOperationLogs(state.GroupOperations)
