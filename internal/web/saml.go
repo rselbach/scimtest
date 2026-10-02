@@ -62,16 +62,26 @@ func (a *webApp) handleSAMLMetadata(w http.ResponseWriter, r *http.Request) {
 	if nameIDFormat == "" {
 		nameIDFormat = samlNameIDFormatForField(app.SAMLNameIDField)
 	}
-	cert := base64.StdEncoding.EncodeToString(a.certDER)
+	// During a rollover the metadata lists the retired certificate after the
+	// active one, so an SP that refreshes metadata trusts both.
+	keys, err := a.publishedSigningKeys(state, time.Now())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var keyDescriptors strings.Builder
+	for _, key := range keys {
+		fmt.Fprintf(&keyDescriptors, `
+    <KeyDescriptor use="signing"><KeyInfo xmlns="http://www.w3.org/2000/09/xmldsig#"><X509Data><X509Certificate>%s</X509Certificate></X509Data></KeyInfo></KeyDescriptor>`, base64.StdEncoding.EncodeToString(key.CertDER))
+	}
 	metadata := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <EntityDescriptor xmlns="urn:oasis:names:tc:SAML:2.0:metadata" entityID="%s">
-  <IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
-    <KeyDescriptor use="signing"><KeyInfo xmlns="http://www.w3.org/2000/09/xmldsig#"><X509Data><X509Certificate>%s</X509Certificate></X509Data></KeyInfo></KeyDescriptor>
+  <IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">%s
     <NameIDFormat>%s</NameIDFormat>
     <SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="%s/saml/%s/sso"/>
     <SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="%s/saml/%s/sso"/>
   </IDPSSODescriptor>
-</EntityDescriptor>`, xmlEscape(entityID), cert, xmlEscape(nameIDFormat), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(baseURL), xmlEscape(app.Slug))
+</EntityDescriptor>`, xmlEscape(entityID), keyDescriptors.String(), xmlEscape(nameIDFormat), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(baseURL), xmlEscape(app.Slug))
 	if r.URL.Query().Get("download") == "1" {
 		w.Header().Set("Content-Disposition", `attachment; filename="scimtest-`+app.Slug+`-idp-metadata.xml"`)
 	}
@@ -402,7 +412,11 @@ func (a *webApp) buildSignedSAMLResponse(state appState, baseURL string, app app
 	if assertion == nil {
 		return samlPostedResponse{}, fmt.Errorf("SAML assertion not found")
 	}
-	ctx, err := dsig.NewSigningContext(a.signingKey, [][]byte{a.certDER})
+	key, err := a.activeSigningKey(state)
+	if err != nil {
+		return samlPostedResponse{}, err
+	}
+	ctx, err := dsig.NewSigningContext(key.PrivateKey, [][]byte{key.CertDER})
 	if err != nil {
 		return samlPostedResponse{}, fmt.Errorf("create SAML signing context: %w", err)
 	}

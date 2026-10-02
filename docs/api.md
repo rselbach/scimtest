@@ -164,6 +164,8 @@ All paths in this section are relative to `/environments/{id}`.
 | GET | `/oidc/tokens` | Users holding live access or refresh tokens, with counts. |
 | DELETE | `/oidc/tokens` | Revoke every token, or one user's with `?user_id=`. Returns `revoked`. |
 | POST | `/saml/sign-in` | Return `acs_url`, base64 `saml_response`, and `relay_state`. |
+| GET | `/signing-keys` | Published signing keys, active key first. |
+| POST | `/signing-keys/rotate` | Sign with a new key and keep the old key published for `grace_period`. |
 | GET | `/inspections/oidc`, `/inspections/saml` | Recent protocol inspections. |
 | GET | `/flows` | Recent flow activity, including failures. |
 | GET, PUT, DELETE | `/faults` | Read, replace, or disarm one-shot faults. |
@@ -206,6 +208,15 @@ string as `redirect_query` instead of splitting its signed fields. This keeps
 the exact encoding needed for signature validation. API URL query parameters
 are not SAML signing inputs.
 
+Each signing key has `kid`, `active`, `created_at`, `published_until`, and
+`certificate_pem`. The shared key that every environment starts with has the
+`kid` `scimtest-dev` and no `created_at`. Rotation accepts an optional
+`grace_period` duration from `0s` to `168h`; the default is `24h`, and `0s`
+removes the old key at once. It returns the new key list. Rotation changes
+only the selected environment. Backups include the environment's keys.
+Restoring a backup made before key rotation existed returns the environment
+to the shared key.
+
 In identifier chooser mode, use `login_identifier` instead of `user_id` for
 OIDC authorization, the playground, and SAML sign-in.
 
@@ -217,7 +228,8 @@ both protocols are `wrong_issuer` and `wrong_audience`. OIDC adds
 `wrong_destination`, `wrong_recipient`, `in_response_to_mismatch`, and
 `replayed_assertion`, which reuses the newest assertion ID the environment
 sent. Invalid fault values are rejected. Fault scenarios expire after
-15 minutes.
+15 minutes. The `stale-jwks` scenario serves `count` JWKS responses without
+the active signing key.
 
 Traffic, inspections, flow activity, faults, and jobs are in memory. They
 disappear when the app restarts. Traffic retains 100 entries, inspectors retain

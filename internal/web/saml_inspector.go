@@ -24,6 +24,7 @@ type samlInspectorPageData struct {
 	Found       bool
 	History     []samlInspection
 	Events      []flowEvent
+	SigningKeys []signingKeyView
 	ArmedFaults string
 	ReturnTab   string
 }

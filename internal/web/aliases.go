@@ -17,6 +17,7 @@ type (
 	syncPlanEntry         = core.SyncPlanEntry
 	oidcClaimMappings     = core.OIDCClaimMappings
 	samlAttributeMappings = core.SAMLAttributeMappings
+	storedSigningKey      = core.SigningKey
 )
 
 var errAppNotFound = core.ErrAppNotFound

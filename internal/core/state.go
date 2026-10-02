@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -1306,6 +1307,10 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 			state.Config.AutoOpenSyncTrace = value == "1"
 		case "scim_disabled":
 			state.Config.SCIMDisabled = value == "1"
+		case "signing_keys":
+			if err := json.Unmarshal([]byte(value), &state.Config.SigningKeys); err != nil {
+				return AppState{}, fmt.Errorf("decode signing keys for environment %q: %w", environmentID, err)
+			}
 		}
 	}
 	if err := environmentConfigRows.Err(); err != nil {
@@ -1574,6 +1579,7 @@ func loadGlobalStateFromDB(db *sql.DB) (AppState, error) {
 	state.Config.BearerToken = ""
 	state.Config.AutoOpenSyncTrace = false
 	state.Config.SCIMDisabled = false
+	state.Config.SigningKeys = nil
 	if len(state.UserSync) == 0 {
 		state.UserSync = nil
 	}
@@ -1685,6 +1691,13 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 			"bearer_token":         state.Config.BearerToken,
 			"auto_open_sync_trace": BoolString(state.Config.AutoOpenSyncTrace),
 			"scim_disabled":        BoolString(state.Config.SCIMDisabled),
+		}
+		if len(state.Config.SigningKeys) > 0 {
+			signingKeys, err := json.Marshal(state.Config.SigningKeys)
+			if err != nil {
+				return fmt.Errorf("encode signing keys: %w", err)
+			}
+			environmentConfigEntries["signing_keys"] = string(signingKeys)
 		}
 		for key, value := range environmentConfigEntries {
 			if _, err := tx.Exec(`INSERT INTO environment_config(environment_id, key, value) VALUES(?, ?, ?) ON CONFLICT(environment_id, key) DO UPDATE SET value = excluded.value`, environmentID, key, value); err != nil {
@@ -1914,7 +1927,7 @@ func loadLegacyJSONState(path string) (AppState, bool, error) {
 }
 
 func StateEmpty(state AppState) bool {
-	return state.Config == (Config{}) && len(state.Users) == 0 && len(state.Groups) == 0 && len(state.Apps) == 0
+	return reflect.ValueOf(state.Config).IsZero() && len(state.Users) == 0 && len(state.Groups) == 0 && len(state.Apps) == 0
 }
 
 // maxOperationLogsPerResource bounds per-resource history; logs are ordered

@@ -31,6 +31,7 @@ type oidcInspectorPageData struct {
 	History     []oidcInspection
 	Events      []flowEvent
 	Tokens      []oidcTokenHolder
+	SigningKeys []signingKeyView
 	ArmedFaults string
 	ReturnTab   string
 }

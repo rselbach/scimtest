@@ -99,6 +99,8 @@ func apiRoutes() []apiRoute {
 		{http.MethodPost, "/api/v1/environments/{environment_id}/oidc/playground", []string{"user_id", "login_identifier", "faults", "refresh"}, (*webApp).handleAPIOIDCPlayground, false},
 		{http.MethodGet, "/api/v1/environments/{environment_id}/oidc/tokens", nil, (*webApp).handleAPIOIDCTokens, false},
 		{http.MethodDelete, "/api/v1/environments/{environment_id}/oidc/tokens", nil, (*webApp).handleAPIOIDCTokensRevoke, false},
+		{http.MethodGet, "/api/v1/environments/{environment_id}/signing-keys", nil, (*webApp).handleAPISigningKeys, false},
+		{http.MethodPost, "/api/v1/environments/{environment_id}/signing-keys/rotate", []string{"grace_period"}, (*webApp).handleAPISigningKeyRotate, true},
 		{http.MethodPost, "/api/v1/environments/{environment_id}/saml/sign-in", []string{"user_id", "login_identifier", "relay_state", "saml_request", "sig_alg", "signature", "redirect_query", "authn_strength"}, (*webApp).handleAPISAMLSignIn, false},
 		{http.MethodGet, "/api/v1/traffic", nil, (*webApp).handleAPITraffic, false},
 		{http.MethodPatch, "/api/v1/traffic/settings", []string{"record", "record_secrets"}, (*webApp).handleAPITrafficSettings, false},
