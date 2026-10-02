@@ -25,15 +25,25 @@ type oidcConfigExport struct {
 	ClientSecret string   `json:"client_secret,omitempty"`
 	PublicClient bool     `json:"public_client"`
 	RedirectURIs []string `json:"redirect_uris,omitempty"`
+	// JWTAccessTokens reports RFC 9068 access tokens, which carry
+	// AccessTokenAudience in aud.
+	JWTAccessTokens     bool   `json:"jwt_access_tokens"`
+	AccessTokenAudience string `json:"access_token_audience,omitempty"`
+
+	// IntrospectionURL and RevocationURL serve RFC 7662 and RFC 7009.
+	IntrospectionURL string `json:"introspection_url"`
+	RevocationURL    string `json:"revocation_url"`
 }
 
 type samlConfigExport struct {
 	SSOURL         string `json:"sso_url"`
+	SLOURL         string `json:"slo_url"`
 	IDPEntityID    string `json:"idp_entity_id"`
 	MetadataURL    string `json:"metadata_url"`
 	CertificatePEM string `json:"certificate_pem"`
 	SPEntityID     string `json:"sp_entity_id,omitempty"`
 	ACSURL         string `json:"acs_url,omitempty"`
+	SPSLOURL       string `json:"sp_slo_url,omitempty"`
 	Audience       string `json:"audience,omitempty"`
 	NameIDFormat   string `json:"name_id_format,omitempty"`
 }
@@ -79,6 +89,12 @@ func (a *webApp) appConfigExport(r *http.Request, state appState, foundApp app) 
 			PublicClient: foundApp.OIDCPublicClient,
 			RedirectURIs: foundApp.OIDCRedirectURIs,
 		}
+		export.OIDC.IntrospectionURL = issuer + "/introspect"
+		export.OIDC.RevocationURL = issuer + "/revoke"
+		if foundApp.OIDCJWTAccessTokens {
+			export.OIDC.JWTAccessTokens = true
+			export.OIDC.AccessTokenAudience = accessTokenAudience(foundApp)
+		}
 		if foundApp.OIDCPublicClient {
 			export.OIDC.ClientSecret = ""
 		}
@@ -95,11 +111,13 @@ func (a *webApp) appConfigExport(r *http.Request, state appState, foundApp app) 
 		}
 		export.SAML = &samlConfigExport{
 			SSOURL:         baseURL + "/saml/" + foundApp.Slug + "/sso",
+			SLOURL:         baseURL + "/saml/" + foundApp.Slug + "/slo",
 			IDPEntityID:    metadataURL,
 			MetadataURL:    metadataURL,
 			CertificatePEM: certificatePEM(key.CertDER),
 			SPEntityID:     foundApp.SAMLEntityID,
 			ACSURL:         foundApp.SAMLACSURL,
+			SPSLOURL:       foundApp.SAMLSLOURL,
 			Audience:       foundApp.SAMLAudience,
 			NameIDFormat:   nameIDFormat,
 		}

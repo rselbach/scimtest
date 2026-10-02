@@ -9,6 +9,8 @@ overlapping groups, including one inactive user.
 - `sample-tools-entry` exposes the same action in Bulk tools.
 - `sample-users` shows the ten user records and inactive state.
 - `sample-groups` shows the three group records.
+- `sample-attributes` gives users enterprise fields, managers, and a `role`
+  attribute. [Edit user attributes](./user-attributes.md) drives them.
 - `sample-repeat` adds nothing when loaded twice.
 
 ## How to get to it (user POV)

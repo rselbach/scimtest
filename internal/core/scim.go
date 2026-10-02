@@ -10,6 +10,7 @@ import (
 )
 
 const scimUserSchema = "urn:ietf:params:scim:schemas:core:2.0:User"
+const scimEnterpriseUserSchema = "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
 const scimGroupSchema = "urn:ietf:params:scim:schemas:core:2.0:Group"
 const scimPatchSchema = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
 
@@ -22,6 +23,8 @@ type SCIMClient struct {
 	client      *http.Client
 	onRateLimit func(TraceTarget, time.Duration, string, int)
 	traces      []SyncTraceEntry
+	// entra sends requests in Microsoft Entra ID's SCIM dialect.
+	entra bool
 }
 
 type TraceTarget struct {
@@ -46,15 +49,34 @@ type SCIMName struct {
 	Formatted  string `json:"formatted"`
 }
 
+// SCIMManager points at the manager's resource on the provider. Its
+// displayName is read-only (RFC 7643 section 4.3), so scimtest never sends it.
+type SCIMManager struct {
+	Value string `json:"value"`
+}
+
+// SCIMEnterpriseUser sub-attributes are marshaled even when empty, and a
+// missing manager is marshaled as null, so clearing a value locally clears
+// it on the remote (RFC 7643 section 2.5).
+type SCIMEnterpriseUser struct {
+	EmployeeNumber string       `json:"employeeNumber"`
+	CostCenter     string       `json:"costCenter"`
+	Organization   string       `json:"organization"`
+	Division       string       `json:"division"`
+	Department     string       `json:"department"`
+	Manager        *SCIMManager `json:"manager"`
+}
+
 type SCIMUserResource struct {
-	Schemas     []string    `json:"schemas,omitempty"`
-	ID          string      `json:"id,omitempty"`
-	ExternalID  string      `json:"externalId,omitempty"`
-	UserName    string      `json:"userName"`
-	DisplayName string      `json:"displayName"`
-	Active      *bool       `json:"active,omitempty"`
-	Name        *SCIMName   `json:"name,omitempty"`
-	Emails      []SCIMEmail `json:"emails,omitempty"`
+	Schemas     []string            `json:"schemas,omitempty"`
+	ID          string              `json:"id,omitempty"`
+	ExternalID  string              `json:"externalId,omitempty"`
+	UserName    string              `json:"userName"`
+	DisplayName string              `json:"displayName"`
+	Active      *bool               `json:"active,omitempty"`
+	Name        *SCIMName           `json:"name,omitempty"`
+	Emails      []SCIMEmail         `json:"emails,omitempty"`
+	Enterprise  *SCIMEnterpriseUser `json:"urn:ietf:params:scim:schemas:extension:enterprise:2.0:User,omitempty"`
 }
 
 type SCIMMember struct {
@@ -215,6 +237,7 @@ func newSCIMClient(ctx context.Context, cfg Config) (*SCIMClient, error) {
 		token:   token,
 		filter:  cfg.FilterSupported,
 		patch:   cfg.PatchSupported,
+		entra:   NormalizePersona(cfg.Persona) == PersonaEntra,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -543,6 +566,10 @@ func countDirtyResources(state AppState) int {
 func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressReporter) (AppState, syncCounts, error) {
 	nextUsers := make([]User, 0, len(state.Users))
 	counts := syncCounts{}
+	directory := newSCIMUserDirectory(state.Users)
+	directory.enterprise = directory.enterprise || state.Config.SCIMEnterpriseUsed
+	state.Config.SCIMEnterpriseUsed = directory.enterprise
+	var awaitingManager []int
 
 	for i, u := range state.Users {
 		if !u.Dirty {
@@ -566,6 +593,7 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 			nextUsers = append(nextUsers, u)
 			progress.reportUser(u, operation, "Failed")
 			if isStoppingSCIMError(err) {
+				markUsersDirty(nextUsers, awaitingManager)
 				nextUsers = append(nextUsers, state.Users[i+1:]...)
 				state.Users = nextUsers
 				return err
@@ -575,6 +603,7 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 
 		switch {
 		case u.Deleted && u.RemoteID == "":
+			delete(directory.remoteIDs, u.ID)
 			progress.addTotal(pruneUserFromGroups(&state, u.ID))
 			counts.deleted++
 			progress.reportUser(u, operation, "Deleted locally")
@@ -587,11 +616,12 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 				continue
 			}
 
+			delete(directory.remoteIDs, u.ID)
 			progress.addTotal(pruneUserFromGroups(&state, u.ID))
 			counts.deleted++
 			progress.reportUser(u, operation, "Deleted")
 		case u.RemoteID == "":
-			remoteID, adopted, err := client.createUser(u)
+			remoteID, adopted, err := client.createUser(u, directory)
 			if err != nil {
 				if stopped := fail(err); stopped != nil {
 					return state, counts, stopped
@@ -599,6 +629,10 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 				continue
 			}
 
+			if directory.awaitsManager(u) {
+				awaitingManager = append(awaitingManager, len(nextUsers))
+			}
+			directory.remoteIDs[u.ID] = remoteID
 			u.RemoteID = remoteID
 			u.Dirty = false
 			nextUsers = append(nextUsers, u)
@@ -610,13 +644,16 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 			counts.created++
 			progress.reportUser(u, operation, "Created")
 		default:
-			if err := client.replaceUser(u); err != nil {
+			if err := client.replaceUser(u, directory); err != nil {
 				if stopped := fail(err); stopped != nil {
 					return state, counts, stopped
 				}
 				continue
 			}
 
+			if directory.awaitsManager(u) {
+				awaitingManager = append(awaitingManager, len(nextUsers))
+			}
 			u.Dirty = false
 			counts.updated++
 			nextUsers = append(nextUsers, u)
@@ -625,7 +662,49 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 	}
 
 	state.Users = nextUsers
-	return state, counts, nil
+	stopped := sendAwaitedManagers(client, state.Users, awaitingManager, directory, progress, &counts)
+	return state, counts, stopped
+}
+
+// sendAwaitedManagers updates users that were sent before their manager had
+// a remote ID, now that the pass has created the manager. Entra ID holds
+// manager references back the same way until both users exist.
+func sendAwaitedManagers(client *SCIMClient, users []User, awaiting []int, directory scimUserDirectory, progress *syncProgressReporter, counts *syncCounts) error {
+	for position, index := range awaiting {
+		u := users[index]
+		remoteID, live := directory.remoteIDs[u.ManagerID]
+		switch {
+		case !live:
+			// Deleted during this pass; the payload already sent no manager.
+			continue
+		case remoteID == "":
+			// The manager failed to sync; send the reference next time.
+			users[index].Dirty = true
+			continue
+		}
+		progress.addTotal(1)
+		progress.startUser(u, "update")
+		if err := client.replaceUser(u, directory); err != nil {
+			users[index].LastError = err.Error()
+			users[index].Dirty = true
+			counts.failed++
+			progress.reportUser(users[index], "update", "Failed")
+			if isStoppingSCIMError(err) {
+				markUsersDirty(users, awaiting[position+1:])
+				return err
+			}
+			continue
+		}
+		counts.updated++
+		progress.reportUser(u, "update", "Updated")
+	}
+	return nil
+}
+
+func markUsersDirty(users []User, indexes []int) {
+	for _, index := range indexes {
+		users[index].Dirty = true
+	}
 }
 
 func pruneUserFromGroups(state *AppState, userID string) int {
@@ -742,6 +821,10 @@ func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressR
 func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressReporter) (AppState, syncCounts, error) {
 	nextUsers := make([]User, 0, len(state.Users))
 	counts := syncCounts{}
+	directory := newSCIMUserDirectory(state.Users)
+	directory.enterprise = directory.enterprise || state.Config.SCIMEnterpriseUsed
+	state.Config.SCIMEnterpriseUsed = directory.enterprise
+	var awaitingManager []int
 
 	for i, u := range state.Users {
 		u.LastError = ""
@@ -761,6 +844,7 @@ func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 			nextUsers = append(nextUsers, u)
 			progress.reportUser(u, operation, "Failed")
 			if isStoppingSCIMError(err) {
+				markUsersDirty(nextUsers, awaitingManager)
 				nextUsers = append(nextUsers, state.Users[i+1:]...)
 				state.Users = nextUsers
 				return err
@@ -770,6 +854,7 @@ func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 
 		switch {
 		case u.Deleted && u.RemoteID == "":
+			delete(directory.remoteIDs, u.ID)
 			pruneUserFromGroups(&state, u.ID)
 			counts.deleted++
 			progress.reportUser(u, operation, "Deleted locally")
@@ -781,11 +866,12 @@ func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 				continue
 			}
 
+			delete(directory.remoteIDs, u.ID)
 			pruneUserFromGroups(&state, u.ID)
 			counts.deleted++
 			progress.reportUser(u, operation, "Deleted")
 		case u.RemoteID == "":
-			remoteID, adopted, err := client.createUser(u)
+			remoteID, adopted, err := client.createUser(u, directory)
 			if err != nil {
 				if stopped := fail(err); stopped != nil {
 					return state, counts, stopped
@@ -793,6 +879,10 @@ func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 				continue
 			}
 
+			if directory.awaitsManager(u) {
+				awaitingManager = append(awaitingManager, len(nextUsers))
+			}
+			directory.remoteIDs[u.ID] = remoteID
 			u.RemoteID = remoteID
 			u.Dirty = false
 			nextUsers = append(nextUsers, u)
@@ -807,7 +897,7 @@ func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 			remote, err := client.getUser(u)
 			switch {
 			case errors.Is(err, errSCIMNotFound):
-				remoteID, adopted, createErr := client.createUser(u)
+				remoteID, adopted, createErr := client.createUser(u, directory)
 				if createErr != nil {
 					if stopped := fail(createErr); stopped != nil {
 						return state, counts, stopped
@@ -815,6 +905,10 @@ func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 					continue
 				}
 
+				if directory.awaitsManager(u) {
+					awaitingManager = append(awaitingManager, len(nextUsers))
+				}
+				directory.remoteIDs[u.ID] = remoteID
 				u.RemoteID = remoteID
 				u.Dirty = false
 				nextUsers = append(nextUsers, u)
@@ -829,19 +923,25 @@ func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 				if stopped := fail(err); stopped != nil {
 					return state, counts, stopped
 				}
-			case userMatchesRemote(newSCIMUserResource(u), remote):
+			case userMatchesRemote(newSCIMUserResource(u, directory), remote):
+				if directory.awaitsManager(u) {
+					awaitingManager = append(awaitingManager, len(nextUsers))
+				}
 				u.Dirty = false
 				counts.inSync++
 				nextUsers = append(nextUsers, u)
 				progress.reportUser(u, operation, "In sync")
 			default:
-				if err := client.replaceUser(u); err != nil {
+				if err := client.replaceUser(u, directory); err != nil {
 					if stopped := fail(err); stopped != nil {
 						return state, counts, stopped
 					}
 					continue
 				}
 
+				if directory.awaitsManager(u) {
+					awaitingManager = append(awaitingManager, len(nextUsers))
+				}
 				u.Dirty = false
 				counts.updated++
 				nextUsers = append(nextUsers, u)
@@ -851,7 +951,8 @@ func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 	}
 
 	state.Users = nextUsers
-	return state, counts, nil
+	stopped := sendAwaitedManagers(client, state.Users, awaitingManager, directory, progress, &counts)
+	return state, counts, stopped
 }
 
 func reconcileGroups(client *SCIMClient, state AppState, progress *syncProgressReporter) (AppState, syncCounts, error) {
@@ -982,7 +1083,32 @@ func userMatchesRemote(desired SCIMUserResource, remote SCIMUserResource) bool {
 		*desired.Active == remoteActive &&
 		desiredGiven == remoteGiven &&
 		desiredFamily == remoteFamily &&
-		firstSCIMEmail(desired.Emails) == firstSCIMEmail(remote.Emails)
+		firstSCIMEmail(desired.Emails) == firstSCIMEmail(remote.Emails) &&
+		enterpriseMatchesRemote(desired.Enterprise, remote.Enterprise)
+}
+
+// enterpriseMatchesRemote compares extension values when scimtest sends the
+// extension. A missing remote extension counts as empty values.
+func enterpriseMatchesRemote(desired *SCIMEnterpriseUser, remote *SCIMEnterpriseUser) bool {
+	if desired == nil {
+		return true
+	}
+	if remote == nil {
+		remote = &SCIMEnterpriseUser{}
+	}
+	return desired.EmployeeNumber == strings.TrimSpace(remote.EmployeeNumber) &&
+		desired.CostCenter == strings.TrimSpace(remote.CostCenter) &&
+		desired.Organization == strings.TrimSpace(remote.Organization) &&
+		desired.Division == strings.TrimSpace(remote.Division) &&
+		desired.Department == strings.TrimSpace(remote.Department) &&
+		scimManagerValue(desired.Manager) == scimManagerValue(remote.Manager)
+}
+
+func scimManagerValue(manager *SCIMManager) string {
+	if manager == nil {
+		return ""
+	}
+	return strings.TrimSpace(manager.Value)
 }
 
 func scimNameParts(name *SCIMName) (string, string) {

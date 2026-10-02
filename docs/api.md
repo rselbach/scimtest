@@ -49,7 +49,7 @@ accepted body fields. The paths below are relative to `/api/v1`.
 | POST | `/tunnel/retry` | Retry the automatic tunnel connection. |
 | GET | `/account` | Desktop GitHub account state. |
 | POST | `/account/start`, `/account/retry`, `/account/logout` | Start, retry, or sign out of desktop authorization. |
-| GET | `/traffic` | Recorded OIDC and SAML transcripts. |
+| GET | `/traffic` | Recorded OIDC and SAML transcripts, including back-channel logout requests and SAML Single Logout messages. |
 | PATCH | `/traffic/settings` | Set `record` and `record_secrets` booleans. |
 | DELETE | `/traffic` | Clear recorded transcripts. |
 
@@ -72,18 +72,27 @@ in the operation catalog.
 - Identity uses `name` and `slug`.
 - Protocol switches use `oidc_enabled`, `saml_enabled`, and `scim_enabled`.
 - OIDC uses `oidc_client_id`, `oidc_client_secret`, `oidc_public_client`,
-  `oidc_redirect_uris`, `allow_any_oidc_redirect`, and
-  `regenerate_oidc_secret`. Redirect URIs are an array of strings.
-- SAML uses `saml_entity_id`, `saml_acs_url`, `saml_audience`,
+  `oidc_redirect_uris`, `allow_any_oidc_redirect`, `oidc_jwt_access_tokens`,
+  `oidc_access_token_audience`, `oidc_backchannel_logout_uri`,
+  `oidc_backchannel_logout_session_required`, and `regenerate_oidc_secret`. Redirect URIs
+  are an array of strings. `oidc_jwt_access_tokens: true` issues RFC 9068 JWT
+  access tokens whose `aud` is `oidc_access_token_audience`, or the client ID
+  when the audience is empty.
+  The back-channel logout URI must be an absolute HTTP(S) URL without a fragment.
+- SAML uses `saml_entity_id`, `saml_acs_url`, `saml_slo_url`, `saml_audience`,
   `saml_name_id_field`, `saml_email_attribute_name`,
   `saml_request_certificate_pem`, `saml_encryption_certificate_pem`,
   `saml_encryption_algorithm`, and `saml_signing_mode`. The signing mode is
   `assertion` (the default), `response`, or `both`.
+  `saml_slo_url` is the SP's Single Logout URL and must be an absolute HTTP(S) URL without a fragment.
 - Directory claims use `include_groups_claim`, `chooser_mode`,
   `oidc_claim_mappings`, and `saml_attribute_mappings`. Claim mappings are
   objects whose keys are directory field names and whose values are claim or
   attribute names.
 - SCIM uses `scim_base_url`, `scim_bearer_token`, and `scim_auto_open_trace`.
+- Provider personas use `persona` (`generic`, `entra`, `okta`, or `google`)
+  and `groups_overage_threshold`, the Entra ID group count above which tokens
+  carry the groups overage form. `0` uses Entra ID's default of 200.
 
 `regenerate_oidc_secret: true` generates a new confidential-client secret.
 An empty `oidc_client_secret` preserves an existing secret or generates one
@@ -110,6 +119,15 @@ All paths in this section are relative to `/environments/{id}`.
 
 User writes accept `given_name`, `family_name`, `email`, `username`, and
 `active`. New users default to active. An empty username uses the email.
+They also accept the enterprise fields `employee_number`, `cost_center`,
+`organization`, `division`, `department`, and `manager_id`, which names
+another user in the same environment. An empty `manager_id` removes the
+manager. `attributes` is an object of custom string attributes, such as
+`{"role":"student"}`, and replaces every existing custom attribute. Send `{}`
+to remove them all. Names start with a letter or underscore and use letters,
+digits, and `_ . : / # -`. Protocol claim names such as `sub` and `iss`, and the
+enterprise names such as `department`, are reserved. A user can have up to 50
+custom attributes, and each value is one line of at most 1024 characters.
 Group writes accept `display_name` and a `member_ids` array of local user IDs.
 An empty array removes all group members.
 
@@ -162,9 +180,13 @@ All paths in this section are relative to `/environments/{id}`.
 | --- | --- | --- |
 | POST | `/oidc/authorize` | Authorize a directory user and return `code`, `redirect_uri`, and `state`. |
 | POST | `/oidc/playground` | Run authorization, code exchange, and userinfo locally and return the results. |
-| GET | `/oidc/tokens` | Users holding live access or refresh tokens, with counts. |
-| DELETE | `/oidc/tokens` | Revoke every token, or one user's with `?user_id=`. Returns `revoked`. |
+| GET | `/oidc/tokens` | Users holding live access or refresh tokens, with counts. `client_credentials` tokens are not listed. |
+| DELETE | `/oidc/tokens` | Revoke every token, including `client_credentials` tokens, or one user's with `?user_id=`. Returns `revoked`. |
+| GET | `/sessions` | Live IdP sessions, newest sign-in first. |
+| DELETE | `/sessions` | End every IdP session, or one with `?session_id=`. Returns `ended`. |
 | POST | `/saml/sign-in` | Return `acs_url`, base64 `saml_response`, and `relay_state`. |
+| POST | `/saml/logout` | End a session with a SAML sign-in and return the signed `LogoutRequest` to deliver to the SP. |
+| GET | `/saml/logouts` | IdP-initiated `LogoutRequest`s, newest first, with the SP's answers. |
 | GET | `/signing-keys` | Published signing keys, active key first. |
 | POST | `/signing-keys/rotate` | Sign with a new key and keep the old key published for `grace_period`. |
 | GET | `/inspections/oidc`, `/inspections/saml` | Recent protocol inspections. |
@@ -189,10 +211,48 @@ invalidates the presented token. After a revocation, refreshes fail with
 Userinfo remains at `/oidc/{slug}/userinfo`. The
 [automation example](automation.md) performs both requests.
 
+The same token endpoint accepts `grant_type=client_credentials` from a
+confidential client and returns only an access token. Apps can check and
+revoke their own tokens at `/oidc/{slug}/introspect` (RFC 7662) and
+`/oidc/{slug}/revoke` (RFC 7009), with the token endpoint's client
+authentication and a form-encoded `token`. Revoking a refresh token also
+revokes the access tokens from the same authorization. The connection export
+lists both URLs as `introspection_url` and `revocation_url`.
+
+API calls normally carry no browser cookie, so each OIDC authorization,
+playground run, and SAML sign-in through the API starts its own IdP session. ID
+tokens carry the session ID in `sid`, and refreshed ID tokens keep it. Each
+session in `GET /sessions` has `session_id`, `user_id`, `user`,
+`signed_in_at`, `authn_strength`, `protocols` (`oidc`, `saml`, or both), and
+`started_at`. A session with a SAML sign-in also has `saml_session_index`,
+the `SessionIndex` its assertions carry, and `saml_name_id`. Ending a session signs that browser out, as the end session
+endpoint `/oidc/{slug}/logout` does, but leaves its tokens valid. Ending an
+unknown `session_id` returns `404`. Deactivating or deleting a user ends that
+user's sessions.
+
+When the environment has `oidc_backchannel_logout_uri`, ending a session that
+issued ID tokens, by any of these routes, also POSTs a logout token to that
+URI in the background. The `DELETE` response does not wait for the app.
+`GET /flows` and `GET /traffic` show each logout request and the app's
+response.
+
+`POST /saml/logout` starts IdP-initiated SAML Single Logout. It accepts
+`session_id` and an optional `binding`, `redirect` (the default) or `post`.
+The environment needs `saml_slo_url`. scimtest ends the session, then returns
+`request_id`, `binding`, and `url`. For HTTP-Redirect, `url` is the SP's Single
+Logout URL with the signed query; send a browser there. For HTTP-POST, `url`
+is the form action and `form` holds the base64 `SAMLRequest` to post. The SP
+answers at `/saml/{slug}/slo`. `GET /saml/logouts` lists each request with
+`outcome` (`pending`, `ok`, or `failed`), the SP's `status`, and a `detail`.
+An unknown `session_id` returns `404`. SP-initiated `LogoutRequest`s arrive at
+`/saml/{slug}/slo` directly and appear in `GET /flows`.
+
 The headless playground accepts `{"user_id":"..."}` and optional `faults`
 using the fields below. It handles confidential-client authentication or
 public-client PKCE. Its result includes `authorize_status`, `token_status`,
 `token`, `id_token_header`, `id_token_claims`, `userinfo_status`, and `userinfo`.
+With JWT access tokens, it also includes `access_token_header` and
+`access_token_claims`.
 With `"refresh": true`, it also requests `offline_access`, redeems the refresh
 token once, and adds `refresh_status`, `refresh`, and
 `refreshed_id_token_claims`.
@@ -240,15 +300,71 @@ different, non-empty configured `NameID`. `xsw_assertion` requires
 assertion-only signing, since inserting the forgery would invalidate a response
 signature. `xsw_response` requires response signing (`response` or `both`).
 Either wrapping fault can combine with `nameid_comment`; none combine with
-assertion encryption. Invalid fault values are
+assertion encryption. Back-channel logout tokens have their own tamper values:
+`logout_alg_none`, `logout_wrong_audience`, `logout_missing_events`, and
+`logout_repeated_jti`. Sign-ins leave these armed, and the next logout token
+consumes them. The headless playground rejects them. With JWT access tokens, tamper values, `break_signature`, and
+`clock_skew` also apply to the access token. Invalid fault values are
 rejected. Fault scenarios expire after
 15 minutes. The `stale-jwks` scenario serves `count` JWKS responses without
 the active signing key.
 
-Traffic, inspections, flow activity, faults, and jobs are in memory. They
-disappear when the app restarts. Traffic retains 100 entries, inspectors retain
-ten flows, and flow activity retains 20 events per environment.
+Traffic, inspections, flow activity, IdP sessions, faults, and jobs are in
+memory. They disappear when the app restarts. Traffic retains 100 entries,
+inspectors retain ten flows, and flow activity retains 20 events per
+environment.
 
 Diagnostics preserve their existing field names, including capitalized names
 such as `Summary` and `CreatedAt` in operation history. Disabling traffic
 recording also disables recording secrets.
+
+## Lifecycle scenarios
+
+All paths in this section are relative to `/environments/{id}`.
+
+| Method | Path | Result |
+| --- | --- | --- |
+| POST | `/lifecycle/joiner` | Create a user, add them to `group_ids`, and provision them. Returns `202` and the run. |
+| POST | `/lifecycle/mover` | Change `user_id`'s groups with `add_group_ids` and `remove_group_ids`. Returns `202` and the run. |
+| POST | `/lifecycle/leaver` | Deactivate `user_id` and offboard them everywhere. Returns `202` and the run. |
+| GET | `/lifecycle` | The environment's runs, newest first, as `runs`. |
+| GET | `/lifecycle/{run_id}` | One run. |
+
+The joiner accepts `given_name`, `family_name`, `email`, and `username`, as
+user creation does, plus an optional `group_ids` array. The mover needs an
+active user and at least one group in `add_group_ids` or `remove_group_ids`.
+Adding a group the user is already in, or removing one they are not in,
+returns `400`. An unknown user or group returns `404`. A rejected request
+changes nothing. Like other directory writes, these return `409` while a SCIM
+job runs.
+
+A run has `id`, `kind` (`joiner`, `mover`, or `leaver`), `user_id`, `user`,
+`status`, `started_at`, and `steps`. Each step has `id`, `protocol`
+(`directory`, `idp`, `oidc`, `saml`, or `scim`), `title`, `status`, and a
+`detail`. Steps that send messages list them in `messages`, each with `at`,
+`sent`, `to`, an optional request `body`, the app's `response`, and an
+`outcome`. A step's `status` is one of:
+
+- `running`: scimtest is still pushing through SCIM or delivering a logout
+  token.
+- `waiting`: the step waits for the app or a sign-in, such as a mover's next
+  ID token or the SP's `LogoutResponse`.
+- `needs_browser`: a leaver's SAML Single Logout step. Both bindings travel
+  through a browser, so the step has a `browser_url`. Open it, pick a binding,
+  and choose **Send LogoutRequest**.
+- `ok`, `failed`, or `skipped`. A skipped step's `detail` gives the reason,
+  such as a protocol the environment does not use.
+
+The run's `status` is `running` while any step runs, then `failed` if any step
+failed, `waiting` while any step waits, and `ok` otherwise. Poll
+`GET /lifecycle/{run_id}` until it settles. SCIM pushes run one at a time
+after the response. A failed push does not stop other steps, but a joiner
+skips its group pushes when the user push fails.
+
+A mover's `oidc-groups` and `saml-groups` steps record the groups that the
+next ID token or userinfo response, and the next SAML assertion, issued to the
+user actually carried. They need `include_groups_claim`, and the OIDC check
+needs an app that requests the `groups` scope. A leaver's `backchannel-*`
+steps record each logout token sent for an ended session. The `revoke` step
+counts the access and refresh tokens it revoked. Runs are in memory, ten per
+environment.

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"cmp"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -29,14 +30,22 @@ type authCode struct {
 	Scope         string
 	CodeChallenge string
 	Authn         authnStatement
+	SessionID     string // the IdP session the sign-in joined, sent as sid
 	ExpiresAt     time.Time
 	Faults        faultOptions
 	Redeeming     bool
+	// GrantID is set when the code is redeemed. It links the tokens that
+	// exchange and its refreshes issue, so revoking the refresh token revokes
+	// them all (RFC 7009 section 2.1).
+	GrantID string
 }
 
 // refreshTokenLifetime bounds a refresh token. Each refresh rotates the token
 // and starts a new lifetime.
 const refreshTokenLifetime = 24 * time.Hour
+
+// accessTokenLifetime bounds an access token, opaque or JWT.
+const accessTokenLifetime = time.Hour
 
 // refreshToken keeps the grant an offline_access authorization started, so a
 // refresh can re-check the user and issue tokens for the original scope and
@@ -51,14 +60,24 @@ type refreshToken struct {
 	RedirectURI   string
 	CodeChallenge string
 	Authn         authnStatement
+	GrantID       string
+	IssuedAt      time.Time
+	SessionID     string
 	ExpiresAt     time.Time
 	Redeeming     bool // an injected delay holds the token
 }
 
+// accessToken is a live access token. UserID is empty for a
+// client_credentials token, which the client holds for itself. Audience is
+// the aud of a JWT access token; opaque tokens have none.
 type accessToken struct {
 	AppSlug   string
+	ClientID  string
 	UserID    string
+	GrantID   string
 	Scope     string
+	Audience  string
+	IssuedAt  time.Time
 	ExpiresAt time.Time
 	Faults    faultOptions
 }
@@ -77,14 +96,23 @@ func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 	if app.IncludeGroupsClaim {
 		scopes = append(scopes, "groups")
 	}
+	grantTypes := []string{"authorization_code", "refresh_token"}
+	if !app.OIDCPublicClient {
+		grantTypes = append(grantTypes, "client_credentials")
+	}
 	writeJSON(w, map[string]any{
 		"issuer":                                issuer,
 		"authorization_endpoint":                issuer + "/authorize",
 		"token_endpoint":                        issuer + "/token",
 		"userinfo_endpoint":                     issuer + "/userinfo",
 		"jwks_uri":                              issuer + "/jwks",
+		"introspection_endpoint":                issuer + "/introspect",
+		"revocation_endpoint":                   issuer + "/revoke",
+		"end_session_endpoint":                  issuer + "/logout",
+		"backchannel_logout_supported":          true,
+		"backchannel_logout_session_supported":  true,
 		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
+		"grant_types_supported":                 grantTypes,
 		"subject_types_supported":               []string{"public"},
 		"id_token_signing_alg_values_supported": []string{"RS256"},
 		"scopes_supported":                      scopes,
@@ -92,6 +120,11 @@ func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 		"acr_values_supported":                  supportedAuthnContexts(),
 		"code_challenge_methods_supported":      []string{"S256"},
 		"token_endpoint_auth_methods_supported": authMethods,
+
+		// Introspection and revocation authenticate clients the way the
+		// token endpoint does.
+		"introspection_endpoint_auth_methods_supported": authMethods,
+		"revocation_endpoint_auth_methods_supported":    authMethods,
 	})
 }
 
@@ -164,7 +197,7 @@ func (a *webApp) serveOIDCAuthorize(w http.ResponseWriter, r *http.Request, post
 	}
 	now := time.Now()
 	if request.Passive {
-		found, session, ok := rememberedSignIn(r, state.Users, app.Slug)
+		found, session, ok := a.rememberedSignIn(r, state.Users, app.Slug)
 		if !ok {
 			a.failAuthorize(w, r, app, values, &authorizeError{code: "login_required", description: "prompt=none requires a remembered sign-in"})
 			return
@@ -178,11 +211,11 @@ func (a *webApp) serveOIDCAuthorize(w http.ResponseWriter, r *http.Request, post
 	}
 	if !post && !chooserSelectionProvided(app, values) {
 		data := newChooserData("OIDC sign-in", app, publicRequestURI(r), state.Users, loginHintFromValues(values), hiddenValues(values), "Create an active user before starting an OIDC flow.")
-		data.applySignIn(r, state.Users, app.Slug, values, request, now)
+		a.applySignIn(&data, r, state.Users, app.Slug, values, request, now)
 		renderChooser(w, data)
 		return
 	}
-	found, session, err := chooserSignIn(r, state.Users, app, values, request, now)
+	found, session, err := a.chooserSignIn(r, state.Users, app, values, request, now)
 	if err != nil {
 		a.failFlow(w, app, "oidc", "authorize", http.StatusBadRequest, err.Error())
 		return
@@ -197,6 +230,11 @@ func (a *webApp) issueOIDCCode(w http.ResponseWriter, r *http.Request, app app, 
 	redirectURI, err := parseOIDCRedirectURI(values.Get("redirect_uri"))
 	if err != nil {
 		a.failFlow(w, app, "oidc", "authorize", http.StatusBadRequest, err.Error())
+		return
+	}
+	sessionID, err := a.joinIdPSession(w, r, app.Slug, user, session, "oidc")
+	if err != nil {
+		a.failFlow(w, app, "oidc", "authorize", http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -219,6 +257,7 @@ func (a *webApp) issueOIDCCode(w http.ResponseWriter, r *http.Request, app app, 
 		Scope:         values.Get("scope"),
 		CodeChallenge: values.Get("code_challenge"),
 		Authn:         session.statement(request.Contexts),
+		SessionID:     sessionID,
 		ExpiresAt:     now.Add(5 * time.Minute),
 		Faults:        a.flowFaults(app.Slug, values),
 	}
@@ -228,7 +267,6 @@ func (a *webApp) issueOIDCCode(w http.ResponseWriter, r *http.Request, app app, 
 		return
 	}
 	a.recordFlowEvent(app.Slug, "oidc", "authorize", "ok", userLabel(user), "Authorization code issued to "+authCode.ClientID)
-	rememberSignIn(w, app.Slug, session)
 
 	query := redirectURI.Query()
 	query.Set("code", code)
@@ -255,21 +293,19 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	grantType := r.FormValue("grant_type")
-	if grantType != "authorization_code" && grantType != "refresh_token" {
-		a.failOAuth(w, app, "token", http.StatusBadRequest, "unsupported_grant_type", "grant_type must be authorization_code or refresh_token")
+	if grantType != "authorization_code" && grantType != "refresh_token" && grantType != "client_credentials" {
+		a.failOAuth(w, app, "token", http.StatusBadRequest, "unsupported_grant_type", "grant_type must be authorization_code, refresh_token, or client_credentials")
 		return
 	}
-	if !clientAuthenticated(r, app) {
-		// RFC 6749 section 5.2: a 401 for an attempted Basic
-		// authentication must carry a WWW-Authenticate challenge.
-		if _, _, usedBasic := r.BasicAuth(); usedBasic {
-			w.Header().Set("WWW-Authenticate", `Basic realm="scimtest", charset="UTF-8"`)
-		}
-		a.failOAuth(w, app, "token", http.StatusUnauthorized, "invalid_client", "client authentication failed")
+	if !a.authenticateOAuthClient(w, r, app, "token") {
 		return
 	}
-	if grantType == "refresh_token" {
+	switch grantType {
+	case "refresh_token":
 		a.refreshOIDCTokens(w, r, app)
+		return
+	case "client_credentials":
+		a.issueClientCredentialsToken(w, r, app)
 		return
 	}
 
@@ -330,6 +366,12 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	code.GrantID, err = randomSecret(16)
+	if err != nil {
+		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
+		return
+	}
+
 	now := time.Now()
 	response, err := a.issueOIDCTokens(r, state, app, user, code, "Tokens issued", now)
 	if err != nil {
@@ -346,6 +388,8 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 			Scope:         code.Scope,
 			CodeChallenge: code.CodeChallenge,
 			Authn:         code.Authn,
+			GrantID:       code.GrantID,
+			SessionID:     code.SessionID,
 		}, now)
 		if err != nil {
 			a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
@@ -404,43 +448,124 @@ func (a *webApp) injectTokenFault(w http.ResponseWriter, r *http.Request, app ap
 // records the inspection under stage, and returns the token response. The
 // caller holds oidcMu.
 func (a *webApp) issueOIDCTokens(r *http.Request, state appState, app app, user user, grant authCode, stage string, now time.Time) (map[string]any, error) {
-	claims := userClaims(state, app, user, grant.Scope)
-	claims["iss"] = oidcIssuer(a.effectiveIDPBaseURL(r, state), app)
+	issuer := oidcIssuer(a.effectiveIDPBaseURL(r, state), app)
+	claims := userClaims(state, app, user, grant.Scope, issuer)
+	claims["iss"] = issuer
 	claims["aud"] = app.OIDCClientID
 	claims["iat"] = now.Unix()
 	grant.Authn.addClaims(claims, grant.Faults.ClockSkew)
 	if grant.Nonce != "" {
 		claims["nonce"] = grant.Nonce
 	}
+	if grant.SessionID != "" {
+		claims["sid"] = grant.SessionID
+	}
 	grant.Faults.applyToClaims(claims, now)
-	idToken, err := a.signJWT(state, claims, grant.Faults)
+	idToken, err := a.signJWT(state, idTokenJWT, claims, grant.Faults)
 	if err != nil {
 		return nil, err
+	}
+	if grant.SessionID != "" {
+		a.noteIDTokenIssued(grant.SessionID, issuer)
 	}
 	if grant.Faults.BreakSignature {
 		idToken = corruptJWTSignature(idToken)
 	}
-	access, err := randomSecret(32)
-	if err != nil {
-		return nil, err
-	}
 	if err := a.rememberOIDCInspection(app, user, grant, stage, claims, idToken, now); err != nil {
 		return nil, err
 	}
-	a.accessTokens[access] = accessToken{
-		AppSlug:   app.Slug,
-		UserID:    user.ID,
-		Scope:     grant.Scope,
-		ExpiresAt: now.Add(time.Hour),
-		Faults:    grant.Faults,
+	access, err := a.mintAccessToken(state, issuer, app, user.ID, grant, now)
+	if err != nil {
+		return nil, err
 	}
+	groups := claimGroups(claims, oidcClaimMappingsForApp(app).Groups)
+	a.noteIssuedGroups(app, user.ID, "oidc", "ID token", app.OIDCClientID, groups)
 	return map[string]any{
 		"access_token": access,
 		"token_type":   "Bearer",
-		"expires_in":   3600,
+		"expires_in":   int(accessTokenLifetime.Seconds()),
 		"id_token":     idToken,
 		"scope":        grant.Scope,
 	}, nil
+}
+
+// mintAccessToken stores a new access token for grant and returns its value:
+// random and opaque, or an RFC 9068 JWT when the environment issues them.
+// userID is empty for a client_credentials token. The caller holds oidcMu.
+func (a *webApp) mintAccessToken(state appState, issuer string, app app, userID string, grant authCode, now time.Time) (string, error) {
+	value, err := randomSecret(32)
+	if err != nil {
+		return "", err
+	}
+	token := accessToken{
+		AppSlug:   app.Slug,
+		ClientID:  grant.ClientID,
+		UserID:    userID,
+		GrantID:   grant.GrantID,
+		Scope:     grant.Scope,
+		IssuedAt:  now,
+		ExpiresAt: now.Add(accessTokenLifetime),
+		Faults:    grant.Faults,
+	}
+	if app.OIDCJWTAccessTokens {
+		// RFC 9068 section 2.2: a token the client holds for itself names
+		// the client as its subject.
+		subject := cmp.Or(userID, grant.ClientID)
+		token.Audience = accessTokenAudience(app)
+		value, err = a.signAccessToken(state, issuer, app, subject, grant, value, now)
+		if err != nil {
+			return "", err
+		}
+	}
+	a.accessTokens[value] = token
+	return value, nil
+}
+
+// signAccessToken signs an RFC 9068 JWT access token for grant, issued to
+// subject and identified by jti. Faults that model the IDP's signing or clock
+// apply as they do to the ID token: tamper faults, a broken signature, and
+// clock skew. Faults named for the ID token, its lifetime, dropped claims, and
+// the nonce, do not.
+func (a *webApp) signAccessToken(state appState, issuer string, app app, subject string, grant authCode, jti string, now time.Time) (string, error) {
+	issued := now.Add(grant.Faults.ClockSkew)
+	claims := map[string]any{
+		"iss":       issuer,
+		"sub":       subject,
+		"aud":       accessTokenAudience(app),
+		"client_id": app.OIDCClientID,
+		"scope":     grant.Scope,
+		"iat":       issued.Unix(),
+		"exp":       issued.Add(accessTokenLifetime).Unix(),
+		"jti":       jti,
+	}
+	// RFC 9068 section 2.2.1: the sign-in that started the grant. A
+	// client_credentials grant has no sign-in.
+	if !grant.Authn.Time.IsZero() {
+		grant.Authn.addClaims(claims, grant.Faults.ClockSkew)
+	}
+	if grant.Faults.tampers(tamperWrongIssuer) {
+		claims["iss"] = nearMiss(claims["iss"])
+	}
+	if grant.Faults.tampers(tamperWrongAudience) {
+		claims["aud"] = nearMiss(claims["aud"])
+	}
+	token, err := a.signJWT(state, accessTokenJWT, claims, grant.Faults)
+	if err != nil {
+		return "", err
+	}
+	if grant.Faults.BreakSignature {
+		token = corruptJWTSignature(token)
+	}
+	return token, nil
+}
+
+// accessTokenAudience is the aud of an environment's JWT access tokens: the
+// configured audience, or the client ID.
+func accessTokenAudience(app app) string {
+	if audience := strings.TrimSpace(app.OIDCAccessTokenAudience); audience != "" {
+		return audience
+	}
+	return app.OIDCClientID
 }
 
 // issueRefreshToken stores grant under a new refresh token value. The caller
@@ -450,6 +575,7 @@ func (a *webApp) issueRefreshToken(grant refreshToken, now time.Time) (string, e
 	if err != nil {
 		return "", err
 	}
+	grant.IssuedAt = now
 	grant.ExpiresAt = now.Add(refreshTokenLifetime)
 	a.refreshTokens[value] = grant
 	return value, nil
@@ -516,6 +642,8 @@ func (a *webApp) refreshOIDCTokens(w http.ResponseWriter, r *http.Request, app a
 		Scope:         scope,
 		CodeChallenge: grant.CodeChallenge,
 		Authn:         grant.Authn,
+		GrantID:       grant.GrantID,
+		SessionID:     grant.SessionID,
 	}, "Tokens refreshed", now)
 	if err != nil {
 		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
@@ -551,13 +679,19 @@ func (a *webApp) handleOIDCUserinfo(w http.ResponseWriter, r *http.Request) {
 		a.failOAuth(w, app, "userinfo", http.StatusUnauthorized, "invalid_token", "access token is invalid or expired")
 		return
 	}
+	if token.UserID == "" {
+		a.failOAuth(w, app, "userinfo", http.StatusUnauthorized, "invalid_token", "a client_credentials access token has no user")
+		return
+	}
 	user, ok := userByID(state.Users, token.UserID)
 	if !ok || !user.Active || user.Deleted {
 		a.failOAuth(w, app, "userinfo", http.StatusUnauthorized, "invalid_token", "user is inactive or missing")
 		return
 	}
-	claims := userClaims(state, app, user, token.Scope)
+	claims := userClaims(state, app, user, token.Scope, oidcIssuer(a.effectiveIDPBaseURL(r, state), app))
 	token.Faults.dropClaims(claims)
+	groups := claimGroups(claims, oidcClaimMappingsForApp(app).Groups)
+	a.noteIssuedGroups(app, user.ID, "oidc", "userinfo response", app.OIDCClientID, groups)
 	a.recordFlowEvent(app.Slug, "oidc", "userinfo", "ok", userLabel(user), "Userinfo claims served")
 	writeJSON(w, claims)
 }
@@ -587,7 +721,8 @@ func (a *webApp) oidcTokenHolders(slug string, users []user) []oidcTokenHolder {
 		return byUser[userID]
 	}
 	for _, token := range a.accessTokens {
-		if token.AppSlug == slug {
+		// A client_credentials token has no user; Revoke all still covers it.
+		if token.AppSlug == slug && token.UserID != "" {
 			holder(token.UserID).AccessTokens++
 		}
 	}
@@ -842,7 +977,9 @@ func clientAuthenticated(r *http.Request, app app) bool {
 	return clientID == app.OIDCClientID && subtle.ConstantTimeCompare([]byte(secret), []byte(app.OIDCClientSecret)) == 1
 }
 
-func userClaims(state appState, app app, user user, scope string) map[string]any {
+// userClaims builds the ID token and userinfo claims for user. issuer locates
+// the Entra ID persona's groups overage endpoint.
+func userClaims(state appState, app app, user user, scope string, issuer string) map[string]any {
 	claims := map[string]any{"sub": user.ID}
 	mappings := oidcClaimMappingsForApp(app)
 	if hasOIDCScope(scope, "profile") {
@@ -858,36 +995,74 @@ func userClaims(state appState, app app, user user, scope string) map[string]any
 	if app.IncludeGroupsClaim && hasOIDCScope(scope, "groups") {
 		claims[mappings.Groups] = userGroups(state, user.ID)
 	}
+	addPersonaClaims(claims, state, app, user, scope, issuer)
+	if hasOIDCScope(scope, "profile") {
+		addUserAttributeClaims(claims, state, user)
+	}
 	return claims
+}
+
+// addUserAttributeClaims adds non-empty enterprise values, the manager's
+// sub, and custom attributes. Custom attributes never replace a claim that
+// is already set.
+func addUserAttributeClaims(claims map[string]any, state appState, user user) {
+	for _, value := range enterpriseValues(user) {
+		if value.Value != "" {
+			claims[value.Name] = value.Value
+		}
+	}
+	if manager, ok := userManager(state.Users, user); ok {
+		claims[enterpriseManager] = manager.ID
+	}
+	for _, name := range customAttributeNames(user.Attributes) {
+		if _, exists := claims[name]; !exists && !isReservedAttributeName(name) {
+			claims[name] = user.Attributes[name]
+		}
+	}
 }
 
 func oidcClaimsSupported(app app) []string {
 	mappings := oidcClaimMappingsForApp(app)
-	return []string{
+	return personaClaimsSupported(app, []string{
 		"sub", mappings.Name, mappings.GivenName, mappings.FamilyName,
 		mappings.Username, mappings.Email, "email_verified", mappings.Groups,
-		"auth_time", "acr", "amr",
-	}
+		"auth_time", "acr", "amr", "sid",
+		enterpriseEmployeeNumber, enterpriseCostCenter, enterpriseOrganization,
+		enterpriseDivision, enterpriseDepartment, enterpriseManager,
+	})
 }
 
 func hasOIDCScope(scope string, target string) bool {
 	return slices.Contains(strings.Fields(scope), target)
 }
 
-// signJWT signs claims as an RS256 compact JWS with the environment's active
-// key. Tamper faults can name a key the JWKS does not publish or emit an
-// unsecured alg none token.
-func (a *webApp) signJWT(state appState, claims map[string]any, faults faultOptions) (string, error) {
+// jwtKind is a token signJWT produces: its JOSE typ header and the name debug
+// output uses.
+type jwtKind struct {
+	typ  string
+	name string
+}
+
+var (
+	idTokenJWT = jwtKind{typ: "JWT", name: "ID token"}
+	// RFC 9068 section 2.1 types access tokens so they cannot pass for ID
+	// tokens.
+	accessTokenJWT = jwtKind{typ: "at+jwt", name: "access token"}
+)
+
+// signJWT signs claims as an RS256 compact JWS. Tamper faults can name a key
+// the JWKS does not publish or emit an unsecured alg none token.
+func (a *webApp) signJWT(state appState, kind jwtKind, claims map[string]any, faults faultOptions) (string, error) {
 	key, err := a.activeSigningKey(state)
 	if err != nil {
 		return "", err
 	}
-	header := map[string]any{"typ": "JWT", "alg": "RS256", "kid": key.ID}
+	header := map[string]any{"typ": kind.typ, "alg": "RS256", "kid": key.ID}
 	if faults.tampers(tamperUnknownKeyID) {
 		header["kid"] = "scimtest-unknown"
 	}
 	if faults.tampers(tamperAlgNone) {
-		header = map[string]any{"typ": "JWT", "alg": "none"}
+		header = map[string]any{"typ": kind.typ, "alg": "none"}
 	}
 	headerData, err := json.Marshal(header)
 	if err != nil {
@@ -897,7 +1072,7 @@ func (a *webApp) signJWT(state appState, claims map[string]any, faults faultOpti
 	if err != nil {
 		return "", err
 	}
-	a.writeDebugOIDCTokenPayload(os.Stdout, claimData)
+	a.writeDebugOIDCTokenPayload(os.Stdout, kind.name, claimData)
 	unsigned := base64.RawURLEncoding.EncodeToString(headerData) + "." + base64.RawURLEncoding.EncodeToString(claimData)
 	if faults.tampers(tamperAlgNone) {
 		return unsigned + ".", nil

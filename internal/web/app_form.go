@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -82,6 +83,18 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 			existingProtocol = protocolWithout(existingProtocol, protocol)
 		}
 	}
+	groupsOverageThreshold := 0
+	if raw := strings.TrimSpace(r.FormValue("groups_overage_threshold")); raw != "" {
+		groupsOverageThreshold, err = strconv.Atoi(raw)
+		if err != nil {
+			a.redirectFormError(w, r, tab, "app", fmt.Errorf("groups overage threshold must be a whole number"))
+			return
+		}
+	}
+	persona := strings.TrimSpace(r.FormValue("persona"))
+	if persona == "" {
+		persona = personaGeneric
+	}
 	app := app{
 		ID:                      id,
 		Name:                    strings.TrimSpace(r.FormValue("name")),
@@ -92,8 +105,11 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		OIDCPublicClient:        r.FormValue("oidc_public_client") == "on",
 		OIDCRedirectURIs:        lines(r.FormValue("oidc_redirect_uris")),
 		AllowAnyOIDCRedirect:    r.FormValue("allow_any_oidc_redirect") == "on",
+		OIDCJWTAccessTokens:     r.FormValue("oidc_jwt_access_tokens") == "on",
+		OIDCAccessTokenAudience: strings.TrimSpace(r.FormValue("oidc_access_token_audience")),
 		SAMLEntityID:            strings.TrimSpace(r.FormValue("saml_entity_id")),
 		SAMLACSURL:              strings.TrimSpace(r.FormValue("saml_acs_url")),
+		SAMLSLOURL:              strings.TrimSpace(r.FormValue("saml_slo_url")),
 		SAMLAudience:            strings.TrimSpace(r.FormValue("saml_audience")),
 		SAMLNameIDField:         normalizeSAMLNameIDField(r.FormValue("saml_name_id_field")),
 		SAMLEmailAttributeName:  strings.TrimSpace(r.FormValue("saml_email_attribute_name")),
@@ -103,11 +119,15 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		SAMLSigningMode:         strings.TrimSpace(r.FormValue("saml_signing_mode")),
 		IncludeGroupsClaim:      r.FormValue("include_groups_claim") == "on",
 		ChooserMode:             normalizeChooserMode(r.FormValue("chooser_mode")),
+		Persona:                 persona,
+		GroupsOverageThreshold:  groupsOverageThreshold,
 		OIDCClaimMappings: oidcClaimMappings{
 			Name: strings.TrimSpace(r.FormValue("oidc_claim_name")), GivenName: strings.TrimSpace(r.FormValue("oidc_claim_given_name")),
 			FamilyName: strings.TrimSpace(r.FormValue("oidc_claim_family_name")), Username: strings.TrimSpace(r.FormValue("oidc_claim_username")),
 			Email: strings.TrimSpace(r.FormValue("oidc_claim_email")), Groups: strings.TrimSpace(r.FormValue("oidc_claim_groups")),
 		},
+		OIDCBackchannelLogoutURI:             strings.TrimSpace(r.FormValue("oidc_backchannel_logout_uri")),
+		OIDCBackchannelLogoutSessionRequired: r.FormValue("oidc_backchannel_logout_session_required") == "on",
 		SAMLAttributeMappings: samlAttributeMappings{
 			GivenName: strings.TrimSpace(r.FormValue("saml_attribute_given_name")), FamilyName: strings.TrimSpace(r.FormValue("saml_attribute_family_name")),
 			Username: strings.TrimSpace(r.FormValue("saml_attribute_username")), Email: strings.TrimSpace(r.FormValue("saml_email_attribute_name")),
@@ -231,9 +251,14 @@ func clearAppProtocol(app *app, protocol string) {
 		app.OIDCPublicClient = false
 		app.OIDCRedirectURIs = nil
 		app.AllowAnyOIDCRedirect = false
+		app.OIDCBackchannelLogoutURI = ""
+		app.OIDCBackchannelLogoutSessionRequired = false
+		app.OIDCJWTAccessTokens = false
+		app.OIDCAccessTokenAudience = ""
 	case "saml":
 		app.SAMLEntityID = ""
 		app.SAMLACSURL = ""
+		app.SAMLSLOURL = ""
 		app.SAMLAudience = ""
 		app.SAMLRequestCertPEM = ""
 		app.SAMLEncryptionCertPEM = ""

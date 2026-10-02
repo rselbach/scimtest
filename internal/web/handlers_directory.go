@@ -18,19 +18,42 @@ func (a *webApp) handleUserSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	id := strings.TrimSpace(r.FormValue("id"))
-	username := strings.TrimSpace(r.FormValue("username"))
-	givenName := strings.TrimSpace(r.FormValue("given_name"))
-	familyName := strings.TrimSpace(r.FormValue("family_name"))
-	email := strings.TrimSpace(r.FormValue("email"))
-	if username == "" {
-		username = email
+	submitted := user{
+		Username:       strings.TrimSpace(r.FormValue("username")),
+		GivenName:      strings.TrimSpace(r.FormValue("given_name")),
+		FamilyName:     strings.TrimSpace(r.FormValue("family_name")),
+		Email:          strings.TrimSpace(r.FormValue("email")),
+		EmployeeNumber: strings.TrimSpace(r.FormValue("employee_number")),
+		CostCenter:     strings.TrimSpace(r.FormValue("cost_center")),
+		Organization:   strings.TrimSpace(r.FormValue("organization")),
+		Division:       strings.TrimSpace(r.FormValue("division")),
+		Department:     strings.TrimSpace(r.FormValue("department")),
+		ManagerID:      strings.TrimSpace(r.FormValue("manager_id")),
+	}
+	if submitted.Username == "" {
+		submitted.Username = submitted.Email
 	}
 
-	if err := validateUser(givenName, email, username); err != nil {
+	if err := validateUser(submitted.GivenName, submitted.Email, submitted.Username); err != nil {
 		a.redirectFormError(w, r, tab, "user", err)
 		return
 	}
-	if err := validateUserUnique(state.Users, id, email, username); err != nil {
+	if err := validateUserUnique(state.Users, id, submitted.Email, submitted.Username); err != nil {
+		a.redirectFormError(w, r, tab, "user", err)
+		return
+	}
+	previous, _ := userByID(state.Users, id)
+	if submitted.ManagerID != previous.ManagerID {
+		if err := validateManager(state.Users, id, submitted.ManagerID); err != nil {
+			a.redirectFormError(w, r, tab, "user", err)
+			return
+		}
+	}
+	submitted.Attributes, err = parseCustomAttributes(r.FormValue("attributes"))
+	if err == nil {
+		err = validateCustomAttributes(submitted.Attributes)
+	}
+	if err != nil {
 		a.redirectFormError(w, r, tab, "user", err)
 		return
 	}
@@ -43,15 +66,11 @@ func (a *webApp) handleUserSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		state.Users = append(state.Users, user{
-			ID:         id,
-			GivenName:  givenName,
-			FamilyName: familyName,
-			Username:   username,
-			Email:      email,
-			Active:     true,
-			Dirty:      true,
-		})
+		created := submitted
+		created.ID = id
+		created.Active = true
+		created.Dirty = true
+		state.Users = append(state.Users, created)
 		appendLocalOperationLog(&state, "user", id, "Created")
 		status = "user added"
 	}
@@ -62,20 +81,29 @@ func (a *webApp) handleUserSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if status == "user updated" {
-			summary := summarizeUserUpdate(state.Users[index], givenName, familyName, email, username)
-			state.Users[index].GivenName = givenName
-			state.Users[index].FamilyName = familyName
-			state.Users[index].Username = username
-			state.Users[index].Email = email
-			state.Users[index].Deleted = false
-			state.Users[index].Dirty = true
-			state.Users[index].LastError = ""
-			appendLocalOperationLog(&state, "user", state.Users[index].ID, summary)
+			existing := state.Users[index]
+			updated := existing
+			updated.GivenName = submitted.GivenName
+			updated.FamilyName = submitted.FamilyName
+			updated.Username = submitted.Username
+			updated.Email = submitted.Email
+			updated.EmployeeNumber = submitted.EmployeeNumber
+			updated.CostCenter = submitted.CostCenter
+			updated.Organization = submitted.Organization
+			updated.Division = submitted.Division
+			updated.Department = submitted.Department
+			updated.ManagerID = submitted.ManagerID
+			updated.Attributes = submitted.Attributes
+			updated.Deleted = false
+			updated.Dirty = true
+			updated.LastError = ""
+			state.Users[index] = updated
+			appendLocalOperationLog(&state, "user", updated.ID, summarizeUserUpdate(existing, updated))
 		}
 	}
 	markUserDirty(&state, id, false)
 
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
@@ -111,7 +139,7 @@ func (a *webApp) handleUserToggleActive(w http.ResponseWriter, r *http.Request) 
 	markUserDirty(&state, id, false)
 	appendLocalOperationLog(&state, "user", state.Users[index].ID, summarizeActiveToggle(state.Users[index].Active))
 
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
@@ -181,7 +209,7 @@ func (a *webApp) handleUsersDelete(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
@@ -223,7 +251,7 @@ func (a *webApp) handleUserDeletedState(w http.ResponseWriter, r *http.Request, 
 		for i := range state.Groups {
 			state.Groups[i].MemberIDs = removeString(state.Groups[i].MemberIDs, id)
 		}
-		if err := saveRequestState(state); err != nil {
+		if err := a.saveRequestState(state); err != nil {
 			a.redirectError(w, r, tab, err)
 			return
 		}
@@ -237,7 +265,7 @@ func (a *webApp) handleUserDeletedState(w http.ResponseWriter, r *http.Request, 
 	markUserDirty(&state, id, deleted)
 	appendLocalOperationLog(&state, "user", state.Users[index].ID, localDeleteSummary(deleted))
 
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
@@ -304,7 +332,7 @@ func (a *webApp) handleGroupSave(w http.ResponseWriter, r *http.Request) {
 	}
 	markGroupDirty(&state, id, false)
 
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
@@ -365,7 +393,7 @@ func (a *webApp) handleGroupsDelete(w http.ResponseWriter, r *http.Request) {
 		state.Groups = keptGroups
 	}
 
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
@@ -404,7 +432,7 @@ func (a *webApp) handleGroupDeletedState(w http.ResponseWriter, r *http.Request,
 			return
 		}
 		state.Groups = append(state.Groups[:index], state.Groups[index+1:]...)
-		if err := saveRequestState(state); err != nil {
+		if err := a.saveRequestState(state); err != nil {
 			a.redirectError(w, r, tab, err)
 			return
 		}
@@ -418,7 +446,7 @@ func (a *webApp) handleGroupDeletedState(w http.ResponseWriter, r *http.Request,
 	markGroupDirty(&state, id, deleted)
 	appendLocalOperationLog(&state, "group", state.Groups[index].ID, localDeleteSummary(deleted))
 
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}

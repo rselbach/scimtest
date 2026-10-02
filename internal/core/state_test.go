@@ -1479,6 +1479,132 @@ func TestSchemaMigrationWritesPreMigrationCopy(t *testing.T) {
 	r.Contains(entries[0].Name(), "pre-migrate-v000-")
 }
 
+func TestSchemaMigrationAddsBackchannelLogoutSettings(t *testing.T) {
+	r := require.New(t)
+	path := filepath.Join(t.TempDir(), "state.db")
+	t.Setenv("SCIMTEST_STATE_FILE", path)
+	r.NoError(SaveState(AppState{Apps: []App{{
+		ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "oidc",
+		OIDCClientID: "greendale", OIDCClientSecret: "secret", OIDCRedirectURIs: []string{"https://greendale.test/callback"},
+	}}}))
+
+	db, err := openStateDB()
+	r.NoError(err)
+	for _, column := range []string{"oidc_backchannel_logout_uri", "oidc_backchannel_logout_session_required"} {
+		_, err = db.Exec(`ALTER TABLE apps DROP COLUMN ` + column)
+		r.NoError(err)
+	}
+	_, err = db.Exec(`PRAGMA user_version = 2`)
+	r.NoError(err)
+	r.NoError(resetStateDBCache())
+
+	state, err := LoadState()
+	r.NoError(err)
+	r.Len(state.Apps, 1)
+	r.Empty(state.Apps[0].OIDCBackchannelLogoutURI)
+	r.False(state.Apps[0].OIDCBackchannelLogoutSessionRequired)
+
+	state.Apps[0].OIDCBackchannelLogoutURI = "https://greendale.test/backchannel-logout"
+	state.Apps[0].OIDCBackchannelLogoutSessionRequired = true
+	r.NoError(SaveState(state))
+	r.NoError(resetStateDBCache())
+	state, err = LoadState()
+	r.NoError(err)
+	r.Equal("https://greendale.test/backchannel-logout", state.Apps[0].OIDCBackchannelLogoutURI)
+	r.True(state.Apps[0].OIDCBackchannelLogoutSessionRequired)
+}
+
+func TestValidateAppBackchannelLogoutURI(t *testing.T) {
+	tests := map[string]struct {
+		uri     string
+		wantErr string
+	}{
+		"empty":         {},
+		"https":         {uri: "https://greendale.test/backchannel-logout"},
+		"with a query":  {uri: "http://localhost:3000/logout?tenant=greendale"},
+		"relative":      {uri: "/backchannel-logout", wantErr: "must be an absolute HTTP(S) URL"},
+		"other scheme":  {uri: "ftp://greendale.test/logout", wantErr: "must be an absolute HTTP(S) URL"},
+		"with fragment": {uri: "https://greendale.test/logout#study-group", wantErr: "without a fragment"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			app := App{
+				ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "oidc",
+				OIDCClientID: "greendale", OIDCClientSecret: "secret", OIDCRedirectURIs: []string{"https://greendale.test/callback"},
+				OIDCBackchannelLogoutURI: tc.uri,
+			}
+			err := ValidateApp(app, nil)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				require.Equal(t, SetupStatusConfigured, OIDCSetupStatus(app))
+				return
+			}
+			require.ErrorContains(t, err, tc.wantErr)
+			require.Equal(t, SetupStatusIncomplete, OIDCSetupStatus(app))
+		})
+	}
+}
+
+func TestSchemaMigrationAddsSAMLSLOURL(t *testing.T) {
+	r := require.New(t)
+	path := filepath.Join(t.TempDir(), "state.db")
+	t.Setenv("SCIMTEST_STATE_FILE", path)
+	r.NoError(SaveState(AppState{Apps: []App{{
+		ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "saml",
+		SAMLACSURL: "https://greendale.test/saml/acs",
+	}}}))
+
+	db, err := openStateDB()
+	r.NoError(err)
+	_, err = db.Exec(`ALTER TABLE apps DROP COLUMN saml_slo_url`)
+	r.NoError(err)
+	_, err = db.Exec(`PRAGMA user_version = 3`)
+	r.NoError(err)
+	r.NoError(resetStateDBCache())
+
+	state, err := LoadState()
+	r.NoError(err)
+	r.Len(state.Apps, 1)
+	r.Empty(state.Apps[0].SAMLSLOURL)
+
+	state.Apps[0].SAMLSLOURL = "https://greendale.test/saml/slo"
+	r.NoError(SaveState(state))
+	r.NoError(resetStateDBCache())
+	state, err = LoadState()
+	r.NoError(err)
+	r.Equal("https://greendale.test/saml/slo", state.Apps[0].SAMLSLOURL)
+}
+
+func TestValidateAppSAMLSLOURL(t *testing.T) {
+	tests := map[string]struct {
+		url     string
+		wantErr string
+	}{
+		"empty":         {},
+		"https":         {url: "https://greendale.test/saml/slo"},
+		"with a query":  {url: "http://localhost:3000/slo?tenant=greendale"},
+		"relative":      {url: "/saml/slo", wantErr: "must be an absolute HTTP(S) URL"},
+		"other scheme":  {url: "ftp://greendale.test/slo", wantErr: "must be an absolute HTTP(S) URL"},
+		"with fragment": {url: "https://greendale.test/slo#study-group", wantErr: "without a fragment"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			app := App{
+				ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "saml",
+				SAMLACSURL: "https://greendale.test/saml/acs", SAMLSLOURL: tc.url,
+			}
+			err := ValidateApp(app, nil)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				require.Equal(t, SetupStatusConfigured, SAMLSetupStatus(app))
+				return
+			}
+			require.ErrorContains(t, err, tc.wantErr)
+			require.Equal(t, SetupStatusIncomplete, SAMLSetupStatus(app))
+		})
+	}
+}
+
 func TestSchemaMigrationDefaultsSAMLEncryptionAlgorithm(t *testing.T) {
 	r := require.New(t)
 	path := filepath.Join(t.TempDir(), "state.db")
@@ -1813,4 +1939,36 @@ func testRSAPEMCertificate(t *testing.T, notBefore, notAfter time.Time) string {
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	require.NoError(t, err)
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}
+
+func TestSchemaMigrationDefaultsJWTAccessTokens(t *testing.T) {
+	r := require.New(t)
+	path := filepath.Join(t.TempDir(), "state.db")
+	t.Setenv("SCIMTEST_STATE_FILE", path)
+	r.NoError(SaveState(AppState{Apps: []App{{ID: "greendale", Name: "Greendale", Slug: "greendale", Protocol: "oidc"}}}))
+	db, err := openStateDB()
+	r.NoError(err)
+	_, err = db.Exec(`ALTER TABLE apps DROP COLUMN oidc_jwt_access_tokens`)
+	r.NoError(err)
+	_, err = db.Exec(`ALTER TABLE apps DROP COLUMN oidc_access_token_audience`)
+	r.NoError(err)
+	_, err = db.Exec(`PRAGMA user_version = 3`)
+	r.NoError(err)
+	r.NoError(resetStateDBCache())
+	state, err := LoadState()
+	r.NoError(err)
+	r.Len(state.Apps, 1)
+	r.False(state.Apps[0].OIDCJWTAccessTokens)
+	r.Empty(state.Apps[0].OIDCAccessTokenAudience)
+	state.Apps[0].OIDCJWTAccessTokens = true
+	state.Apps[0].OIDCAccessTokenAudience = "https://api.greendale.edu"
+	r.NoError(SaveState(state))
+	loaded, err := LoadState()
+	r.NoError(err)
+	r.True(loaded.Apps[0].OIDCJWTAccessTokens)
+	r.Equal("https://api.greendale.edu", loaded.Apps[0].OIDCAccessTokenAudience)
+	entries, err := os.ReadDir(filepath.Join(filepath.Dir(path), "backups"))
+	r.NoError(err)
+	r.Len(entries, 1)
+	r.Contains(entries[0].Name(), "pre-migrate-v003-")
 }

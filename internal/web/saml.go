@@ -47,6 +47,7 @@ type samlResponseContext struct {
 	ACSURL       string
 	InResponseTo string
 	AssertionID  string // generated when empty
+	SessionIndex string // the IdP session's SessionIndex; omitted when empty
 	Requested    authnRequest
 	Authn        authnStatement
 }
@@ -77,11 +78,13 @@ func (a *webApp) handleSAMLMetadata(w http.ResponseWriter, r *http.Request) {
 	metadata := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <EntityDescriptor xmlns="urn:oasis:names:tc:SAML:2.0:metadata" entityID="%s">
   <IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">%s
+    <SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="%s/saml/%s/slo"/>
+    <SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="%s/saml/%s/slo"/>
     <NameIDFormat>%s</NameIDFormat>
     <SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="%s/saml/%s/sso"/>
     <SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="%s/saml/%s/sso"/>
   </IDPSSODescriptor>
-</EntityDescriptor>`, xmlEscape(entityID), keyDescriptors.String(), xmlEscape(nameIDFormat), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(baseURL), xmlEscape(app.Slug))
+</EntityDescriptor>`, xmlEscape(entityID), keyDescriptors.String(), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(nameIDFormat), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(baseURL), xmlEscape(app.Slug))
 	if r.URL.Query().Get("download") == "1" {
 		w.Header().Set("Content-Disposition", `attachment; filename="scimtest-`+app.Slug+`-idp-metadata.xml"`)
 	}
@@ -144,11 +147,11 @@ func (a *webApp) serveSAMLSSO(w http.ResponseWriter, r *http.Request, post bool)
 		(!post || values.Get("SAMLRequest") != "" || values.Get("login_hint") != "" || values.Get("RelayState") != "")
 	if needsChooser {
 		data := newChooserData("SAML sign-in", app, publicRequestURI(r), state.Users, loginHintFromValues(values), hiddenValues(values), "Create an active user before starting a SAML flow.")
-		data.applySignIn(r, state.Users, app.Slug, values, responseContext.Requested, now)
+		a.applySignIn(&data, r, state.Users, app.Slug, values, responseContext.Requested, now)
 		renderChooser(w, data)
 		return
 	}
-	found, session, err := chooserSignIn(r, state.Users, app, values, responseContext.Requested, now)
+	found, session, err := a.chooserSignIn(r, state.Users, app, values, responseContext.Requested, now)
 	if err != nil {
 		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
 		return
@@ -171,6 +174,16 @@ func (a *webApp) completeSAMLSSO(w http.ResponseWriter, r *http.Request, state a
 		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
 		return
 	}
+	sessionID, err := a.joinIdPSession(w, r, app.Slug, user, session, "saml")
+	if err != nil {
+		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
+		return
+	}
+	responseContext.SessionIndex, err = a.noteSAMLSignIn(sessionID, samlNameIDValue(app, user), samlNameIDFormatForApp(app))
+	if err != nil {
+		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
+		return
+	}
 	posted, err := a.buildSignedSAMLResponse(state, baseURL, app, user, responseContext, encryption, faults)
 	if err != nil {
 		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
@@ -178,12 +191,14 @@ func (a *webApp) completeSAMLSSO(w http.ResponseWriter, r *http.Request, state a
 	}
 	encodedResponse := base64.StdEncoding.EncodeToString([]byte(posted.XML))
 	a.rememberSAMLInspection(app, user, responseContext, posted, encodedResponse, faults, time.Now())
+	if groups, carried, issued := samlAssertionGroups(posted, samlAttributeMappingsForApp(app).Groups); issued {
+		a.noteIssuedGroups(app, user.ID, "saml", "SAML assertion", responseContext.ACSURL, lifecycleGroupClaims{Groups: groups, Carried: carried})
+	}
 	ssoDetail := "Signed response posted to " + responseContext.ACSURL
 	if faults.active() {
 		ssoDetail = "Response posted to " + responseContext.ACSURL + " (faults injected)"
 	}
 	a.recordFlowEvent(app.Slug, "saml", "sso", "ok", userLabel(user), ssoDetail)
-	rememberSignIn(w, app.Slug, session)
 	if wantsAPIProtocolResponse(r) {
 		writeJSON(w, map[string]string{"acs_url": responseContext.ACSURL, "saml_response": encodedResponse, "relay_state": values.Get("RelayState")})
 		return
@@ -675,6 +690,10 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user, respo
 	if nameIDFormat == "" {
 		nameIDFormat = samlNameIDFormatForField(app.SAMLNameIDField)
 	}
+	sessionIndex := ""
+	if responseContext.SessionIndex != "" {
+		sessionIndex = ` SessionIndex="` + xmlEscape(responseContext.SessionIndex) + `"`
+	}
 	responseInResponseTo := ""
 	subjectInResponseTo := ""
 	if inResponseTo != "" {
@@ -694,7 +713,7 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user, respo
       </saml:SubjectConfirmation>
     </saml:Subject>
     <saml:Conditions NotBefore="%s" NotOnOrAfter="%s"><saml:AudienceRestriction><saml:Audience>%s</saml:Audience></saml:AudienceRestriction></saml:Conditions>
-    <saml:AuthnStatement AuthnInstant="%s"><saml:AuthnContext><saml:AuthnContextClassRef>%s</saml:AuthnContextClassRef></saml:AuthnContext></saml:AuthnStatement>
+    <saml:AuthnStatement AuthnInstant="%s"%s><saml:AuthnContext><saml:AuthnContextClassRef>%s</saml:AuthnContextClassRef></saml:AuthnContext></saml:AuthnStatement>
     <saml:AttributeStatement>
       %s
     </saml:AttributeStatement>
@@ -704,7 +723,7 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user, respo
 		xmlEscape(assertionID), now.Format(time.RFC3339), xmlEscape(issuer),
 		xmlEscape(nameIDFormat), xmlEscape(nameIDValue), subjectInResponseTo, notOnOrAfter.Format(time.RFC3339), xmlEscape(recipient),
 		notBefore.Format(time.RFC3339), notOnOrAfter.Format(time.RFC3339), xmlEscape(audience),
-		responseContext.Authn.Time.UTC().Add(faults.ClockSkew).Format(time.RFC3339), xmlEscape(responseContext.Authn.Context), attributeStatement), nil
+		responseContext.Authn.Time.UTC().Add(faults.ClockSkew).Format(time.RFC3339), sessionIndex, xmlEscape(responseContext.Authn.Context), attributeStatement), nil
 }
 
 func samlAttributeStatement(state appState, app app, user user) string {
@@ -714,10 +733,38 @@ func samlAttributeStatement(state appState, app app, user user) string {
 	writeSAMLAttribute(&attributes, mappings.Username, []string{user.Username})
 	writeSAMLAttribute(&attributes, mappings.GivenName, []string{user.GivenName})
 	writeSAMLAttribute(&attributes, mappings.FamilyName, []string{user.FamilyName})
+	written := map[string]bool{mappings.Email: true, mappings.Username: true, mappings.GivenName: true, mappings.FamilyName: true}
 	if app.IncludeGroupsClaim {
 		writeSAMLAttribute(&attributes, mappings.Groups, userGroups(state, user.ID))
+		written[mappings.Groups] = true
 	}
+	writeSAMLUserAttributes(&attributes, written, state, app, user)
 	return attributes.String()
+}
+
+// writeSAMLUserAttributes writes non-empty enterprise values, the manager's
+// NameID value, and custom attributes, skipping names already written.
+func writeSAMLUserAttributes(attributes *strings.Builder, written map[string]bool, state appState, app app, user user) {
+	write := func(name string, value string) {
+		if written[name] {
+			return
+		}
+		written[name] = true
+		writeSAMLAttribute(attributes, name, []string{value})
+	}
+	for _, value := range enterpriseValues(user) {
+		if value.Value != "" {
+			write(value.Name, value.Value)
+		}
+	}
+	if manager, ok := userManager(state.Users, user); ok {
+		write(enterpriseManager, samlNameIDValue(app, manager))
+	}
+	for _, name := range customAttributeNames(user.Attributes) {
+		if !isReservedAttributeName(name) {
+			write(name, user.Attributes[name])
+		}
+	}
 }
 
 func writeSAMLAttribute(attributes *strings.Builder, name string, values []string) {

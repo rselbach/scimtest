@@ -24,6 +24,11 @@ type Config struct {
 	SigningCertificatePEM string `json:"signing_certificate_pem,omitempty"`
 	FilterSupported       bool   `json:"filter_supported,omitempty"`
 	PatchSupported        bool   `json:"patch_supported,omitempty"`
+	// Persona is the app's provider persona, projected for the SCIM client.
+	Persona string `json:"-"`
+	// SCIMEnterpriseUsed remembers that this environment manages enterprise
+	// values, so clearing its last value still sends the extension.
+	SCIMEnterpriseUsed bool `json:"scim_enterprise_used,omitempty"`
 	// SigningKeys is one environment's signing key ring, oldest first. The
 	// last key signs. An empty ring signs with the shared key above.
 	SigningKeys []SigningKey `json:"signing_keys,omitempty"`
@@ -68,10 +73,21 @@ type User struct {
 	Email      string `json:"email"`
 	Username   string `json:"username"`
 	Active     bool   `json:"active"`
-	RemoteID   string `json:"remote_id,omitempty"`
-	Dirty      bool   `json:"dirty"`
-	Deleted    bool   `json:"deleted"`
-	LastError  string `json:"last_error,omitempty"`
+	// Enterprise fields follow the SCIM enterprise user extension. ManagerID
+	// names another user in the same environment.
+	EmployeeNumber string `json:"employee_number,omitempty"`
+	CostCenter     string `json:"cost_center,omitempty"`
+	Organization   string `json:"organization,omitempty"`
+	Division       string `json:"division,omitempty"`
+	Department     string `json:"department,omitempty"`
+	ManagerID      string `json:"manager_id,omitempty"`
+	// Attributes are free-form values sent as OIDC claims and SAML
+	// attributes under their own names.
+	Attributes map[string]string `json:"attributes,omitempty"`
+	RemoteID   string            `json:"remote_id,omitempty"`
+	Dirty      bool              `json:"dirty"`
+	Deleted    bool              `json:"deleted"`
+	LastError  string            `json:"last_error,omitempty"`
 }
 
 func (u *User) UnmarshalJSON(data []byte) error {
@@ -170,6 +186,8 @@ type App struct {
 	OIDCPublicClient        bool                  `json:"oidc_public_client,omitempty"`
 	OIDCRedirectURIs        []string              `json:"oidc_redirect_uris,omitempty"`
 	AllowAnyOIDCRedirect    bool                  `json:"allow_any_oidc_redirect,omitempty"`
+	OIDCJWTAccessTokens     bool                  `json:"oidc_jwt_access_tokens,omitempty"`
+	OIDCAccessTokenAudience string                `json:"oidc_access_token_audience,omitempty"`
 	SAMLEntityID            string                `json:"saml_entity_id,omitempty"`
 	SAMLACSURL              string                `json:"saml_acs_url,omitempty"`
 	SAMLAudience            string                `json:"saml_audience,omitempty"`
@@ -191,6 +209,19 @@ type App struct {
 	SCIMCapabilitiesKnown   bool                  `json:"scim_capabilities_known,omitempty"`
 	SCIMPatchSupported      bool                  `json:"scim_patch_supported,omitempty"`
 	SCIMFilterSupported     bool                  `json:"scim_filter_supported,omitempty"`
+	// Persona shapes OIDC claims and SCIM requests like a real provider.
+	Persona string `json:"persona,omitempty"`
+	// GroupsOverageThreshold is the Entra ID group count above which tokens
+	// carry the groups overage form. Zero means Entra ID's default.
+	GroupsOverageThreshold int `json:"groups_overage_threshold,omitempty"`
+
+	// OpenID Connect Back-Channel Logout 1.0 client metadata.
+	OIDCBackchannelLogoutURI             string `json:"oidc_backchannel_logout_uri,omitempty"`
+	OIDCBackchannelLogoutSessionRequired bool   `json:"oidc_backchannel_logout_session_required,omitempty"`
+
+	// SAMLSLOURL is the SP's SingleLogoutService, where scimtest sends
+	// LogoutRequest and LogoutResponse messages.
+	SAMLSLOURL string `json:"saml_slo_url,omitempty"`
 }
 
 const (

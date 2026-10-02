@@ -35,7 +35,33 @@ Create Troy with `POST /environments/{ENV_ID}/users`:
 {"given_name":"Troy","family_name":"Barnes","email":"troy@greendale.edu","username":"tbarnes","active":true}
 ```
 
-Save the returned `id` as `USER_ID`. Use local user IDs in a group's
+Save the returned `id` as `USER_ID`. To test attribute-based role mapping,
+add enterprise fields and custom attributes:
+
+```json
+{"department":"Air Conditioning Repair","employee_number":"GC-1001","manager_id":"DEAN_USER_ID","attributes":{"role":"student"}}
+```
+
+`manager_id` is another local user ID. OIDC returns these values with the
+`profile` scope as `department`, `employeeNumber`, `manager` (the manager's
+`sub`), and `role`. SAML assertions carry the same attribute names. SCIM sends
+the enterprise fields in the enterprise extension but never the custom
+attributes.
+
+To test an app against a specific provider's shape, `PATCH` the environment
+with `{"persona":"entra"}`, `"okta"`, or `"google"`. `"generic"` restores
+scimtest's own shape. Entra ID adds `tid`, `oid`, and `upn`, sets
+`preferred_username` to the UPN, and drops `email_verified`. Above
+`groups_overage_threshold` groups (default 200; set a small value such as
+`1` to trigger it with a few groups), the token replaces `groups` with
+`_claim_names` and `_claim_sources`. Call the source endpoint with
+`POST` and the user's access token, with `{"securityEnabledOnly":false}` as
+the body. Okta adds `ver` and an `Everyone` group. Google adds `hd`. The Entra
+ID persona also switches SCIM sync to Entra ID's dialect: externalId filter
+lookups before every write, `PATCH` updates with capitalized `op` values, and
+`active` as `"True"` or `"False"`.
+
+Use local user IDs in a group's
 `member_ids` array when posting to `/environments/{ENV_ID}/groups` with a
 `display_name`. These are IDs within that environment, not remote SCIM IDs.
 Use `PATCH` on an individual resource for edits. `{"member_ids":[]}` removes
@@ -43,8 +69,10 @@ all group memberships.
 
 For a larger directory, `POST /environments/{ENV_ID}/tools/seed-sample` with
 `{}` adds ten Greendale users and three groups. Repeating it adds no duplicate
-sample records. One sample user is deliberately inactive. Read environment
-`/users` and `/groups` afterward instead of assuming IDs or active states.
+sample records. One sample user is deliberately inactive. Sample users have
+enterprise fields, a manager (except the Dean), and a `role` attribute. Read
+environment `/users` and `/groups` afterward instead of assuming IDs or active
+states.
 
 Environment `tools/create-users` accepts `count` and `email_domain`. The catalog
 also offers activation, deletion, and local-clear actions. With SCIM configured,
@@ -76,7 +104,24 @@ authentication or PKCE verifier. Read `userinfo_url` with the resulting
 access token. The instance-token header belongs only on local API calls.
 
 The connection export also contains `issuer`, `discovery_url`, `authorize_url`,
-and `jwks_url`. Configure the relying party from these values. A manually
+`jwks_url`, `introspection_url`, and `revocation_url`. Configure the relying
+party from these values.
+
+For a service-to-service client, POST `grant_type=client_credentials` to
+`token_url` with the client's secret. Only confidential clients qualify. The
+response has an access token and no ID or refresh token, and userinfo rejects
+that token. A resource server checks tokens by POSTing `token` to
+`introspection_url` with the same client authentication; `active: false`
+covers unknown, expired, revoked, and deactivated-user tokens. An app revokes
+its own token at `revocation_url`, which always returns `200` with an empty
+body. Revoking a refresh token also revokes that authorization's access
+tokens.
+
+To test an API that validates JWT access tokens, set
+`oidc_jwt_access_tokens: true` and `oidc_access_token_audience` to the API's
+expected audience. The connection export then reports `jwt_access_tokens` and
+`access_token_audience`, and the playground adds `access_token_header` and
+`access_token_claims`. Without an audience, `aud` is the client ID. A manually
 exchanged code does not prove the app's callback or login session; exercise
 that path separately when it is the test's goal.
 
@@ -87,8 +132,24 @@ or email.
 To test an app's step-up check, set `authn_strength` to `mfa` or `password` in
 the authorization or SAML sign-in request. The ID token reports the choice in
 `acr` and `amr`. The SAML assertion reports it in `AuthnContextClassRef`. Each
-API call is a fresh sign-in. `prompt=none`, `max_age`, and session reuse need
-a browser, because they depend on the chooser's remembered sign-in cookie.
+API call is a fresh sign-in with its own IdP session. `prompt=none`, `max_age`,
+session reuse, and the end session confirmation need a browser, because they
+depend on the cookie that names the browser's IdP session.
+
+To test an app's logout, read the ID token's `sid`, send the app's
+RP-initiated logout to `/oidc/{slug}/logout`, and confirm the session is gone
+from `GET /environments/{ENV_ID}/sessions`. `DELETE` on the same path with
+`?session_id=` ends one session as an administrator would. Deactivating or
+deleting the user also ends that user's sessions. None of these revoke tokens.
+
+To test back-channel logout, set `oidc_backchannel_logout_uri` to the app's
+logout endpoint, and `oidc_backchannel_logout_session_required: true` when the
+app needs `sid`. The app must be reachable from the machine that runs
+scimtest. Exchange a code first: only sessions that issued an ID token send a
+logout token. Then end the session by any route above. Delivery is
+asynchronous, so poll `GET /environments/{ENV_ID}/flows` for the
+`backchannel-logout` stage, which records the app's status, and check that the
+app ended its own session.
 
 ## SAML
 
@@ -110,6 +171,22 @@ For a signed Redirect-binding request, pass the original encoded query as
 `redirect_query`. Do not combine it with separate `saml_request`, `sig_alg`,
 `signature`, or `relay_state` fields. Re-encoding signed fields can invalidate
 their signature. The API URL's query is not SAML signing input.
+
+To test SAML Single Logout, set `saml_slo_url` to the service provider's
+SingleLogoutService. scimtest's own endpoint is `/saml/{slug}/slo` (`slo_url`
+in the connection export), and the metadata advertises it for HTTP-Redirect
+and HTTP-POST. `GET /environments/{ENV_ID}/sessions` lists each SAML session's
+`saml_session_index` and `saml_name_id`. For SP-initiated logout, have the SP
+send its `LogoutRequest` through the browser, then confirm the session is gone
+and read the `saml logout` row in `/flows`. A `failed` row names the error
+status scimtest answered, such as a NameID or SessionIndex that does not match
+the session. For IdP-initiated logout, `POST
+/environments/{ENV_ID}/saml/logout` with `session_id` and optional `binding`
+(`redirect` or `post`) ends the session and returns the signed message: send a
+browser to `url` for Redirect, or post `form` to `url` for POST. The SP answers
+at `/saml/{slug}/slo`, and `GET /environments/{ENV_ID}/saml/logouts` shows each
+request's `outcome`. A pinned `saml_request_certificate_pem` also requires
+signed logout messages. Ending a session any other way does not notify the SP.
 
 ## SCIM sync and import
 
@@ -159,6 +236,27 @@ python3 "${SCIMTEST_API}" --state-file "${SCIMTEST_STATE}" \
 Restore requires the matching target environment and saves a safety copy.
 It replaces local state and does not undo prior remote SCIM writes.
 
+## Lifecycle scenarios
+
+Paths in this section follow `/environments/{ENV_ID}`. A scenario changes the
+directory, then sends the messages the change calls for in every protocol the
+environment uses, and records the app's answers. `POST /lifecycle/joiner`
+takes user fields and optional `group_ids`. `POST /lifecycle/mover` takes
+`user_id`, `add_group_ids`, and `remove_group_ids`. `POST /lifecycle/leaver`
+takes `user_id`. Each returns `202` and the run. These scenarios write to the
+directory, and their SCIM pushes write to the configured target, so keep them
+within the user's authorized environment.
+
+Poll `GET /lifecycle/{RUN_ID}` until no step is `running`. Read each step's
+`status`, `detail`, and `messages`. A `skipped` step names the setup it lacks.
+A leaver's SAML Single Logout step is `needs_browser` with a `browser_url`:
+open it in a browser and choose **Send LogoutRequest**. The step then waits
+for the SP's `LogoutResponse`. A mover's `oidc-groups` and `saml-groups`
+steps stay `waiting` until the app signs the user in or refreshes again. Run a
+real sign-in through the app, then read the step to see the groups the token
+or assertion carried. Check the app's own state too: the provisioned or
+deactivated resource, its ended session, and its rejected tokens.
+
 ## Faults and diagnostics
 
 Use the playground's `faults` object for one OIDC experiment:
@@ -183,6 +281,13 @@ with a different, non-empty configured `NameID` and refuse assertion encryption.
 `xsw_assertion` needs `saml_signing_mode: "assertion"`; `xsw_response` needs
 `"response"` or `"both"`. Either wrapping fault can combine with
 `nameid_comment`.
+
+Logout token tamper values `logout_alg_none`,
+`logout_wrong_audience`, `logout_missing_events`, and `logout_repeated_jti`
+apply only through `PUT /faults`: sign-ins leave them armed, and the next
+back-channel logout token consumes them. A safe app answers `400`.
+With JWT access tokens, tamper values, `break_signature`, and
+`clock_skew` change the access token as well as the ID token.
 
 To affect the next incoming protocol flow, `PUT /environments/{ENV_ID}/faults`.
 Read or disarm it with `GET` or `DELETE` on the same path. Disarming returns

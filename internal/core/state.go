@@ -640,7 +640,7 @@ func openStateDBAt(path string) (*sql.DB, error) {
 // is initialized. Bump it whenever initStateDB's schema or migrations
 // change, so older builds refuse newer state files instead of silently
 // dropping columns they do not know.
-const currentSchemaVersion = 3
+const currentSchemaVersion = 8
 
 // maxPreMigrationCopies bounds the pre-migration snapshots kept next to the
 // state database.
@@ -775,6 +775,13 @@ func initStateDB(db *sql.DB) error {
 			dirty INTEGER NOT NULL,
 			deleted INTEGER NOT NULL,
 			last_error TEXT NOT NULL DEFAULT '',
+			employee_number TEXT NOT NULL DEFAULT '',
+			cost_center TEXT NOT NULL DEFAULT '',
+			organization TEXT NOT NULL DEFAULT '',
+			division TEXT NOT NULL DEFAULT '',
+			department TEXT NOT NULL DEFAULT '',
+			manager_id TEXT NOT NULL DEFAULT '',
+			attributes TEXT NOT NULL DEFAULT '',
 			PRIMARY KEY (environment_id, id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS groups (
@@ -819,7 +826,14 @@ func initStateDB(db *sql.DB) error {
 			scim_filter_supported INTEGER NOT NULL DEFAULT 0,
 			oidc_claim_mappings TEXT NOT NULL DEFAULT '',
 			saml_attribute_mappings TEXT NOT NULL DEFAULT '',
-			chooser_mode TEXT NOT NULL DEFAULT 'list'
+			chooser_mode TEXT NOT NULL DEFAULT 'list',
+			oidc_jwt_access_tokens INTEGER NOT NULL DEFAULT 0,
+			oidc_access_token_audience TEXT NOT NULL DEFAULT '',
+			oidc_backchannel_logout_uri TEXT NOT NULL DEFAULT '',
+			oidc_backchannel_logout_session_required INTEGER NOT NULL DEFAULT 0,
+			persona TEXT NOT NULL DEFAULT 'generic',
+			groups_overage_threshold INTEGER NOT NULL DEFAULT 0,
+			saml_slo_url TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE TABLE IF NOT EXISTS app_user_sync (
 			app_id TEXT NOT NULL,
@@ -900,7 +914,14 @@ func initStateDB(db *sql.DB) error {
 		`ALTER TABLE apps ADD COLUMN saml_request_certificate_pem TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE apps ADD COLUMN saml_encryption_certificate_pem TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE apps ADD COLUMN saml_encryption_algorithm TEXT NOT NULL DEFAULT 'aes256-gcm'`,
+		`ALTER TABLE apps ADD COLUMN persona TEXT NOT NULL DEFAULT 'generic'`,
+		`ALTER TABLE apps ADD COLUMN groups_overage_threshold INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE apps ADD COLUMN oidc_backchannel_logout_uri TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE apps ADD COLUMN oidc_backchannel_logout_session_required INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE apps ADD COLUMN saml_slo_url TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE apps ADD COLUMN saml_signing_mode TEXT NOT NULL DEFAULT 'assertion'`,
+		`ALTER TABLE apps ADD COLUMN oidc_jwt_access_tokens INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE apps ADD COLUMN oidc_access_token_audience TEXT NOT NULL DEFAULT ''`,
 	}
 	for _, migration := range migrations {
 		if _, err := db.Exec(migration); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
@@ -909,6 +930,22 @@ func initStateDB(db *sql.DB) error {
 	}
 	if err := migrateEnvironmentScopedDirectoryKeys(db); err != nil {
 		return err
+	}
+	// The users table is rebuilt above for old databases, so its newer
+	// columns are added afterwards.
+	userMigrations := []string{
+		`ALTER TABLE users ADD COLUMN employee_number TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN cost_center TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN organization TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN division TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN department TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN manager_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE users ADD COLUMN attributes TEXT NOT NULL DEFAULT ''`,
+	}
+	for _, migration := range userMigrations {
+		if _, err := db.Exec(migration); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("migrate sqlite users schema: %w", err)
+		}
 	}
 	indexes := []string{
 		`CREATE INDEX IF NOT EXISTS users_environment_id ON users(environment_id)`,
@@ -1198,8 +1235,8 @@ func distributeDirectoryRowsToApps(db *sql.DB, markMigrated bool) error {
 			return fmt.Errorf("create environment %s for directory migration: %w", app.id, err)
 		}
 		if app.sourceID != app.id {
-			if _, err := tx.Exec(`INSERT OR IGNORE INTO users(id, environment_id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error)
-				SELECT id, ?, given_name, family_name, email, username, active, '', 0, deleted, '' FROM users WHERE environment_id = ?`, app.id, app.sourceID); err != nil {
+			if _, err := tx.Exec(`INSERT OR IGNORE INTO users(id, environment_id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error, employee_number, cost_center, organization, division, department, manager_id, attributes)
+				SELECT id, ?, given_name, family_name, email, username, active, '', 0, deleted, '', employee_number, cost_center, organization, division, department, manager_id, attributes FROM users WHERE environment_id = ?`, app.id, app.sourceID); err != nil {
 				return fmt.Errorf("copy users into environment %s: %w", app.id, err)
 			}
 			if _, err := tx.Exec(`INSERT OR IGNORE INTO groups(id, environment_id, display_name, remote_id, dirty, deleted, last_error)
@@ -1339,6 +1376,8 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 			state.Config.AutoOpenSyncTrace = value == "1"
 		case "scim_disabled":
 			state.Config.SCIMDisabled = value == "1"
+		case "scim_enterprise_used":
+			state.Config.SCIMEnterpriseUsed = value == "1"
 		case "signing_keys":
 			if err := json.Unmarshal([]byte(value), &state.Config.SigningKeys); err != nil {
 				return AppState{}, fmt.Errorf("decode signing keys for environment %q: %w", environmentID, err)
@@ -1349,7 +1388,7 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 		return AppState{}, fmt.Errorf("iterate environment config rows: %w", err)
 	}
 
-	userRows, err := db.Query(`SELECT id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error FROM users WHERE environment_id = ? ORDER BY rowid`, environmentID)
+	userRows, err := db.Query(`SELECT id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error, employee_number, cost_center, organization, division, department, manager_id, attributes FROM users WHERE environment_id = ? ORDER BY rowid`, environmentID)
 	if err != nil {
 		return AppState{}, fmt.Errorf("load users from sqlite: %w", err)
 	}
@@ -1360,12 +1399,18 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 		var active int
 		var dirty int
 		var deleted int
-		if err := userRows.Scan(&u.ID, &u.GivenName, &u.FamilyName, &u.Email, &u.Username, &active, &u.RemoteID, &dirty, &deleted, &u.LastError); err != nil {
+		var attributes string
+		if err := userRows.Scan(&u.ID, &u.GivenName, &u.FamilyName, &u.Email, &u.Username, &active, &u.RemoteID, &dirty, &deleted, &u.LastError, &u.EmployeeNumber, &u.CostCenter, &u.Organization, &u.Division, &u.Department, &u.ManagerID, &attributes); err != nil {
 			return AppState{}, fmt.Errorf("scan sqlite user row: %w", err)
 		}
 		u.Active = active != 0
 		u.Dirty = dirty != 0
 		u.Deleted = deleted != 0
+		if attributes != "" {
+			if err := json.Unmarshal([]byte(attributes), &u.Attributes); err != nil {
+				return AppState{}, fmt.Errorf("decode attributes for user %s: %w", u.ID, err)
+			}
+		}
 		state.Users = append(state.Users, u)
 	}
 	if err := userRows.Err(); err != nil {
@@ -1418,7 +1463,7 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 		return AppState{}, fmt.Errorf("iterate sqlite group member rows: %w", err)
 	}
 
-	appRows, err := db.Query(`SELECT id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, saml_verify_requests, saml_request_certificate_pem, saml_encryption_certificate_pem, saml_encryption_algorithm, saml_signing_mode, include_groups_claim, allow_any_oidc_redirect, scim_enabled, scim_base_url, scim_bearer_token, scim_auto_open_trace, scim_capabilities_known, scim_patch_supported, scim_filter_supported, oidc_claim_mappings, saml_attribute_mappings, chooser_mode FROM apps WHERE environment_id = ? ORDER BY rowid`, environmentID)
+	appRows, err := db.Query(`SELECT id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, saml_verify_requests, saml_request_certificate_pem, saml_encryption_certificate_pem, saml_encryption_algorithm, saml_signing_mode, include_groups_claim, allow_any_oidc_redirect, scim_enabled, scim_base_url, scim_bearer_token, scim_auto_open_trace, scim_capabilities_known, scim_patch_supported, scim_filter_supported, oidc_claim_mappings, saml_attribute_mappings, chooser_mode, oidc_jwt_access_tokens, oidc_access_token_audience, oidc_backchannel_logout_uri, oidc_backchannel_logout_session_required, persona, groups_overage_threshold, saml_slo_url FROM apps WHERE environment_id = ? ORDER BY rowid`, environmentID)
 	if err != nil {
 		return AppState{}, fmt.Errorf("load apps from sqlite: %w", err)
 	}
@@ -1438,18 +1483,22 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 		var scimFilterSupported int
 		var oidcClaimMappings string
 		var samlAttributeMappings string
-		if err := appRows.Scan(&app.ID, &app.Name, &app.Slug, &app.Protocol, &app.OIDCClientID, &app.OIDCClientSecret, &publicClient, &redirectURIs, &app.SAMLEntityID, &app.SAMLACSURL, &app.SAMLAudience, &app.SAMLNameIDField, &app.SAMLNameIDFormat, &app.SAMLEmailAttributeName, &legacyVerifySAMLRequests, &app.SAMLRequestCertPEM, &app.SAMLEncryptionCertPEM, &app.SAMLEncryptionAlgorithm, &app.SAMLSigningMode, &includeGroups, &allowAnyRedirect, &scimEnabled, &app.SCIMBaseURL, &app.SCIMBearerToken, &scimAutoOpenTrace, &scimCapabilitiesKnown, &scimPatchSupported, &scimFilterSupported, &oidcClaimMappings, &samlAttributeMappings, &app.ChooserMode); err != nil {
+		var backchannelSessionRequired int
+		var jwtAccessTokens int
+		if err := appRows.Scan(&app.ID, &app.Name, &app.Slug, &app.Protocol, &app.OIDCClientID, &app.OIDCClientSecret, &publicClient, &redirectURIs, &app.SAMLEntityID, &app.SAMLACSURL, &app.SAMLAudience, &app.SAMLNameIDField, &app.SAMLNameIDFormat, &app.SAMLEmailAttributeName, &legacyVerifySAMLRequests, &app.SAMLRequestCertPEM, &app.SAMLEncryptionCertPEM, &app.SAMLEncryptionAlgorithm, &app.SAMLSigningMode, &includeGroups, &allowAnyRedirect, &scimEnabled, &app.SCIMBaseURL, &app.SCIMBearerToken, &scimAutoOpenTrace, &scimCapabilitiesKnown, &scimPatchSupported, &scimFilterSupported, &oidcClaimMappings, &samlAttributeMappings, &app.ChooserMode, &jwtAccessTokens, &app.OIDCAccessTokenAudience, &app.OIDCBackchannelLogoutURI, &backchannelSessionRequired, &app.Persona, &app.GroupsOverageThreshold, &app.SAMLSLOURL); err != nil {
 			return AppState{}, fmt.Errorf("scan sqlite app row: %w", err)
 		}
 		app.OIDCRedirectURIs = Lines(redirectURIs)
 		app.IncludeGroupsClaim = includeGroups != 0
 		app.AllowAnyOIDCRedirect = allowAnyRedirect != 0
+		app.OIDCJWTAccessTokens = jwtAccessTokens != 0
 		app.OIDCPublicClient = publicClient != 0
 		app.SCIMEnabled = scimEnabled != 0
 		app.SCIMAutoOpenTrace = scimAutoOpenTrace != 0
 		app.SCIMCapabilitiesKnown = scimCapabilitiesKnown != 0
 		app.SCIMPatchSupported = scimPatchSupported != 0
 		app.SCIMFilterSupported = scimFilterSupported != 0
+		app.OIDCBackchannelLogoutSessionRequired = backchannelSessionRequired != 0
 		if oidcClaimMappings != "" {
 			if err := json.Unmarshal([]byte(oidcClaimMappings), &app.OIDCClaimMappings); err != nil {
 				return AppState{}, fmt.Errorf("decode OIDC claim mappings for app %s: %w", app.ID, err)
@@ -1612,6 +1661,7 @@ func loadGlobalStateFromDB(db *sql.DB) (AppState, error) {
 	state.Config.AutoOpenSyncTrace = false
 	state.Config.SCIMDisabled = false
 	state.Config.SigningKeys = nil
+	state.Config.SCIMEnterpriseUsed = false
 	if len(state.UserSync) == 0 {
 		state.UserSync = nil
 	}
@@ -1723,6 +1773,7 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 			"bearer_token":         state.Config.BearerToken,
 			"auto_open_sync_trace": BoolString(state.Config.AutoOpenSyncTrace),
 			"scim_disabled":        BoolString(state.Config.SCIMDisabled),
+			"scim_enterprise_used": BoolString(state.Config.SCIMEnterpriseUsed),
 		}
 		if len(state.Config.SigningKeys) > 0 {
 			signingKeys, err := json.Marshal(state.Config.SigningKeys)
@@ -1738,7 +1789,7 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 		}
 	}
 
-	userStmt, err := tx.Prepare(`INSERT INTO users(id, environment_id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(environment_id, id) DO UPDATE SET given_name = excluded.given_name, family_name = excluded.family_name, email = excluded.email, username = excluded.username, active = excluded.active, remote_id = excluded.remote_id, dirty = excluded.dirty, deleted = excluded.deleted, last_error = excluded.last_error`)
+	userStmt, err := tx.Prepare(`INSERT INTO users(id, environment_id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error, employee_number, cost_center, organization, division, department, manager_id, attributes) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(environment_id, id) DO UPDATE SET given_name = excluded.given_name, family_name = excluded.family_name, email = excluded.email, username = excluded.username, active = excluded.active, remote_id = excluded.remote_id, dirty = excluded.dirty, deleted = excluded.deleted, last_error = excluded.last_error, employee_number = excluded.employee_number, cost_center = excluded.cost_center, organization = excluded.organization, division = excluded.division, department = excluded.department, manager_id = excluded.manager_id, attributes = excluded.attributes`)
 	if err != nil {
 		return fmt.Errorf("prepare sqlite user insert: %w", err)
 	}
@@ -1750,7 +1801,15 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 			u.Dirty = false
 			u.LastError = ""
 		}
-		if _, err := userStmt.Exec(u.ID, environmentID, u.GivenName, u.FamilyName, u.Email, u.Username, boolToInt(u.Active), u.RemoteID, boolToInt(u.Dirty), boolToInt(u.Deleted), u.LastError); err != nil {
+		attributes := ""
+		if len(u.Attributes) > 0 {
+			data, err := json.Marshal(u.Attributes)
+			if err != nil {
+				return fmt.Errorf("encode attributes for user %s: %w", u.ID, err)
+			}
+			attributes = string(data)
+		}
+		if _, err := userStmt.Exec(u.ID, environmentID, u.GivenName, u.FamilyName, u.Email, u.Username, boolToInt(u.Active), u.RemoteID, boolToInt(u.Dirty), boolToInt(u.Deleted), u.LastError, u.EmployeeNumber, u.CostCenter, u.Organization, u.Division, u.Department, u.ManagerID, attributes); err != nil {
 			return fmt.Errorf("insert sqlite user %s: %w", u.ID, err)
 		}
 	}
@@ -1790,7 +1849,7 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 		}
 	}
 
-	appStmt, err := tx.Prepare(`INSERT INTO apps(id, environment_id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, saml_verify_requests, saml_request_certificate_pem, saml_encryption_certificate_pem, saml_encryption_algorithm, saml_signing_mode, include_groups_claim, allow_any_oidc_redirect, scim_enabled, scim_base_url, scim_bearer_token, scim_auto_open_trace, scim_capabilities_known, scim_patch_supported, scim_filter_supported, oidc_claim_mappings, saml_attribute_mappings, chooser_mode) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET environment_id = excluded.environment_id, name = excluded.name, slug = excluded.slug, protocol = excluded.protocol, oidc_client_id = excluded.oidc_client_id, oidc_client_secret = excluded.oidc_client_secret, oidc_public_client = excluded.oidc_public_client, oidc_redirect_uris = excluded.oidc_redirect_uris, saml_entity_id = excluded.saml_entity_id, saml_acs_url = excluded.saml_acs_url, saml_audience = excluded.saml_audience, saml_name_id_field = excluded.saml_name_id_field, saml_name_id_format = excluded.saml_name_id_format, saml_email_attribute_name = excluded.saml_email_attribute_name, saml_verify_requests = excluded.saml_verify_requests, saml_request_certificate_pem = excluded.saml_request_certificate_pem, saml_encryption_certificate_pem = excluded.saml_encryption_certificate_pem, saml_encryption_algorithm = excluded.saml_encryption_algorithm, saml_signing_mode = excluded.saml_signing_mode, include_groups_claim = excluded.include_groups_claim, allow_any_oidc_redirect = excluded.allow_any_oidc_redirect, scim_enabled = excluded.scim_enabled, scim_base_url = excluded.scim_base_url, scim_bearer_token = excluded.scim_bearer_token, scim_auto_open_trace = excluded.scim_auto_open_trace, scim_capabilities_known = excluded.scim_capabilities_known, scim_patch_supported = excluded.scim_patch_supported, scim_filter_supported = excluded.scim_filter_supported, oidc_claim_mappings = excluded.oidc_claim_mappings, saml_attribute_mappings = excluded.saml_attribute_mappings, chooser_mode = excluded.chooser_mode`)
+	appStmt, err := tx.Prepare(`INSERT INTO apps(id, environment_id, name, slug, protocol, oidc_client_id, oidc_client_secret, oidc_public_client, oidc_redirect_uris, saml_entity_id, saml_acs_url, saml_audience, saml_name_id_field, saml_name_id_format, saml_email_attribute_name, saml_verify_requests, saml_request_certificate_pem, saml_encryption_certificate_pem, saml_encryption_algorithm, saml_signing_mode, include_groups_claim, allow_any_oidc_redirect, scim_enabled, scim_base_url, scim_bearer_token, scim_auto_open_trace, scim_capabilities_known, scim_patch_supported, scim_filter_supported, oidc_claim_mappings, saml_attribute_mappings, chooser_mode, oidc_jwt_access_tokens, oidc_access_token_audience, oidc_backchannel_logout_uri, oidc_backchannel_logout_session_required, persona, groups_overage_threshold, saml_slo_url) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET environment_id = excluded.environment_id, name = excluded.name, slug = excluded.slug, protocol = excluded.protocol, oidc_client_id = excluded.oidc_client_id, oidc_client_secret = excluded.oidc_client_secret, oidc_public_client = excluded.oidc_public_client, oidc_redirect_uris = excluded.oidc_redirect_uris, saml_entity_id = excluded.saml_entity_id, saml_acs_url = excluded.saml_acs_url, saml_audience = excluded.saml_audience, saml_name_id_field = excluded.saml_name_id_field, saml_name_id_format = excluded.saml_name_id_format, saml_email_attribute_name = excluded.saml_email_attribute_name, saml_verify_requests = excluded.saml_verify_requests, saml_request_certificate_pem = excluded.saml_request_certificate_pem, saml_encryption_certificate_pem = excluded.saml_encryption_certificate_pem, saml_encryption_algorithm = excluded.saml_encryption_algorithm, saml_signing_mode = excluded.saml_signing_mode, include_groups_claim = excluded.include_groups_claim, allow_any_oidc_redirect = excluded.allow_any_oidc_redirect, scim_enabled = excluded.scim_enabled, scim_base_url = excluded.scim_base_url, scim_bearer_token = excluded.scim_bearer_token, scim_auto_open_trace = excluded.scim_auto_open_trace, scim_capabilities_known = excluded.scim_capabilities_known, scim_patch_supported = excluded.scim_patch_supported, scim_filter_supported = excluded.scim_filter_supported, oidc_claim_mappings = excluded.oidc_claim_mappings, saml_attribute_mappings = excluded.saml_attribute_mappings, chooser_mode = excluded.chooser_mode, oidc_jwt_access_tokens = excluded.oidc_jwt_access_tokens, oidc_access_token_audience = excluded.oidc_access_token_audience, oidc_backchannel_logout_uri = excluded.oidc_backchannel_logout_uri, oidc_backchannel_logout_session_required = excluded.oidc_backchannel_logout_session_required, persona = excluded.persona, groups_overage_threshold = excluded.groups_overage_threshold, saml_slo_url = excluded.saml_slo_url`)
 	if err != nil {
 		return fmt.Errorf("prepare sqlite app insert: %w", err)
 	}
@@ -1806,7 +1865,7 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 			return fmt.Errorf("encode SAML attribute mappings for app %s: %w", app.ID, err)
 		}
 		verifySAMLRequests := strings.TrimSpace(app.SAMLRequestCertPEM) != ""
-		if _, err := appStmt.Exec(app.ID, environmentID, app.Name, app.Slug, app.Protocol, app.OIDCClientID, app.OIDCClientSecret, boolToInt(app.OIDCPublicClient), JoinLines(app.OIDCRedirectURIs), app.SAMLEntityID, app.SAMLACSURL, app.SAMLAudience, app.SAMLNameIDField, app.SAMLNameIDFormat, app.SAMLEmailAttributeName, boolToInt(verifySAMLRequests), app.SAMLRequestCertPEM, app.SAMLEncryptionCertPEM, app.SAMLEncryptionAlgorithm, app.SAMLSigningMode, boolToInt(app.IncludeGroupsClaim), boolToInt(app.AllowAnyOIDCRedirect), boolToInt(app.SCIMEnabled), app.SCIMBaseURL, app.SCIMBearerToken, boolToInt(app.SCIMAutoOpenTrace), boolToInt(app.SCIMCapabilitiesKnown), boolToInt(app.SCIMPatchSupported), boolToInt(app.SCIMFilterSupported), string(oidcClaimMappings), string(samlAttributeMappings), app.ChooserMode); err != nil {
+		if _, err := appStmt.Exec(app.ID, environmentID, app.Name, app.Slug, app.Protocol, app.OIDCClientID, app.OIDCClientSecret, boolToInt(app.OIDCPublicClient), JoinLines(app.OIDCRedirectURIs), app.SAMLEntityID, app.SAMLACSURL, app.SAMLAudience, app.SAMLNameIDField, app.SAMLNameIDFormat, app.SAMLEmailAttributeName, boolToInt(verifySAMLRequests), app.SAMLRequestCertPEM, app.SAMLEncryptionCertPEM, app.SAMLEncryptionAlgorithm, app.SAMLSigningMode, boolToInt(app.IncludeGroupsClaim), boolToInt(app.AllowAnyOIDCRedirect), boolToInt(app.SCIMEnabled), app.SCIMBaseURL, app.SCIMBearerToken, boolToInt(app.SCIMAutoOpenTrace), boolToInt(app.SCIMCapabilitiesKnown), boolToInt(app.SCIMPatchSupported), boolToInt(app.SCIMFilterSupported), string(oidcClaimMappings), string(samlAttributeMappings), app.ChooserMode, boolToInt(app.OIDCJWTAccessTokens), app.OIDCAccessTokenAudience, app.OIDCBackchannelLogoutURI, boolToInt(app.OIDCBackchannelLogoutSessionRequired), NormalizePersona(app.Persona), app.GroupsOverageThreshold, app.SAMLSLOURL); err != nil {
 			return fmt.Errorf("insert sqlite app %s: %w", app.ID, err)
 		}
 	}
@@ -1968,6 +2027,12 @@ func StateEmpty(state AppState) bool {
 const maxOperationLogsPerResource = 100
 
 func NormalizeState(state *AppState) {
+	for _, user := range state.Users {
+		if !user.Deleted && HasEnterpriseValues(user) {
+			state.Config.SCIMEnterpriseUsed = true
+			break
+		}
+	}
 	migrateLegacySCIMConfig(state)
 	capOperationLogs(state.UserOperations)
 	capOperationLogs(state.GroupOperations)
@@ -2009,6 +2074,7 @@ func NormalizeState(state *AppState) {
 		state.Apps[i].OIDCClaimMappings = OIDCClaimMappingsForApp(state.Apps[i])
 		state.Apps[i].SAMLAttributeMappings = SAMLAttributeMappingsForApp(state.Apps[i])
 		state.Apps[i].ChooserMode = NormalizeChooserMode(state.Apps[i].ChooserMode)
+		state.Apps[i].Persona = NormalizePersona(state.Apps[i].Persona)
 		if SupportsSAML(state.Apps[i]) {
 			state.Apps[i].SAMLEmailAttributeName = state.Apps[i].SAMLAttributeMappings.Email
 		}
@@ -2245,6 +2311,12 @@ func ValidateApp(app App, apps []App) error {
 	if NormalizeChooserMode(app.ChooserMode) != app.ChooserMode && strings.TrimSpace(app.ChooserMode) != "" {
 		return fmt.Errorf("chooser mode must be list or identifier")
 	}
+	if NormalizePersona(app.Persona) != app.Persona && strings.TrimSpace(app.Persona) != "" {
+		return fmt.Errorf("persona must be generic, entra, okta, or google")
+	}
+	if app.GroupsOverageThreshold < 0 {
+		return fmt.Errorf("groups overage threshold must not be negative")
+	}
 	for _, existing := range apps {
 		if existing.ID != app.ID && strings.EqualFold(existing.Slug, app.Slug) {
 			if existing.EnvironmentName != "" {
@@ -2262,6 +2334,11 @@ func ValidateApp(app App, apps []App) error {
 				return err
 			}
 		}
+		if app.OIDCBackchannelLogoutURI != "" {
+			if err := validateBackchannelLogoutURI(app.OIDCBackchannelLogoutURI); err != nil {
+				return err
+			}
+		}
 		mappings := OIDCClaimMappingsForApp(app)
 		if err := validateMappedNames("OIDC claim", []string{mappings.Name, mappings.GivenName, mappings.FamilyName, mappings.Username, mappings.Email, mappings.Groups}, "sub", "iss", "aud", "iat", "exp", "nonce", "email_verified"); err != nil {
 			return err
@@ -2274,6 +2351,11 @@ func ValidateApp(app App, apps []App) error {
 		}
 	}
 	if hasSAMLSetup(app) {
+		if app.SAMLSLOURL != "" {
+			if err := validateSAMLSLOURL(app.SAMLSLOURL); err != nil {
+				return err
+			}
+		}
 		mappings := SAMLAttributeMappingsForApp(app)
 		if err := validateMappedNames("SAML attribute", []string{mappings.GivenName, mappings.FamilyName, mappings.Username, mappings.Email, mappings.Groups}); err != nil {
 			return err
@@ -2314,6 +2396,9 @@ func OIDCSetupStatus(app App) string {
 			return SetupStatusIncomplete
 		}
 	}
+	if app.OIDCBackchannelLogoutURI != "" && validateBackchannelLogoutURI(app.OIDCBackchannelLogoutURI) != nil {
+		return SetupStatusIncomplete
+	}
 	mappings := OIDCClaimMappingsForApp(app)
 	if validateMappedNames("OIDC claim", []string{mappings.Name, mappings.GivenName, mappings.FamilyName, mappings.Username, mappings.Email, mappings.Groups}, "sub", "iss", "aud", "iat", "exp", "nonce", "email_verified") != nil {
 		return SetupStatusIncomplete
@@ -2328,6 +2413,9 @@ func SAMLSetupStatus(app App) string {
 		return SetupStatusNotSetUp
 	}
 	if validateSAMLACSURL(strings.TrimSpace(app.SAMLACSURL)) != nil {
+		return SetupStatusIncomplete
+	}
+	if app.SAMLSLOURL != "" && validateSAMLSLOURL(app.SAMLSLOURL) != nil {
 		return SetupStatusIncomplete
 	}
 	mappings := SAMLAttributeMappingsForApp(app)
@@ -2462,6 +2550,19 @@ func validateOIDCRedirectURI(rawURI string) error {
 	return nil
 }
 
+// validateBackchannelLogoutURI applies the backchannel_logout_uri rules from
+// OpenID Connect Back-Channel Logout 1.0: an absolute URI with no fragment.
+func validateBackchannelLogoutURI(rawURI string) error {
+	logoutURI, err := url.Parse(rawURI)
+	if err != nil {
+		return fmt.Errorf("back-channel logout URI %q is invalid: %w", rawURI, err)
+	}
+	if !logoutURI.IsAbs() || logoutURI.Host == "" || (logoutURI.Scheme != "http" && logoutURI.Scheme != "https") || logoutURI.Fragment != "" {
+		return fmt.Errorf("back-channel logout URI %q must be an absolute HTTP(S) URL without a fragment", rawURI)
+	}
+	return nil
+}
+
 func validateSAMLACSURL(rawURL string) error {
 	if rawURL == "" {
 		return fmt.Errorf("SAML ACS URL is required")
@@ -2472,6 +2573,19 @@ func validateSAMLACSURL(rawURL string) error {
 	}
 	if !acsURL.IsAbs() || acsURL.Host == "" || (acsURL.Scheme != "http" && acsURL.Scheme != "https") || acsURL.Fragment != "" {
 		return fmt.Errorf("SAML ACS URL must be an absolute HTTP(S) URL without a fragment")
+	}
+	return nil
+}
+
+// validateSAMLSLOURL checks the SP's Single Logout URL: an absolute HTTP(S)
+// URL with no fragment, since the Redirect binding appends its query to it.
+func validateSAMLSLOURL(rawURL string) error {
+	sloURL, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("SAML Single Logout URL %q is invalid: %w", rawURL, err)
+	}
+	if !sloURL.IsAbs() || sloURL.Host == "" || (sloURL.Scheme != "http" && sloURL.Scheme != "https") || sloURL.Fragment != "" {
+		return fmt.Errorf("SAML Single Logout URL %q must be an absolute HTTP(S) URL without a fragment", rawURL)
 	}
 	return nil
 }

@@ -177,6 +177,30 @@ func (a *webApp) saveAPIUser(environmentID, id string, request apiUserRequest) (
 	if request.Active != nil {
 		found.Active = *request.Active
 	}
+	for _, field := range []struct {
+		value  *string
+		target *string
+	}{
+		{request.EmployeeNumber, &found.EmployeeNumber},
+		{request.CostCenter, &found.CostCenter},
+		{request.Organization, &found.Organization},
+		{request.Division, &found.Division},
+		{request.Department, &found.Department},
+	} {
+		if field.value != nil {
+			*field.target = strings.TrimSpace(*field.value)
+		}
+	}
+	if request.ManagerID != nil {
+		managerID := strings.TrimSpace(*request.ManagerID)
+		if err := validateManager(state.Users, id, managerID); err != nil {
+			return user{}, err
+		}
+		found.ManagerID = managerID
+	}
+	if request.Attributes != nil {
+		found.Attributes = trimCustomAttributes(*request.Attributes)
+	}
 	if found.Username == "" {
 		found.Username = found.Email
 	}
@@ -184,6 +208,9 @@ func (a *webApp) saveAPIUser(environmentID, id string, request apiUserRequest) (
 		return user{}, err
 	}
 	if err := validateUserUnique(state.Users, found.ID, found.Email, found.Username); err != nil {
+		return user{}, err
+	}
+	if err := validateCustomAttributes(found.Attributes); err != nil {
 		return user{}, err
 	}
 	if id == "" {
@@ -200,17 +227,30 @@ func (a *webApp) saveAPIUser(environmentID, id string, request apiUserRequest) (
 		found.Dirty = true
 		found.LastError = ""
 		state.Users[index] = found
-		summary := summarizeUserUpdate(old, found.GivenName, found.FamilyName, found.Email, found.Username)
+		summary := summarizeUserUpdate(old, found)
 		if old.Active != found.Active {
 			summary += fmt.Sprintf("; active set to %t", found.Active)
 		}
 		appendLocalOperationLog(&state, "user", id, summary)
 	}
 	markUserDirty(&state, found.ID, false)
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		return user{}, err
 	}
 	return found, nil
+}
+
+// trimCustomAttributes trims values and returns nil for an empty map, the
+// same shape the user form produces.
+func trimCustomAttributes(attributes map[string]string) map[string]string {
+	if len(attributes) == 0 {
+		return nil
+	}
+	trimmed := make(map[string]string, len(attributes))
+	for name, value := range attributes {
+		trimmed[name] = strings.TrimSpace(value)
+	}
+	return trimmed
 }
 
 func (a *webApp) handleAPIUserDelete(w http.ResponseWriter, r *http.Request) {
@@ -248,7 +288,7 @@ func (a *webApp) setAPIUserDeleted(w http.ResponseWriter, r *http.Request, delet
 		apiError(w, http.StatusConflict, "SCIM is disabled")
 		return
 	}
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -316,7 +356,7 @@ func (a *webApp) handleAPIUsersBulkDelete(w http.ResponseWriter, r *http.Request
 			}
 		}
 	}
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -447,7 +487,7 @@ func (a *webApp) saveAPIGroup(environmentID, id string, request apiGroupRequest)
 		appendLocalOperationLog(&state, "group", id, summary)
 	}
 	markGroupDirty(&state, found.ID, false)
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		return group{}, err
 	}
 	return found, nil
@@ -484,7 +524,7 @@ func (a *webApp) setAPIGroupDeleted(w http.ResponseWriter, r *http.Request, dele
 		apiError(w, http.StatusConflict, "SCIM is disabled")
 		return
 	}
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -542,7 +582,7 @@ func (a *webApp) handleAPIGroupsBulkDelete(w http.ResponseWriter, r *http.Reques
 		}
 		state.Groups = kept
 	}
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

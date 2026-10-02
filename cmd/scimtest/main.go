@@ -135,7 +135,7 @@ func usage(w *os.File) {
 	mustWriteOutput(w, "                    tried upward from the last used port or 8080\n")
 	mustWriteOutput(w, "  --state-file PATH use an isolated SQLite state file (also runs a second\n")
 	mustWriteOutput(w, "                    instance next to a running one)\n")
-	mustWriteOutput(w, "  --debug           print OIDC/SAML RP traffic and ID token payloads\n")
+	mustWriteOutput(w, "  --debug           print OIDC/SAML RP traffic and OIDC token payloads\n")
 	mustWriteOutput(w, "  --debug-secrets   include credentials and tokens in debug output\n")
 	mustWriteOutput(w, "  --no-open         start without opening the admin UI in a browser\n")
 	mustWriteOutput(w, "  --version         print the version and exit\n\n")

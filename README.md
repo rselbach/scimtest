@@ -79,7 +79,8 @@ steps, the authentication design, and release packaging details.
    OIDC and SAML connection values (issuer, discovery, metadata, and
    certificate) appear as you type and can be copied or downloaded.
 3. Load the Greendale sample (from the empty users list or Bulk tools) to
-   get ten named users and three overlapping groups instantly.
+   get ten named users and three overlapping groups instantly. The users
+   come with departments, managers, and a `role` attribute.
 4. Test: use **Test sign-in** for a real flow against your app, the
    built-in **playground** for an instant OIDC round trip with no relying
    party required, or **Sync** to push the directory to your app's SCIM
@@ -96,24 +97,29 @@ steps, the authentication design, and release packaging details.
   selector in the top bar sets the context for the whole admin UI.
 - **OIDC playground.** A built-in relying party that runs the full
   authorization-code exchange and shows the token response, decoded and
-  raw ID token, and userinfo on one page. It requests `offline_access`, so
+  raw ID token, decoded JWT access token, and userinfo on one page. It requests `offline_access`, so
   the page can also redeem the refresh token, optionally with a narrower
   scope, and show the refreshed claims beside the ones they replace.
 - **Flow inspectors.** Per-environment OIDC and SAML inspectors keep the
   last ten flows, including decoded claims, the raw ID token, and the
   base64 `SAMLResponse` exactly as posted, plus a per-hop activity log
-  that records failures too.
+  that records failures too. The OIDC inspector also lists live IdP
+  sessions and can end them. The SAML inspector lists sessions with a SAML
+  sign-in and can send their service provider a `LogoutRequest`.
 - **Traffic view.** Request/response transcripts of every OIDC and SAML
-  exchange, recorded by default into a bounded in-memory ring, with
+  exchange, including the back-channel logout requests scimtest sends and
+  decoded SAML Single Logout messages,
+  recorded by default into a bounded in-memory ring, with
   optional raw-secret capture. `--debug` additionally prints transcripts
   to stdout.
 - **Fault Injection.** Choose **Fault Injection** in an environment's sidebar to
-  arm a preset such as a temporary token outage, a slow token endpoint, a
-  stale JWKS, an expired token, a broken signature, an unsigned token, a wrong
-  audience, a missing claim, a replayed SAML assertion, or a SAML failure. The
-  page waits for RP-initiated and SP-initiated flows, records each injection, and
-  disarms active scenarios after 15 minutes. Token endpoint presets hit both
-  code exchanges and refresh requests, and each injection names the grant. Inspector controls still provide
+  arm a preset such as a temporary token outage, a slow token endpoint, a stale JWKS, an
+  expired token, a broken signature, an unsigned token, a wrong audience, a
+  missing claim, a replayed SAML assertion, or a SAML failure. The page waits
+  for RP-initiated and SP-initiated flows, records each injection, and
+  disarms active scenarios after 15 minutes. Token endpoint presets hit code
+  exchanges, refresh requests, and `client_credentials` requests, and each
+  injection names the grant. Inspector controls still provide
   one-shot clock skew, token and assertion lifetime, claim, signature, and
   error faults, plus tamper faults that break one validation rule in an
   otherwise valid response. OIDC tamper faults cover a wrong issuer or
@@ -125,12 +131,24 @@ steps, the authentication design, and release packaging details.
   directory user's identity: a safe SP binds the signature to the exact element
   it processes and reads the whole `NameID` text node, so it rejects all three,
   while a vulnerable one signs in as the forged user. These forgery faults need
-  a second active directory user, and scimtest still posts only to the
-  configured ACS URL. The same one-shot effects are available as `fault_*` URL
-  parameters, such as `fault_tamper=wrong_issuer,alg_none`.
+  a second active directory user with a different configured `NameID`, and
+  scimtest still posts only to the configured ACS URL. Logout token tamper
+  faults cover an unsigned token, a wrong audience, a missing `events` claim,
+  and a repeated `jti`. The same one-shot sign-in effects are available as
+  `fault_*` URL parameters, such as
+  `fault_tamper=wrong_issuer,alg_none`.
 - **SCIM sync.** Push the directory to your app's SCIM endpoint, reconcile
   drift, import an existing remote directory with a preview, and inspect
   every request in the sync trace and per-resource history.
+- **Lifecycle scenarios.** Run a joiner, mover, or leaver across SCIM, OIDC,
+  and SAML in one action, and get a checklist of each message scimtest sent
+  and how the app answered. See [Lifecycle scenarios](#lifecycle-scenarios).
+- **User attributes.** Give users enterprise fields (employee number, cost
+  center, organization, division, department, and manager) and custom
+  attributes such as `role=student`, to test attribute-based role mapping.
+- **Provider personas.** Shape an environment's claims and SCIM requests like
+  Microsoft Entra ID, Okta, or Google, to catch breaks before moving an app
+  from one provider to another.
 - **Config export.** Download SAML IDP metadata and the signing
   certificate as files, or fetch `GET /apps/{id}/config.json` for a
   machine-readable connection bundle to use in CI.
@@ -148,10 +166,15 @@ Each environment can expose OIDC, SAML, or both, under its endpoint name
 - OIDC authorize: `/oidc/{slug}/authorize`
 - OIDC token: `/oidc/{slug}/token`
 - OIDC userinfo: `/oidc/{slug}/userinfo`
+- OIDC end session (RP-initiated logout): `/oidc/{slug}/logout`
 - OIDC JWKS: `/oidc/{slug}/jwks`
+- Entra ID groups overage: `/oidc/{slug}/users/{oid}/getMemberObjects`
+- OIDC token introspection: `/oidc/{slug}/introspect`
+- OIDC token revocation: `/oidc/{slug}/revoke`
 - SAML metadata: `/saml/{slug}/metadata` (`?download=1` for a file)
 - SAML certificate: `/saml/{slug}/certificate.pem`
 - SAML SSO: `/saml/{slug}/sso`
+- SAML Single Logout: `/saml/{slug}/slo`
 
 The OIDC flow signs RS256 ID tokens. SAML setup's **Signed parts** chooses
 what scimtest signs: the assertion (the default), the Response, or both. An SP
@@ -177,6 +200,33 @@ The OIDC inspector lists users with live tokens and can revoke one user's
 tokens or all of them, as an administrator would. Refresh tokens last 24
 hours and are kept in memory, so restarting scimtest revokes them.
 
+Access tokens are opaque by default. Turn on **Issue JWT access tokens** in
+OIDC setup to receive RFC 9068 JWT access tokens instead, so an API can
+validate them locally against the JWKS. They carry the header `typ: at+jwt`
+and the claims `iss`, `sub`, `aud`, `client_id`, `scope`, `iat`, `exp`,
+`jti`, `auth_time`, `acr`, and `amr`. `aud` is the **Access token audience**,
+or the client ID when that field is empty. Code exchanges and refreshes issue
+the same format, and userinfo accepts it. Tamper faults, broken signatures,
+and clock skew apply to JWT access tokens as they do to ID tokens. The ID token
+lifetime, dropped claims, and nonce mismatch faults change only the ID token.
+
+A confidential client can request a token for itself with
+`grant_type=client_credentials`. The response has an access token with the
+requested scope, and no ID token or refresh token. As a JWT, its `sub` is the
+client ID and it has no `auth_time`, `acr`, or `amr`. Userinfo rejects it
+because it has no user. Public clients get `unauthorized_client`.
+
+`/oidc/{slug}/introspect` (RFC 7662) and `/oidc/{slug}/revoke` (RFC 7009)
+authenticate the client the same way the token endpoint does. Introspection
+reports `active`, `scope`, `client_id`, `sub`, `username`, `iss`, `iat`, and
+`exp`, plus `token_type` for access tokens and `aud` for JWT access tokens. A
+token is inactive once it expires, is revoked, or its user is deactivated or
+deleted. Revoking an access token ends only that token. Revoking a refresh
+token also ends every access token issued from the same authorization, across
+refreshes. Unknown tokens get `200`, as RFC 7009 requires. The inspector's
+token list counts only user tokens; **Revoke all** also ends
+`client_credentials` tokens.
+
 The chooser's **Sign-in method** sets how the user authenticated: **Password**
 or **Password + MFA**. ID tokens report the method in `acr`, `amr`, and
 `auth_time`. SAML assertions report it in `AuthnContextClassRef` and
@@ -187,15 +237,143 @@ echoes that value. Password matches the OASIS `PasswordProtectedTransport` and
 PAPE `multi-factor`, and Microsoft `multipleauthn`. Discovery lists these
 values in `acr_values_supported`. Other values leave Password selected.
 
-scimtest remembers each environment's last sign-in in a browser cookie. The
-chooser's **Reuse session** button answers with that sign-in's original user,
-method, and time, so the app receives an older `auth_time` or `AuthnInstant`.
+Each sign-in starts or joins an IdP session for that browser and environment.
+OIDC and SAML sign-ins from the same browser share the session, and ID tokens
+carry its ID in `sid`. Signing in again as the same user keeps the session;
+signing in as another user ends it and starts a new one. The chooser's
+**Reuse session** button answers with the session's original user, method,
+and time, so the app receives an older `auth_time` or `AuthnInstant`.
 `prompt=login`, `max_age=0`, and SAML `ForceAuthn` hide the button and require
-a fresh sign-in. So does a `max_age` shorter than the remembered sign-in's age.
-With `prompt=none`, authorize skips the chooser and answers from the remembered
-sign-in. If there is none, or it is older than `max_age`, authorize redirects
-with `login_required`. A refreshed ID token keeps the original `auth_time`,
-`acr`, and `amr`.
+a fresh sign-in. So does a `max_age` shorter than the session's age. With
+`prompt=none`, authorize skips the chooser and answers from the session. If
+there is none, or it is older than `max_age`, authorize redirects with
+`login_required`. A refreshed ID token keeps the original `auth_time`, `acr`,
+`amr`, and `sid`.
+
+A session ends when the app sends the browser to the end session endpoint,
+when a SAML service provider sends a `LogoutRequest`, when the tester ends it
+in the OIDC inspector or sends a `LogoutRequest` from the SAML inspector, or
+when its user is deactivated or deleted. The endpoint implements OpenID Connect RP-Initiated
+Logout 1.0: it accepts `id_token_hint`, `client_id`, `post_logout_redirect_uri`,
+and `state` by GET or POST. The hint must be an ID token this environment
+issued to the app; an expired one is accepted. The `post_logout_redirect_uri`
+must be one of the environment's registered redirect URIs and needs a hint or
+`client_id`. scimtest ends the session that the hint's `sid` names, or the
+browser's session when the hint has no `sid`, then redirects to
+`post_logout_redirect_uri` with `state`. Without a hint for the browser's own
+session, it asks the user to confirm first. Invalid requests show an error and never redirect.
+Ending a session does not revoke tokens. Sessions last 30 days after their
+latest sign-in and are kept in memory, so restarting scimtest ends them.
+
+Set a **Back-channel logout URI** in OIDC setup to test OpenID Connect
+Back-Channel Logout 1.0. When a session that issued ID tokens ends, for any of
+the reasons above, scimtest POSTs a signed `logout_token` to that URI. The
+token is typed `logout+jwt` and carries `iss`, `aud`, `iat`, `exp`, `jti`,
+`sub`, and the back-channel logout `events` claim, and never a `nonce`. With
+**Session required** (`backchannel_logout_session_required`), it also carries
+the session's `sid`; without it, the app should end every session for `sub`.
+Discovery advertises `backchannel_logout_supported` and
+`backchannel_logout_session_supported`. scimtest sends the request in the
+background with a 5-second timeout and does not follow redirects, so ending a
+session never waits for the app. The URI must be reachable from the machine
+that runs scimtest; no tunnel route is involved. The OIDC inspector's Recent
+activity and the Traffic view record each request and the app's response.
+
+Arm logout token faults from the inspector's **Simulate a failure** panel or
+the API's `PUT /faults`. `logout_alg_none` sends an unsigned `alg: none`
+token, `logout_wrong_audience` changes `aud`, `logout_missing_events` drops
+`events`, and `logout_repeated_jti` delivers the same token, with the same
+`jti`, a second time. Sign-ins leave these faults armed, and the next logout
+token consumes them. A safe app answers each tampered token with `400 Bad
+Request` and keeps the user's session. Recent activity marks a tampered token
+that the app accepted with a 2xx status as failed.
+
+SAML assertions carry the session's `SessionIndex` in the `AuthnStatement`, and
+the IdP metadata advertises a `SingleLogoutService` at `/saml/{slug}/slo` for
+the HTTP-Redirect and HTTP-POST bindings. Set the service provider's **Single
+Logout URL** in SAML setup to test SAML Single Logout. When the SP sends a
+`LogoutRequest`, scimtest checks its issuer, signature, `Destination`,
+`IssueInstant`, and `NotOnOrAfter`. It then ends the sessions with the
+request's `NameID` and, when the request lists any, one of its `SessionIndex`
+values, and answers with a signed `LogoutResponse` through the same binding,
+echoing `RelayState`. A request whose `SessionIndex` names another user's
+session, or whose `NameID` differs from the browser's own session, gets a
+`Requester` status with `UnknownPrincipal`. A `SessionIndex` that no live
+session for the `NameID` has, a wrong `Destination`, or a stale timestamp gets
+`Requester`. In those cases the sessions stay. A request that matches no live
+session succeeds without ending anything, since its sessions may already have
+ended. A request from another issuer, with a bad signature, or sent before the
+Single Logout URL is set gets a plain `400` instead of a `LogoutResponse`.
+Ending a session this way also sends back-channel logout tokens for its OIDC
+sign-ins.
+
+To test IdP-initiated logout, open the SAML inspector, pick a binding, and
+choose **Send LogoutRequest** for a session. scimtest ends the session, then
+sends a signed `LogoutRequest` with the session's `NameID` and `SessionIndex`
+to the SP through your browser. The SP's `LogoutResponse` comes back to
+`/saml/{slug}/slo`, where scimtest checks it and shows the result. The
+inspector lists each request and the SP's answer. Ending a session any other
+way does not notify the SP, because both bindings need a browser to carry the
+message. Recent activity and the Traffic view record every logout message.
+
+A user's enterprise fields and custom attributes reach the app through every
+protocol:
+
+- **OIDC.** ID tokens and userinfo include them when the scope has `profile`.
+  Enterprise claims use the SCIM names `employeeNumber`, `costCenter`,
+  `organization`, `division`, `department`, and `manager`. The `manager` claim
+  is the manager's `sub`. Empty fields are left out.
+- **SAML.** Assertions carry them as attributes with the same names. The
+  `manager` attribute is the manager's NameID value.
+- **SCIM.** Once any user in the environment has an enterprise field, every
+  user payload carries the
+  `urn:ietf:params:scim:schemas:extension:enterprise:2.0:User` extension. The
+  environment remembers this after its last value is cleared, including across
+  restarts, so updates and reconciliation remove stale remote values.
+  Cleared fields are sent as empty strings and a removed manager as `null`.
+  `manager.value` is the manager's ID in the app. When a sync creates a
+  manager after one of their reports, scimtest updates the report with the
+  manager once the manager exists. Import reads the extension back.
+
+Custom attributes use their own names, such as `role` or a claim URI. They
+never replace a claim or attribute that scimtest already sends. SCIM does not
+send them, and SCIM import keeps the local values. A deleted manager stops
+appearing in claims, attributes, and SCIM payloads.
+
+An environment's **Provider persona** shapes its OIDC claims, and for Entra
+ID its SCIM requests, the way that provider sends them. **Generic** is
+scimtest's own shape. ID tokens and userinfo change as follows:
+
+- **Microsoft Entra ID.** Every token carries `tid`, a tenant GUID that stays
+  the same for the environment. With `profile`, tokens also carry `oid`, a
+  GUID that stays the same for the user, and `upn`. `preferred_username` is
+  the UPN: the username, or the username at the email's domain when the
+  username has no `@`. `email_verified` is left out, as Entra ID leaves it
+  out. When a user has more groups than the **groups overage threshold**
+  (200 by default), the token drops `groups` and carries `_claim_names` and
+  `_claim_sources` instead. The source endpoint,
+  `POST /oidc/{slug}/users/{oid}/getMemberObjects`, answers like Microsoft
+  Graph: send the user's access token and `{"securityEnabledOnly": false}`,
+  and the response's `value` lists the groups. The token must have the
+  `groups` scope and belong to that user.
+- **Okta.** Tokens carry `ver: 1`. The `groups` claim starts with
+  `Everyone`, the group Okta puts every user in.
+- **Google.** Tokens carry `hd`, the email's domain, except for `gmail.com`
+  addresses. `email_verified` stays.
+
+Claim mappings still apply. When a mapping renames a field to a claim that
+the persona also sends, the mapped value wins. Personas do not change SAML
+assertions.
+
+The Entra ID persona also changes SCIM sync to match Entra ID's default
+dialect. Before every user or group write, scimtest looks the resource up
+with `filter=externalId eq "..."` and nothing else. If the filter fails,
+scimtest does not fall back to listing the collection. Updates are always
+`PATCH`, with one operation per changed attribute. Operations use capitalized
+`op` values (`Add`, `Replace`, `Remove`) and paths such as
+`emails[type eq "work"].value`. `active` is sent as the string `"True"` or
+`"False"`. The manager is sent as a bare ID. Group updates add and remove
+only the members that changed. Creates use `POST` as before.
 
 Paste the service provider's RSA encryption certificate into SAML setup to
 wrap the assertion in `EncryptedAssertion` (AES-128-GCM, AES-192-GCM, or
@@ -209,7 +387,43 @@ certificate into the request-signing certificate field. Leave the field empty
 to accept unsigned AuthnRequests. scimtest validates HTTP-Redirect query
 signatures and enveloped HTTP-POST XML signatures with SHA-256, SHA-384, or
 SHA-512. When a certificate is present, scimtest rejects unsigned requests,
-SHA-1 signatures, and signatures from any other certificate.
+SHA-1 signatures, and signatures from any other certificate. The same rules
+apply to the SP's `LogoutRequest` and `LogoutResponse` messages.
+
+## Lifecycle scenarios
+
+Choose **Lifecycle** in an environment's sidebar to run a joiner, mover, or
+leaver across every protocol the environment uses. Each run keeps a checklist
+of each step: what scimtest sent, where it went, and how the app answered. A
+failed step does not stop the steps that do not depend on it. A step for a
+protocol the environment does not use, or has not finished setting up, is
+skipped with the reason.
+
+- **Joiner** creates a user, optionally adds them to groups, and pushes the
+  user and then each group through SCIM. The group pushes are skipped when the
+  user push fails.
+- **Mover** adds an active user to groups, removes them from groups, or both,
+  and pushes each changed group through SCIM. It then waits for the next ID
+  token or userinfo response, and the next SAML assertion, issued to the
+  user, and records the groups each one carried. Each check passes when the
+  groups match the user's new groups. The environment must send the groups
+  claim, and an OIDC app must request the `groups` scope.
+  Okta checks include its `Everyone` group. Entra ID groups overage keeps
+  the check waiting until the app calls the group source endpoint; the
+  returned groups then settle it. SAML checks use directory groups.
+- **Leaver** deactivates the user, which ends their IdP sessions and sends a
+  back-channel logout token for each session that issued ID tokens. The
+  checklist records each token and the app's answer. The leaver also revokes
+  the user's access and refresh tokens and pushes `active=false` through SCIM.
+  SAML Single Logout needs a browser to carry its messages, so each ended
+  session with a SAML sign-in gets a **Send LogoutRequest** button in the
+  checklist. That step finishes when the SP's `LogoutResponse` arrives.
+
+SCIM steps list each request from the sync trace, with its body and the app's
+status. The page refreshes itself while a SCIM push or logout token is in
+flight. Runs are kept in memory, ten per environment, so restarting scimtest
+clears them. The local API runs the same scenarios; see the
+[API reference](docs/api.md#lifecycle-scenarios).
 
 ## Configuration
 
@@ -267,9 +481,14 @@ GET /oidc/{slug}/jwks
 GET,POST /oidc/{slug}/authorize
 POST /oidc/{slug}/token
 GET,POST /oidc/{slug}/userinfo
+POST /oidc/{slug}/users/{oid}/getMemberObjects
+POST /oidc/{slug}/introspect
+POST /oidc/{slug}/revoke
+GET,POST /oidc/{slug}/logout
 GET /saml/{slug}/metadata
 GET /saml/{slug}/certificate.pem
 GET,POST /saml/{slug}/sso
+GET,POST /saml/{slug}/slo
 ```
 
 Tunnel startup diagnostics are written to the application log; private keys

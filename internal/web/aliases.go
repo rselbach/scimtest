@@ -50,6 +50,14 @@ var (
 	joinLines                        = core.JoinLines
 	validateUser                     = core.ValidateUser
 	validateUserUnique               = core.ValidateUserUnique
+	validateManager                  = core.ValidateManager
+	validateCustomAttributes         = core.ValidateCustomAttributes
+	parseCustomAttributes            = core.ParseCustomAttributes
+	formatCustomAttributes           = core.FormatCustomAttributes
+	customAttributeNames             = core.CustomAttributeNames
+	isReservedAttributeName          = core.IsReservedAttributeName
+	enterpriseValues                 = core.EnterpriseValues
+	userManager                      = core.UserManager
 	validateGroup                    = core.ValidateGroup
 	validateHTTPBaseURL              = core.ValidateHTTPBaseURL
 	validateApp                      = core.ValidateApp
@@ -93,6 +101,8 @@ var (
 	oidcClaimMappingsForApp          = core.OIDCClaimMappingsForApp
 	samlAttributeMappingsForApp      = core.SAMLAttributeMappingsForApp
 	normalizeChooserMode             = core.NormalizeChooserMode
+	normalizePersona                 = core.NormalizePersona
+	groupsOverageThresholdForApp     = core.GroupsOverageThresholdForApp
 )
 
 const (
@@ -111,4 +121,14 @@ const (
 	setupStatusNotSetUp              = core.SetupStatusNotSetUp
 	setupStatusIncomplete            = core.SetupStatusIncomplete
 	setupStatusConfigured            = core.SetupStatusConfigured
+	enterpriseEmployeeNumber         = core.EnterpriseEmployeeNumber
+	enterpriseCostCenter             = core.EnterpriseCostCenter
+	enterpriseOrganization           = core.EnterpriseOrganization
+	enterpriseDivision               = core.EnterpriseDivision
+	enterpriseDepartment             = core.EnterpriseDepartment
+	enterpriseManager                = core.EnterpriseManager
+	personaGeneric                   = core.PersonaGeneric
+	personaEntra                     = core.PersonaEntra
+	personaOkta                      = core.PersonaOkta
+	personaGoogle                    = core.PersonaGoogle
 )
