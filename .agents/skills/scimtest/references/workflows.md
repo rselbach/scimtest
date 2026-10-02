@@ -95,7 +95,10 @@ a browser, because they depend on the chooser's remembered sign-in cookie.
 Create or patch an environment with `saml_enabled: true`, `saml_entity_id`,
 and `saml_acs_url` matching the service provider. Read the SAML connection
 export for the IDP entity ID, SSO URL, metadata URL, and certificate. Metadata
-and certificate requests use those exported protocol URLs.
+and certificate requests use those exported protocol URLs. Set
+`saml_signing_mode` to `assertion` (the default), `response`, or `both` to match
+what the service provider requires. To check that it rejects a weaker form,
+set a mode that leaves out the signature it should require.
 
 `POST /environments/{ENV_ID}/saml/sign-in` accepts `user_id`, optional
 `relay_state`, and optional base64 `saml_request`. It returns `acs_url`, base64

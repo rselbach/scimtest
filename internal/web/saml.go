@@ -19,11 +19,11 @@ import (
 	dsig "github.com/russellhaering/goxmldsig"
 )
 
-// samlPostedResponse is what successful SSO posts, plus the plaintext signed
+// samlPostedResponse is what successful SSO posts, plus the plaintext
 // Assertion when encryption ran. Status-only builders do not use this type.
 type samlPostedResponse struct {
-	XML             string
-	SignedAssertion string
+	XML                string
+	PlaintextAssertion string
 }
 
 const (
@@ -421,44 +421,82 @@ func (a *webApp) buildSignedSAMLResponse(state appState, baseURL string, app app
 		return samlPostedResponse{}, fmt.Errorf("create SAML signing context: %w", err)
 	}
 	ctx.Canonicalizer = dsig.MakeC14N10ExclusiveCanonicalizerWithPrefixList("")
-	signature, err := ctx.ConstructSignature(assertion, true)
-	if err != nil {
-		return samlPostedResponse{}, fmt.Errorf("sign SAML assertion: %w", err)
-	}
-	signedAssertion := assertion.Copy()
-	if err := placeSAMLAssertionSignature(signedAssertion, signature); err != nil {
-		return samlPostedResponse{}, err
-	}
-	parent := assertion.Parent()
-	if parent == nil {
-		return samlPostedResponse{}, fmt.Errorf("SAML assertion has no parent")
-	}
-	parent.RemoveChild(assertion)
-	parent.AddChild(signedAssertion)
-
-	if faults.BreakSignature {
-		corruptSAMLSignatureValue(signedAssertion)
+	var signAssertion, signResponse bool
+	switch normalizeSAMLSigningMode(app.SAMLSigningMode) {
+	case samlSigningModeAssertion:
+		signAssertion = true
+	case samlSigningModeResponse:
+		signResponse = true
+	case samlSigningModeBoth:
+		signAssertion, signResponse = true, true
+	default:
+		return samlPostedResponse{}, fmt.Errorf("unknown SAML signing mode %q", app.SAMLSigningMode)
 	}
 
-	var signedXML string
+	if signAssertion {
+		assertion, err = signSAMLElement(ctx, assertion)
+		if err != nil {
+			return samlPostedResponse{}, fmt.Errorf("sign SAML assertion: %w", err)
+		}
+		if faults.BreakSignature {
+			corruptSAMLSignatureValue(assertion)
+		}
+	}
+
+	var plaintextXML string
 	if encryption != nil {
-		signedXML, err = serializeElement(signedAssertion)
+		plaintextXML, err = serializeElement(assertion)
 		if err != nil {
 			return samlPostedResponse{}, err
 		}
-		encrypted, err := encryptSAMLAssertion(signedAssertion, *encryption)
+		encrypted, err := encryptSAMLAssertion(assertion, *encryption)
 		if err != nil {
 			return samlPostedResponse{}, fmt.Errorf("encrypt SAML assertion: %w", err)
 		}
-		parent.RemoveChild(signedAssertion)
-		parent.AddChild(encrypted)
+		replaceSAMLElement(assertion, encrypted)
+	}
+
+	// the Response signature covers the assertion as posted, so it comes after
+	// encryption
+	if signResponse {
+		root, err := signSAMLElement(ctx, doc.Root())
+		if err != nil {
+			return samlPostedResponse{}, fmt.Errorf("sign SAML response: %w", err)
+		}
+		if faults.BreakSignature {
+			corruptSAMLSignatureValue(root)
+		}
 	}
 
 	responseXML, err := doc.WriteToString()
 	if err != nil {
 		return samlPostedResponse{}, fmt.Errorf("serialize signed SAML response: %w", err)
 	}
-	return samlPostedResponse{XML: responseXML, SignedAssertion: signedXML}, nil
+	return samlPostedResponse{XML: responseXML, PlaintextAssertion: plaintextXML}, nil
+}
+
+// signSAMLElement replaces el with a copy that carries an enveloped signature
+// after its Issuer, as the SAML schema requires, and returns the copy.
+func signSAMLElement(ctx *dsig.SigningContext, el *etree.Element) (*etree.Element, error) {
+	signature, err := ctx.ConstructSignature(el, true)
+	if err != nil {
+		return nil, err
+	}
+	signed := el.Copy()
+	if err := placeSAMLSignature(signed, signature); err != nil {
+		return nil, err
+	}
+	replaceSAMLElement(el, signed)
+	return signed, nil
+}
+
+// replaceSAMLElement puts replacement where el sits in its parent, which for
+// a document root is the document itself.
+func replaceSAMLElement(el *etree.Element, replacement *etree.Element) {
+	parent := el.Parent()
+	index := el.Index()
+	parent.RemoveChildAt(index)
+	parent.InsertChildAt(index, replacement)
 }
 
 // buildSAMLStatusResponse produces an unsigned non-success SAML Response so an
@@ -483,8 +521,10 @@ func buildSAMLStatusResponse(baseURL string, app app, responseContext samlRespon
 		xmlEscape(issuer), xmlEscape(faults.SAMLStatus)), nil
 }
 
-func corruptSAMLSignatureValue(assertion *etree.Element) {
-	value := findElementByLocalName(assertion, "SignatureValue")
+// corruptSAMLSignatureValue breaks the signature that signed carries itself,
+// leaving any signature on a nested element alone.
+func corruptSAMLSignatureValue(signed *etree.Element) {
+	value := childElementByLocalName(childElementByLocalName(signed, "Signature"), "SignatureValue")
 	if value == nil || value.Text() == "" {
 		return
 	}
@@ -508,9 +548,9 @@ func childElementByLocalName(parent *etree.Element, localName string) *etree.Ele
 	return nil
 }
 
-func placeSAMLAssertionSignature(assertion *etree.Element, signature *etree.Element) error {
+func placeSAMLSignature(signed *etree.Element, signature *etree.Element) error {
 	issuerIndex := -1
-	for index, child := range assertion.Child {
+	for index, child := range signed.Child {
 		element, ok := child.(*etree.Element)
 		if !ok {
 			continue
@@ -520,9 +560,9 @@ func placeSAMLAssertionSignature(assertion *etree.Element, signature *etree.Elem
 		}
 	}
 	if issuerIndex < 0 {
-		return fmt.Errorf("signed SAML assertion issuer not found")
+		return fmt.Errorf("signed SAML %s issuer not found", elementLocalName(signed))
 	}
-	assertion.InsertChildAt(issuerIndex+1, signature)
+	signed.InsertChildAt(issuerIndex+1, signature)
 	return nil
 }
 

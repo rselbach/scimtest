@@ -179,6 +179,7 @@ type App struct {
 	SAMLRequestCertPEM      string                `json:"saml_request_certificate_pem,omitempty"`
 	SAMLEncryptionCertPEM   string                `json:"saml_encryption_certificate_pem,omitempty"`
 	SAMLEncryptionAlgorithm string                `json:"saml_encryption_algorithm,omitempty"`
+	SAMLSigningMode         string                `json:"saml_signing_mode,omitempty"`
 	IncludeGroupsClaim      bool                  `json:"include_groups_claim"`
 	OIDCClaimMappings       OIDCClaimMappings     `json:"oidc_claim_mappings,omitempty"`
 	SAMLAttributeMappings   SAMLAttributeMappings `json:"saml_attribute_mappings,omitempty"`

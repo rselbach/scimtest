@@ -76,8 +76,9 @@ in the operation catalog.
   `regenerate_oidc_secret`. Redirect URIs are an array of strings.
 - SAML uses `saml_entity_id`, `saml_acs_url`, `saml_audience`,
   `saml_name_id_field`, `saml_email_attribute_name`,
-  `saml_request_certificate_pem`, `saml_encryption_certificate_pem`, and
-  `saml_encryption_algorithm`.
+  `saml_request_certificate_pem`, `saml_encryption_certificate_pem`,
+  `saml_encryption_algorithm`, and `saml_signing_mode`. The signing mode is
+  `assertion` (the default), `response`, or `both`.
 - Directory claims use `include_groups_claim`, `chooser_mode`,
   `oidc_claim_mappings`, and `saml_attribute_mappings`. Claim mappings are
   objects whose keys are directory field names and whose values are claim or
@@ -221,7 +222,8 @@ In identifier chooser mode, use `login_identifier` instead of `user_id` for
 OIDC authorization, the playground, and SAML sign-in.
 
 Fault writes accept duration strings in `id_token_ttl`, `assertion_ttl`, and
-`clock_skew`, a `break_signature` boolean, a `drop_claims` string array,
+`clock_skew`, a `break_signature` boolean that corrupts the ID token signature
+or every SAML signature, a `drop_claims` string array,
 `token_error`, `saml_status`, and a `tamper` string array. Tamper values for
 both protocols are `wrong_issuer` and `wrong_audience`. OIDC adds
 `unknown_kid`, `alg_none`, and `nonce_mismatch`. SAML adds

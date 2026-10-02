@@ -115,7 +115,7 @@ var resiliencePresets = []resiliencePreset{
 	{
 		ID:           "broken-signature",
 		Name:         "Invalid signature",
-		Summary:      "Corrupt the token or assertion signature without changing its shape.",
+		Summary:      "Corrupt the token signature, or every SAML signature, without changing its shape.",
 		Protocol:     "both",
 		Phase:        "flow",
 		Action:       resilienceAction{Faults: faultOptions{BreakSignature: true}},

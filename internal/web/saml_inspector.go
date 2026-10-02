@@ -7,15 +7,15 @@ import (
 )
 
 type samlInspection struct {
-	User               string
-	ACSURL             string
-	InResponseTo       string
-	AssertionID        string
-	ResponseXML        string
-	SignedAssertionXML string
-	EncodedResponse    string
-	Faults             string
-	UpdatedAt          string
+	User                  string
+	ACSURL                string
+	InResponseTo          string
+	AssertionID           string
+	ResponseXML           string
+	PlaintextAssertionXML string
+	EncodedResponse       string
+	Faults                string
+	UpdatedAt             string
 }
 
 type samlInspectorPageData struct {
@@ -31,15 +31,15 @@ type samlInspectorPageData struct {
 
 func (a *webApp) rememberSAMLInspection(app app, user user, context samlResponseContext, posted samlPostedResponse, encoded string, faults faultOptions, now time.Time) {
 	inspection := samlInspection{
-		User:               userLabel(user),
-		ACSURL:             context.ACSURL,
-		InResponseTo:       context.InResponseTo,
-		AssertionID:        context.AssertionID,
-		ResponseXML:        posted.XML,
-		SignedAssertionXML: posted.SignedAssertion,
-		EncodedResponse:    encoded,
-		Faults:             faults.describe(),
-		UpdatedAt:          now.Format(time.RFC3339),
+		User:                  userLabel(user),
+		ACSURL:                context.ACSURL,
+		InResponseTo:          context.InResponseTo,
+		AssertionID:           context.AssertionID,
+		ResponseXML:           posted.XML,
+		PlaintextAssertionXML: posted.PlaintextAssertion,
+		EncodedResponse:       encoded,
+		Faults:                faults.describe(),
+		UpdatedAt:             now.Format(time.RFC3339),
 	}
 
 	a.samlInspectorMu.Lock()
