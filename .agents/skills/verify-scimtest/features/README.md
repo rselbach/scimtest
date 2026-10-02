@@ -60,6 +60,8 @@ exactly four H2 sections in this order.
   party, chooser, token exchange, claims, inspector, and IdP session end.
 - [Export environment config](./config-export.md) covers the setup link and the
   machine-readable OIDC bundle.
+- [Use the OAuth client endpoints](./oauth-client-endpoints.md) covers
+  `client_credentials`, token introspection, and token revocation.
 - [Rotate signing keys](./signing-keys.md) covers the inspector card, rotation,
   the published keys, per-environment isolation, and the stale JWKS scenario.
 - [Choose SAML signed parts](./saml-signing.md) covers the setup combobox, the

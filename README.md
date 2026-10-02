@@ -110,12 +110,13 @@ steps, the authentication design, and release packaging details.
   optional raw-secret capture. `--debug` additionally prints transcripts
   to stdout.
 - **Fault Injection.** Choose **Fault Injection** in an environment's sidebar to
-  arm a preset such as a temporary token outage, a slow token endpoint, a
-  stale JWKS, an expired token, a broken signature, an unsigned token, a wrong
-  audience, a missing claim, a replayed SAML assertion, or a SAML failure. The
-  page waits for RP-initiated and SP-initiated flows, records each injection, and
-  disarms active scenarios after 15 minutes. Token endpoint presets hit both
-  code exchanges and refresh requests, and each injection names the grant. Inspector controls still provide
+  arm a preset such as a temporary token outage, a slow token endpoint, a stale JWKS, an
+  expired token, a broken signature, an unsigned token, a wrong audience, a
+  missing claim, a replayed SAML assertion, or a SAML failure. The page waits
+  for RP-initiated and SP-initiated flows, records each injection, and
+  disarms active scenarios after 15 minutes. Token endpoint presets hit code
+  exchanges, refresh requests, and `client_credentials` requests, and each
+  injection names the grant. Inspector controls still provide
   one-shot clock skew, token and assertion lifetime, claim, signature, and
   error faults, plus tamper faults that break one validation rule in an
   otherwise valid response. OIDC tamper faults cover a wrong issuer or
@@ -149,6 +150,8 @@ Each environment can expose OIDC, SAML, or both, under its endpoint name
 - OIDC userinfo: `/oidc/{slug}/userinfo`
 - OIDC end session (RP-initiated logout): `/oidc/{slug}/logout`
 - OIDC JWKS: `/oidc/{slug}/jwks`
+- OIDC token introspection: `/oidc/{slug}/introspect`
+- OIDC token revocation: `/oidc/{slug}/revoke`
 - SAML metadata: `/saml/{slug}/metadata` (`?download=1` for a file)
 - SAML certificate: `/saml/{slug}/certificate.pem`
 - SAML SSO: `/saml/{slug}/sso`
@@ -186,6 +189,23 @@ or the client ID when that field is empty. Code exchanges and refreshes issue
 the same format, and userinfo accepts it. Tamper faults, broken signatures,
 and clock skew apply to JWT access tokens as they do to ID tokens. The ID token
 lifetime, dropped claims, and nonce mismatch faults change only the ID token.
+
+A confidential client can request a token for itself with
+`grant_type=client_credentials`. The response has an access token with the
+requested scope, and no ID token or refresh token. As a JWT, its `sub` is the
+client ID and it has no `auth_time`, `acr`, or `amr`. Userinfo rejects it
+because it has no user. Public clients get `unauthorized_client`.
+
+`/oidc/{slug}/introspect` (RFC 7662) and `/oidc/{slug}/revoke` (RFC 7009)
+authenticate the client the same way the token endpoint does. Introspection
+reports `active`, `scope`, `client_id`, `sub`, `username`, `iss`, `iat`, and
+`exp`, plus `token_type` for access tokens and `aud` for JWT access tokens. A
+token is inactive once it expires, is revoked, or its user is deactivated or
+deleted. Revoking an access token ends only that token. Revoking a refresh
+token also ends every access token issued from the same authorization, across
+refreshes. Unknown tokens get `200`, as RFC 7009 requires. The inspector's
+token list counts only user tokens; **Revoke all** also ends
+`client_credentials` tokens.
 
 The chooser's **Sign-in method** sets how the user authenticated: **Password**
 or **Password + MFA**. ID tokens report the method in `acr`, `amr`, and
@@ -318,6 +338,8 @@ GET /oidc/{slug}/jwks
 GET,POST /oidc/{slug}/authorize
 POST /oidc/{slug}/token
 GET,POST /oidc/{slug}/userinfo
+POST /oidc/{slug}/introspect
+POST /oidc/{slug}/revoke
 GET,POST /oidc/{slug}/logout
 GET /saml/{slug}/metadata
 GET /saml/{slug}/certificate.pem

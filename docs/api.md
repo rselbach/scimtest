@@ -174,8 +174,8 @@ All paths in this section are relative to `/environments/{id}`.
 | --- | --- | --- |
 | POST | `/oidc/authorize` | Authorize a directory user and return `code`, `redirect_uri`, and `state`. |
 | POST | `/oidc/playground` | Run authorization, code exchange, and userinfo locally and return the results. |
-| GET | `/oidc/tokens` | Users holding live access or refresh tokens, with counts. |
-| DELETE | `/oidc/tokens` | Revoke every token, or one user's with `?user_id=`. Returns `revoked`. |
+| GET | `/oidc/tokens` | Users holding live access or refresh tokens, with counts. `client_credentials` tokens are not listed. |
+| DELETE | `/oidc/tokens` | Revoke every token, including `client_credentials` tokens, or one user's with `?user_id=`. Returns `revoked`. |
 | GET | `/sessions` | Live IdP sessions, newest sign-in first. |
 | DELETE | `/sessions` | End every IdP session, or one with `?session_id=`. Returns `ended`. |
 | POST | `/saml/sign-in` | Return `acs_url`, base64 `saml_response`, and `relay_state`. |
@@ -202,6 +202,14 @@ invalidates the presented token. After a revocation, refreshes fail with
 `invalid_grant` and userinfo calls fail with `invalid_token`.
 Userinfo remains at `/oidc/{slug}/userinfo`. The
 [automation example](automation.md) performs both requests.
+
+The same token endpoint accepts `grant_type=client_credentials` from a
+confidential client and returns only an access token. Apps can check and
+revoke their own tokens at `/oidc/{slug}/introspect` (RFC 7662) and
+`/oidc/{slug}/revoke` (RFC 7009), with the token endpoint's client
+authentication and a form-encoded `token`. Revoking a refresh token also
+revokes the access tokens from the same authorization. The connection export
+lists both URLs as `introspection_url` and `revocation_url`.
 
 API calls normally carry no browser cookie, so each OIDC authorization,
 playground run, and SAML sign-in through the API starts its own IdP session. ID

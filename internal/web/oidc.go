@@ -1,6 +1,7 @@
 package web
 
 import (
+	"cmp"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -33,6 +34,10 @@ type authCode struct {
 	ExpiresAt     time.Time
 	Faults        faultOptions
 	Redeeming     bool
+	// GrantID is set when the code is redeemed. It links the tokens that
+	// exchange and its refreshes issue, so revoking the refresh token revokes
+	// them all (RFC 7009 section 2.1).
+	GrantID string
 }
 
 // refreshTokenLifetime bounds a refresh token. Each refresh rotates the token
@@ -55,15 +60,24 @@ type refreshToken struct {
 	RedirectURI   string
 	CodeChallenge string
 	Authn         authnStatement
+	GrantID       string
+	IssuedAt      time.Time
 	SessionID     string
 	ExpiresAt     time.Time
 	Redeeming     bool // an injected delay holds the token
 }
 
+// accessToken is a live access token. UserID is empty for a
+// client_credentials token, which the client holds for itself. Audience is
+// the aud of a JWT access token; opaque tokens have none.
 type accessToken struct {
 	AppSlug   string
+	ClientID  string
 	UserID    string
+	GrantID   string
 	Scope     string
+	Audience  string
+	IssuedAt  time.Time
 	ExpiresAt time.Time
 	Faults    faultOptions
 }
@@ -82,15 +96,21 @@ func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 	if app.IncludeGroupsClaim {
 		scopes = append(scopes, "groups")
 	}
+	grantTypes := []string{"authorization_code", "refresh_token"}
+	if !app.OIDCPublicClient {
+		grantTypes = append(grantTypes, "client_credentials")
+	}
 	writeJSON(w, map[string]any{
 		"issuer":                                issuer,
 		"authorization_endpoint":                issuer + "/authorize",
 		"token_endpoint":                        issuer + "/token",
 		"userinfo_endpoint":                     issuer + "/userinfo",
 		"jwks_uri":                              issuer + "/jwks",
+		"introspection_endpoint":                issuer + "/introspect",
+		"revocation_endpoint":                   issuer + "/revoke",
 		"end_session_endpoint":                  issuer + "/logout",
 		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
+		"grant_types_supported":                 grantTypes,
 		"subject_types_supported":               []string{"public"},
 		"id_token_signing_alg_values_supported": []string{"RS256"},
 		"scopes_supported":                      scopes,
@@ -98,6 +118,11 @@ func (a *webApp) handleOIDCDiscovery(w http.ResponseWriter, r *http.Request) {
 		"acr_values_supported":                  supportedAuthnContexts(),
 		"code_challenge_methods_supported":      []string{"S256"},
 		"token_endpoint_auth_methods_supported": authMethods,
+
+		// Introspection and revocation authenticate clients the way the
+		// token endpoint does.
+		"introspection_endpoint_auth_methods_supported": authMethods,
+		"revocation_endpoint_auth_methods_supported":    authMethods,
 	})
 }
 
@@ -266,21 +291,19 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	grantType := r.FormValue("grant_type")
-	if grantType != "authorization_code" && grantType != "refresh_token" {
-		a.failOAuth(w, app, "token", http.StatusBadRequest, "unsupported_grant_type", "grant_type must be authorization_code or refresh_token")
+	if grantType != "authorization_code" && grantType != "refresh_token" && grantType != "client_credentials" {
+		a.failOAuth(w, app, "token", http.StatusBadRequest, "unsupported_grant_type", "grant_type must be authorization_code, refresh_token, or client_credentials")
 		return
 	}
-	if !clientAuthenticated(r, app) {
-		// RFC 6749 section 5.2: a 401 for an attempted Basic
-		// authentication must carry a WWW-Authenticate challenge.
-		if _, _, usedBasic := r.BasicAuth(); usedBasic {
-			w.Header().Set("WWW-Authenticate", `Basic realm="scimtest", charset="UTF-8"`)
-		}
-		a.failOAuth(w, app, "token", http.StatusUnauthorized, "invalid_client", "client authentication failed")
+	if !a.authenticateOAuthClient(w, r, app, "token") {
 		return
 	}
-	if grantType == "refresh_token" {
+	switch grantType {
+	case "refresh_token":
 		a.refreshOIDCTokens(w, r, app)
+		return
+	case "client_credentials":
+		a.issueClientCredentialsToken(w, r, app)
 		return
 	}
 
@@ -341,6 +364,12 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	code.GrantID, err = randomSecret(16)
+	if err != nil {
+		a.failOAuth(w, app, "token", http.StatusInternalServerError, "server_error", err.Error())
+		return
+	}
+
 	now := time.Now()
 	response, err := a.issueOIDCTokens(r, state, app, user, code, "Tokens issued", now)
 	if err != nil {
@@ -357,6 +386,7 @@ func (a *webApp) handleOIDCToken(w http.ResponseWriter, r *http.Request) {
 			Scope:         code.Scope,
 			CodeChallenge: code.CodeChallenge,
 			Authn:         code.Authn,
+			GrantID:       code.GrantID,
 			SessionID:     code.SessionID,
 		}, now)
 		if err != nil {
@@ -436,25 +466,12 @@ func (a *webApp) issueOIDCTokens(r *http.Request, state appState, app app, user 
 	if grant.Faults.BreakSignature {
 		idToken = corruptJWTSignature(idToken)
 	}
-	access, err := randomSecret(32)
-	if err != nil {
-		return nil, err
-	}
-	if app.OIDCJWTAccessTokens {
-		access, err = a.signAccessToken(state, issuer, app, user, grant, access, now)
-		if err != nil {
-			return nil, err
-		}
-	}
 	if err := a.rememberOIDCInspection(app, user, grant, stage, claims, idToken, now); err != nil {
 		return nil, err
 	}
-	a.accessTokens[access] = accessToken{
-		AppSlug:   app.Slug,
-		UserID:    user.ID,
-		Scope:     grant.Scope,
-		ExpiresAt: now.Add(accessTokenLifetime),
-		Faults:    grant.Faults,
+	access, err := a.mintAccessToken(state, issuer, app, user.ID, grant, now)
+	if err != nil {
+		return nil, err
 	}
 	return map[string]any{
 		"access_token": access,
@@ -465,15 +482,48 @@ func (a *webApp) issueOIDCTokens(r *http.Request, state appState, app app, user 
 	}, nil
 }
 
-// signAccessToken signs an RFC 9068 JWT access token for grant, identified by
-// jti. Faults that model the IDP's signing or clock apply as they do to the ID
-// token: tamper faults, a broken signature, and clock skew. Faults named for
-// the ID token, its lifetime, dropped claims, and the nonce, do not.
-func (a *webApp) signAccessToken(state appState, issuer string, app app, user user, grant authCode, jti string, now time.Time) (string, error) {
+// mintAccessToken stores a new access token for grant and returns its value:
+// random and opaque, or an RFC 9068 JWT when the environment issues them.
+// userID is empty for a client_credentials token. The caller holds oidcMu.
+func (a *webApp) mintAccessToken(state appState, issuer string, app app, userID string, grant authCode, now time.Time) (string, error) {
+	value, err := randomSecret(32)
+	if err != nil {
+		return "", err
+	}
+	token := accessToken{
+		AppSlug:   app.Slug,
+		ClientID:  grant.ClientID,
+		UserID:    userID,
+		GrantID:   grant.GrantID,
+		Scope:     grant.Scope,
+		IssuedAt:  now,
+		ExpiresAt: now.Add(accessTokenLifetime),
+		Faults:    grant.Faults,
+	}
+	if app.OIDCJWTAccessTokens {
+		// RFC 9068 section 2.2: a token the client holds for itself names
+		// the client as its subject.
+		subject := cmp.Or(userID, grant.ClientID)
+		token.Audience = accessTokenAudience(app)
+		value, err = a.signAccessToken(state, issuer, app, subject, grant, value, now)
+		if err != nil {
+			return "", err
+		}
+	}
+	a.accessTokens[value] = token
+	return value, nil
+}
+
+// signAccessToken signs an RFC 9068 JWT access token for grant, issued to
+// subject and identified by jti. Faults that model the IDP's signing or clock
+// apply as they do to the ID token: tamper faults, a broken signature, and
+// clock skew. Faults named for the ID token, its lifetime, dropped claims, and
+// the nonce, do not.
+func (a *webApp) signAccessToken(state appState, issuer string, app app, subject string, grant authCode, jti string, now time.Time) (string, error) {
 	issued := now.Add(grant.Faults.ClockSkew)
 	claims := map[string]any{
 		"iss":       issuer,
-		"sub":       user.ID,
+		"sub":       subject,
 		"aud":       accessTokenAudience(app),
 		"client_id": app.OIDCClientID,
 		"scope":     grant.Scope,
@@ -481,8 +531,11 @@ func (a *webApp) signAccessToken(state appState, issuer string, app app, user us
 		"exp":       issued.Add(accessTokenLifetime).Unix(),
 		"jti":       jti,
 	}
-	// RFC 9068 section 2.2.1: the sign-in that started the grant.
-	grant.Authn.addClaims(claims, grant.Faults.ClockSkew)
+	// RFC 9068 section 2.2.1: the sign-in that started the grant. A
+	// client_credentials grant has no sign-in.
+	if !grant.Authn.Time.IsZero() {
+		grant.Authn.addClaims(claims, grant.Faults.ClockSkew)
+	}
 	if grant.Faults.tampers(tamperWrongIssuer) {
 		claims["iss"] = nearMiss(claims["iss"])
 	}
@@ -515,6 +568,7 @@ func (a *webApp) issueRefreshToken(grant refreshToken, now time.Time) (string, e
 	if err != nil {
 		return "", err
 	}
+	grant.IssuedAt = now
 	grant.ExpiresAt = now.Add(refreshTokenLifetime)
 	a.refreshTokens[value] = grant
 	return value, nil
@@ -581,6 +635,7 @@ func (a *webApp) refreshOIDCTokens(w http.ResponseWriter, r *http.Request, app a
 		Scope:         scope,
 		CodeChallenge: grant.CodeChallenge,
 		Authn:         grant.Authn,
+		GrantID:       grant.GrantID,
 		SessionID:     grant.SessionID,
 	}, "Tokens refreshed", now)
 	if err != nil {
@@ -615,6 +670,10 @@ func (a *webApp) handleOIDCUserinfo(w http.ResponseWriter, r *http.Request) {
 	token, ok := a.accessTokens[tokenValue]
 	if !ok || token.AppSlug != app.Slug {
 		a.failOAuth(w, app, "userinfo", http.StatusUnauthorized, "invalid_token", "access token is invalid or expired")
+		return
+	}
+	if token.UserID == "" {
+		a.failOAuth(w, app, "userinfo", http.StatusUnauthorized, "invalid_token", "a client_credentials access token has no user")
 		return
 	}
 	user, ok := userByID(state.Users, token.UserID)
@@ -653,7 +712,8 @@ func (a *webApp) oidcTokenHolders(slug string, users []user) []oidcTokenHolder {
 		return byUser[userID]
 	}
 	for _, token := range a.accessTokens {
-		if token.AppSlug == slug {
+		// A client_credentials token has no user; Revoke all still covers it.
+		if token.AppSlug == slug && token.UserID != "" {
 			holder(token.UserID).AccessTokens++
 		}
 	}

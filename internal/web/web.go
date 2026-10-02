@@ -1068,6 +1068,8 @@ func (a *webApp) registerIDPRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /oidc/{slug}/token", a.debugRPHandler(a.handleOIDCToken))
 	mux.HandleFunc("GET /oidc/{slug}/userinfo", a.debugRPHandler(a.handleOIDCUserinfo))
 	mux.HandleFunc("POST /oidc/{slug}/userinfo", a.debugRPHandler(a.handleOIDCUserinfo))
+	mux.HandleFunc("POST /oidc/{slug}/introspect", a.debugRPHandler(a.handleOIDCIntrospect))
+	mux.HandleFunc("POST /oidc/{slug}/revoke", a.debugRPHandler(a.handleOIDCRevoke))
 	mux.HandleFunc("GET /oidc/{slug}/logout", a.debugRPHandler(a.handleOIDCLogout))
 	mux.HandleFunc("POST /oidc/{slug}/logout", a.debugRPHandler(a.handleOIDCLogout))
 	mux.HandleFunc("GET /saml/{slug}/metadata", a.debugRPHandler(a.handleSAMLMetadata))

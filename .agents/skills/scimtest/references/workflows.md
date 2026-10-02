@@ -91,7 +91,18 @@ authentication or PKCE verifier. Read `userinfo_url` with the resulting
 access token. The instance-token header belongs only on local API calls.
 
 The connection export also contains `issuer`, `discovery_url`, `authorize_url`,
-and `jwks_url`. Configure the relying party from these values.
+`jwks_url`, `introspection_url`, and `revocation_url`. Configure the relying
+party from these values.
+
+For a service-to-service client, POST `grant_type=client_credentials` to
+`token_url` with the client's secret. Only confidential clients qualify. The
+response has an access token and no ID or refresh token, and userinfo rejects
+that token. A resource server checks tokens by POSTing `token` to
+`introspection_url` with the same client authentication; `active: false`
+covers unknown, expired, revoked, and deactivated-user tokens. An app revokes
+its own token at `revocation_url`, which always returns `200` with an empty
+body. Revoking a refresh token also revokes that authorization's access
+tokens.
 
 To test an API that validates JWT access tokens, set
 `oidc_jwt_access_tokens: true` and `oidc_access_token_audience` to the API's
