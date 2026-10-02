@@ -96,5 +96,9 @@ Preconditions:
   groups`.
 - API sign-ins carry no browser cookie, so each one starts its own IdP
   session. A leaver then ends one OIDC session and one SAML session.
+- Okta adds `Everyone` to OIDC groups. The mover accepts that provider group
+  while checking SAML against directory groups alone. Entra ID groups overage
+  leaves the OIDC check waiting until the group source endpoint is called
+  with the user's access token; its returned groups settle the check.
 - Runs live in memory. Relaunching the run clears them, and the binary embeds
   the templates and CSS, so relaunch after changing either.

@@ -159,6 +159,76 @@ func TestLifecycleMoverChecksNextTokenAndAssertion(t *testing.T) {
 	}
 }
 
+func TestLifecycleMoverChecksPersonaGroups(t *testing.T) {
+	tests := map[string]struct {
+		persona        string
+		removeGroups   []string
+		wantAfterToken string
+	}{
+		"Okta includes Everyone": {persona: personaOkta, removeGroups: []string{"grp-study"}, wantAfterToken: lifecycleOK},
+		"Entra resolves overage": {persona: personaEntra, removeGroups: []string{}, wantAfterToken: lifecycleWaiting},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			svc := lifecycleTestApp(t, func(found *app) {
+				withoutSCIM(found)
+				found.Persona = tc.persona
+				found.GroupsOverageThreshold = 1
+			})
+			body, err := json.Marshal(map[string]any{"user_id": "usr-troy", "add_group_ids": []string{"grp-glee"}, "remove_group_ids": tc.removeGroups})
+			r.NoError(err)
+			run := startLifecycle(t, svc, lifecycleMover, string(body))
+			_, tokens := lifecycleOIDCSignIn(t, svc, "usr-troy", "openid profile groups")
+			run = getLifecycleRun(t, svc, run.ID)
+			r.Equal(tc.wantAfterToken, lifecycleStepByID(t, run, "oidc-groups").Status)
+			if tc.persona == personaEntra {
+				claims := decodeIDTokenClaims(t, tokens["id_token"].(string))
+				source := claims["_claim_sources"].(map[string]any)["src1"].(map[string]any)["endpoint"].(string)
+				endpoint, err := url.Parse(source)
+				r.NoError(err)
+				denied := personaMemberObjects(svc.routes(), endpoint.RequestURI(), "Bearer chang-was-here", `{"securityEnabledOnly":false}`)
+				r.Equal(http.StatusUnauthorized, denied.Code)
+				r.Equal(lifecycleWaiting, lifecycleStepByID(t, getLifecycleRun(t, svc, run.ID), "oidc-groups").Status)
+				response := personaMemberObjects(svc.routes(), endpoint.RequestURI(), "Bearer "+tokens["access_token"].(string), `{"securityEnabledOnly":false}`)
+				r.Equal(http.StatusOK, response.Code, response.Body.String())
+				r.Contains(response.Body.String(), `"value":["Glee Club","Study Group"]`)
+			}
+			lifecycleSAMLSignIn(t, svc, "usr-troy")
+			run = getLifecycleRun(t, svc, run.ID)
+			r.Equal(lifecycleOK, lifecycleStepByID(t, run, "oidc-groups").Status)
+			r.Equal(lifecycleOK, lifecycleStepByID(t, run, "saml-groups").Status)
+			r.Equal(lifecycleOK, run.Status)
+		})
+	}
+}
+
+func TestLifecycleMoverReadsAssertionForEverySigningMode(t *testing.T) {
+	tests := map[string]struct {
+		mode      string
+		encrypted bool
+	}{
+		"response only":                  {mode: samlSigningModeResponse},
+		"both signatures and encryption": {mode: samlSigningModeBoth, encrypted: true},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			svc := lifecycleTestApp(t, func(found *app) {
+				withoutSCIM(found)
+				found.SAMLSigningMode = tc.mode
+				if tc.encrypted {
+					_, _, found.SAMLEncryptionCertPEM = newSPEncryptionMaterial(t)
+				}
+			})
+			run := startLifecycle(t, svc, lifecycleMover, `{"user_id":"usr-troy","add_group_ids":["grp-glee"],"remove_group_ids":["grp-study"]}`)
+			lifecycleSAMLSignIn(t, svc, "usr-troy")
+			step := lifecycleStepByID(t, getLifecycleRun(t, svc, run.ID), "saml-groups")
+			require.Equal(t, lifecycleOK, step.Status, step.Detail)
+			require.Equal(t, "The SAML assertion carried the new groups: Glee Club", step.Detail)
+		})
+	}
+}
+
 func TestLifecycleJoinerProvisionsUser(t *testing.T) {
 	r := require.New(t)
 	target := newFakeSCIM(t)

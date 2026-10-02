@@ -3,12 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
-	"crypto"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -119,7 +114,7 @@ func (a *webApp) sendBackchannelLogout(session idpSession) {
 		return
 	}
 	faults := a.takeArmedLogoutFaults(found.Slug)
-	token, err := a.logoutToken(found, session, faults, time.Now())
+	token, err := a.logoutToken(state, found, session, faults, time.Now())
 	if err != nil {
 		a.recordFlowEvent(found.Slug, "oidc", backchannelLogoutFlowStage, "failed", session.User, "Logout token for session "+session.ID+": "+err.Error())
 		a.rememberLogoutResult(session.ID, backchannelLogoutResult{Token: "Logout token", URI: found.OIDCBackchannelLogoutURI, Response: err.Error(), Outcome: "failed"})
@@ -135,7 +130,7 @@ func (a *webApp) sendBackchannelLogout(session idpSession) {
 // logoutToken builds and signs session's logout token. It carries sub, and
 // sid too when the environment requires the session. Tamper faults leave it
 // unsigned, aim it at another audience, or drop events.
-func (a *webApp) logoutToken(found app, session idpSession, faults faultOptions, now time.Time) (string, error) {
+func (a *webApp) logoutToken(state appState, found app, session idpSession, faults faultOptions, now time.Time) (string, error) {
 	jti, err := randomSecret(16)
 	if err != nil {
 		return "", err
@@ -158,34 +153,11 @@ func (a *webApp) logoutToken(found app, session idpSession, faults faultOptions,
 	if faults.tampers(tamperLogoutMissingEvents) {
 		delete(claims, "events")
 	}
-	return a.signLogoutToken(claims, faults.tampers(tamperLogoutAlgNone))
-}
-
-// signLogoutToken signs claims as an RS256 compact JWS typed logout+jwt, as
-// section 2.4 recommends, or leaves it unsigned with alg none.
-func (a *webApp) signLogoutToken(claims map[string]any, unsigned bool) (string, error) {
-	header := map[string]any{"typ": "logout+jwt", "alg": "RS256", "kid": "scimtest-dev"}
-	if unsigned {
-		header = map[string]any{"typ": "logout+jwt", "alg": "none"}
+	signingFaults := faultOptions{}
+	if faults.tampers(tamperLogoutAlgNone) {
+		signingFaults.Tamper = []tamperFault{tamperAlgNone}
 	}
-	headerData, err := json.Marshal(header)
-	if err != nil {
-		return "", err
-	}
-	claimData, err := json.Marshal(claims)
-	if err != nil {
-		return "", err
-	}
-	signingInput := base64.RawURLEncoding.EncodeToString(headerData) + "." + base64.RawURLEncoding.EncodeToString(claimData)
-	if unsigned {
-		return signingInput + ".", nil
-	}
-	digest := sha256.Sum256([]byte(signingInput))
-	signature, err := rsa.SignPKCS1v15(rand.Reader, a.signingKey, crypto.SHA256, digest[:])
-	if err != nil {
-		return "", err
-	}
-	return signingInput + "." + base64.RawURLEncoding.EncodeToString(signature), nil
+	return a.signJWT(state, jwtKind{typ: "logout+jwt", name: "logout token"}, claims, signingFaults)
 }
 
 // postLogoutToken delivers token and records the request and the app's

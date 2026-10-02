@@ -751,18 +751,22 @@ func (r lifecycleRun) clone() lifecycleRun {
 	return r
 }
 
-// noteIssuedGroups settles the mover checks that wait for the next ID token
-// or userinfo response (oidc), or SAML assertion (saml), issued to userID in
-// slug. issued names what scimtest issued and to names its recipient. groups
-// is what it carried, and carried is false when it had no groups claim or
-// attribute at all.
-func (a *webApp) noteIssuedGroups(slug, userID, protocol, issued, to string, groups []string, carried bool) {
+// lifecycleGroupClaims describes the group claim or attribute actually issued.
+type lifecycleGroupClaims struct {
+	Groups  []string
+	Carried bool
+	Overage bool
+}
+
+// noteIssuedGroups checks the next groups issued to a mover's user. An Entra
+// overage response leaves the check waiting until its source serves the groups.
+func (a *webApp) noteIssuedGroups(app app, userID, protocol, issued, to string, claims lifecycleGroupClaims) {
 	stepID := protocol + "-groups"
 	now := time.Now().UTC().Format(time.RFC3339)
 	a.lifecycleMu.Lock()
 	defer a.lifecycleMu.Unlock()
-	for i := range a.lifecycleRuns[slug] {
-		run := &a.lifecycleRuns[slug][i]
+	for i := range a.lifecycleRuns[app.Slug] {
+		run := &a.lifecycleRuns[app.Slug][i]
 		if run.Kind != lifecycleMover || run.UserID != userID {
 			continue
 		}
@@ -770,15 +774,22 @@ func (a *webApp) noteIssuedGroups(slug, userID, protocol, issued, to string, gro
 		if step == nil || step.Status != lifecycleWaiting {
 			continue
 		}
-		message := lifecycleMessage{At: now, Sent: issued, To: to, Body: "groups: " + describeGroups(groups)}
+		want := run.expectedGroups
+		if protocol == "oidc" && normalizePersona(app.Persona) == personaOkta && !slices.Contains(want, oktaEveryoneGroup) {
+			want = append(slices.Clone(want), oktaEveryoneGroup)
+		}
+		message := lifecycleMessage{At: now, Sent: issued, To: to, Body: "groups: " + describeGroups(claims.Groups)}
 		switch {
-		case !carried:
+		case claims.Overage && protocol == "oidc" && supportsEntraPersona(app):
+			message.Body = "groups overage"
+			step.Detail = "The " + issued + " carried groups overage; waiting for the group source response"
+		case !claims.Carried:
 			message.Body = "no groups"
 			step.Status, step.Detail = lifecycleFailed, "The "+issued+" carried no groups"
-		case sameGroups(groups, run.expectedGroups):
-			step.Status, step.Detail = lifecycleOK, "The "+issued+" carried the new groups: "+describeGroups(groups)
+		case sameGroups(claims.Groups, want):
+			step.Status, step.Detail = lifecycleOK, "The "+issued+" carried the new groups: "+describeGroups(claims.Groups)
 		default:
-			step.Status, step.Detail = lifecycleFailed, "The "+issued+" carried "+describeGroups(groups)+"; expected "+describeGroups(run.expectedGroups)
+			step.Status, step.Detail = lifecycleFailed, "The "+issued+" carried "+describeGroups(claims.Groups)+"; expected "+describeGroups(want)
 		}
 		message.Outcome = step.Status
 		step.Messages = append(step.Messages, message)
@@ -792,32 +803,35 @@ func sameGroups(got, want []string) bool {
 	return slices.Equal(got, want)
 }
 
-// claimGroups reads the groups claim name from claims.
-func claimGroups(claims map[string]any, name string) ([]string, bool) {
+// claimGroups reads the mapped groups claim, including a distributed source.
+func claimGroups(claims map[string]any, name string) lifecycleGroupClaims {
 	value, ok := claims[name]
 	if !ok || name == "" {
-		return nil, false
+		names, _ := claims["_claim_names"].(map[string]string)
+		sources, _ := claims["_claim_sources"].(map[string]any)
+		source, _ := sources[names[name]].(map[string]string)
+		return lifecycleGroupClaims{Overage: name != "" && source["endpoint"] != ""}
 	}
+	result := lifecycleGroupClaims{Carried: true}
 	switch typed := value.(type) {
 	case []string:
-		return typed, true
+		result.Groups = typed
 	case []any:
-		groups := make([]string, 0, len(typed))
 		for _, item := range typed {
-			groups = append(groups, fmt.Sprint(item))
+			result.Groups = append(result.Groups, fmt.Sprint(item))
 		}
-		return groups, true
 	case nil:
-		return nil, true
+	default:
+		result.Groups = []string{fmt.Sprint(value)}
 	}
-	return []string{fmt.Sprint(value)}, true
+	return result
 }
 
 // samlAssertionGroups reads the values of the attribute name from the
 // assertion that posted carries. issued is false when posted carries no
 // assertion, as an error status response does not.
 func samlAssertionGroups(posted samlPostedResponse, name string) (groups []string, carried, issued bool) {
-	source := posted.SignedAssertion
+	source := posted.PlaintextAssertion
 	if source == "" {
 		source = posted.XML
 	}

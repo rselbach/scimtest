@@ -17,6 +17,7 @@ type (
 	syncPlanEntry         = core.SyncPlanEntry
 	oidcClaimMappings     = core.OIDCClaimMappings
 	samlAttributeMappings = core.SAMLAttributeMappings
+	storedSigningKey      = core.SigningKey
 )
 
 var errAppNotFound = core.ErrAppNotFound
@@ -49,6 +50,14 @@ var (
 	joinLines                        = core.JoinLines
 	validateUser                     = core.ValidateUser
 	validateUserUnique               = core.ValidateUserUnique
+	validateManager                  = core.ValidateManager
+	validateCustomAttributes         = core.ValidateCustomAttributes
+	parseCustomAttributes            = core.ParseCustomAttributes
+	formatCustomAttributes           = core.FormatCustomAttributes
+	customAttributeNames             = core.CustomAttributeNames
+	isReservedAttributeName          = core.IsReservedAttributeName
+	enterpriseValues                 = core.EnterpriseValues
+	userManager                      = core.UserManager
 	validateGroup                    = core.ValidateGroup
 	validateHTTPBaseURL              = core.ValidateHTTPBaseURL
 	validateApp                      = core.ValidateApp
@@ -65,6 +74,7 @@ var (
 	samlNameIDFormatForField         = core.SAMLNameIDFormatForField
 	samlNameIDValue                  = core.SAMLNameIDValue
 	normalizeSAMLEncryptionAlgorithm = core.NormalizeSAMLEncryptionAlgorithm
+	normalizeSAMLSigningMode         = core.NormalizeSAMLSigningMode
 	appBySlug                        = core.AppBySlug
 	stateForApp                      = core.StateForApp
 	markUserDirty                    = core.MarkUserDirty
@@ -91,6 +101,8 @@ var (
 	oidcClaimMappingsForApp          = core.OIDCClaimMappingsForApp
 	samlAttributeMappingsForApp      = core.SAMLAttributeMappingsForApp
 	normalizeChooserMode             = core.NormalizeChooserMode
+	normalizePersona                 = core.NormalizePersona
+	groupsOverageThresholdForApp     = core.GroupsOverageThresholdForApp
 )
 
 const (
@@ -101,9 +113,22 @@ const (
 	samlEncryptionAlgorithmAES128GCM = core.SAMLEncryptionAlgorithmAES128GCM
 	samlEncryptionAlgorithmAES192GCM = core.SAMLEncryptionAlgorithmAES192GCM
 	samlEncryptionAlgorithmAES256GCM = core.SAMLEncryptionAlgorithmAES256GCM
+	samlSigningModeAssertion         = core.SAMLSigningModeAssertion
+	samlSigningModeResponse          = core.SAMLSigningModeResponse
+	samlSigningModeBoth              = core.SAMLSigningModeBoth
 	chooserModeList                  = core.ChooserModeList
 	chooserModeIdentifier            = core.ChooserModeIdentifier
 	setupStatusNotSetUp              = core.SetupStatusNotSetUp
 	setupStatusIncomplete            = core.SetupStatusIncomplete
 	setupStatusConfigured            = core.SetupStatusConfigured
+	enterpriseEmployeeNumber         = core.EnterpriseEmployeeNumber
+	enterpriseCostCenter             = core.EnterpriseCostCenter
+	enterpriseOrganization           = core.EnterpriseOrganization
+	enterpriseDivision               = core.EnterpriseDivision
+	enterpriseDepartment             = core.EnterpriseDepartment
+	enterpriseManager                = core.EnterpriseManager
+	personaGeneric                   = core.PersonaGeneric
+	personaEntra                     = core.PersonaEntra
+	personaOkta                      = core.PersonaOkta
+	personaGoogle                    = core.PersonaGoogle
 )

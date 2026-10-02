@@ -20,7 +20,7 @@ type faultOptions struct {
 	AssertionTTL    time.Duration // overrides the SAML assertion lifetime
 	AssertionTTLSet bool
 	ClockSkew       time.Duration // added to iat, exp, auth_time, and SAML instants
-	BreakSignature  bool          // corrupt the ID token / assertion signature
+	BreakSignature  bool          // corrupt the ID token signature or every SAML signature
 	DropClaims      []string      // claims omitted from the ID token and userinfo
 	TokenError      string        // force this OAuth error at the token endpoint
 	SAMLStatus      string        // non-success SAML status: Responder or AuthnFailed

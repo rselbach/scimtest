@@ -439,8 +439,8 @@ func TestIdPInitiatedSAMLLogoutRejectsBadResponses(t *testing.T) {
 			}
 			r.Equal(http.StatusBadRequest, answer.Code, answer.Body.String())
 			r.Contains(answer.Body.String(), tc.want)
-			r.Equal("failed", logout.Outcome)
-			r.Contains(logout.Detail, "rejected: ")
+			r.Equal("pending", logout.Outcome)
+			r.Contains(flowDetails(svc, "greendale"), "rejected: ")
 		})
 	}
 }
@@ -742,7 +742,12 @@ func sendSAMLInspectorLogout(t *testing.T, svc *webApp, sessionID, binding strin
 // without scimtest's own validators, and returns its root and RelayState.
 func receivedSAMLLogoutMessage(t *testing.T, svc *webApp, rec *httptest.ResponseRecorder, binding, param string) (*etree.Element, string) {
 	t.Helper()
-	cert, err := x509.ParseCertificate(svc.certDER)
+	return receivedSAMLLogoutMessageWithCertificate(t, rec, binding, param, svc.certDER)
+}
+
+func receivedSAMLLogoutMessageWithCertificate(t *testing.T, rec *httptest.ResponseRecorder, binding, param string, certDER []byte) (*etree.Element, string) {
+	t.Helper()
+	cert, err := x509.ParseCertificate(certDER)
 	require.NoError(t, err)
 	if binding == samlHTTPRedirectBinding {
 		require.Equal(t, http.StatusFound, rec.Code, rec.Body.String())
@@ -809,4 +814,48 @@ func cookieCleared(rec *httptest.ResponseRecorder, name string) bool {
 		}
 	}
 	return false
+}
+
+func TestInvalidSAMLLogoutResponseDoesNotConsumePendingRequest(t *testing.T) {
+	for name, binding := range map[string]string{"redirect": samlHTTPRedirectBinding, "post": samlHTTPPostBinding} {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			signer := newTestSPSigner(t)
+			svc := sloTestApp(t, signer)
+			cookie, _ := samlLogoutSignIn(t, svc, "usr-troy")
+			request, _ := receivedSAMLLogoutMessage(t, svc, sendSAMLInspectorLogout(t, svc, cookie.Value, name), binding, "SAMLRequest")
+			requestID := request.SelectAttrValue("ID", "")
+			responseXML := testSPLogoutResponse(requestID, samlStatusSuccess)
+			bad := sendSAMLLogoutMessage(t, svc, "greendale", binding, "SAMLResponse", responseXML, "", nil)
+			r.Equal(http.StatusBadRequest, bad.Code, bad.Body.String())
+			valid := sendSAMLLogoutMessage(t, svc, "greendale", binding, "SAMLResponse", responseXML, "", signer)
+			r.Equal(http.StatusOK, valid.Code, valid.Body.String())
+			logout, found := svc.samlLogoutResult("greendale", requestID)
+			r.True(found)
+			r.Equal("ok", logout.Outcome)
+		})
+	}
+}
+
+func TestSAMLLogoutUsesRotatedEnvironmentKey(t *testing.T) {
+	for name, binding := range map[string]string{"redirect": samlHTTPRedirectBinding, "post": samlHTTPPostBinding} {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			svc := sloTestApp(t, nil)
+			cookie, _ := samlLogoutSignIn(t, svc, "usr-troy")
+			state, err := loadStateForAppSlug("greendale")
+			r.NoError(err)
+			_, err = svc.rotateEnvironmentSigningKey(state.Apps[0], 0, time.Now())
+			r.NoError(err)
+			certificates := samlMetadataCertificates(t, svc.routes(), "greendale")
+			r.Len(certificates, 1)
+			r.NotEqual(svc.certDER, certificates[0])
+			sent := sendSAMLInspectorLogout(t, svc, cookie.Value, name)
+			receivedSAMLLogoutMessageWithCertificate(t, sent, binding, "SAMLRequest", certificates[0])
+			cookie, sessionIndex := samlLogoutSignIn(t, svc, "usr-troy")
+			answer := sendSAMLLogoutMessage(t, svc, "greendale", binding, "SAMLRequest", newTestLogoutRequest(sessionIndex).xml(), "", nil, cookie)
+			response, _ := receivedSAMLLogoutMessageWithCertificate(t, answer, binding, "SAMLResponse", certificates[0])
+			r.True(testSAMLStatus(response).success())
+		})
+	}
 }

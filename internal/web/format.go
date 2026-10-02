@@ -3,6 +3,8 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 )
 
@@ -42,14 +44,18 @@ func formatSyncTraces(traces []syncTraceEntry) string {
 	return strings.Join(lines, "\n")
 }
 
-func summarizeUserUpdate(existing user, givenName string, familyName string, email string, username string) string {
+func summarizeUserUpdate(existing user, updated user) string {
 	switch {
-	case existing.GivenName != givenName || existing.FamilyName != familyName:
+	case existing.GivenName != updated.GivenName || existing.FamilyName != updated.FamilyName:
 		return "Updated name"
-	case existing.Email != email:
+	case existing.Email != updated.Email:
 		return "Updated email"
-	case existing.Username != username:
+	case existing.Username != updated.Username:
 		return "Updated username"
+	case !slices.Equal(enterpriseValues(existing), enterpriseValues(updated)) || existing.ManagerID != updated.ManagerID:
+		return "Updated enterprise attributes"
+	case !maps.Equal(existing.Attributes, updated.Attributes):
+		return "Updated custom attributes"
 	default:
 		return "Updated"
 	}
