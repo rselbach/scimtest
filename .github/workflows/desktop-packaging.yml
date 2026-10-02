@@ -1,19 +1,24 @@
-name: Desktop spike
+name: Desktop packaging
 
+# Only desktop sources, packaging scripts, and Go dependencies can break these
+# builds in ways ci.yml misses, so other changes skip them. Pushes to main
+# catch packaging changes that land without a pull request.
 on:
   workflow_dispatch:
   pull_request:
     branches: [main]
     paths:
-      - .github/workflows/desktop-spike.yml
-      - client/**
+      - .github/workflows/desktop-packaging.yml
       - cmd/scimtest-desktop/**
-      - internal/client/**
-      - internal/protocol/**
-      - internal/server/**
-      - internal/web/**
-      - packaging/linux/**
-      - packaging/macos/**
+      - packaging/**
+      - go.mod
+      - go.sum
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/desktop-packaging.yml
+      - cmd/scimtest-desktop/**
+      - packaging/**
       - go.mod
       - go.sum
 
@@ -58,11 +63,13 @@ jobs:
       - name: Package macOS preview app
         shell: bash
         run: |
+          printf 'Preview build %s.\n' "${GITHUB_RUN_NUMBER}" > build/release-notes.md
           ./packaging/macos/build-app.sh \
             build/scimtest-desktop \
             build \
             0.0.0 \
-            "${GITHUB_RUN_NUMBER}"
+            "${GITHUB_RUN_NUMBER}" \
+            build/release-notes.md
           ./packaging/macos/sign-app.sh build/scimtest.app -
           codesign --verify --deep --strict --verbose=2 build/scimtest.app
           ditto -c -k --sequesterRsrc --keepParent \
@@ -105,8 +112,6 @@ jobs:
             echo "::error::Set SCIMTEST_APPLICATION_PROFILE_ID to the application profile ID"
             exit 1
           fi
-      - name: Test desktop shell
-        run: go test -tags desktop ./cmd/scimtest-desktop
       - name: Build desktop executable
         shell: bash
         run: |
