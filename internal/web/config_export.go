@@ -46,21 +46,27 @@ type samlConfigExport struct {
 // It is an admin route: the export includes the client secret, exactly as
 // the setup panel already shows it on the loopback listener.
 func (a *webApp) handleAppConfigJSON(w http.ResponseWriter, r *http.Request) {
-	state, err := loadState()
+	state, err := a.loadAPIEnvironment(r.PathValue("id"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	foundApp, err := apiAppByID(state, r.PathValue("id"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	export, err := a.appConfigExport(r, state, foundApp)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	foundApp, ok := appByID(state.Apps, r.PathValue("id"))
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-
-	writeJSON(w, a.appConfigExport(r, state, foundApp))
+	writeJSON(w, export)
 }
 
-func (a *webApp) appConfigExport(r *http.Request, state appState, foundApp app) appConfigExport {
+// appConfigExport builds the connection values for foundApp. state must be
+// the environment's own state, which carries its signing key ring.
+func (a *webApp) appConfigExport(r *http.Request, state appState, foundApp app) (appConfigExport, error) {
 	baseURL := a.effectiveIDPBaseURL(r, state)
 	export := appConfigExport{Environment: foundApp.Name, Slug: foundApp.Slug}
 	if supportsOIDC(foundApp) {
@@ -86,6 +92,10 @@ func (a *webApp) appConfigExport(r *http.Request, state appState, foundApp app) 
 		}
 	}
 	if supportsSAML(foundApp) {
+		key, err := a.activeSigningKey(state)
+		if err != nil {
+			return appConfigExport{}, err
+		}
 		metadataURL := baseURL + "/saml/" + foundApp.Slug + "/metadata"
 		nameIDFormat := foundApp.SAMLNameIDFormat
 		if nameIDFormat == "" {
@@ -95,7 +105,7 @@ func (a *webApp) appConfigExport(r *http.Request, state appState, foundApp app) 
 			SSOURL:         baseURL + "/saml/" + foundApp.Slug + "/sso",
 			IDPEntityID:    metadataURL,
 			MetadataURL:    metadataURL,
-			CertificatePEM: certificatePEM(a.certDER),
+			CertificatePEM: certificatePEM(key.CertDER),
 			SPEntityID:     foundApp.SAMLEntityID,
 			ACSURL:         foundApp.SAMLACSURL,
 			Audience:       foundApp.SAMLAudience,
@@ -103,19 +113,25 @@ func (a *webApp) appConfigExport(r *http.Request, state appState, foundApp app) 
 		}
 	}
 
-	return export
+	return export, nil
 }
 
-// handleSAMLCertificate serves the IDP signing certificate as a PEM file,
-// for service providers that want a certificate upload instead of a paste.
+// handleSAMLCertificate serves the active IDP signing certificate as a PEM
+// file, for service providers that want a certificate upload instead of a
+// paste.
 func (a *webApp) handleSAMLCertificate(w http.ResponseWriter, r *http.Request) {
-	_, foundApp, ok := appForProtocol(w, r, supportsSAML)
+	state, foundApp, ok := appForProtocol(w, r, supportsSAML)
 	if !ok {
+		return
+	}
+	key, err := a.activeSigningKey(state)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-pem-file")
 	w.Header().Set("Content-Disposition", `attachment; filename="scimtest-`+foundApp.Slug+`.pem"`)
-	if _, err := w.Write([]byte(certificatePEM(a.certDER))); err != nil {
+	if _, err := w.Write([]byte(certificatePEM(key.CertDER))); err != nil {
 		return
 	}
 }

@@ -1145,7 +1145,7 @@ func TestSignedSAMLResponseUsesEnvironmentGroups(t *testing.T) {
 	r.Contains(posted.XML, `Name="groups"`)
 	r.Contains(posted.XML, "Engineering")
 	r.Contains(posted.XML, `Name="http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress"`)
-	r.Empty(posted.SignedAssertion)
+	r.Empty(posted.PlaintextAssertion)
 	r.NotContains(posted.XML, "EncryptedAssertion")
 
 	doc := etree.NewDocument()
@@ -1201,7 +1201,7 @@ func TestSignedSAMLResponseUsesConfiguredNameIDField(t *testing.T) {
 	r.Contains(posted.XML, `<saml:Attribute Name="mail"><saml:AttributeValue>troy@example.test</saml:AttributeValue></saml:Attribute>`)
 	r.Contains(posted.XML, `<saml:Attribute Name="login"><saml:AttributeValue>tbarnes</saml:AttributeValue></saml:Attribute>`)
 	r.NotContains(posted.XML, `Name="username"`)
-	r.Empty(posted.SignedAssertion)
+	r.Empty(posted.PlaintextAssertion)
 }
 
 func newTestIDPApp(t *testing.T) *webApp {

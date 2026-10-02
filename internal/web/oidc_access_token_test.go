@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -243,4 +244,26 @@ func TestAPIOIDCPlaygroundDecodesJWTAccessToken(t *testing.T) {
 	r.True(ok)
 	r.Equal("user-troy", claims["sub"])
 	r.Equal("greendale-client", claims["aud"])
+}
+
+func TestJWTAccessTokensUseRotatedEnvironmentKey(t *testing.T) {
+	r := require.New(t)
+	svc := jwtAccessTokenTestApp(t, "https://api.greendale.edu")
+	first := tokenBody(t, redeemToken(t, svc, authorizeForCode(t, svc, url.Values{"scope": {"openid offline_access"}})))
+	state, err := loadState()
+	r.NoError(err)
+	rotated, err := svc.rotateEnvironmentSigningKey(state.Apps[0], 0, time.Now())
+	r.NoError(err)
+	key, err := svc.activeSigningKey(rotated)
+	r.NoError(err)
+	r.Error(verifyWithJWKS(t, svc, first["access_token"].(string)))
+	fresh := tokenBody(t, redeemToken(t, svc, authorizeForCode(t, svc, nil)))
+	refreshed := tokenBody(t, refreshTokens(t, svc, first["refresh_token"].(string), nil))
+	for name, tokens := range map[string]map[string]any{"authorization code": fresh, "refresh": refreshed} {
+		for _, field := range []string{"access_token", "id_token"} {
+			token := tokens[field].(string)
+			r.Equal(key.ID, decodeJWTHeader(t, token)["kid"], name, field)
+			r.NoError(verifyWithJWKS(t, svc, token), name, field)
+		}
+	}
 }

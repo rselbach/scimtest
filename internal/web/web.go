@@ -1000,6 +1000,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /inspect/resilience/{slug}/disarm", a.handleResilienceDisarm)
 	mux.HandleFunc("POST /inspect/faults/{slug}/arm", a.handleFaultArm)
 	mux.HandleFunc("POST /inspect/faults/{slug}/disarm", a.handleFaultDisarm)
+	mux.HandleFunc("POST /inspect/signing-keys/{slug}/rotate", a.rejectWhileSyncing(a.handleSigningKeyRotate))
 	mux.HandleFunc("POST /restore", a.rejectWhileSyncing(a.handleBackupRestore))
 	mux.HandleFunc("GET /sync/status", a.handleSyncStatus)
 	mux.HandleFunc("POST /sync", a.handleSync)
@@ -1183,11 +1184,20 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if tab == "resilience" && data.HasIDP {
 		data.Resilience = a.buildResiliencePageData(activeEnvironment, strings.TrimSpace(r.URL.Query().Get("error")))
 	}
-	if tab == "oidc-inspector" && data.HasOIDC {
-		data.OIDCInspector = a.buildOIDCInspectorPageData(activeEnvironment, state.Users)
-	}
-	if tab == "saml-inspector" && data.HasSAML {
-		data.SAMLInspector = a.buildSAMLInspectorPageData(activeEnvironment)
+	if (tab == "oidc-inspector" && data.HasOIDC) || (tab == "saml-inspector" && data.HasSAML) {
+		signingKeys, err := a.signingKeyViews(state, time.Now())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		switch tab {
+		case "oidc-inspector":
+			data.OIDCInspector = a.buildOIDCInspectorPageData(activeEnvironment, state.Users)
+			data.OIDCInspector.SigningKeys = signingKeys
+		case "saml-inspector":
+			data.SAMLInspector = a.buildSAMLInspectorPageData(activeEnvironment)
+			data.SAMLInspector.SigningKeys = signingKeys
+		}
 	}
 	if !data.SCIMEnabled {
 		data.Errors = nil
@@ -1232,7 +1242,14 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 				formState = selectedState
 			}
 		}
-		if form, formErr := buildAppFormView(formState, tab, r.URL.Query().Get("id"), data.IDPBaseURL, certificatePEM(a.certDER)); formErr == nil {
+		// formState is the edited environment's own state, or the global
+		// state for a new environment, which signs with the shared key.
+		key, err := a.activeSigningKey(formState)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if form, formErr := buildAppFormView(formState, tab, r.URL.Query().Get("id"), data.IDPBaseURL, certificatePEM(key.CertDER)); formErr == nil {
 			form.AllowAnyOIDCRedirectDisabled = a.tunnelPublicURL() != ""
 			data.AppForm = form
 		}
@@ -2094,6 +2111,7 @@ func applyFormDraft(data *pageData, draft formDraft) {
 		data.AppForm.App.SAMLRequestCertPEM = values.Get("saml_request_certificate_pem")
 		data.AppForm.App.SAMLEncryptionCertPEM = values.Get("saml_encryption_certificate_pem")
 		data.AppForm.App.SAMLEncryptionAlgorithm = values.Get("saml_encryption_algorithm")
+		data.AppForm.App.SAMLSigningMode = values.Get("saml_signing_mode")
 		data.AppForm.App.OIDCClaimMappings = oidcClaimMappings{
 			Name: values.Get("oidc_claim_name"), GivenName: values.Get("oidc_claim_given_name"),
 			FamilyName: values.Get("oidc_claim_family_name"), Username: values.Get("oidc_claim_username"),
@@ -2644,6 +2662,7 @@ func buildAppFormView(state appState, tab string, id string, baseURL string, cer
 
 func populateAppFormStatuses(form *appFormView) {
 	form.App.SAMLEncryptionAlgorithm = normalizeSAMLEncryptionAlgorithm(form.App.SAMLEncryptionAlgorithm)
+	form.App.SAMLSigningMode = normalizeSAMLSigningMode(form.App.SAMLSigningMode)
 	form.OIDCStatus = newSetupStatusView(oidcSetupStatus(form.App))
 	form.SAMLStatus = newSetupStatusView(samlSetupStatus(form.App))
 	form.SCIMStatus = newSetupStatusView(scimSetupStatus(form.App))

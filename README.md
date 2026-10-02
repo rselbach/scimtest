@@ -108,10 +108,10 @@ steps, the authentication design, and release packaging details.
   optional raw-secret capture. `--debug` additionally prints transcripts
   to stdout.
 - **Fault Injection.** Choose **Fault Injection** in an environment's sidebar to
-  arm a preset such as a temporary token outage, a slow token endpoint, an
-  expired token, a broken signature, an unsigned token, a wrong audience, a
-  missing claim, a replayed SAML assertion, or a SAML failure. The page waits
-  for RP-initiated and SP-initiated flows, records each injection, and
+  arm a preset such as a temporary token outage, a slow token endpoint, a
+  stale JWKS, an expired token, a broken signature, an unsigned token, a wrong
+  audience, a missing claim, a replayed SAML assertion, or a SAML failure. The
+  page waits for RP-initiated and SP-initiated flows, records each injection, and
   disarms active scenarios after 15 minutes. Token endpoint presets hit both
   code exchanges and refresh requests, and each injection names the grant. Inspector controls still provide
   one-shot clock skew, token and assertion lifetime, claim, signature, and
@@ -147,9 +147,21 @@ Each environment can expose OIDC, SAML, or both, under its endpoint name
 - SAML certificate: `/saml/{slug}/certificate.pem`
 - SAML SSO: `/saml/{slug}/sso`
 
-The OIDC flow signs RS256 ID tokens. SAML responses include a signed
-assertion. Signing material is generated on first run and stored in the
-SQLite state database.
+The OIDC flow signs RS256 ID tokens. SAML setup's **Signed parts** chooses
+what scimtest signs: the assertion (the default), the Response, or both. An SP
+that needs a signed Response can sign in, and an SP that accepts less than it
+should can be caught. The broken-signature fault corrupts every signature the
+response carries. Signing material is generated on first run and stored in the
+SQLite state database. Every environment starts with this shared key, whose
+`kid` is `scimtest-dev`.
+
+Select **Rotate signing key** in either inspector to give one environment a
+new key. New ID tokens and assertions use it at once. The old key stays in
+the JWKS and the SAML metadata for the grace period you choose: 24 hours by
+default, 1 hour, or none. Other environments keep their keys. The setup panel,
+the certificate download, and the config export show the active certificate.
+To test how an app refetches keys, arm the **Stale JWKS** scenario. The next
+JWKS responses leave out the active key, as a cached or lagging key set would.
 
 Add `offline_access` to the OIDC scope to receive a refresh token. Each
 refresh rotates the token: the response carries a replacement, and the
@@ -190,10 +202,11 @@ with `login_required`. A refreshed ID token keeps the original `auth_time`,
 `acr`, and `amr`.
 
 Paste the service provider's RSA encryption certificate into SAML setup to
-wrap that signed assertion in `EncryptedAssertion` (AES-128-GCM, AES-192-GCM,
-or AES-256-GCM, RSA-OAEP). AES-256-GCM is the default.
-Leave the field empty to post the signed assertion in the clear. The SAML
-inspector still shows the signed assertion this IDP produced.
+wrap the assertion in `EncryptedAssertion` (AES-128-GCM, AES-192-GCM, or
+AES-256-GCM, RSA-OAEP). AES-256-GCM is the default. The assertion is signed
+before it is encrypted, and the Response after, so the Response signature
+covers the `EncryptedAssertion`. Leave the field empty to post the assertion in
+the clear. The SAML inspector still shows the assertion before encryption.
 
 To require signed AuthnRequests, paste the service provider's RSA X.509
 certificate into the request-signing certificate field. Leave the field empty
