@@ -178,9 +178,11 @@ adds `wrong_destination`, `wrong_recipient`, `in_response_to_mismatch`, and
 `replayed_assertion`. Replay needs an earlier SAML sign-in in the same
 environment. SAML also adds `xsw_assertion`, `xsw_response`, and
 `nameid_comment`: forgery faults that keep the genuine signature valid while
-asserting a second directory user's identity. They need another active user,
-refuse assertion encryption, and `xsw_assertion`/`xsw_response` need that part
-signed (set `saml_signing_mode`).
+asserting a second directory user's identity. They need another active user
+with a different, non-empty configured `NameID` and refuse assertion encryption.
+`xsw_assertion` needs `saml_signing_mode: "assertion"`; `xsw_response` needs
+`"response"` or `"both"`. Either wrapping fault can combine with
+`nameid_comment`.
 
 To affect the next incoming protocol flow, `PUT /environments/{ENV_ID}/faults`.
 Read or disarm it with `GET` or `DELETE` on the same path. Disarming returns

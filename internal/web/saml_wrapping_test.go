@@ -1,6 +1,9 @@
 package web
 
 import (
+	"encoding/base64"
+	"net/http"
+	"net/url"
 	"testing"
 
 	"github.com/beevik/etree"
@@ -109,12 +112,16 @@ func TestNameIDCommentInjection(t *testing.T) {
 }
 
 func TestSignatureWrappingAssertion(t *testing.T) {
-	for _, mode := range []string{samlSigningModeAssertion, samlSigningModeBoth} {
-		t.Run(mode, func(t *testing.T) {
+	tests := map[string]string{
+		"default":   "",
+		"assertion": samlSigningModeAssertion,
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
 			r := require.New(t)
 			svc := newTestIDPApp(t)
 			cert := activeSAMLSigningCertificate(t, svc)
-			doc := buildWrappingResponse(t, svc, mode, faultOptions{Tamper: []tamperFault{tamperSignatureWrappingAssertion}})
+			doc := buildWrappingResponse(t, svc, tc, faultOptions{Tamper: []tamperFault{tamperSignatureWrappingAssertion}})
 			root := doc.Root()
 
 			assertions := directChildAssertions(root)
@@ -189,6 +196,7 @@ func TestSignatureWrappingNeedsMatchingSignature(t *testing.T) {
 		wantErr string
 	}{
 		"assertion wrap without signed assertion": {mode: samlSigningModeResponse, fault: tamperSignatureWrappingAssertion, wantErr: "needs a signed assertion"},
+		"assertion wrap with signed response":     {mode: samlSigningModeBoth, fault: tamperSignatureWrappingAssertion, wantErr: "cannot wrap a signed response"},
 		"response wrap without signed response":   {mode: samlSigningModeAssertion, fault: tamperSignatureWrappingResponse, wantErr: "needs a signed response"},
 	}
 	for name, tc := range tests {
@@ -205,16 +213,130 @@ func TestSignatureWrappingNeedsMatchingSignature(t *testing.T) {
 	}
 }
 
-func TestSignatureWrappingRejectsEncryption(t *testing.T) {
-	r := require.New(t)
-	svc := newTestIDPApp(t)
-	spKey, dest, pem := newSPEncryptionMaterial(t)
-	_ = spKey
-	state, troy, _ := twoUserGreendaleSAMLState()
-	state.Apps[0].SAMLSigningMode = samlSigningModeAssertion
-	state.Apps[0].SAMLEncryptionCertPEM = pem
+func TestSignatureWrappingWithNameIDComment(t *testing.T) {
+	tests := map[string]struct {
+		mode  string
+		fault tamperFault
+	}{
+		"assertion": {mode: samlSigningModeAssertion, fault: tamperSignatureWrappingAssertion},
+		"response":  {mode: samlSigningModeResponse, fault: tamperSignatureWrappingResponse},
+		"both":      {mode: samlSigningModeBoth, fault: tamperSignatureWrappingResponse},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			setTestStateFile(t)
+			svc := newTestIDPApp(t)
+			state, troy, abed := twoUserGreendaleSAMLState()
+			state.Apps[0].SAMLSigningMode = tc.mode
+			r.NoError(saveState(state))
 
-	posted, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], troy, samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL}, samlTestEncryption(t, dest, defaultSAMLEncryptionAlgorithm), faultOptions{Tamper: []tamperFault{tamperSignatureWrappingAssertion}})
-	r.ErrorContains(err, "cannot combine with assertion encryption")
-	r.Empty(posted.XML)
+			rec := postSAMLSSO(t, svc, url.Values{
+				"user_id":      {troy.ID},
+				"fault_tamper": {string(tc.fault) + ",nameid_comment"},
+			})
+			r.Equal(http.StatusOK, rec.Code, rec.Body.String())
+			responseXML, err := base64.StdEncoding.DecodeString(hiddenInputValue(rec.Body.String(), "SAMLResponse"))
+			r.NoError(err)
+			root := mustParseXML(t, string(responseXML)).Root()
+			r.Equal(abed.Email, nameIDFullText(root))
+
+			var signedAssertion *etree.Element
+			cert := activeSAMLSigningCertificate(t, svc)
+			switch tc.fault {
+			case tamperSignatureWrappingAssertion:
+				assertions := directChildAssertions(root)
+				r.Len(assertions, 2)
+				signedAssertion = assertions[1]
+			case tamperSignatureWrappingResponse:
+				signedResponse := childElementByLocalName(root, "Response")
+				r.NotNil(signedResponse)
+				_, err := samlSignatureValidator(cert).Validate(signedResponse)
+				r.NoError(err)
+				signedAssertion = findElementByLocalName(signedResponse, "Assertion")
+			}
+			r.NotNil(signedAssertion)
+			if tc.mode != samlSigningModeResponse {
+				_, err := samlSignatureValidator(cert).Validate(signedAssertion)
+				r.NoError(err)
+			}
+			r.Equal(abed.Email, nameIDFirstTextNode(signedAssertion))
+			r.Equal(abed.Email+samlForgedNameIDSuffix, nameIDFullText(signedAssertion))
+		})
+	}
+}
+
+func TestForgeryFaultsNeedDistinctNameID(t *testing.T) {
+	faults := map[string]tamperFault{
+		"nameid_comment": tamperNameIDComment,
+		"xsw_assertion":  tamperSignatureWrappingAssertion,
+		"xsw_response":   tamperSignatureWrappingResponse,
+	}
+	for name, fault := range faults {
+		t.Run(name, func(t *testing.T) {
+			tests := map[string]struct {
+				familyName string
+				addAnnie   bool
+				wantNameID string
+			}{
+				"same NameID only":   {familyName: "Barnes"},
+				"empty NameID only":  {},
+				"blank NameID only":  {familyName: " \t"},
+				"skip same NameID":   {familyName: "Barnes", addAnnie: true, wantNameID: "Edison"},
+				"skip empty NameID":  {addAnnie: true, wantNameID: "Edison"},
+				"lowest distinct ID": {familyName: "Nadir", addAnnie: true, wantNameID: "Nadir"},
+			}
+			for name, tc := range tests {
+				t.Run(name, func(t *testing.T) {
+					r := require.New(t)
+					svc := newTestIDPApp(t)
+					state, troy, _ := twoUserGreendaleSAMLState()
+					state.Apps[0].SAMLNameIDField = "lastName"
+					state.Apps[0].SAMLNameIDFormat = samlNameIDFormatForField("lastName")
+					state.Users[1].FamilyName = tc.familyName
+					if fault == tamperSignatureWrappingResponse {
+						state.Apps[0].SAMLSigningMode = samlSigningModeResponse
+					}
+					if tc.addAnnie {
+						state.Users = append(state.Users, user{
+							ID: "usr-annie", GivenName: "Annie", FamilyName: "Edison",
+							Email: "annie@greendale.edu", Username: "aedison", Active: true,
+						})
+					}
+
+					posted, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], troy, samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL}, nil, faultOptions{Tamper: []tamperFault{fault}})
+					if tc.wantNameID == "" {
+						r.ErrorIs(err, errSAMLForgeryNoUser)
+						r.Empty(posted.XML)
+						return
+					}
+					r.NoError(err)
+					root := mustParseXML(t, posted.XML).Root()
+					r.Equal(tc.wantNameID, nameIDFirstTextNode(root))
+				})
+			}
+		})
+	}
+}
+
+func TestForgeryFaultsRejectEncryption(t *testing.T) {
+	_, dest, pem := newSPEncryptionMaterial(t)
+	tests := map[string]tamperFault{
+		"nameid_comment": tamperNameIDComment,
+		"xsw_assertion":  tamperSignatureWrappingAssertion,
+		"xsw_response":   tamperSignatureWrappingResponse,
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			svc := newTestIDPApp(t)
+			state, troy, _ := twoUserGreendaleSAMLState()
+			state.Apps[0].SAMLSigningMode = samlSigningModeAssertion
+			state.Apps[0].SAMLEncryptionCertPEM = pem
+
+			posted, err := svc.buildSignedSAMLResponse(state, state.Config.IDPBaseURL, state.Apps[0], troy, samlResponseContext{ACSURL: state.Apps[0].SAMLACSURL}, samlTestEncryption(t, dest, defaultSAMLEncryptionAlgorithm), faultOptions{Tamper: []tamperFault{tc}})
+			r.ErrorContains(err, "cannot combine with assertion encryption")
+			r.Empty(posted.XML)
+		})
+	}
 }

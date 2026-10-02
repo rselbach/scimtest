@@ -416,6 +416,9 @@ func (a *webApp) buildSignedSAMLResponse(state appState, baseURL string, app app
 	if wantsWrapping && encryption != nil {
 		return samlPostedResponse{}, errors.New("signature wrapping faults cannot combine with assertion encryption")
 	}
+	if faults.tampers(tamperNameIDComment) && encryption != nil {
+		return samlPostedResponse{}, errors.New("nameid_comment fault cannot combine with assertion encryption")
+	}
 	// the signature covers the whole forged NameID value; the comment that
 	// hides half of it from a naive reader is injected after signing
 	if faults.tampers(tamperNameIDComment) {
@@ -479,18 +482,18 @@ func (a *webApp) buildSignedSAMLResponse(state appState, baseURL string, app app
 		}
 	}
 
-	// wrapping runs last, on the signed document, so the genuine signature
-	// stays valid while a forged element is presented alongside it
-	if wantsWrapping {
-		if err := a.applySAMLSignatureWrapping(doc, state, app, user, faults); err != nil {
+	// the comment is invisible to canonicalization, so it is safe to inject
+	// after signing. Split the signed NameID before wrapping inserts a forgery.
+	if faults.tampers(tamperNameIDComment) {
+		if err := splitNameIDComment(doc); err != nil {
 			return samlPostedResponse{}, err
 		}
 	}
 
-	// the comment is invisible to canonicalization, so it is safe to inject
-	// after signing and keeps the signature valid
-	if faults.tampers(tamperNameIDComment) {
-		if err := splitNameIDComment(doc); err != nil {
+	// wrapping runs last, on the signed document, so the genuine signature
+	// stays valid while a forged element is presented alongside it
+	if wantsWrapping {
+		if err := a.applySAMLSignatureWrapping(doc, state, app, user, faults); err != nil {
 			return samlPostedResponse{}, err
 		}
 	}

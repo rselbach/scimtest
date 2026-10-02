@@ -11,12 +11,12 @@ ACS URL.
 
 ## Sub-features
 
-- `forgery-user` picks the lowest-ID other active user as the forged identity
-  and fails clearly when no second user exists.
-- `xsw-assertion` wraps a signed assertion; it needs the assertion signed.
+- `forgery-user` picks the lowest-ID active user with a different, non-empty
+  configured `NameID` and fails clearly when no such user exists.
+- `xsw-assertion` wraps a signed assertion; it needs assertion-only signing.
 - `xsw-response` wraps a signed response; it needs the response signed.
 - `nameid-comment` splits the signed `NameID` and keeps the signature valid.
-- `forgery-encryption` refuses to combine any wrapping fault with assertion
+- `forgery-encryption` refuses to combine any forgery fault with assertion
   encryption.
 
 ## How to get to it (user POV)
@@ -36,7 +36,7 @@ Preconditions:
 
 - Greendale Portal has SAML enabled with endpoint name `greendale-portal`, ACS
   URL `https://sp.greendale.test/acs`, and `saml_signing_mode` set to match the
-  fault under test (`assertion` or `both` for `xsw_assertion`, `response` or
+  fault under test (`assertion` for `xsw_assertion`, `response` or
   `both` for `xsw_response`).
 - The directory has at least two active users, Troy Barnes and Abed Nadir.
 - Route `https://sp.greendale.test/**` to a stub body so the posted form lands
@@ -60,6 +60,16 @@ Preconditions:
   response wrapping the signed one). The first assertion a naive reader finds
   names `abed@greendale.edu`; the element that carries the `ds:Signature` still
   verifies and names `troy@greendale.edu`.
+- **Combine with comment injection.** Check `NameID comment injection` with
+  either wrapping fault and sign in again. The response posts successfully,
+  the forged assertion names Abed, and the signed assertion contains the split
+  `NameID`. Every signature on the genuine element still verifies.
+- **Needs a different NameID.** Configure `lastName` as the `NameID` field and
+  give Troy and Abed the same last name. Arming a forgery fault fails clearly.
+  Add Annie Edison and repeat: the forged `NameID` is `Edison`.
+- **Refuses signed response for assertion wrapping.** Set signing mode to
+  `both`, arm `xsw_assertion`, and sign in. The error asks for assertion-only
+  signing and nothing is posted.
 - **Needs a second user.** Remove Abed, arm any of the three, and sign in. The
   flow fails with an error that another active directory user is required, and
   nothing is posted.
@@ -69,9 +79,10 @@ Preconditions:
 
 ## Gotchas
 
-- `xsw_assertion` needs the assertion signed and `xsw_response` needs the
-  response signed. Arming the wrong one for the signing mode fails the flow with
-  a clear error rather than posting a healthy response.
+- `xsw_assertion` needs assertion-only signing; `both` is refused because
+  inserting the forged assertion would invalidate the response signature.
+  `xsw_response` needs the response signed. Arming the wrong one for the signing
+  mode fails the flow with a clear error rather than posting a healthy response.
 - The forged `NameID` value depends on the environment's `SAMLNameIDField`, so
   it is the other user's username or name field when that is configured.
 - A validator that searches the whole document finds the genuine signature even

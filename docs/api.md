@@ -235,9 +235,12 @@ valid while asserting another directory user's identity: `xsw_assertion` and
 assertion or response, and `nameid_comment` splits the signed `NameID` with a
 comment so a naive first-text-node read returns the forged user. A safe SP
 rejects all three; it processes the exact element the signature covers and
-reads the whole `NameID`. They need a second active directory user,
-`xsw_assertion` needs the assertion signed and `xsw_response` the response
-signed, and none combine with assertion encryption. Invalid fault values are
+reads the whole `NameID`. They need a second active directory user with a
+different, non-empty configured `NameID`. `xsw_assertion` requires
+assertion-only signing, since inserting the forgery would invalidate a response
+signature. `xsw_response` requires response signing (`response` or `both`).
+Either wrapping fault can combine with `nameid_comment`; none combine with
+assertion encryption. Invalid fault values are
 rejected. Fault scenarios expire after
 15 minutes. The `stale-jwks` scenario serves `count` JWKS responses without
 the active signing key.

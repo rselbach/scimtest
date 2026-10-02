@@ -19,15 +19,20 @@ import (
 // canonical NameID is an identifier scimtest never issues.
 const samlForgedNameIDSuffix = ".scimtest-forged.example"
 
-var errSAMLForgeryNoUser = errors.New("this fault needs another active directory user to forge an identity for")
+var errSAMLForgeryNoUser = errors.New("this fault needs another active directory user with a different, non-empty SAML NameID")
 
 // samlForgeryUser picks the directory user a forgery fault impersonates. It is
-// the lowest-ID active user other than the one who signed in, so the choice is
-// stable across runs.
-func samlForgeryUser(state appState, excludeID string) (user, bool) {
+// the lowest-ID active user with a different, non-empty NameID, so the choice
+// is stable across runs.
+func samlForgeryUser(state appState, app app, signedIn user) (user, bool) {
 	var candidates []user
+	signedInNameID := samlNameIDValue(app, signedIn)
 	for _, candidate := range state.Users {
-		if candidate.ID == excludeID || candidate.Deleted || !candidate.Active {
+		if candidate.ID == signedIn.ID || candidate.Deleted || !candidate.Active {
+			continue
+		}
+		nameID := samlNameIDValue(app, candidate)
+		if strings.TrimSpace(nameID) == "" || nameID == signedInNameID {
 			continue
 		}
 		candidates = append(candidates, candidate)
@@ -43,7 +48,7 @@ func samlForgeryUser(state appState, excludeID string) (user, bool) {
 // plus a suffix scimtest never issues. It runs before signing, so the signature
 // covers the whole joined value. splitNameIDComment then runs after signing.
 func forgeNameIDFullValue(doc *etree.Document, state appState, app app, signedIn user) error {
-	forged, ok := samlForgeryUser(state, signedIn.ID)
+	forged, ok := samlForgeryUser(state, app, signedIn)
 	if !ok {
 		return errSAMLForgeryNoUser
 	}
@@ -93,16 +98,20 @@ func (a *webApp) applySAMLSignatureWrapping(doc *etree.Document, state appState,
 }
 
 // wrapSignedSAMLAssertion inserts an unsigned forged assertion ahead of the
-// genuine signed one. A safe SP reads the assertion the signature covers (by
-// resolving the signed reference), not simply the first assertion.
+// genuine signed one. It requires an unsigned response so inserting the forgery
+// does not invalidate a response signature. A safe SP reads the assertion the
+// signature covers (by resolving the signed reference), not the first assertion.
 func wrapSignedSAMLAssertion(doc *etree.Document, state appState, app app, signedIn user) error {
-	forgedUser, ok := samlForgeryUser(state, signedIn.ID)
+	forgedUser, ok := samlForgeryUser(state, app, signedIn)
 	if !ok {
 		return errSAMLForgeryNoUser
 	}
 	signed := findElementByLocalName(doc.Root(), "Assertion")
 	if signed == nil || childElementByLocalName(signed, "Signature") == nil {
-		return errors.New("xsw_assertion fault needs a signed assertion; sign the assertion or both")
+		return errors.New("xsw_assertion fault needs a signed assertion; sign only the assertion")
+	}
+	if childElementByLocalName(doc.Root(), "Signature") != nil {
+		return errors.New("xsw_assertion fault cannot wrap a signed response; sign only the assertion")
 	}
 	forged, err := forgeSAMLElement(signed, app, forgedUser, "saml-forged-assertion")
 	if err != nil {
@@ -117,7 +126,7 @@ func wrapSignedSAMLAssertion(doc *etree.Document, state appState, app app, signe
 // genuine signed response wrapped inside it, so the signed reference still
 // resolves. A safe SP reads the response the signature covers, not the root.
 func wrapSignedSAMLResponse(doc *etree.Document, state appState, app app, signedIn user) error {
-	forgedUser, ok := samlForgeryUser(state, signedIn.ID)
+	forgedUser, ok := samlForgeryUser(state, app, signedIn)
 	if !ok {
 		return errSAMLForgeryNoUser
 	}
@@ -150,6 +159,7 @@ func forgeSAMLElement(el *etree.Element, app app, forgedUser user, idPrefix stri
 		forged.RemoveChild(signature)
 	}
 	if nameID := findElementByLocalName(forged, "NameID"); nameID != nil {
+		nameID.Child = nil
 		nameID.SetText(samlNameIDValue(app, forgedUser))
 	}
 	if err := reassignSAMLID(forged, idPrefix); err != nil {
