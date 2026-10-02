@@ -82,6 +82,8 @@ type webApp struct {
 	authCodes        map[string]authCode
 	accessTokens     map[string]accessToken
 	refreshTokens    map[string]refreshToken
+	sessionMu        sync.Mutex            // guards idpSessions
+	idpSessions      map[string]idpSession // by session ID
 	oidcInspectorMu  sync.Mutex
 	oidcInspections  map[string][]oidcInspection
 	samlInspectorMu  sync.Mutex
@@ -867,14 +869,19 @@ func loadRequestState(r *http.Request) (appState, error) {
 	return loadStateForApp(environmentID)
 }
 
-// saveRequestState persists a single environment's state. Whole-database
-// writes are reserved for the legacy-state migration: refusing them here
-// keeps a mis-scoped request from rewriting every environment.
-func saveRequestState(state appState) error {
+// saveRequestState persists a single environment's state, then ends the IdP
+// sessions of users it deactivated or removed. Whole-database writes are
+// reserved for the legacy-state migration: refusing them here keeps a
+// mis-scoped request from rewriting every environment.
+func (a *webApp) saveRequestState(state appState) error {
 	if state.Environment.ID == "" {
 		return errors.New("no environment selected")
 	}
-	return saveEnvironmentState(state)
+	if err := saveEnvironmentState(state); err != nil {
+		return err
+	}
+	a.endInactiveUserSessions(state)
+	return nil
 }
 
 func rememberEnvironment(w http.ResponseWriter, environmentID string) {
@@ -1002,12 +1009,14 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /inspect/oidc/{slug}/playground/callback", a.handleOIDCPlaygroundCallback)
 	mux.HandleFunc("POST /inspect/oidc/{slug}/playground/refresh", a.handleOIDCPlaygroundRefresh)
 	mux.HandleFunc("POST /inspect/oidc/{slug}/revoke", a.handleOIDCTokenRevoke)
+	mux.HandleFunc("POST /inspect/oidc/{slug}/sessions/end", a.handleOIDCSessionEnd)
 	mux.HandleFunc("GET /inspect/saml/{slug}", a.handleSAMLInspector)
 	mux.HandleFunc("GET /inspect/resilience/{slug}", a.handleResilience)
 	mux.HandleFunc("POST /inspect/resilience/{slug}/arm", a.handleResilienceArm)
 	mux.HandleFunc("POST /inspect/resilience/{slug}/disarm", a.handleResilienceDisarm)
 	mux.HandleFunc("POST /inspect/faults/{slug}/arm", a.handleFaultArm)
 	mux.HandleFunc("POST /inspect/faults/{slug}/disarm", a.handleFaultDisarm)
+	mux.HandleFunc("POST /inspect/signing-keys/{slug}/rotate", a.rejectWhileSyncing(a.handleSigningKeyRotate))
 	mux.HandleFunc("POST /restore", a.rejectWhileSyncing(a.handleBackupRestore))
 	mux.HandleFunc("GET /sync/status", a.handleSyncStatus)
 	mux.HandleFunc("POST /sync", a.handleSync)
@@ -1059,6 +1068,8 @@ func (a *webApp) registerIDPRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /oidc/{slug}/token", a.debugRPHandler(a.handleOIDCToken))
 	mux.HandleFunc("GET /oidc/{slug}/userinfo", a.debugRPHandler(a.handleOIDCUserinfo))
 	mux.HandleFunc("POST /oidc/{slug}/userinfo", a.debugRPHandler(a.handleOIDCUserinfo))
+	mux.HandleFunc("GET /oidc/{slug}/logout", a.debugRPHandler(a.handleOIDCLogout))
+	mux.HandleFunc("POST /oidc/{slug}/logout", a.debugRPHandler(a.handleOIDCLogout))
 	mux.HandleFunc("GET /saml/{slug}/metadata", a.debugRPHandler(a.handleSAMLMetadata))
 	mux.HandleFunc("GET /saml/{slug}/certificate.pem", a.debugRPHandler(a.handleSAMLCertificate))
 	mux.HandleFunc("GET /saml/{slug}/sso", a.debugRPHandler(a.handleSAMLSSO))
@@ -1191,11 +1202,20 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if tab == "resilience" && data.HasIDP {
 		data.Resilience = a.buildResiliencePageData(activeEnvironment, strings.TrimSpace(r.URL.Query().Get("error")))
 	}
-	if tab == "oidc-inspector" && data.HasOIDC {
-		data.OIDCInspector = a.buildOIDCInspectorPageData(activeEnvironment, state.Users)
-	}
-	if tab == "saml-inspector" && data.HasSAML {
-		data.SAMLInspector = a.buildSAMLInspectorPageData(activeEnvironment)
+	if (tab == "oidc-inspector" && data.HasOIDC) || (tab == "saml-inspector" && data.HasSAML) {
+		signingKeys, err := a.signingKeyViews(state, time.Now())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		switch tab {
+		case "oidc-inspector":
+			data.OIDCInspector = a.buildOIDCInspectorPageData(activeEnvironment, state.Users)
+			data.OIDCInspector.SigningKeys = signingKeys
+		case "saml-inspector":
+			data.SAMLInspector = a.buildSAMLInspectorPageData(activeEnvironment)
+			data.SAMLInspector.SigningKeys = signingKeys
+		}
 	}
 	if !data.SCIMEnabled {
 		data.Errors = nil
@@ -1240,7 +1260,14 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 				formState = selectedState
 			}
 		}
-		if form, formErr := buildAppFormView(formState, tab, r.URL.Query().Get("id"), data.IDPBaseURL, certificatePEM(a.certDER)); formErr == nil {
+		// formState is the edited environment's own state, or the global
+		// state for a new environment, which signs with the shared key.
+		key, err := a.activeSigningKey(formState)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if form, formErr := buildAppFormView(formState, tab, r.URL.Query().Get("id"), data.IDPBaseURL, certificatePEM(key.CertDER)); formErr == nil {
 			form.AllowAnyOIDCRedirectDisabled = a.tunnelPublicURL() != ""
 			data.AppForm = form
 		}
@@ -1873,7 +1900,7 @@ func (a *webApp) handleToolsDeleteAll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if changed > 0 {
-		if err := saveRequestState(state); err != nil {
+		if err := a.saveRequestState(state); err != nil {
 			a.redirectError(w, r, tab, err)
 			return
 		}
@@ -1900,7 +1927,7 @@ func (a *webApp) handleToolsClearDirectoryLocal(w http.ResponseWriter, r *http.R
 	state.GroupOperations = make(map[string][]operationLog)
 	state.UserSync = nil
 	state.GroupSync = nil
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
@@ -1942,7 +1969,7 @@ func (a *webApp) handleToolsSetAllActive(w http.ResponseWriter, r *http.Request,
 	}
 
 	if changed > 0 {
-		if err := saveRequestState(state); err != nil {
+		if err := a.saveRequestState(state); err != nil {
 			a.redirectError(w, r, tab, err)
 			return
 		}
@@ -1990,7 +2017,7 @@ func (a *webApp) handleToolsCreateUsers(w http.ResponseWriter, r *http.Request) 
 	for _, createdUser := range state.Users[firstNewUser:] {
 		markUserDirty(&state, createdUser.ID, false)
 	}
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}
@@ -2102,6 +2129,8 @@ func applyFormDraft(data *pageData, draft formDraft) {
 		data.AppForm.App.OIDCRedirectURIs = lines(values.Get("oidc_redirect_uris"))
 		data.AppForm.App.OIDCPublicClient = values.Get("oidc_public_client") == "on"
 		data.AppForm.App.AllowAnyOIDCRedirect = values.Get("allow_any_oidc_redirect") == "on"
+		data.AppForm.App.OIDCJWTAccessTokens = values.Get("oidc_jwt_access_tokens") == "on"
+		data.AppForm.App.OIDCAccessTokenAudience = values.Get("oidc_access_token_audience")
 		data.AppForm.App.SAMLEntityID = values.Get("saml_entity_id")
 		data.AppForm.App.SAMLACSURL = values.Get("saml_acs_url")
 		data.AppForm.App.SAMLAudience = values.Get("saml_audience")
@@ -2110,6 +2139,7 @@ func applyFormDraft(data *pageData, draft formDraft) {
 		data.AppForm.App.SAMLRequestCertPEM = values.Get("saml_request_certificate_pem")
 		data.AppForm.App.SAMLEncryptionCertPEM = values.Get("saml_encryption_certificate_pem")
 		data.AppForm.App.SAMLEncryptionAlgorithm = values.Get("saml_encryption_algorithm")
+		data.AppForm.App.SAMLSigningMode = values.Get("saml_signing_mode")
 		data.AppForm.App.OIDCClaimMappings = oidcClaimMappings{
 			Name: values.Get("oidc_claim_name"), GivenName: values.Get("oidc_claim_given_name"),
 			FamilyName: values.Get("oidc_claim_family_name"), Username: values.Get("oidc_claim_username"),
@@ -2680,6 +2710,7 @@ func buildAppFormView(state appState, tab string, id string, baseURL string, cer
 
 func populateAppFormStatuses(form *appFormView) {
 	form.App.SAMLEncryptionAlgorithm = normalizeSAMLEncryptionAlgorithm(form.App.SAMLEncryptionAlgorithm)
+	form.App.SAMLSigningMode = normalizeSAMLSigningMode(form.App.SAMLSigningMode)
 	form.OIDCStatus = newSetupStatusView(oidcSetupStatus(form.App))
 	form.SAMLStatus = newSetupStatusView(samlSetupStatus(form.App))
 	form.SCIMStatus = newSetupStatusView(scimSetupStatus(form.App))

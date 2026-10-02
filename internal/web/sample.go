@@ -159,7 +159,7 @@ func (a *webApp) handleToolsSeedSample(w http.ResponseWriter, r *http.Request) {
 	for _, created := range state.Groups[firstNewGroup:] {
 		markGroupDirty(&state, created.ID, false)
 	}
-	if err := saveRequestState(state); err != nil {
+	if err := a.saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
 		return
 	}

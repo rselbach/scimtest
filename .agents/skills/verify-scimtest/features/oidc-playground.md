@@ -13,7 +13,11 @@ userinfo.
   `amr`.
 - `playground-session-reuse` offers the remembered sign-in on the next run and
   keeps its `auth_time`.
+- `playground-session-end` lists the IdP session in OIDC Inspector, whose
+  `sid` matches the ID token, and ending it removes `Reuse session`.
 - `playground-result` shows the authorization and token results.
+- `playground-jwt-access-token` decodes the access token when OIDC setup issues
+  JWT access tokens.
 - `playground-inspector` records the completed flow.
 
 ## How to get to it (user POV)
@@ -56,9 +60,20 @@ Preconditions:
   chooser header shows `Signed in as Troy Barnes`, `Password + MFA`, the
   session age, and button `Reuse session`. Choose it. The new claims keep the
   first run's `auth_time`.
+- **Check JWT access tokens.** In OIDC setup, check `Issue JWT access tokens
+  (RFC 9068)`, set `Access token audience` to `https://api.greendale.edu`, and
+  save. Reopen setup to confirm both values persisted. Run the playground
+  again. The result adds heading `Decoded access token`, with header `typ`
+  `at+jwt` and claims `aud` `https://api.greendale.edu`, `client_id`
+  `greendale-portal`, `scope`, and `jti`. `Userinfo` still shows Troy.
 - **Confirm the inspector.** Choose `Flow inspector`. The OIDC inspector shows
   the completed Troy flow and its successful hops. Capture it as the second
   view.
+- **End the session.** The OIDC inspector's `IdP sessions` table lists Troy
+  Barnes with the `sid` from the decoded ID token and protocol `oidc`. Choose
+  `End Troy Barnes's session` and expect navigation. The table disappears and
+  `Recent activity` shows `idp session` with `ended from the OIDC inspector`.
+  Start the playground again: the chooser no longer shows `Reuse session`.
 - **Check the inspector entry.** On a separate pass, open `OIDC Inspector`
   first and confirm its playground action reaches the same chooser. Do not run
   a second token exchange unless that path changed.
@@ -73,7 +88,8 @@ Preconditions:
 - A discovery response or readiness check does not prove the playground. The
   proof requires chooser, code exchange, decoded token, and userinfo.
 - After any sign-in, the chooser preselects that user and offers `Reuse
-  session`. Use a fresh browser profile to see the first-run chooser.
+  session`. Use a fresh browser profile, end the session in OIDC Inspector, or
+  restart the run to see the first-run chooser. Sessions live in memory.
 - Adding `prompt=login` or a short `max_age` to an authorize URL replaces the
   `Reuse session` card with `requires a fresh sign-in (...)`.
 - Token artifacts contain short-lived credentials. Keep them in the ignored

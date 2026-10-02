@@ -57,6 +57,11 @@ exactly four H2 sections in this order.
 - [Edit user attributes](./user-attributes.md) covers enterprise fields, the
   manager picker, custom attributes, and the resulting claims.
 - [Run the OIDC playground](./oidc-playground.md) covers the built-in relying
-  party, chooser, token exchange, claims, and inspector.
+  party, chooser, token exchange, claims, inspector, and IdP session end.
 - [Export environment config](./config-export.md) covers the setup link and the
   machine-readable OIDC bundle.
+- [Rotate signing keys](./signing-keys.md) covers the inspector card, rotation,
+  the published keys, per-environment isolation, and the stale JWKS scenario.
+- [Choose SAML signed parts](./saml-signing.md) covers the setup combobox, the
+  API field, the posted signatures with and without encryption, and the broken
+  signature fault.

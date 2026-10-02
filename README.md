@@ -97,22 +97,23 @@ steps, the authentication design, and release packaging details.
   selector in the top bar sets the context for the whole admin UI.
 - **OIDC playground.** A built-in relying party that runs the full
   authorization-code exchange and shows the token response, decoded and
-  raw ID token, and userinfo on one page. It requests `offline_access`, so
+  raw ID token, decoded JWT access token, and userinfo on one page. It requests `offline_access`, so
   the page can also redeem the refresh token, optionally with a narrower
   scope, and show the refreshed claims beside the ones they replace.
 - **Flow inspectors.** Per-environment OIDC and SAML inspectors keep the
   last ten flows, including decoded claims, the raw ID token, and the
   base64 `SAMLResponse` exactly as posted, plus a per-hop activity log
-  that records failures too.
+  that records failures too. The OIDC inspector also lists live IdP
+  sessions and can end them.
 - **Traffic view.** Request/response transcripts of every OIDC and SAML
   exchange, recorded by default into a bounded in-memory ring, with
   optional raw-secret capture. `--debug` additionally prints transcripts
   to stdout.
 - **Fault Injection.** Choose **Fault Injection** in an environment's sidebar to
-  arm a preset such as a temporary token outage, a slow token endpoint, an
-  expired token, a broken signature, an unsigned token, a wrong audience, a
-  missing claim, a replayed SAML assertion, or a SAML failure. The page waits
-  for RP-initiated and SP-initiated flows, records each injection, and
+  arm a preset such as a temporary token outage, a slow token endpoint, a
+  stale JWKS, an expired token, a broken signature, an unsigned token, a wrong
+  audience, a missing claim, a replayed SAML assertion, or a SAML failure. The
+  page waits for RP-initiated and SP-initiated flows, records each injection, and
   disarms active scenarios after 15 minutes. Token endpoint presets hit both
   code exchanges and refresh requests, and each injection names the grant. Inspector controls still provide
   one-shot clock skew, token and assertion lifetime, claim, signature, and
@@ -146,14 +147,27 @@ Each environment can expose OIDC, SAML, or both, under its endpoint name
 - OIDC authorize: `/oidc/{slug}/authorize`
 - OIDC token: `/oidc/{slug}/token`
 - OIDC userinfo: `/oidc/{slug}/userinfo`
+- OIDC end session (RP-initiated logout): `/oidc/{slug}/logout`
 - OIDC JWKS: `/oidc/{slug}/jwks`
 - SAML metadata: `/saml/{slug}/metadata` (`?download=1` for a file)
 - SAML certificate: `/saml/{slug}/certificate.pem`
 - SAML SSO: `/saml/{slug}/sso`
 
-The OIDC flow signs RS256 ID tokens. SAML responses include a signed
-assertion. Signing material is generated on first run and stored in the
-SQLite state database.
+The OIDC flow signs RS256 ID tokens. SAML setup's **Signed parts** chooses
+what scimtest signs: the assertion (the default), the Response, or both. An SP
+that needs a signed Response can sign in, and an SP that accepts less than it
+should can be caught. The broken-signature fault corrupts every signature the
+response carries. Signing material is generated on first run and stored in the
+SQLite state database. Every environment starts with this shared key, whose
+`kid` is `scimtest-dev`.
+
+Select **Rotate signing key** in either inspector to give one environment a
+new key. New ID tokens and assertions use it at once. The old key stays in
+the JWKS and the SAML metadata for the grace period you choose: 24 hours by
+default, 1 hour, or none. Other environments keep their keys. The setup panel,
+the certificate download, and the config export show the active certificate.
+To test how an app refetches keys, arm the **Stale JWKS** scenario. The next
+JWKS responses leave out the active key, as a cached or lagging key set would.
 
 Add `offline_access` to the OIDC scope to receive a refresh token. Each
 refresh rotates the token: the response carries a replacement, and the
@@ -162,6 +176,16 @@ it. It fails with `invalid_grant` once the user is deactivated or deleted.
 The OIDC inspector lists users with live tokens and can revoke one user's
 tokens or all of them, as an administrator would. Refresh tokens last 24
 hours and are kept in memory, so restarting scimtest revokes them.
+
+Access tokens are opaque by default. Turn on **Issue JWT access tokens** in
+OIDC setup to receive RFC 9068 JWT access tokens instead, so an API can
+validate them locally against the JWKS. They carry the header `typ: at+jwt`
+and the claims `iss`, `sub`, `aud`, `client_id`, `scope`, `iat`, `exp`,
+`jti`, `auth_time`, `acr`, and `amr`. `aud` is the **Access token audience**,
+or the client ID when that field is empty. Code exchanges and refreshes issue
+the same format, and userinfo accepts it. Tamper faults, broken signatures,
+and clock skew apply to JWT access tokens as they do to ID tokens. The ID token
+lifetime, dropped claims, and nonce mismatch faults change only the ID token.
 
 The chooser's **Sign-in method** sets how the user authenticated: **Password**
 or **Password + MFA**. ID tokens report the method in `acr`, `amr`, and
@@ -173,15 +197,32 @@ echoes that value. Password matches the OASIS `PasswordProtectedTransport` and
 PAPE `multi-factor`, and Microsoft `multipleauthn`. Discovery lists these
 values in `acr_values_supported`. Other values leave Password selected.
 
-scimtest remembers each environment's last sign-in in a browser cookie. The
-chooser's **Reuse session** button answers with that sign-in's original user,
-method, and time, so the app receives an older `auth_time` or `AuthnInstant`.
+Each sign-in starts or joins an IdP session for that browser and environment.
+OIDC and SAML sign-ins from the same browser share the session, and ID tokens
+carry its ID in `sid`. Signing in again as the same user keeps the session;
+signing in as another user ends it and starts a new one. The chooser's
+**Reuse session** button answers with the session's original user, method,
+and time, so the app receives an older `auth_time` or `AuthnInstant`.
 `prompt=login`, `max_age=0`, and SAML `ForceAuthn` hide the button and require
-a fresh sign-in. So does a `max_age` shorter than the remembered sign-in's age.
-With `prompt=none`, authorize skips the chooser and answers from the remembered
-sign-in. If there is none, or it is older than `max_age`, authorize redirects
-with `login_required`. A refreshed ID token keeps the original `auth_time`,
-`acr`, and `amr`.
+a fresh sign-in. So does a `max_age` shorter than the session's age. With
+`prompt=none`, authorize skips the chooser and answers from the session. If
+there is none, or it is older than `max_age`, authorize redirects with
+`login_required`. A refreshed ID token keeps the original `auth_time`, `acr`,
+`amr`, and `sid`.
+
+A session ends when the app sends the browser to the end session endpoint,
+when the tester ends it in the OIDC inspector, or when its user is
+deactivated or deleted. The endpoint implements OpenID Connect RP-Initiated
+Logout 1.0: it accepts `id_token_hint`, `client_id`, `post_logout_redirect_uri`,
+and `state` by GET or POST. The hint must be an ID token this environment
+issued to the app; an expired one is accepted. The `post_logout_redirect_uri`
+must be one of the environment's registered redirect URIs and needs a hint or
+`client_id`. scimtest ends the session that the hint's `sid` names, or the
+browser's session when the hint has no `sid`, then redirects to
+`post_logout_redirect_uri` with `state`. Without a hint for the browser's own
+session, it asks the user to confirm first. Invalid requests show an error and never redirect.
+Ending a session does not revoke tokens. Sessions last 30 days after their
+latest sign-in and are kept in memory, so restarting scimtest ends them.
 
 A user's enterprise fields and custom attributes reach the app through every
 protocol:
@@ -194,7 +235,9 @@ protocol:
   `manager` attribute is the manager's NameID value.
 - **SCIM.** Once any user in the environment has an enterprise field, every
   user payload carries the
-  `urn:ietf:params:scim:schemas:extension:enterprise:2.0:User` extension.
+  `urn:ietf:params:scim:schemas:extension:enterprise:2.0:User` extension. The
+  environment remembers this after its last value is cleared, including across
+  restarts, so updates and reconciliation remove stale remote values.
   Cleared fields are sent as empty strings and a removed manager as `null`.
   `manager.value` is the manager's ID in the app. When a sync creates a
   manager after one of their reports, scimtest updates the report with the
@@ -206,10 +249,11 @@ send them, and SCIM import keeps the local values. A deleted manager stops
 appearing in claims, attributes, and SCIM payloads.
 
 Paste the service provider's RSA encryption certificate into SAML setup to
-wrap that signed assertion in `EncryptedAssertion` (AES-128-GCM, AES-192-GCM,
-or AES-256-GCM, RSA-OAEP). AES-256-GCM is the default.
-Leave the field empty to post the signed assertion in the clear. The SAML
-inspector still shows the signed assertion this IDP produced.
+wrap the assertion in `EncryptedAssertion` (AES-128-GCM, AES-192-GCM, or
+AES-256-GCM, RSA-OAEP). AES-256-GCM is the default. The assertion is signed
+before it is encrypted, and the Response after, so the Response signature
+covers the `EncryptedAssertion`. Leave the field empty to post the assertion in
+the clear. The SAML inspector still shows the assertion before encryption.
 
 To require signed AuthnRequests, paste the service provider's RSA X.509
 certificate into the request-signing certificate field. Leave the field empty
@@ -274,6 +318,7 @@ GET /oidc/{slug}/jwks
 GET,POST /oidc/{slug}/authorize
 POST /oidc/{slug}/token
 GET,POST /oidc/{slug}/userinfo
+GET,POST /oidc/{slug}/logout
 GET /saml/{slug}/metadata
 GET /saml/{slug}/certificate.pem
 GET,POST /saml/{slug}/sso

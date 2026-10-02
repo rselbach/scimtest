@@ -85,7 +85,7 @@ func TestDebugOIDCTokenPayload(t *testing.T) {
 			var output bytes.Buffer
 			app := debugApp(tc.debug, false)
 
-			app.writeDebugOIDCTokenPayload(&output, []byte(`{"aud":"greendale-client","sub":"troy"}`))
+			app.writeDebugOIDCTokenPayload(&output, "ID token", []byte(`{"aud":"greendale-client","sub":"troy"}`))
 
 			r.Equal(tc.want, output.String())
 		})
