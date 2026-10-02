@@ -47,6 +47,7 @@ type samlResponseContext struct {
 	ACSURL       string
 	InResponseTo string
 	AssertionID  string // generated when empty
+	SessionIndex string // the IdP session's SessionIndex; omitted when empty
 	Requested    authnRequest
 	Authn        authnStatement
 }
@@ -77,11 +78,13 @@ func (a *webApp) handleSAMLMetadata(w http.ResponseWriter, r *http.Request) {
 	metadata := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <EntityDescriptor xmlns="urn:oasis:names:tc:SAML:2.0:metadata" entityID="%s">
   <IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">%s
+    <SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="%s/saml/%s/slo"/>
+    <SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="%s/saml/%s/slo"/>
     <NameIDFormat>%s</NameIDFormat>
     <SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="%s/saml/%s/sso"/>
     <SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="%s/saml/%s/sso"/>
   </IDPSSODescriptor>
-</EntityDescriptor>`, xmlEscape(entityID), keyDescriptors.String(), xmlEscape(nameIDFormat), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(baseURL), xmlEscape(app.Slug))
+</EntityDescriptor>`, xmlEscape(entityID), keyDescriptors.String(), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(nameIDFormat), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(baseURL), xmlEscape(app.Slug))
 	if r.URL.Query().Get("download") == "1" {
 		w.Header().Set("Content-Disposition", `attachment; filename="scimtest-`+app.Slug+`-idp-metadata.xml"`)
 	}
@@ -171,7 +174,13 @@ func (a *webApp) completeSAMLSSO(w http.ResponseWriter, r *http.Request, state a
 		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
 		return
 	}
-	if _, err := a.joinIdPSession(w, r, app.Slug, user, session, "saml"); err != nil {
+	sessionID, err := a.joinIdPSession(w, r, app.Slug, user, session, "saml")
+	if err != nil {
+		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
+		return
+	}
+	responseContext.SessionIndex, err = a.noteSAMLSignIn(sessionID, samlNameIDValue(app, user), samlNameIDFormatForApp(app))
+	if err != nil {
 		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -648,6 +657,10 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user, respo
 	if nameIDFormat == "" {
 		nameIDFormat = samlNameIDFormatForField(app.SAMLNameIDField)
 	}
+	sessionIndex := ""
+	if responseContext.SessionIndex != "" {
+		sessionIndex = ` SessionIndex="` + xmlEscape(responseContext.SessionIndex) + `"`
+	}
 	responseInResponseTo := ""
 	subjectInResponseTo := ""
 	if inResponseTo != "" {
@@ -667,7 +680,7 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user, respo
       </saml:SubjectConfirmation>
     </saml:Subject>
     <saml:Conditions NotBefore="%s" NotOnOrAfter="%s"><saml:AudienceRestriction><saml:Audience>%s</saml:Audience></saml:AudienceRestriction></saml:Conditions>
-    <saml:AuthnStatement AuthnInstant="%s"><saml:AuthnContext><saml:AuthnContextClassRef>%s</saml:AuthnContextClassRef></saml:AuthnContext></saml:AuthnStatement>
+    <saml:AuthnStatement AuthnInstant="%s"%s><saml:AuthnContext><saml:AuthnContextClassRef>%s</saml:AuthnContextClassRef></saml:AuthnContext></saml:AuthnStatement>
     <saml:AttributeStatement>
       %s
     </saml:AttributeStatement>
@@ -677,7 +690,7 @@ func buildSAMLResponse(state appState, baseURL string, app app, user user, respo
 		xmlEscape(assertionID), now.Format(time.RFC3339), xmlEscape(issuer),
 		xmlEscape(nameIDFormat), xmlEscape(nameIDValue), subjectInResponseTo, notOnOrAfter.Format(time.RFC3339), xmlEscape(recipient),
 		notBefore.Format(time.RFC3339), notOnOrAfter.Format(time.RFC3339), xmlEscape(audience),
-		responseContext.Authn.Time.UTC().Add(faults.ClockSkew).Format(time.RFC3339), xmlEscape(responseContext.Authn.Context), attributeStatement), nil
+		responseContext.Authn.Time.UTC().Add(faults.ClockSkew).Format(time.RFC3339), sessionIndex, xmlEscape(responseContext.Authn.Context), attributeStatement), nil
 }
 
 func samlAttributeStatement(state appState, app app, user user) string {

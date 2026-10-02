@@ -216,7 +216,8 @@ type logoutPage struct {
 	User    string
 	Action  string
 	Hidden  url.Values
-	Confirm bool // ask before ending the session
+	Confirm bool   // ask before ending the session
+	Detail  string // shown under the signed-out message
 }
 
 func renderLogoutPage(w http.ResponseWriter, page logoutPage) {
@@ -253,6 +254,7 @@ var logoutTemplate = template.Must(template.New("logout").Parse(`<!DOCTYPE html>
     {{else}}
     <h1>Signed out</h1>
     <p>{{if .User}}{{.User}} is signed out of {{.AppName}}.{{else}}There is no active session for {{.AppName}}.{{end}}</p>
+    {{if .Detail}}<p>{{.Detail}}</p>{{end}}
     {{end}}
   </main>
 </body>

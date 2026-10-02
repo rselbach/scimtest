@@ -27,6 +27,8 @@ type samlInspectorPageData struct {
 	SigningKeys []signingKeyView
 	ArmedFaults string
 	ReturnTab   string
+	Sessions    []idpSessionView // live sessions with a SAML sign-in
+	Logouts     []samlLogout     // IdP-initiated LogoutRequests, newest first
 }
 
 func (a *webApp) rememberSAMLInspection(app app, user user, context samlResponseContext, posted samlPostedResponse, encoded string, faults faultOptions, now time.Time) {
@@ -76,6 +78,12 @@ func (a *webApp) buildSAMLInspectorPageData(foundApp app) *samlInspectorPageData
 		Events:      a.flowEvents(foundApp.Slug),
 		ArmedFaults: a.peekArmedFaults(foundApp.Slug).describe(),
 		ReturnTab:   "saml-inspector",
+		Logouts:     a.recentSAMLLogouts(foundApp.Slug),
+	}
+	for _, session := range a.liveIdPSessions(foundApp.Slug) {
+		if session.SAMLSessionIndex != "" {
+			data.Sessions = append(data.Sessions, session)
+		}
 	}
 	if len(entries) > 0 {
 		data.Inspection = entries[0]

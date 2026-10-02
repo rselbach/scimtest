@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"slices"
 	"time"
@@ -27,6 +28,14 @@ type idpSession struct {
 	// empty until the app redeems a code, and ending a session that has it
 	// sends a back-channel logout token.
 	OIDCIssuer string
+
+	// SAMLSessionIndex is the SessionIndex the session's SAML assertions
+	// carry, and SAMLNameID and SAMLNameIDFormat are the NameID the SP
+	// received at the latest SAML sign-in. They stay empty until a SAML
+	// sign-in completes. Single Logout matches LogoutRequests against them.
+	SAMLSessionIndex string
+	SAMLNameID       string
+	SAMLNameIDFormat string
 }
 
 // idpSessionView is a live session as the OIDC inspector and the API show it.
@@ -39,6 +48,9 @@ type idpSessionView struct {
 	Method        string   `json:"-"`
 	Protocols     []string `json:"protocols"`
 	StartedAt     string   `json:"started_at"`
+
+	SAMLSessionIndex string `json:"saml_session_index,omitempty"`
+	SAMLNameID       string `json:"saml_name_id,omitempty"`
 }
 
 func (s idpSession) view() idpSessionView {
@@ -51,6 +63,9 @@ func (s idpSession) view() idpSessionView {
 		Method:        s.SignIn.Strength.Label,
 		Protocols:     s.Protocols,
 		StartedAt:     s.Started.UTC().Format(time.RFC3339),
+
+		SAMLSessionIndex: s.SAMLSessionIndex,
+		SAMLNameID:       s.SAMLNameID,
 	}
 }
 
@@ -147,6 +162,29 @@ func (a *webApp) noteIDTokenIssued(sessionID, issuer string) {
 	}
 	session.OIDCIssuer = issuer
 	a.idpSessions[sessionID] = session
+}
+
+// noteSAMLSignIn records the NameID that a SAML sign-in in sessionID sent,
+// and returns the session's SessionIndex. The session's first SAML sign-in
+// creates it, and later ones reuse it.
+func (a *webApp) noteSAMLSignIn(sessionID, nameID, nameIDFormat string) (string, error) {
+	a.sessionMu.Lock()
+	defer a.sessionMu.Unlock()
+	session, ok := a.idpSessions[sessionID]
+	if !ok {
+		return "", errors.New("the IdP session ended during sign-in")
+	}
+	if session.SAMLSessionIndex == "" {
+		index, err := newID("saml-session")
+		if err != nil {
+			return "", err
+		}
+		session.SAMLSessionIndex = index
+	}
+	session.SAMLNameID = nameID
+	session.SAMLNameIDFormat = nameIDFormat
+	a.idpSessions[sessionID] = session
+	return session.SAMLSessionIndex, nil
 }
 
 // handleOIDCSessionEnd ends one IdP session, or every session in the

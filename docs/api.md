@@ -49,7 +49,7 @@ accepted body fields. The paths below are relative to `/api/v1`.
 | POST | `/tunnel/retry` | Retry the automatic tunnel connection. |
 | GET | `/account` | Desktop GitHub account state. |
 | POST | `/account/start`, `/account/retry`, `/account/logout` | Start, retry, or sign out of desktop authorization. |
-| GET | `/traffic` | Recorded OIDC and SAML transcripts, including back-channel logout requests. |
+| GET | `/traffic` | Recorded OIDC and SAML transcripts, including back-channel logout requests and SAML Single Logout messages. |
 | PATCH | `/traffic/settings` | Set `record` and `record_secrets` booleans. |
 | DELETE | `/traffic` | Clear recorded transcripts. |
 
@@ -79,11 +79,12 @@ in the operation catalog.
   access tokens whose `aud` is `oidc_access_token_audience`, or the client ID
   when the audience is empty.
   The back-channel logout URI must be an absolute HTTP(S) URL without a fragment.
-- SAML uses `saml_entity_id`, `saml_acs_url`, `saml_audience`,
+- SAML uses `saml_entity_id`, `saml_acs_url`, `saml_slo_url`, `saml_audience`,
   `saml_name_id_field`, `saml_email_attribute_name`,
   `saml_request_certificate_pem`, `saml_encryption_certificate_pem`,
   `saml_encryption_algorithm`, and `saml_signing_mode`. The signing mode is
   `assertion` (the default), `response`, or `both`.
+  `saml_slo_url` is the SP's Single Logout URL and must be an absolute HTTP(S) URL without a fragment.
 - Directory claims use `include_groups_claim`, `chooser_mode`,
   `oidc_claim_mappings`, and `saml_attribute_mappings`. Claim mappings are
   objects whose keys are directory field names and whose values are claim or
@@ -184,6 +185,8 @@ All paths in this section are relative to `/environments/{id}`.
 | GET | `/sessions` | Live IdP sessions, newest sign-in first. |
 | DELETE | `/sessions` | End every IdP session, or one with `?session_id=`. Returns `ended`. |
 | POST | `/saml/sign-in` | Return `acs_url`, base64 `saml_response`, and `relay_state`. |
+| POST | `/saml/logout` | End a session with a SAML sign-in and return the signed `LogoutRequest` to deliver to the SP. |
+| GET | `/saml/logouts` | IdP-initiated `LogoutRequest`s, newest first, with the SP's answers. |
 | GET | `/signing-keys` | Published signing keys, active key first. |
 | POST | `/signing-keys/rotate` | Sign with a new key and keep the old key published for `grace_period`. |
 | GET | `/inspections/oidc`, `/inspections/saml` | Recent protocol inspections. |
@@ -221,7 +224,8 @@ playground run, and SAML sign-in through the API starts its own IdP session. ID
 tokens carry the session ID in `sid`, and refreshed ID tokens keep it. Each
 session in `GET /sessions` has `session_id`, `user_id`, `user`,
 `signed_in_at`, `authn_strength`, `protocols` (`oidc`, `saml`, or both), and
-`started_at`. Ending a session signs that browser out, as the end session
+`started_at`. A session with a SAML sign-in also has `saml_session_index`,
+the `SessionIndex` its assertions carry, and `saml_name_id`. Ending a session signs that browser out, as the end session
 endpoint `/oidc/{slug}/logout` does, but leaves its tokens valid. Ending an
 unknown `session_id` returns `404`. Deactivating or deleting a user ends that
 user's sessions.
@@ -231,6 +235,17 @@ issued ID tokens, by any of these routes, also POSTs a logout token to that
 URI in the background. The `DELETE` response does not wait for the app.
 `GET /flows` and `GET /traffic` show each logout request and the app's
 response.
+
+`POST /saml/logout` starts IdP-initiated SAML Single Logout. It accepts
+`session_id` and an optional `binding`, `redirect` (the default) or `post`.
+The environment needs `saml_slo_url`. scimtest ends the session, then returns
+`request_id`, `binding`, and `url`. For HTTP-Redirect, `url` is the SP's Single
+Logout URL with the signed query; send a browser there. For HTTP-POST, `url`
+is the form action and `form` holds the base64 `SAMLRequest` to post. The SP
+answers at `/saml/{slug}/slo`. `GET /saml/logouts` lists each request with
+`outcome` (`pending`, `ok`, or `failed`), the SP's `status`, and a `detail`.
+An unknown `session_id` returns `404`. SP-initiated `LogoutRequest`s arrive at
+`/saml/{slug}/slo` directly and appear in `GET /flows`.
 
 The headless playground accepts `{"user_id":"..."}` and optional `faults`
 using the fields below. It handles confidential-client authentication or
