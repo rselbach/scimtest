@@ -301,7 +301,7 @@ func (s *Store) EnrollApplicationInstance(
 	if !ok {
 		return errors.New("application profile not found")
 	}
-	previous := cloneApplicationProfile(profile)
+	previous := profile
 	profile = cloneApplicationProfile(profile)
 	if profile.Instances == nil {
 		profile.Instances = make(map[string]StoredApplicationInstance)
@@ -367,7 +367,7 @@ func (s *Store) PruneIdleApplicationInstances(profileID string, cutoff time.Time
 	if !ok {
 		return 0, errors.New("application profile not found")
 	}
-	previous := cloneApplicationProfile(profile)
+	previous := profile
 	profile = cloneApplicationProfile(profile)
 	pruned := 0
 	for instanceID, instance := range profile.Instances {
@@ -401,7 +401,7 @@ func (s *Store) RevokeApplicationInstanceForGitHubUser(profileID, instanceID str
 	if !ok || !instance.Enrolled() || instance.Revoked || instance.GitHubUserID != userID {
 		return false, nil
 	}
-	previous := cloneApplicationProfile(profile)
+	previous := profile
 	profile = cloneApplicationProfile(profile)
 	instance.Revoked = true
 	profile.Instances[instanceID] = instance
@@ -424,7 +424,7 @@ func (s *Store) SetApplicationInstanceRevoked(profileID, instanceID string, revo
 	if !ok || !instance.Enrolled() {
 		return false, nil
 	}
-	previous := cloneApplicationProfile(profile)
+	previous := profile
 	profile = cloneApplicationProfile(profile)
 	instance.Revoked = revoked
 	profile.Instances[instanceID] = instance
@@ -459,7 +459,7 @@ func (s *Store) rememberApplicationTunnel(profileID, instanceID, tunnelID string
 	if !ok {
 		return errors.New("application profile not found")
 	}
-	previous := cloneApplicationProfile(profile)
+	previous := profile
 	profile = cloneApplicationProfile(profile)
 	if profile.Instances == nil {
 		profile.Instances = make(map[string]StoredApplicationInstance)
@@ -505,7 +505,7 @@ func (s *Store) UnreserveApplicationTunnel(profileID, instanceID string) (bool, 
 	if !ok {
 		return false, nil
 	}
-	previous := cloneApplicationProfile(profile)
+	previous := profile
 	profile = cloneApplicationProfile(profile)
 	if instance.Enrolled() {
 		instance.TunnelID = ""

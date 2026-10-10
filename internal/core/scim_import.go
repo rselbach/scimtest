@@ -66,10 +66,11 @@ func replaceStateFromSCIM(state AppState, userResources []SCIMUserResource, grou
 }
 
 func importedUserFromSCIM(existingUsers []User, resource SCIMUserResource) (User, error) {
+	existing, matched := importedUserMatch(existingUsers, resource)
 	localID := strings.TrimSpace(resource.ExternalID)
 	if localID == "" {
-		if matched, ok := importedUserMatch(existingUsers, resource); ok {
-			localID = matched.ID
+		if matched {
+			localID = existing.ID
 		} else {
 			var err error
 			localID, err = NewUserID()
@@ -126,7 +127,7 @@ func importedUserFromSCIM(existingUsers []User, resource SCIMUserResource) (User
 		imported.Department = strings.TrimSpace(enterprise.Department)
 	}
 	// Custom attributes never travel over SCIM, so keep the local ones.
-	if existing, ok := importedUserMatch(existingUsers, resource); ok {
+	if matched {
 		imported.Attributes = existing.Attributes
 	}
 	return imported, nil
@@ -183,30 +184,23 @@ func importedGroupFromSCIM(existingGroups []Group, resource SCIMGroupResource, r
 	}, skipped, nil
 }
 
-func importedUserIndex(users []User, resource SCIMUserResource, localID string) (int, bool) {
+func importedUserMatch(users []User, resource SCIMUserResource) (User, bool) {
+	localID := strings.TrimSpace(resource.ExternalID)
 	if localID != "" {
-		for i, existing := range users {
+		for _, existing := range users {
 			if existing.ID == localID {
-				return i, true
+				return existing, true
 			}
 		}
 	}
 
 	remoteID := strings.TrimSpace(resource.ID)
 	if remoteID != "" {
-		for i, existing := range users {
+		for _, existing := range users {
 			if existing.RemoteID == remoteID {
-				return i, true
+				return existing, true
 			}
 		}
-	}
-
-	return 0, false
-}
-
-func importedUserMatch(users []User, resource SCIMUserResource) (User, bool) {
-	if index, ok := importedUserIndex(users, resource, strings.TrimSpace(resource.ExternalID)); ok {
-		return users[index], true
 	}
 
 	return User{}, false

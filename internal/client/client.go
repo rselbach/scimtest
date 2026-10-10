@@ -677,15 +677,18 @@ func (c *Client) handleRequest(ctx context.Context, msg protocol.Message, send c
 		Type:     protocol.TypeResponse,
 		StreamID: msg.StreamID,
 	}
+	sendResponse := func() {
+		select {
+		case send <- resp:
+		case <-done:
+		}
+	}
 
 	localURL, err := localRequestURL(c.cfg.LocalHost, c.cfg.LocalPort, msg.Path)
 	if err != nil {
 		c.cfg.Logger.Warn("rejecting tunneled request path", "path", msg.Path, "error", err)
 		resp.Error = "invalid request path"
-		select {
-		case send <- resp:
-		case <-done:
-		}
+		sendResponse()
 		return
 	}
 
@@ -693,20 +696,14 @@ func (c *Client) handleRequest(ctx context.Context, msg protocol.Message, send c
 	if err != nil {
 		c.cfg.Logger.Warn("local forward failed", "error", err)
 		resp.Error = "failed to reach local application"
-		select {
-		case send <- resp:
-		case <-done:
-		}
+		sendResponse()
 		return
 	}
 	expectedHost := net.JoinHostPort(c.cfg.LocalHost, strconv.Itoa(c.cfg.LocalPort))
 	if req.URL.Host != expectedHost {
 		c.cfg.Logger.Warn("rejecting tunneled request path", "path", msg.Path, "host", req.URL.Host)
 		resp.Error = "invalid request path"
-		select {
-		case send <- resp:
-		case <-done:
-		}
+		sendResponse()
 		return
 	}
 
@@ -720,10 +717,7 @@ func (c *Client) handleRequest(ctx context.Context, msg protocol.Message, send c
 	if err != nil {
 		c.cfg.Logger.Warn("local forward failed", "error", err)
 		resp.Error = "failed to reach local application"
-		select {
-		case send <- resp:
-		case <-done:
-		}
+		sendResponse()
 		return
 	}
 	defer func() {
@@ -736,18 +730,12 @@ func (c *Client) handleRequest(ctx context.Context, msg protocol.Message, send c
 	if err != nil {
 		c.cfg.Logger.Warn("local forward failed", "error", err)
 		resp.Error = "failed to read local response"
-		select {
-		case send <- resp:
-		case <-done:
-		}
+		sendResponse()
 		return
 	}
 	if int64(len(body)) > c.cfg.MaxBodyBytes {
 		resp.Error = "local response body too large"
-		select {
-		case send <- resp:
-		case <-done:
-		}
+		sendResponse()
 		return
 	}
 
@@ -755,10 +743,7 @@ func (c *Client) handleRequest(ctx context.Context, msg protocol.Message, send c
 	resp.Header = httputil.CloneHeader(localResp.Header)
 	httputil.RemoveHopHeaders(resp.Header)
 	resp.Body = body
-	select {
-	case send <- resp:
-	case <-done:
-	}
+	sendResponse()
 }
 
 // localRequestURL builds an http URL for the configured local application from a

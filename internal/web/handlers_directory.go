@@ -59,7 +59,8 @@ func (a *webApp) handleUserSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status := "user updated"
-	if id == "" {
+	switch id {
+	case "":
 		id, err = newUserID()
 		if err != nil {
 			a.redirectError(w, r, tab, err)
@@ -73,33 +74,30 @@ func (a *webApp) handleUserSave(w http.ResponseWriter, r *http.Request) {
 		state.Users = append(state.Users, created)
 		appendLocalOperationLog(&state, "user", id, "Created")
 		status = "user added"
-	}
-	if id != "" {
+	default:
 		index, ok := userIndexByID(state.Users, id)
 		if !ok {
 			a.redirectError(w, r, tab, fmt.Errorf("user %s not found", id))
 			return
 		}
-		if status == "user updated" {
-			existing := state.Users[index]
-			updated := existing
-			updated.GivenName = submitted.GivenName
-			updated.FamilyName = submitted.FamilyName
-			updated.Username = submitted.Username
-			updated.Email = submitted.Email
-			updated.EmployeeNumber = submitted.EmployeeNumber
-			updated.CostCenter = submitted.CostCenter
-			updated.Organization = submitted.Organization
-			updated.Division = submitted.Division
-			updated.Department = submitted.Department
-			updated.ManagerID = submitted.ManagerID
-			updated.Attributes = submitted.Attributes
-			updated.Deleted = false
-			updated.Dirty = true
-			updated.LastError = ""
-			state.Users[index] = updated
-			appendLocalOperationLog(&state, "user", updated.ID, summarizeUserUpdate(existing, updated))
-		}
+		existing := state.Users[index]
+		updated := existing
+		updated.GivenName = submitted.GivenName
+		updated.FamilyName = submitted.FamilyName
+		updated.Username = submitted.Username
+		updated.Email = submitted.Email
+		updated.EmployeeNumber = submitted.EmployeeNumber
+		updated.CostCenter = submitted.CostCenter
+		updated.Organization = submitted.Organization
+		updated.Division = submitted.Division
+		updated.Department = submitted.Department
+		updated.ManagerID = submitted.ManagerID
+		updated.Attributes = submitted.Attributes
+		updated.Deleted = false
+		updated.Dirty = true
+		updated.LastError = ""
+		state.Users[index] = updated
+		appendLocalOperationLog(&state, "user", updated.ID, summarizeUserUpdate(existing, updated))
 	}
 	markUserDirty(&state, id, false)
 
@@ -172,41 +170,13 @@ func (a *webApp) handleUsersDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	selected := make(map[string]bool, len(userIDs))
-	for _, id := range userIDs {
-		id = strings.TrimSpace(id)
-		index, ok := userIndexByID(state.Users, id)
-		if !ok || state.Users[index].Deleted {
-			a.redirectError(w, r, tab, fmt.Errorf("user %s is not available for deletion", id))
-			return
-		}
-		selected[id] = true
+	for i := range userIDs {
+		userIDs[i] = strings.TrimSpace(userIDs[i])
 	}
-
-	if scimTracksDirectory(state) {
-		for i := range state.Users {
-			if !selected[state.Users[i].ID] {
-				continue
-			}
-			state.Users[i].Deleted = true
-			state.Users[i].Dirty = true
-			state.Users[i].LastError = ""
-			markUserDirty(&state, state.Users[i].ID, true)
-			appendLocalOperationLog(&state, "user", state.Users[i].ID, "Marked for deletion in bulk")
-		}
-	} else {
-		keptUsers := make([]user, 0, len(state.Users)-len(selected))
-		for _, u := range state.Users {
-			if !selected[u.ID] {
-				keptUsers = append(keptUsers, u)
-			}
-		}
-		state.Users = keptUsers
-		for i := range state.Groups {
-			for id := range selected {
-				state.Groups[i].MemberIDs = removeString(state.Groups[i].MemberIDs, id)
-			}
-		}
+	count, err := deleteUsers(&state, userIDs)
+	if err != nil {
+		a.redirectError(w, r, tab, err)
+		return
 	}
 
 	if err := a.saveRequestState(state); err != nil {
@@ -214,9 +184,9 @@ func (a *webApp) handleUsersDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	message := fmt.Sprintf("deleted %d users", len(selected))
+	message := fmt.Sprintf("deleted %d users", count)
 	if scimTracksDirectory(state) {
-		message = fmt.Sprintf("marked %d users for deletion", len(selected))
+		message = fmt.Sprintf("marked %d users for deletion", count)
 	}
 	redirectWithFlash(w, r, dashboardURLWithPage("users", formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: message})
 }
@@ -242,28 +212,11 @@ func (a *webApp) handleUserDeletedState(w http.ResponseWriter, r *http.Request, 
 		a.redirectError(w, r, tab, fmt.Errorf("user %s not found", id))
 		return
 	}
-	if !scimTracksDirectory(state) {
-		if !deleted {
-			a.redirectError(w, r, tab, fmt.Errorf("SCIM is disabled"))
-			return
-		}
-		state.Users = append(state.Users[:index], state.Users[index+1:]...)
-		for i := range state.Groups {
-			state.Groups[i].MemberIDs = removeString(state.Groups[i].MemberIDs, id)
-		}
-		if err := a.saveRequestState(state); err != nil {
-			a.redirectError(w, r, tab, err)
-			return
-		}
-		redirectWithFlash(w, r, dashboardURLWithPage("users", formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: "user deleted"})
+	if !scimTracksDirectory(state) && !deleted {
+		a.redirectError(w, r, tab, fmt.Errorf("SCIM is disabled"))
 		return
 	}
-
-	state.Users[index].Deleted = deleted
-	state.Users[index].Dirty = true
-	state.Users[index].LastError = ""
-	markUserDirty(&state, id, deleted)
-	appendLocalOperationLog(&state, "user", state.Users[index].ID, localDeleteSummary(deleted))
+	setUserDeleted(&state, index, deleted, localDeleteSummary(deleted))
 
 	if err := a.saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
@@ -272,7 +225,10 @@ func (a *webApp) handleUserDeletedState(w http.ResponseWriter, r *http.Request, 
 
 	status := "user restored"
 	if deleted {
-		status = "user marked for deletion"
+		status = "user deleted"
+		if scimTracksDirectory(state) {
+			status = "user marked for deletion"
+		}
 	}
 	redirectWithFlash(w, r, dashboardURLWithPage("users", formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: status})
 }
@@ -298,7 +254,8 @@ func (a *webApp) handleGroupSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status := "group updated"
-	if id == "" {
+	switch id {
+	case "":
 		id, err = newGroupID()
 		if err != nil {
 			a.redirectError(w, r, tab, err)
@@ -313,22 +270,19 @@ func (a *webApp) handleGroupSave(w http.ResponseWriter, r *http.Request) {
 		})
 		appendLocalOperationLog(&state, "group", id, "Created")
 		status = "group added"
-	}
-	if id != "" {
+	default:
 		index, ok := groupIndexByID(state.Groups, id)
 		if !ok {
 			a.redirectError(w, r, tab, fmt.Errorf("group %s not found", id))
 			return
 		}
-		if status == "group updated" {
-			summary := summarizeGroupSave(state.Groups[index], displayName, memberIDs)
-			state.Groups[index].DisplayName = displayName
-			state.Groups[index].MemberIDs = memberIDs
-			state.Groups[index].Deleted = false
-			state.Groups[index].Dirty = true
-			state.Groups[index].LastError = ""
-			appendLocalOperationLog(&state, "group", state.Groups[index].ID, summary)
-		}
+		summary := summarizeGroupSave(state.Groups[index], displayName, memberIDs)
+		state.Groups[index].DisplayName = displayName
+		state.Groups[index].MemberIDs = memberIDs
+		state.Groups[index].Deleted = false
+		state.Groups[index].Dirty = true
+		state.Groups[index].LastError = ""
+		appendLocalOperationLog(&state, "group", state.Groups[index].ID, summary)
 	}
 	markGroupDirty(&state, id, false)
 
@@ -361,36 +315,13 @@ func (a *webApp) handleGroupsDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	selected := make(map[string]bool, len(groupIDs))
-	for _, id := range groupIDs {
-		id = strings.TrimSpace(id)
-		index, ok := groupIndexByID(state.Groups, id)
-		if !ok || state.Groups[index].Deleted {
-			a.redirectError(w, r, tab, fmt.Errorf("group %s is not available for deletion", id))
-			return
-		}
-		selected[id] = true
+	for i := range groupIDs {
+		groupIDs[i] = strings.TrimSpace(groupIDs[i])
 	}
-
-	if scimTracksDirectory(state) {
-		for i := range state.Groups {
-			if !selected[state.Groups[i].ID] {
-				continue
-			}
-			state.Groups[i].Deleted = true
-			state.Groups[i].Dirty = true
-			state.Groups[i].LastError = ""
-			markGroupDirty(&state, state.Groups[i].ID, true)
-			appendLocalOperationLog(&state, "group", state.Groups[i].ID, "Marked for deletion in bulk")
-		}
-	} else {
-		keptGroups := make([]group, 0, len(state.Groups)-len(selected))
-		for _, g := range state.Groups {
-			if !selected[g.ID] {
-				keptGroups = append(keptGroups, g)
-			}
-		}
-		state.Groups = keptGroups
+	count, err := deleteGroups(&state, groupIDs)
+	if err != nil {
+		a.redirectError(w, r, tab, err)
+		return
 	}
 
 	if err := a.saveRequestState(state); err != nil {
@@ -398,9 +329,9 @@ func (a *webApp) handleGroupsDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	message := fmt.Sprintf("deleted %d groups", len(selected))
+	message := fmt.Sprintf("deleted %d groups", count)
 	if scimTracksDirectory(state) {
-		message = fmt.Sprintf("marked %d groups for deletion", len(selected))
+		message = fmt.Sprintf("marked %d groups for deletion", count)
 	}
 	redirectWithFlash(w, r, dashboardURLWithPage("groups", formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: message})
 }
@@ -426,25 +357,11 @@ func (a *webApp) handleGroupDeletedState(w http.ResponseWriter, r *http.Request,
 		a.redirectError(w, r, tab, fmt.Errorf("group %s not found", id))
 		return
 	}
-	if !scimTracksDirectory(state) {
-		if !deleted {
-			a.redirectError(w, r, tab, fmt.Errorf("SCIM is disabled"))
-			return
-		}
-		state.Groups = append(state.Groups[:index], state.Groups[index+1:]...)
-		if err := a.saveRequestState(state); err != nil {
-			a.redirectError(w, r, tab, err)
-			return
-		}
-		redirectWithFlash(w, r, dashboardURLWithPage("groups", formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: "group deleted"})
+	if !scimTracksDirectory(state) && !deleted {
+		a.redirectError(w, r, tab, fmt.Errorf("SCIM is disabled"))
 		return
 	}
-
-	state.Groups[index].Deleted = deleted
-	state.Groups[index].Dirty = true
-	state.Groups[index].LastError = ""
-	markGroupDirty(&state, id, deleted)
-	appendLocalOperationLog(&state, "group", state.Groups[index].ID, localDeleteSummary(deleted))
+	setGroupDeleted(&state, index, deleted, localDeleteSummary(deleted))
 
 	if err := a.saveRequestState(state); err != nil {
 		a.redirectError(w, r, tab, err)
@@ -453,7 +370,10 @@ func (a *webApp) handleGroupDeletedState(w http.ResponseWriter, r *http.Request,
 
 	status := "group restored"
 	if deleted {
-		status = "group marked for deletion"
+		status = "group deleted"
+		if scimTracksDirectory(state) {
+			status = "group marked for deletion"
+		}
 	}
 	redirectWithFlash(w, r, dashboardURLWithPage("groups", formPage(r), formPageSize(r), formSearch(r), nil), flashMessage{Kind: "success", Message: status})
 }

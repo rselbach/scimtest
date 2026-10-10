@@ -272,22 +272,12 @@ func (a *webApp) setAPIUserDeleted(w http.ResponseWriter, r *http.Request, delet
 		apiError(w, http.StatusNotFound, "user not found")
 		return
 	}
-	if scimTracksDirectory(state) {
-		state.Users[index].Deleted = deleted
-		state.Users[index].Dirty = true
-		state.Users[index].LastError = ""
-		markUserDirty(&state, state.Users[index].ID, deleted)
-		appendLocalOperationLog(&state, "user", state.Users[index].ID, localDeleteSummary(deleted))
-	} else if deleted {
-		id := state.Users[index].ID
-		state.Users = append(state.Users[:index], state.Users[index+1:]...)
-		for i := range state.Groups {
-			state.Groups[i].MemberIDs = removeString(state.Groups[i].MemberIDs, id)
-		}
-	} else {
+	if !scimTracksDirectory(state) && !deleted {
 		apiError(w, http.StatusConflict, "SCIM is disabled")
 		return
 	}
+	setUserDeleted(&state, index, deleted, localDeleteSummary(deleted))
+
 	if err := a.saveRequestState(state); err != nil {
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -323,44 +313,17 @@ func (a *webApp) handleAPIUsersBulkDelete(w http.ResponseWriter, r *http.Request
 		apiError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	selected := make(map[string]bool, len(request.IDs))
-	for _, id := range request.IDs {
-		index, ok := userIndexByID(state.Users, id)
-		if !ok || state.Users[index].Deleted {
-			apiError(w, http.StatusBadRequest, "user "+id+" is not available for deletion")
-			return
-		}
-		selected[id] = true
+	count, err := deleteUsers(&state, request.IDs)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, err.Error())
+		return
 	}
-	if scimTracksDirectory(state) {
-		for i := range state.Users {
-			if selected[state.Users[i].ID] {
-				state.Users[i].Deleted = true
-				state.Users[i].Dirty = true
-				state.Users[i].LastError = ""
-				markUserDirty(&state, state.Users[i].ID, true)
-				appendLocalOperationLog(&state, "user", state.Users[i].ID, "Marked for deletion in bulk")
-			}
-		}
-	} else {
-		kept := state.Users[:0]
-		for _, found := range state.Users {
-			if !selected[found.ID] {
-				kept = append(kept, found)
-			}
-		}
-		state.Users = kept
-		for i := range state.Groups {
-			for id := range selected {
-				state.Groups[i].MemberIDs = removeString(state.Groups[i].MemberIDs, id)
-			}
-		}
-	}
+
 	if err := a.saveRequestState(state); err != nil {
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, map[string]int{"deleted": len(selected)})
+	writeJSON(w, map[string]int{"deleted": count})
 }
 
 func (a *webApp) handleAPIUserOperations(w http.ResponseWriter, r *http.Request) {
@@ -512,18 +475,12 @@ func (a *webApp) setAPIGroupDeleted(w http.ResponseWriter, r *http.Request, dele
 		apiError(w, http.StatusNotFound, "group not found")
 		return
 	}
-	if scimTracksDirectory(state) {
-		state.Groups[index].Deleted = deleted
-		state.Groups[index].Dirty = true
-		state.Groups[index].LastError = ""
-		markGroupDirty(&state, state.Groups[index].ID, deleted)
-		appendLocalOperationLog(&state, "group", state.Groups[index].ID, localDeleteSummary(deleted))
-	} else if deleted {
-		state.Groups = append(state.Groups[:index], state.Groups[index+1:]...)
-	} else {
+	if !scimTracksDirectory(state) && !deleted {
 		apiError(w, http.StatusConflict, "SCIM is disabled")
 		return
 	}
+	setGroupDeleted(&state, index, deleted, localDeleteSummary(deleted))
+
 	if err := a.saveRequestState(state); err != nil {
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -554,39 +511,17 @@ func (a *webApp) handleAPIGroupsBulkDelete(w http.ResponseWriter, r *http.Reques
 		apiError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	selected := make(map[string]bool, len(request.IDs))
-	for _, id := range request.IDs {
-		index, ok := groupIndexByID(state.Groups, id)
-		if !ok || state.Groups[index].Deleted {
-			apiError(w, http.StatusBadRequest, "group "+id+" is not available for deletion")
-			return
-		}
-		selected[id] = true
+	count, err := deleteGroups(&state, request.IDs)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, err.Error())
+		return
 	}
-	if scimTracksDirectory(state) {
-		for i := range state.Groups {
-			if selected[state.Groups[i].ID] {
-				state.Groups[i].Deleted = true
-				state.Groups[i].Dirty = true
-				state.Groups[i].LastError = ""
-				markGroupDirty(&state, state.Groups[i].ID, true)
-				appendLocalOperationLog(&state, "group", state.Groups[i].ID, "Marked for deletion in bulk")
-			}
-		}
-	} else {
-		kept := state.Groups[:0]
-		for _, found := range state.Groups {
-			if !selected[found.ID] {
-				kept = append(kept, found)
-			}
-		}
-		state.Groups = kept
-	}
+
 	if err := a.saveRequestState(state); err != nil {
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, map[string]int{"deleted": len(selected)})
+	writeJSON(w, map[string]int{"deleted": count})
 }
 func (a *webApp) handleAPIGroupOperations(w http.ResponseWriter, r *http.Request) {
 	state, err := a.loadAPIEnvironment(r.PathValue("environment_id"))

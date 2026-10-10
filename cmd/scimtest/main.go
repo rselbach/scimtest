@@ -18,7 +18,6 @@ import (
 var version = ""
 
 type cliOptions struct {
-	command      string
 	port         string
 	debug        bool
 	debugSecrets bool
@@ -60,7 +59,6 @@ func parseArgs(args []string) (cliOptions, error) {
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		switch args[0] {
 		case "web":
-			opts.command = "web"
 		case "version":
 			return cliOptions{version: true}, nil
 		case "help":

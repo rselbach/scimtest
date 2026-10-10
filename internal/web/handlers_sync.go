@@ -439,18 +439,18 @@ func (a *webApp) currentSyncJobAfter(appID string, sequence int) *syncJobSnapsho
 	a.syncJobMu.Lock()
 	defer a.syncJobMu.Unlock()
 
-	job := cloneSyncJob(a.syncJobs[appID])
+	job := a.syncJobs[appID]
 	if job == nil || sequence == 0 {
-		return job
+		return cloneSyncJob(job)
 	}
-	events := make([]syncJobEvent, 0, len(job.Events))
+	cloned := *job
+	cloned.Events = make([]syncJobEvent, 0)
 	for _, event := range job.Events {
 		if event.Sequence > sequence {
-			events = append(events, event)
+			cloned.Events = append(cloned.Events, event)
 		}
 	}
-	job.Events = events
-	return job
+	return &cloned
 }
 
 func cloneSyncJob(job *syncJobSnapshot) *syncJobSnapshot {

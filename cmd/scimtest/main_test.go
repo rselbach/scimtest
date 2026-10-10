@@ -14,7 +14,7 @@ func TestParseArgs(t *testing.T) {
 		wantErr string
 	}{
 		"no args":            {args: nil, want: cliOptions{}},
-		"web command":        {args: []string{"web"}, want: cliOptions{command: "web"}},
+		"web command":        {args: []string{"web"}, want: cliOptions{}},
 		"debug":              {args: []string{"--debug"}, want: cliOptions{debug: true}},
 		"debug secrets":      {args: []string{"--debug-secrets"}, want: cliOptions{debug: true, debugSecrets: true}},
 		"no open":            {args: []string{"--no-open"}, want: cliOptions{noOpen: true}},
@@ -26,7 +26,7 @@ func TestParseArgs(t *testing.T) {
 		"port separate":      {args: []string{"--port", "9000"}, want: cliOptions{port: "9000"}},
 		"port equals":        {args: []string{"--port=9000"}, want: cliOptions{port: "9000"}},
 		"port single dash":   {args: []string{"-port", "9000"}, want: cliOptions{port: "9000"}},
-		"port with web":      {args: []string{"web", "--port", "9000"}, want: cliOptions{command: "web", port: "9000"}},
+		"port with web":      {args: []string{"web", "--port", "9000"}, want: cliOptions{port: "9000"}},
 		"port missing value": {args: []string{"--port"}, wantErr: "flag needs an argument"},
 		"port not a number":  {args: []string{"--port", "abc"}, wantErr: `invalid port "abc"`},
 		"port out of range":  {args: []string{"--port", "70000"}, wantErr: `invalid port "70000"`},

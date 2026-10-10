@@ -468,9 +468,6 @@ func (a *webApp) issueOIDCTokens(r *http.Request, state appState, app app, user 
 	if grant.SessionID != "" {
 		a.noteIDTokenIssued(grant.SessionID, issuer)
 	}
-	if grant.Faults.BreakSignature {
-		idToken = corruptJWTSignature(idToken)
-	}
 	if err := a.rememberOIDCInspection(app, user, grant, stage, claims, idToken, now); err != nil {
 		return nil, err
 	}
@@ -549,14 +546,7 @@ func (a *webApp) signAccessToken(state appState, issuer string, app app, subject
 	if grant.Faults.tampers(tamperWrongAudience) {
 		claims["aud"] = nearMiss(claims["aud"])
 	}
-	token, err := a.signJWT(state, accessTokenJWT, claims, grant.Faults)
-	if err != nil {
-		return "", err
-	}
-	if grant.Faults.BreakSignature {
-		token = corruptJWTSignature(token)
-	}
-	return token, nil
+	return a.signJWT(state, accessTokenJWT, claims, grant.Faults)
 }
 
 // accessTokenAudience is the aud of an environment's JWT access tokens: the
@@ -1082,7 +1072,11 @@ func (a *webApp) signJWT(state appState, kind jwtKind, claims map[string]any, fa
 	if err != nil {
 		return "", err
 	}
-	return unsigned + "." + base64.RawURLEncoding.EncodeToString(sig), nil
+	token := unsigned + "." + base64.RawURLEncoding.EncodeToString(sig)
+	if faults.BreakSignature {
+		token = corruptJWTSignature(token)
+	}
+	return token, nil
 }
 
 func writeJSON(w http.ResponseWriter, value any) {
