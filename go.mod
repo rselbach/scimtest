@@ -1,6 +1,6 @@
 module github.com/rselbach/scimtest
 
-go 1.25.13
+go 1.26.10
 
 require (
 	github.com/beevik/etree v1.6.0
