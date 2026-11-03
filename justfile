@@ -16,9 +16,6 @@ build-desktop-linux application_profile_id:
     -ldflags="-X=github.com/rselbach/scimtest/internal/web.tunnelApplicationProfileID={{application_profile_id}} -X=github.com/rselbach/scimtest/internal/web.tunnelReleaseProfileRequired=true" \
     -o ./bin/scimtest-desktop ./cmd/scimtest-desktop
 
-fetch-sparkle:
-  ./packaging/macos/fetch-sparkle.sh
-
 test:
   go test ./...
 

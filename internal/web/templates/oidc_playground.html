@@ -11,6 +11,7 @@
 <body>
   <header class="topbar">
     <a class="brand" href="/?tab=apps"><img class="brand-glyph" src="/assets/app-icon.png" alt="">scimtest</a>
+    {{template "update-control" .Update}}
     {{template "github-account" .GitHubAccount}}
   </header>
   <main class="content inspector-page">

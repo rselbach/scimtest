@@ -42,13 +42,7 @@ Tagged releases contain a signed and notarized macOS arm64 application.
 ## Build locally on macOS
 
 Desktop builds use CGO and require an Apple silicon Mac with Xcode Command Line
-Tools. Fetch the pinned Sparkle framework first:
-
-```sh
-just fetch-sparkle
-```
-
-Then inject the same public application profile ID used by release builds:
+Tools. Inject the same public application profile ID used by release builds:
 
 ```sh
 go build -tags desktop \
@@ -58,11 +52,10 @@ go build -tags desktop \
 
 Release builds set `MACOSX_DEPLOYMENT_TARGET=26.0`.
 
-Run the macOS desktop tests with Sparkle on the dynamic library search path:
+Run the macOS desktop tests:
 
 ```sh
-DYLD_FRAMEWORK_PATH="$PWD/build/sparkle" \
-  go test -tags desktop ./cmd/scimtest-desktop
+go test -tags desktop ./cmd/scimtest-desktop
 ```
 
 ## Build locally on Linux
@@ -131,8 +124,9 @@ installs the finished package, and runs it under Xvfb. It verifies that the
 native window opens, loads the GitHub account gate from the local server, and
 shuts down when the window closes.
 
-Linux releases do not include an automatic updater. Install a newer `.deb`
-package to update the app.
+Release packages check the signed update feed. When a newer version exists,
+the toolbar offers the matching `.deb`, `.rpm`, or Arch package for download;
+install it with the package manager.
 
 The release environment requires these secrets:
 
@@ -142,7 +136,8 @@ The release environment requires these secrets:
 - `APPLE_ID`: Apple Account email used for notarization
 - `APPLE_APP_SPECIFIC_PASSWORD`: app-specific password for that Apple Account
 - `APPLE_TEAM_ID`: Apple Developer team containing the Developer ID certificate
-- `SPARKLE_EDDSA_PRIVATE_KEY`: private key that signs Sparkle update archives
+- `SPARKLE_EDDSA_PRIVATE_KEY`: base64 Ed25519 seed that signs the update feed
+  and the legacy Sparkle appcast
 - `TAP_GITHUB_TOKEN`: write access to `rselbach/homebrew-tap`
 
 The release job generates its temporary keychain password and discovers the
@@ -152,17 +147,29 @@ Store.
 
 The repository variable `SCIMTEST_APPLICATION_PROFILE_ID` remains required.
 GitHub Pages must use GitHub Actions as its source so the release workflow can
-publish `https://rselbach.github.io/scimtest/appcast.xml`.
+publish `https://rselbach.github.io/scimtest/update.json` and the legacy
+`appcast.xml`.
 The release workflow loads signing credentials for `v*` tag pushes and the
 explicit `spike/desktop-app` preview trigger. Pull request artifacts never
 receive those secrets and remain unnotarized.
 
-The signed macOS app checks that appcast through Sparkle. Scheduled update
-checks are enabled by default; installing an available update still requires
-the user to approve it. Users can also choose **scimtest > Check for Updates…**.
-The first release that contains Sparkle must
-still be installed through Homebrew or a manual download. Later releases can
-replace it in place.
+## Updates
+
+The desktop app checks `update.json` ten seconds after launch and then daily.
+The feed is signed with the release key, and the app accepts only files whose
+size and SHA-256 the feed lists. On macOS, a newer release is downloaded,
+unpacked beside the installed app, and checked for scimtest's bundle ID,
+version, arm64 executable, minimum macOS, and notarized Developer ID
+signature. An **Update ready** button then appears in the toolbar. Restarting
+swaps the new app in and reopens it; it is unavailable while a sync runs. If
+the user quits instead, the update is installed then. **scimtest > Check for
+Updates…** checks right away and becomes **Restart to Update** once an update
+is ready. A copy that cannot replace itself, such as one run from the disk
+image, offers the download instead.
+
+Releases still publish a Sparkle `appcast.xml` signed with the same key, so
+versions from before this updater can update to the current release. Remove it
+once those versions are no longer in use.
 
 ## GitHub account gate
 
@@ -197,6 +204,6 @@ starting desktop mode so it cannot bypass the desktop account gate.
 - Account switching uses **Log out** followed by a new GitHub authorization.
 - Each launch needs network access long enough to authenticate the installation
   tunnel. The app locks again if that tunnel disconnects.
-- Linux auto-update and protocol/deep-link registration are not yet implemented.
+- Protocol/deep-link registration is not yet implemented.
 - Linux releases currently support Ubuntu 24.04, Fedora 44, and Arch on
   amd64/x86_64.

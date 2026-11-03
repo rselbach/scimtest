@@ -1,10 +1,14 @@
 //go:build desktop && darwin
 
 #import <Cocoa/Cocoa.h>
-#import <Sparkle/Sparkle.h>
 #import <WebKit/WebKit.h>
+#include <objc/runtime.h>
+#include <stdlib.h>
 
-@interface SCIMTestMenuController : NSObject <NSMenuDelegate>
+#include "_cgo_export.h"
+
+@interface SCIMTestMenuController : NSObject <NSMenuDelegate, NSMenuItemValidation>
+- (void)checkForUpdates:(id)sender;
 - (void)reloadPage:(id)sender;
 - (void)showReleaseNotes:(id)sender;
 - (void)showHelp:(id)sender;
@@ -110,6 +114,32 @@ static NSAttributedString *SCIMTestRenderedReleaseNotes(NSString *markdown) {
 }
 
 @implementation SCIMTestMenuController
+- (void)checkForUpdates:(id)sender {
+  scimtestUpdateMenuAction();
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem *)item {
+  if ([item action] == @selector(showReleaseNotes:)) {
+    return SCIMTestReleaseNotes() != nil;
+  }
+  if ([item action] != @selector(checkForUpdates:)) {
+    return YES;
+  }
+
+  int state = scimtestUpdateMenuState();
+  if (state == 2) {
+    char *version = scimtestUpdateMenuVersion();
+    [item setTitle:[NSString stringWithFormat:@"Restart to Update to %s…",
+                                              version]];
+    free(version);
+  } else if (state == 3) {
+    [item setTitle:@"Restarting…"];
+  } else {
+    [item setTitle:@"Check for Updates…"];
+  }
+  return state == 1 || state == 2;
+}
+
 - (void)reloadPage:(id)sender {
   NSWindow *window = [NSApp keyWindow];
   if (window == nil) {
@@ -191,7 +221,21 @@ static NSAttributedString *SCIMTestRenderedReleaseNotes(NSString *markdown) {
 @end
 
 static SCIMTestMenuController *scimtestMenuController;
-static SPUStandardUpdaterController *scimtestUpdaterController;
+
+void scimtest_show_update_alert(const char *title, const char *message) {
+  @autoreleasepool {
+    NSString *titleText = [NSString stringWithUTF8String:title];
+    NSString *messageText = [NSString stringWithUTF8String:message];
+    dispatch_async(dispatch_get_main_queue(), ^{
+      NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+      [alert setMessageText:titleText];
+      [alert setInformativeText:messageText];
+      [alert addButtonWithTitle:@"OK"];
+      [NSApp activateIgnoringOtherApps:YES];
+      [alert runModal];
+    });
+  }
+}
 
 static void SCIMTestShowReleaseNotesAfterUpdate(void) {
   NSString *version = [[NSBundle mainBundle]
@@ -216,14 +260,6 @@ static void SCIMTestShowReleaseNotesAfterUpdate(void) {
   [scimtestMenuController performSelector:@selector(showReleaseNotes:)
                                withObject:nil
                                afterDelay:0.75];
-}
-
-static BOOL SCIMTestCanStartUpdater(void) {
-  NSBundle *bundle = [NSBundle mainBundle];
-  return [bundle bundleIdentifier] != nil &&
-      [bundle objectForInfoDictionaryKey:@"CFBundleVersion"] != nil &&
-      [bundle objectForInfoDictionaryKey:@"SUFeedURL"] != nil &&
-      [bundle objectForInfoDictionaryKey:@"SUPublicEDKey"] != nil;
 }
 
 static NSMenuItem *SCIMTestMenuItem(NSString *title,
@@ -274,6 +310,23 @@ static NSMenu *SCIMTestMenuNamed(NSMenu *mainMenu, NSString *title) {
   return [item submenu];
 }
 
+static NSApplicationTerminateReply SCIMTestShouldTerminate(id self, SEL command,
+                                                          NSApplication *app) {
+  scimtestInstallUpdateOnQuit();
+  return NSTerminateNow;
+}
+
+// Quit, Command-Q, and the Dock end the process inside terminate: without
+// returning from the webview run loop, so a staged update is installed here.
+static void SCIMTestInstallTerminationHook(void) {
+  id delegate = [NSApp delegate];
+  if (delegate == nil) {
+    return;
+  }
+  class_addMethod([delegate class], @selector(applicationShouldTerminate:),
+                  (IMP)SCIMTestShouldTerminate, "Q@:@");
+}
+
 void scimtest_install_application_menu(void) {
   @autoreleasepool {
     NSApplication *application = [NSApplication sharedApplication];
@@ -291,17 +344,7 @@ void scimtest_install_application_menu(void) {
 
     NSMenuItem *updateItem = SCIMTestMenuItem(
         @"Check for Updates…", @selector(checkForUpdates:), @"", 0);
-    if (SCIMTestCanStartUpdater()) {
-      if (scimtestUpdaterController == nil) {
-        scimtestUpdaterController = [[SPUStandardUpdaterController alloc]
-            initWithStartingUpdater:YES
-                  updaterDelegate:nil
-               userDriverDelegate:nil];
-      }
-      [updateItem setTarget:scimtestUpdaterController];
-    } else {
-      [updateItem setEnabled:NO];
-    }
+    [updateItem setTarget:scimtestMenuController];
     [applicationMenu addItem:updateItem];
     [applicationMenu addItem:[NSMenuItem separatorItem]];
 
@@ -377,7 +420,6 @@ void scimtest_install_application_menu(void) {
     NSMenuItem *releaseNotesItem = SCIMTestMenuItem(
         @"What's New in scimtest", @selector(showReleaseNotes:), @"", 0);
     [releaseNotesItem setTarget:scimtestMenuController];
-    [releaseNotesItem setEnabled:SCIMTestReleaseNotes() != nil];
     [helpMenu addItem:releaseNotesItem];
     [helpMenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *helpItem = SCIMTestMenuItem(
@@ -387,6 +429,7 @@ void scimtest_install_application_menu(void) {
     [helpMenu setDelegate:scimtestMenuController];
 
     [application setMainMenu:mainMenu];
+    SCIMTestInstallTerminationHook();
     SCIMTestShowReleaseNotesAfterUpdate();
   }
 }
@@ -537,5 +580,29 @@ int scimtest_application_menu_is_standard(void) {
 
     return hasAbout && hasHide && hasHideOthers && hasShowAll && hasServices &&
         hasClose && hasEditing && hasView && hasWindow && hasHelp;
+  }
+}
+
+@interface SCIMTestTerminationProbe : NSObject <NSApplicationDelegate>
+@end
+
+@implementation SCIMTestTerminationProbe
+@end
+
+int scimtest_application_delegate_installs_on_quit(void) {
+  @autoreleasepool {
+    static SCIMTestTerminationProbe *probe;
+    NSApplication *application = [NSApplication sharedApplication];
+    id previous = [application delegate];
+    if (probe == nil) {
+      probe = [[SCIMTestTerminationProbe alloc] init];
+    }
+    [application setDelegate:probe];
+    SCIMTestInstallTerminationHook();
+    BOOL handles = [probe respondsToSelector:@selector(applicationShouldTerminate:)] &&
+        [(id<NSApplicationDelegate>)probe applicationShouldTerminate:application] ==
+            NSTerminateNow;
+    [application setDelegate:previous];
+    return handles;
   }
 }

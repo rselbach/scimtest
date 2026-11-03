@@ -29,6 +29,7 @@ import (
 	"time"
 
 	scimtestclient "github.com/rselbach/scimtest/client"
+	"github.com/rselbach/scimtest/internal/update"
 )
 
 //go:embed templates/*.html assets/*
@@ -55,6 +56,7 @@ type webApp struct {
 	adminURL             string
 	instanceToken        string
 	requireGitHubAccount bool
+	updater              *update.Updater
 	tunnelStart          tunnelStarter
 	tunnelSupported      bool
 	tunnelMu             sync.Mutex
@@ -501,6 +503,7 @@ type pageData struct {
 	Environments           []app
 	ActiveEnvironment      app
 	GitHubAccount          githubAccountView
+	Update                 updateView
 }
 
 type RunOptions struct {
@@ -511,7 +514,9 @@ type RunOptions struct {
 	Context              context.Context
 	OpenURL              func(string) error
 	RequireGitHubAccount bool
-	browserOpen          browserOpener
+	// Updater offers desktop updates; nil disables them.
+	Updater     *update.Updater
+	browserOpen browserOpener
 }
 
 // ignoredHandoffFlags lists the flags a second launch cannot apply because
@@ -652,9 +657,13 @@ func Run(options ...RunOptions) error {
 		browserOpen:          opener,
 		noOpen:               opts.NoOpen,
 		requireGitHubAccount: opts.RequireGitHubAccount,
+		updater:              opts.Updater,
 		authCodes:            make(map[string]authCode),
 		accessTokens:         make(map[string]accessToken),
 		refreshTokens:        make(map[string]refreshToken),
+	}
+	if app.updater != nil {
+		app.updater.SetRestartGuard(app.restartGuard)
 	}
 	app.debugRP.Store(opts.Debug)
 	app.debugSecrets.Store(opts.DebugSecrets)
@@ -1007,6 +1016,9 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /desktop/auth/start", a.handleDesktopAuthStart)
 	mux.HandleFunc("POST /desktop/auth/retry", a.handleDesktopAuthRetry)
 	mux.HandleFunc("POST /desktop/auth/logout", a.handleDesktopAuthLogout)
+	mux.HandleFunc("POST /desktop/update/restart", a.handleUpdateRestart)
+	mux.HandleFunc("POST /desktop/update/check", a.handleUpdateCheck)
+	mux.HandleFunc("POST /desktop/update/open", a.handleUpdateOpen)
 	mux.HandleFunc("GET /desktop/auth/logout", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1153,6 +1165,9 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	sortOrder := normalizedSortOrder(r.URL.Query().Get("sort"))
 	flash := consumeFlash(w, r)
+	if flash.Message == "" {
+		flash = a.updatedFlash()
+	}
 	showTrace := r.URL.Query().Get("showTrace") == "1"
 	if consumeShowTrace(w, r) {
 		showTrace = true
@@ -1222,6 +1237,7 @@ func (a *webApp) handleIndex(w http.ResponseWriter, r *http.Request) {
 		Environments:           globalState.Apps,
 		ActiveEnvironment:      activeEnvironment,
 		GitHubAccount:          a.githubAccountView(),
+		Update:                 a.updateView(),
 	}
 	if run, found := a.resilienceRun(activeEnvironment.Slug, time.Now()); found {
 		data.ResilienceActive = run.active()

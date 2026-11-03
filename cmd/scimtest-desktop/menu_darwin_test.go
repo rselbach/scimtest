@@ -44,3 +44,9 @@ func TestInstallApplicationMenuAddsStandardMenus(t *testing.T) {
 		t.Fatal("scimtest has an incomplete macOS menu bar")
 	}
 }
+
+func TestNativeQuitInstallsStagedUpdate(t *testing.T) {
+	if !applicationDelegateInstallsOnQuit() {
+		t.Fatal("the application delegate does not install a staged update on quit")
+	}
+}

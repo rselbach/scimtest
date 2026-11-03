@@ -34,14 +34,29 @@ func run() error {
 
 	urls := make(chan string, 16)
 	stopped := make(chan struct{})
+	terminateRequests := make(chan struct{}, 1)
+	updater, err := newDesktopUpdater(func() {
+		select {
+		case terminateRequests <- struct{}{}:
+		default:
+		}
+	})
+	if err != nil {
+		log.Printf("updates are off: %v", err)
+	}
+	setDesktopUpdater(updater)
 	serverResult := make(chan error, 1)
 	go func() {
 		serverResult <- web.Run(web.RunOptions{
 			Context:              ctx,
 			OpenURL:              desktopOpener(urls, stopped, web.OpenBrowser),
 			RequireGitHubAccount: true,
+			Updater:              updater,
 		})
 	}()
+	if updater != nil {
+		updater.Start(ctx)
+	}
 
 	initialURL, err := waitForAdminURL(urls, serverResult)
 	if err != nil {
@@ -74,6 +89,14 @@ func run() error {
 		}
 	}()
 
+	go func() {
+		select {
+		case <-terminateRequests:
+			window.Terminate()
+		case <-stopped:
+		}
+	}()
+
 	observedResult := make(chan error, 1)
 	observerDone := make(chan struct{})
 	go func() {
@@ -90,6 +113,9 @@ func run() error {
 	err = <-observedResult
 	<-observerDone
 	window.Destroy()
+	if updater != nil {
+		updater.InstallOnQuit()
+	}
 	return err
 }
 

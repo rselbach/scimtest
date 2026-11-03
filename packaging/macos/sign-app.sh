@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sign scimtest and Sparkle from the innermost helpers outward.
+# Sign the scimtest application bundle with the hardened runtime.
 
 set -euo pipefail
 
@@ -32,7 +32,6 @@ main() {
   local app_path="$1"
   local signing_identity="$2"
   local use_timestamp=false
-  local sparkle_path
 
   if (( $# == 3 )); then
     if [[ "$3" != "--timestamp" ]]; then
@@ -46,17 +45,6 @@ main() {
     return 1
   fi
 
-  sparkle_path="${app_path}/Contents/Frameworks/Sparkle.framework"
-  if [[ ! -d "${sparkle_path}" ]]; then
-    echo "Sparkle framework does not exist: ${sparkle_path}" >&2
-    return 1
-  fi
-
-  sign_target "${signing_identity}" "${use_timestamp}" \
-    "${sparkle_path}/Versions/B/Autoupdate"
-  sign_target "${signing_identity}" "${use_timestamp}" \
-    "${sparkle_path}/Versions/B/Updater.app"
-  sign_target "${signing_identity}" "${use_timestamp}" "${sparkle_path}"
   sign_target "${signing_identity}" "${use_timestamp}" "${app_path}"
 }
 

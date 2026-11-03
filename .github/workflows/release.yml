@@ -78,8 +78,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Fetch Sparkle
-        run: ./packaging/macos/fetch-sparkle.sh
       - name: Check desktop application profile
         shell: bash
         run: |
@@ -88,8 +86,6 @@ jobs:
             exit 1
           fi
       - name: Test desktop shell
-        env:
-          DYLD_FRAMEWORK_PATH: ${{ github.workspace }}/build/sparkle
         run: go test -tags desktop ./cmd/scimtest-desktop
       - name: Build desktop executable
         shell: bash
@@ -146,7 +142,7 @@ jobs:
         run: |
           mkdir -p build release
           go build -tags desktop -trimpath \
-            -ldflags="-s -w -X=github.com/rselbach/scimtest/internal/web.tunnelApplicationProfileID=${SCIMTEST_APPLICATION_PROFILE_ID} -X=github.com/rselbach/scimtest/internal/web.tunnelReleaseProfileRequired=true" \
+            -ldflags="-s -w -X=github.com/rselbach/scimtest/internal/web.tunnelApplicationProfileID=${SCIMTEST_APPLICATION_PROFILE_ID} -X=github.com/rselbach/scimtest/internal/web.tunnelReleaseProfileRequired=true -X=main.desktopVersion=${RELEASE_VERSION#v} -X=main.desktopPackageKind=deb" \
             -o build/scimtest-desktop ./cmd/scimtest-desktop
       - name: Package Linux desktop app
         shell: bash
@@ -184,8 +180,10 @@ jobs:
       matrix:
         include:
           - package: rpm
+            kind: rpm
             container: fedora:44
           - package: arch
+            kind: pkg.tar.zst
             container: archlinux:base-devel
     env:
       CGO_ENABLED: 1
@@ -236,7 +234,7 @@ jobs:
         run: |
           mkdir -p build release
           go build -tags desktop -trimpath \
-            -ldflags="-s -w -X=github.com/rselbach/scimtest/internal/web.tunnelApplicationProfileID=${SCIMTEST_APPLICATION_PROFILE_ID} -X=github.com/rselbach/scimtest/internal/web.tunnelReleaseProfileRequired=true" \
+            -ldflags="-s -w -X=github.com/rselbach/scimtest/internal/web.tunnelApplicationProfileID=${SCIMTEST_APPLICATION_PROFILE_ID} -X=github.com/rselbach/scimtest/internal/web.tunnelReleaseProfileRequired=true -X=main.desktopVersion=${RELEASE_VERSION#v} -X=main.desktopPackageKind=${{ matrix.kind }}" \
             -o build/scimtest-desktop ./cmd/scimtest-desktop
       - name: Package RPM
         if: matrix.package == 'rpm'
@@ -327,8 +325,6 @@ jobs:
       MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
     steps:
       - uses: actions/checkout@v7
-      - name: Fetch Sparkle
-        run: ./packaging/macos/fetch-sparkle.sh
       - uses: actions/download-artifact@v7
         with:
           name: scimtest-desktop-arm64
@@ -427,6 +423,10 @@ jobs:
           xcrun stapler staple package/scimtest.app
           xcrun stapler validate package/scimtest.app
           spctl --assess --type execute --verbose=4 package/scimtest.app
+          # the updater installs only apps that satisfy this requirement
+          codesign --verify --deep --strict \
+            -R="$(cat internal/update/requirement.txt)" \
+            package/scimtest.app
       - name: Create and notarize release artifacts
         shell: bash
         run: |
@@ -456,42 +456,12 @@ jobs:
               "$(basename "${dmg_path}")" \
               "$(basename "${zip_path}")"
           ) >"${checksum_path}"
-      - name: Generate Sparkle appcast
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          SPARKLE_EDDSA_PRIVATE_KEY: ${{ secrets.SPARKLE_EDDSA_PRIVATE_KEY }}
-        shell: bash
-        run: |
-          set -o pipefail
-          if [[ -z "${SPARKLE_EDDSA_PRIVATE_KEY}" ]]; then
-            echo "::error::Set the SPARKLE_EDDSA_PRIVATE_KEY repository secret"
-            exit 1
-          fi
-
-          version="${RELEASE_VERSION#v}"
-          archive_name="scimtest-desktop_${version}_arm64.zip"
-          mkdir -p appcast-input appcast-site
-          cp "release/${archive_name}" appcast-input/
-          printf '%s' "${SPARKLE_EDDSA_PRIVATE_KEY}" \
-            | build/sparkle/bin/generate_appcast \
-              --ed-key-file - \
-              --download-url-prefix \
-              "https://github.com/rselbach/scimtest/releases/download/v${version}/" \
-              --link "https://github.com/rselbach/scimtest" \
-              -o "${GITHUB_WORKSPACE}/appcast-site/appcast.xml" \
-              appcast-input
-          xmllint --noout appcast-site/appcast.xml
       - uses: actions/upload-artifact@v7
         with:
           name: scimtest-desktop-release
           path: release/*
           if-no-files-found: error
           retention-days: 7
-      - name: Upload appcast for GitHub Pages
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-pages-artifact@v5
-        with:
-          path: appcast-site
       - name: Upload notarization logs
         if: always()
         uses: actions/upload-artifact@v7
@@ -583,11 +553,92 @@ jobs:
             "${version}" \
             "${dmg_sha256}"
 
+  update-feed:
+    name: Sign update feed
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - release-notes
+      - package-desktop
+      - package-desktop-linux
+      - package-desktop-linux-native
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/download-artifact@v7
+        with:
+          name: scimtest-release-notes
+          path: build
+      - uses: actions/download-artifact@v7
+        with:
+          name: scimtest-desktop-release
+          path: release
+      - uses: actions/download-artifact@v7
+        with:
+          name: scimtest-desktop-linux-release
+          path: release
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: scimtest-desktop-linux-*-release
+          path: release
+          merge-multiple: true
+      - name: Sign update feed and legacy Sparkle appcast
+        env:
+          SIGNING_KEY: ${{ secrets.SPARKLE_EDDSA_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          if [[ -z "${SIGNING_KEY}" ]]; then
+            echo "::error::Set the SPARKLE_EDDSA_PRIVATE_KEY repository secret"
+            exit 1
+          fi
+
+          version="${RELEASE_VERSION#v}"
+          base_url="https://github.com/rselbach/scimtest/releases/download/v${version}"
+          published_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          zip="scimtest-desktop_${version}_arm64.zip"
+          dmg="scimtest-desktop_${version}_arm64.dmg"
+          deb="scimtest-desktop_${version}_linux_amd64.deb"
+          rpm="scimtest-desktop_${version}_linux_x86_64.rpm"
+          arch="scimtest-desktop_${version}_linux_x86_64.pkg.tar.zst"
+          tool=build/scimtest-update-tool
+
+          go build -o "${tool}" ./cmd/scimtest-update-tool
+          mkdir -p site
+          "${tool}" sign-feed \
+            --version "${version}" \
+            --build "${GITHUB_RUN_NUMBER}" \
+            --published-at "${published_at}" \
+            --notes-url "https://github.com/rselbach/scimtest/releases/tag/v${version}" \
+            --notes build/release-notes.md \
+            --artifact "macos,arm64,app-zip,26.0,release/${zip},${base_url}/${zip}" \
+            --artifact "macos,arm64,dmg,26.0,release/${dmg},${base_url}/${dmg}" \
+            --artifact "linux,x86_64,deb,0,release/${deb},${base_url}/${deb}" \
+            --artifact "linux,x86_64,rpm,0,release/${rpm},${base_url}/${rpm}" \
+            --artifact "linux,x86_64,pkg.tar.zst,0,release/${arch},${base_url}/${arch}" \
+            --out site/update.json <<<"${SIGNING_KEY}"
+          # releases from before the signed feed still update through Sparkle
+          "${tool}" appcast \
+            --version "${version}" \
+            --build "${GITHUB_RUN_NUMBER}" \
+            --minimum-os 26.0 \
+            --published-at "${published_at}" \
+            --archive "release/${zip}" \
+            --url "${base_url}/${zip}" \
+            --out site/appcast.xml <<<"${SIGNING_KEY}"
+      - name: Upload update feeds for GitHub Pages
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
   deploy-appcast:
-    name: Publish Sparkle appcast
+    name: Publish update feeds
     if: startsWith(github.ref, 'refs/tags/v')
     needs:
       - release-desktop
+      - update-feed
     permissions:
       id-token: write
       pages: write
@@ -596,6 +647,6 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy appcast
+      - name: Deploy update feeds
         id: deployment
         uses: actions/deploy-pages@v5

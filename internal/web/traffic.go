@@ -93,6 +93,7 @@ func (a *webApp) handleTraffic(w http.ResponseWriter, r *http.Request) {
 		ActiveEnvironment:      activeEnvironment,
 		HasIDP:                 supportsAnyIDP(activeEnvironment),
 		GitHubAccount:          a.githubAccountView(),
+		Update:                 a.updateView(),
 	}
 	if run, found := a.resilienceRun(activeEnvironment.Slug, time.Now()); found {
 		data.ResilienceActive = run.active()
@@ -125,6 +126,7 @@ type trafficPageData struct {
 	HasIDP                 bool
 	ResilienceActive       bool
 	GitHubAccount          githubAccountView
+	Update                 updateView
 }
 
 func (a *webApp) handleTrafficSettings(w http.ResponseWriter, r *http.Request) {

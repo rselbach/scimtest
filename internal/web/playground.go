@@ -116,6 +116,7 @@ type playgroundResult struct {
 	UserinfoBody  string
 	InspectorURL  string
 	GitHubAccount githubAccountView
+	Update        updateView
 
 	// Refreshed marks a page produced by redeeming a refresh token.
 	Refreshed             bool
@@ -140,6 +141,7 @@ func (a *webApp) handleOIDCPlaygroundCallback(w http.ResponseWriter, r *http.Req
 		App:           foundApp,
 		InspectorURL:  "/inspect/oidc/" + url.PathEscape(foundApp.Slug),
 		GitHubAccount: a.githubAccountView(),
+		Update:        a.updateView(),
 	}
 
 	render := func() {
@@ -208,6 +210,7 @@ func (a *webApp) handleOIDCPlaygroundRefresh(w http.ResponseWriter, r *http.Requ
 		App:            foundApp,
 		InspectorURL:   "/inspect/oidc/" + url.PathEscape(foundApp.Slug),
 		GitHubAccount:  a.githubAccountView(),
+		Update:         a.updateView(),
 		Refreshed:      true,
 		RequestedScope: strings.TrimSpace(r.PostFormValue("scope")),
 	}

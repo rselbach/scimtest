@@ -40,8 +40,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Fetch Sparkle
-        run: ./packaging/macos/fetch-sparkle.sh
       - name: Check desktop application profile
         shell: bash
         run: |
@@ -50,8 +48,6 @@ jobs:
             exit 1
           fi
       - name: Test desktop shell
-        env:
-          DYLD_FRAMEWORK_PATH: ${{ github.workspace }}/build/sparkle
         run: go test -tags desktop ./cmd/scimtest-desktop
       - name: Build desktop executable
         shell: bash

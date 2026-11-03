@@ -3,15 +3,14 @@
 package main
 
 /*
-#cgo CFLAGS: -F${SRCDIR}/../../build/sparkle
-#cgo LDFLAGS: -F${SRCDIR}/../../build/sparkle -framework Cocoa
-#cgo LDFLAGS: -framework Sparkle -framework WebKit
+#cgo LDFLAGS: -framework Cocoa -framework WebKit
 
 void scimtest_install_application_menu(void);
 int scimtest_application_menu_has_quit_item(void);
 int scimtest_application_menu_has_update_item(void);
 int scimtest_application_menu_has_release_notes_item(void);
 int scimtest_application_menu_is_standard(void);
+int scimtest_application_delegate_installs_on_quit(void);
 */
 import "C"
 
@@ -33,4 +32,8 @@ func applicationMenuHasReleaseNotesItem() bool {
 
 func applicationMenuIsStandard() bool {
 	return C.scimtest_application_menu_is_standard() != 0
+}
+
+func applicationDelegateInstallsOnQuit() bool {
+	return C.scimtest_application_delegate_installs_on_quit() != 0
 }

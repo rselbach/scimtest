@@ -23,6 +23,7 @@
       </select>
       <a class="environment-manage" href="{{.AppsURL}}">Manage</a>
     </form>
+    {{template "update-control" .Update}}
     {{template "github-account" .GitHubAccount}}
   </header>
 

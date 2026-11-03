@@ -52,9 +52,9 @@ sudo pacman -U ./scimtest-desktop_<version>_linux_x86_64.pkg.tar.zst
 The releases page also provides an Apple silicon macOS 26+ DMG and ZIP. Tagged
 releases no longer distribute the command-line application.
 
-The signed macOS app uses Sparkle for updates. After installing a
-Sparkle-enabled release, choose **scimtest > Check for Updates…** or allow
-automatic checks when prompted.
+The desktop app checks for updates on its own and shows **Update ready** in the
+toolbar when one is ready to install; on macOS, you can also choose
+**scimtest > Check for Updates…**.
 
 Running from source also works, but source builds have no embedded tunnel
 identity, so the public tunnel is unavailable and OIDC/SAML are served on
