@@ -481,7 +481,7 @@ func TestBackchannelLogoutUsesRotatedEnvironmentKey(t *testing.T) {
 	cookie, _ := backchannelSignIn(t, svc, "usr-1")
 	state, err := loadState()
 	r.NoError(err)
-	rotated, err := svc.rotateEnvironmentSigningKey(state.Apps[0], 0, time.Now())
+	rotated, err := svc.rotateEnvironmentSigningKey(state.Apps[0], 0, validityStandard, time.Now())
 	r.NoError(err)
 	key, err := svc.activeSigningKey(rotated)
 	r.NoError(err)

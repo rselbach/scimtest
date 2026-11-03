@@ -109,7 +109,7 @@ func apiRoutes() []apiRoute {
 		{http.MethodPost, "/api/v1/environments/{environment_id}/lifecycle/mover", []string{"user_id", "add_group_ids", "remove_group_ids"}, (*webApp).handleAPILifecycleMover, true},
 		{http.MethodPost, "/api/v1/environments/{environment_id}/lifecycle/leaver", []string{"user_id"}, (*webApp).handleAPILifecycleLeaver, true},
 		{http.MethodGet, "/api/v1/environments/{environment_id}/signing-keys", nil, (*webApp).handleAPISigningKeys, false},
-		{http.MethodPost, "/api/v1/environments/{environment_id}/signing-keys/rotate", []string{"grace_period"}, (*webApp).handleAPISigningKeyRotate, true},
+		{http.MethodPost, "/api/v1/environments/{environment_id}/signing-keys/rotate", []string{"grace_period", "certificate_validity"}, (*webApp).handleAPISigningKeyRotate, true},
 		{http.MethodPost, "/api/v1/environments/{environment_id}/saml/sign-in", []string{"user_id", "login_identifier", "relay_state", "saml_request", "sig_alg", "signature", "redirect_query", "authn_strength"}, (*webApp).handleAPISAMLSignIn, false},
 		{http.MethodGet, "/api/v1/traffic", nil, (*webApp).handleAPITraffic, false},
 		{http.MethodPatch, "/api/v1/traffic/settings", []string{"record", "record_secrets"}, (*webApp).handleAPITrafficSettings, false},

@@ -3,6 +3,7 @@ package web
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
 	"fmt"
 	"math/big"
@@ -69,9 +70,10 @@ func (a *webApp) publishedSigningKeys(state appState, now time.Time) ([]signingK
 
 // rotateSigningKeys retires the active key, keeps it published for grace,
 // drops retired keys whose grace period has ended, and appends a new active
-// key. A ring that never rotated starts from the shared key, so relying
-// parties and service providers that trusted it keep working.
-func (a *webApp) rotateSigningKeys(ring []storedSigningKey, grace time.Duration, now time.Time) ([]storedSigningKey, error) {
+// key whose certificate has the given validity. A ring that never rotated
+// starts from the shared key, so relying parties and service providers that
+// trusted it keep working.
+func (a *webApp) rotateSigningKeys(ring []storedSigningKey, grace time.Duration, validity certificateValidity, now time.Time) ([]storedSigningKey, error) {
 	if len(ring) == 0 {
 		ring = []storedSigningKey{{
 			ID:             sharedSigningKeyID,
@@ -92,7 +94,7 @@ func (a *webApp) rotateSigningKeys(ring []storedSigningKey, grace time.Duration,
 	if err != nil {
 		return nil, fmt.Errorf("generate signing key: %w", err)
 	}
-	certDER, err := selfSignedCert(key)
+	certDER, err := selfSignedCertWithValidity(key, validity, now)
 	if err != nil {
 		return nil, fmt.Errorf("generate signing certificate: %w", err)
 	}
@@ -145,7 +147,7 @@ func parseSigningKeyGrace(raw string) (time.Duration, error) {
 
 // rotateEnvironmentSigningKey rotates one environment's signing key and
 // records the change in its flow activity.
-func (a *webApp) rotateEnvironmentSigningKey(foundApp app, grace time.Duration, now time.Time) (appState, error) {
+func (a *webApp) rotateEnvironmentSigningKey(foundApp app, grace time.Duration, validity certificateValidity, now time.Time) (appState, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	state, err := loadStateForApp(foundApp.ID)
@@ -156,7 +158,7 @@ func (a *webApp) rotateEnvironmentSigningKey(foundApp app, grace time.Duration, 
 	if err != nil {
 		return appState{}, err
 	}
-	ring, err := a.rotateSigningKeys(state.Config.SigningKeys, grace, now)
+	ring, err := a.rotateSigningKeys(state.Config.SigningKeys, grace, validity, now)
 	if err != nil {
 		return appState{}, err
 	}
@@ -164,9 +166,18 @@ func (a *webApp) rotateEnvironmentSigningKey(foundApp app, grace time.Duration, 
 	if err := saveEnvironmentState(state); err != nil {
 		return appState{}, err
 	}
-	detail := fmt.Sprintf("Signing with %s; %s removed from the JWKS and SAML metadata", ring[len(ring)-1].ID, retired.ID)
+	active := ring[len(ring)-1].ID
+	switch validity {
+	case validityExpired:
+		active += " (expired certificate)"
+	case validityNotYetValid:
+		active += " (not-yet-valid certificate)"
+	case validityNoExpiration:
+		active += " (certificate with no expiration)"
+	}
+	detail := fmt.Sprintf("Signing with %s; %s removed from the JWKS and SAML metadata", active, retired.ID)
 	if grace > 0 {
-		detail = fmt.Sprintf("Signing with %s; %s published until %s", ring[len(ring)-1].ID, retired.ID, now.Add(grace).UTC().Format(time.RFC3339))
+		detail = fmt.Sprintf("Signing with %s; %s published until %s", active, retired.ID, now.Add(grace).UTC().Format(time.RFC3339))
 	}
 	a.recordFlowEvent(foundApp.Slug, "keys", "rotate", "ok", "", detail)
 	return state, nil
@@ -179,6 +190,8 @@ type signingKeyView struct {
 	Active         bool   `json:"active"`
 	CreatedAt      string `json:"created_at,omitempty"`
 	PublishedUntil string `json:"published_until,omitempty"`
+	NotBefore      string `json:"not_before"`
+	NotAfter       string `json:"not_after"`
 	CertificatePEM string `json:"certificate_pem"`
 }
 
@@ -189,9 +202,15 @@ func (a *webApp) signingKeyViews(state appState, now time.Time) ([]signingKeyVie
 	}
 	views := make([]signingKeyView, len(keys))
 	for i, key := range keys {
+		cert, err := x509.ParseCertificate(key.CertDER)
+		if err != nil {
+			return nil, fmt.Errorf("parse signing certificate %s: %w", key.ID, err)
+		}
 		views[i] = signingKeyView{
 			ID:             key.ID,
 			Active:         i == 0,
+			NotBefore:      cert.NotBefore.UTC().Format(time.RFC3339),
+			NotAfter:       cert.NotAfter.UTC().Format(time.RFC3339),
 			CertificatePEM: certificatePEM(key.CertDER),
 		}
 		if !key.CreatedAt.IsZero() {
@@ -231,7 +250,12 @@ func (a *webApp) handleSigningKeyRotate(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if _, err := a.rotateEnvironmentSigningKey(foundApp, grace, time.Now()); err != nil {
+	validity, err := parseCertificateValidity(r.FormValue("certificate_validity"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if _, err := a.rotateEnvironmentSigningKey(foundApp, grace, validity, time.Now()); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -273,7 +297,8 @@ func (a *webApp) handleAPISigningKeyRotate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var request struct {
-		GracePeriod string `json:"grace_period"`
+		GracePeriod         string `json:"grace_period"`
+		CertificateValidity string `json:"certificate_validity"`
 	}
 	if r.ContentLength != 0 && decodeAPIJSON(w, r, &request) != nil {
 		return
@@ -283,8 +308,13 @@ func (a *webApp) handleAPISigningKeyRotate(w http.ResponseWriter, r *http.Reques
 		apiError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	validity, err := parseCertificateValidity(request.CertificateValidity)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	now := time.Now()
-	state, err := a.rotateEnvironmentSigningKey(found, grace, now)
+	state, err := a.rotateEnvironmentSigningKey(found, grace, validity, now)
 	if err != nil {
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return

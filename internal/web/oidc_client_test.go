@@ -359,7 +359,7 @@ func TestClientCredentialsUsesRotatedEnvironmentKey(t *testing.T) {
 	svc := jwtAccessTokenTestApp(t, "https://api.greendale.edu")
 	state, err := loadState()
 	r.NoError(err)
-	rotated, err := svc.rotateEnvironmentSigningKey(state.Apps[0], 0, time.Now())
+	rotated, err := svc.rotateEnvironmentSigningKey(state.Apps[0], 0, validityStandard, time.Now())
 	r.NoError(err)
 	key, err := svc.activeSigningKey(rotated)
 	r.NoError(err)

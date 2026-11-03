@@ -9,6 +9,8 @@ SAML metadata for a grace period.
 - `keys-inspector-card` lists published keys in both inspectors.
 - `keys-rotate-ui` rotates from an inspector with a chosen grace period.
 - `keys-rotate-api` rotates through `POST /signing-keys/rotate`.
+- `keys-cert-validity` gives the new key an expired, not-yet-valid, or
+  no-expiration certificate.
 - `keys-publish` lists the active and retired keys in the JWKS and SAML
   metadata, and new tokens carry the new `kid`.
 - `keys-isolation` leaves other environments on their own keys.
@@ -32,8 +34,10 @@ Preconditions:
 - A second environment, such as City College, exists with OIDC enabled.
 
 - **Read the card.** Open `SAML Inspector`. Region `Signing keys` has a table
-  with one row: `scimtest-dev`, `Signing`, `Shared default key`. Combobox
-  `Keep the old key published for` shows `24 hours`. Capture the region.
+  with one row: `scimtest-dev`, `Signing`, `Shared default key`, and the
+  certificate's validity dates. Combobox `Keep the old key published for`
+  shows `24 hours`; combobox `New certificate` shows `Valid for 10 years`.
+  Capture the region.
 - **Rotate.** Select `1 hour` and choose `Rotate signing key`. The page returns
   to the same inspector. The first row now has a new key ID, `Signing`, and a
   creation time. The `scimtest-dev` row reads `Retired, published until`
@@ -42,6 +46,12 @@ Preconditions:
   new `kid` first and `scimtest-dev` second. `/saml/greendale-portal/metadata`
   has two `X509Certificate` elements. A new ID token's header names the new
   `kid`.
+- **Bad certificate dates.** Select `No grace period` and
+  `New certificate: Expired yesterday`, then rotate. The new row's
+  `Certificate valid` ends yesterday, and Recent activity reads
+  `(expired certificate)`. Repeat with `No expiration (9999-12-31)`; the row
+  ends `9999-12-31T23:59:59Z`. `GET /signing-keys` returns the same
+  `not_before` and `not_after`.
 - **Check isolation.** `/oidc/city-college/jwks` still lists only
   `scimtest-dev`.
 - **Check the OIDC entry.** Open `OIDC Inspector`. It shows the same

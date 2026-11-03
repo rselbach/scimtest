@@ -1,9 +1,12 @@
 package web
 
 import (
+	"bytes"
 	"crypto"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -16,6 +19,7 @@ import (
 	"time"
 
 	"github.com/beevik/etree"
+	dsig "github.com/russellhaering/goxmldsig"
 	"github.com/stretchr/testify/require"
 )
 
@@ -131,6 +135,19 @@ func signingKeysSAMLAssertion(t *testing.T, handler http.Handler, environmentID,
 	return findElementByLocalName(mustParseXML(t, string(decoded)).Root(), "Assertion")
 }
 
+func sharedSigningKeyView(t *testing.T, svc *webApp) signingKeyView {
+	t.Helper()
+	cert, err := x509.ParseCertificate(svc.certDER)
+	require.NoError(t, err)
+	return signingKeyView{
+		ID:             sharedSigningKeyID,
+		Active:         true,
+		NotBefore:      cert.NotBefore.UTC().Format(time.RFC3339),
+		NotAfter:       cert.NotAfter.UTC().Format(time.RFC3339),
+		CertificatePEM: certificatePEM(svc.certDER),
+	}
+}
+
 func certificateDER(t *testing.T, pemValue string) []byte {
 	t.Helper()
 	der, err := parseCertificatePEM(pemValue)
@@ -226,12 +243,104 @@ func TestSigningKeyRotationGracePeriod(t *testing.T) {
 	}
 }
 
+func TestSigningKeyRotationCertificateValidity(t *testing.T) {
+	tests := map[string]struct {
+		validity       string
+		wantNotBefore  func(now time.Time) time.Time
+		wantNotAfter   func(now time.Time) time.Time
+		wantDateReject bool
+	}{
+		"default": {
+			wantNotBefore: func(now time.Time) time.Time { return now.Add(-time.Hour) },
+			wantNotAfter:  func(now time.Time) time.Time { return now.AddDate(10, 0, 0) },
+		},
+		"standard": {
+			validity:      "standard",
+			wantNotBefore: func(now time.Time) time.Time { return now.Add(-time.Hour) },
+			wantNotAfter:  func(now time.Time) time.Time { return now.AddDate(10, 0, 0) },
+		},
+		"expired": {
+			validity:       "expired",
+			wantNotBefore:  func(now time.Time) time.Time { return now.AddDate(-1, 0, 0) },
+			wantNotAfter:   func(now time.Time) time.Time { return now.AddDate(0, 0, -1) },
+			wantDateReject: true,
+		},
+		"not yet valid": {
+			validity:       "not_yet_valid",
+			wantNotBefore:  func(now time.Time) time.Time { return now.AddDate(1, 0, 0) },
+			wantNotAfter:   func(now time.Time) time.Time { return now.AddDate(11, 0, 0) },
+			wantDateReject: true,
+		},
+		"no expiration": {
+			validity:      "no_expiration",
+			wantNotBefore: func(now time.Time) time.Time { return now.Add(-time.Hour) },
+			wantNotAfter:  func(time.Time) time.Time { return noWellDefinedExpiration },
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			_, handler := newAcceptanceAPI(t)
+			greendale, troy := signingKeysEnvironment(t, handler, "greendale")
+
+			rotatedAt := time.Now()
+			keys := rotateSigningKeyAPI(t, handler, greendale.ID, fmt.Sprintf(`{"grace_period":"0s","certificate_validity":%q}`, tc.validity))
+			r.Len(keys, 1)
+			der := certificateDER(t, keys[0].CertificatePEM)
+			cert, err := x509.ParseCertificate(der)
+			r.NoError(err)
+			r.WithinDuration(tc.wantNotBefore(rotatedAt), cert.NotBefore, 5*time.Second)
+			r.WithinDuration(tc.wantNotAfter(rotatedAt), cert.NotAfter, 5*time.Second)
+			r.Equal(cert.NotBefore.UTC().Format(time.RFC3339), keys[0].NotBefore)
+			r.Equal(cert.NotAfter.UTC().Format(time.RFC3339), keys[0].NotAfter)
+			r.Equal([][]byte{der}, samlMetadataCertificates(t, handler, "greendale"))
+
+			// The new key signs correctly; only the certificate dates are off,
+			// so a validator that checks dates rejects the assertion and one
+			// with a clock inside the validity period accepts it.
+			assertion := signingKeysSAMLAssertion(t, handler, greendale.ID, troy.ID)
+			validator := dsig.NewDefaultValidationContext(&dsig.MemoryX509CertificateStore{Roots: []*x509.Certificate{cert}})
+			validator.Clock = dsig.NewFakeClockAt(cert.NotBefore.Add(time.Minute))
+			_, err = validator.Validate(assertion.Copy())
+			r.NoError(err)
+			validator.Clock = nil
+			_, err = validator.Validate(assertion)
+			if tc.wantDateReject {
+				r.ErrorContains(err, "not valid at this time")
+				return
+			}
+			r.NoError(err)
+		})
+	}
+}
+
+func TestNoExpirationCertificateUsesGeneralizedTime(t *testing.T) {
+	r := require.New(t)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	r.NoError(err)
+	der, err := selfSignedCertWithValidity(key, validityNoExpiration, time.Now())
+	r.NoError(err)
+	// RFC 5280 encodes 9999-12-31 23:59:59 as a GeneralizedTime (tag 0x18).
+	r.True(bytes.Contains(der, append([]byte{0x18, 15}, "99991231235959Z"...)))
+}
+
+func TestSigningKeyRotationRejectsUnknownCertificateValidity(t *testing.T) {
+	r := require.New(t)
+	_, handler := newAcceptanceAPI(t)
+	greendale, _ := signingKeysEnvironment(t, handler, "greendale")
+
+	rec := acceptanceRequest(t, handler, http.MethodPost, "/api/v1/environments/"+greendale.ID+"/signing-keys/rotate", `{"certificate_validity":"revoked"}`, http.StatusBadRequest)
+	r.Contains(rec.Body.String(), `certificate validity \"revoked\"`)
+	ids, _ := fetchJWKS(t, handler, "greendale")
+	r.Equal([]string{sharedSigningKeyID}, ids, "a rejected rotation leaves the ring alone")
+}
+
 func TestRetiredSigningKeysLeaveAfterGrace(t *testing.T) {
 	r := require.New(t)
 	svc := newTestIDPApp(t)
 	start := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
 
-	ring, err := svc.rotateSigningKeys(nil, time.Hour, start)
+	ring, err := svc.rotateSigningKeys(nil, time.Hour, validityStandard, start)
 	r.NoError(err)
 	state := appState{Config: config{SigningKeys: ring}}
 	published, err := svc.publishedSigningKeys(state, start.Add(59*time.Minute))
@@ -242,7 +351,7 @@ func TestRetiredSigningKeysLeaveAfterGrace(t *testing.T) {
 	r.Len(published, 1)
 	r.Equal(ring[1].ID, published[0].ID)
 
-	ring, err = svc.rotateSigningKeys(ring, time.Hour, start.Add(2*time.Hour))
+	ring, err = svc.rotateSigningKeys(ring, time.Hour, validityStandard, start.Add(2*time.Hour))
 	r.NoError(err)
 	r.Len(ring, 2, "rotation drops keys whose grace period ended")
 	r.Equal(published[0].ID, ring[0].ID)
@@ -258,7 +367,7 @@ func TestSigningKeysArePerEnvironment(t *testing.T) {
 	// environment's ring.
 	cityCollege, dean := signingKeysEnvironment(t, handler, "city-college")
 
-	r.Equal([]signingKeyView{{ID: sharedSigningKeyID, Active: true, CertificatePEM: certificatePEM(svc.certDER)}}, listSigningKeys(t, handler, cityCollege.ID))
+	r.Equal([]signingKeyView{sharedSigningKeyView(t, svc)}, listSigningKeys(t, handler, cityCollege.ID))
 	ids, jwks := fetchJWKS(t, handler, "city-college")
 	r.Equal([]string{sharedSigningKeyID}, ids)
 	r.Equal(sharedSigningKeyID, verifyJWTWithJWKS(t, signingKeysIDToken(t, handler, cityCollege, dean.ID), jwks))
@@ -331,7 +440,7 @@ func TestSigningKeysSurviveBackupRestore(t *testing.T) {
 	legacyBackup, err := json.Marshal(legacy)
 	r.NoError(err)
 	acceptanceRequest(t, handler, http.MethodPost, base+"/restore", string(legacyBackup), http.StatusOK)
-	r.Equal([]signingKeyView{{ID: sharedSigningKeyID, Active: true, CertificatePEM: certificatePEM(svc.certDER)}}, listSigningKeys(t, handler, greendale.ID))
+	r.Equal([]signingKeyView{sharedSigningKeyView(t, svc)}, listSigningKeys(t, handler, greendale.ID))
 	validateSAMLAssertionSignature(t, svc.certDER, signingKeysSAMLAssertion(t, handler, greendale.ID, troy.ID))
 }
 
@@ -355,7 +464,7 @@ func TestInspectorRotatesSigningKey(t *testing.T) {
 			r.Contains(page.Body.String(), "Signing keys")
 			r.Contains(page.Body.String(), sharedSigningKeyID)
 
-			form := url.Values{"return_tab": {tc.returnTab}, "grace_period": {"1h"}}
+			form := url.Values{"return_tab": {tc.returnTab}, "grace_period": {"1h"}, "certificate_validity": {"no_expiration"}}
 			req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8080/inspect/signing-keys/greendale/rotate", strings.NewReader(form.Encode()))
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			rec := httptest.NewRecorder()
@@ -368,13 +477,14 @@ func TestInspectorRotatesSigningKey(t *testing.T) {
 			event := svc.flowEvents("greendale")[0]
 			r.Equal("keys", event.Protocol)
 			r.Equal("rotate", event.Stage)
-			r.Contains(event.Detail, "Signing with "+keys[0].ID)
+			r.Contains(event.Detail, "Signing with "+keys[0].ID+" (certificate with no expiration)")
 
 			page = httptest.NewRecorder()
 			handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/?environment="+greendale.ID+"&tab="+tc.returnTab, nil))
 			r.Equal(http.StatusOK, page.Code)
 			r.Contains(page.Body.String(), keys[0].ID)
 			r.Contains(page.Body.String(), "Retired, published until")
+			r.Contains(page.Body.String(), "9999-12-31T23:59:59Z")
 		})
 	}
 }
