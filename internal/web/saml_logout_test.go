@@ -845,7 +845,7 @@ func TestSAMLLogoutUsesRotatedEnvironmentKey(t *testing.T) {
 			cookie, _ := samlLogoutSignIn(t, svc, "usr-troy")
 			state, err := loadStateForAppSlug("greendale")
 			r.NoError(err)
-			_, err = svc.rotateEnvironmentSigningKey(state.Apps[0], 0, time.Now())
+			_, err = svc.rotateEnvironmentSigningKey(state.Apps[0], 0, validityStandard, time.Now())
 			r.NoError(err)
 			certificates := samlMetadataCertificates(t, svc.routes(), "greendale")
 			r.Len(certificates, 1)

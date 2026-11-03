@@ -188,7 +188,7 @@ All paths in this section are relative to `/environments/{id}`.
 | POST | `/saml/logout` | End a session with a SAML sign-in and return the signed `LogoutRequest` to deliver to the SP. |
 | GET | `/saml/logouts` | IdP-initiated `LogoutRequest`s, newest first, with the SP's answers. |
 | GET | `/signing-keys` | Published signing keys, active key first. |
-| POST | `/signing-keys/rotate` | Sign with a new key and keep the old key published for `grace_period`. |
+| POST | `/signing-keys/rotate` | Sign with a new key, optionally with a deliberately bad `certificate_validity`, and keep the old key published for `grace_period`. |
 | GET | `/inspections/oidc`, `/inspections/saml` | Recent protocol inspections. |
 | GET | `/flows` | Recent flow activity, including failures. |
 | GET, PUT, DELETE | `/faults` | Read, replace, or disarm one-shot faults. |
@@ -269,11 +269,18 @@ string as `redirect_query` instead of splitting its signed fields. This keeps
 the exact encoding needed for signature validation. API URL query parameters
 are not SAML signing inputs.
 
-Each signing key has `kid`, `active`, `created_at`, `published_until`, and
-`certificate_pem`. The shared key that every environment starts with has the
-`kid` `scimtest-dev` and no `created_at`. Rotation accepts an optional
-`grace_period` duration from `0s` to `168h`; the default is `24h`, and `0s`
-removes the old key at once. It returns the new key list. Rotation changes
+Each signing key has `kid`, `active`, `created_at`, `published_until`,
+`not_before`, `not_after`, and `certificate_pem`. The shared key that every
+environment starts with has the `kid` `scimtest-dev` and no `created_at`.
+Rotation accepts an optional `grace_period` duration from `0s` to `168h`; the
+default is `24h`, and `0s` removes the old key at once. It also accepts an
+optional `certificate_validity` for the new key's self-signed certificate:
+`standard` (the default, valid for 10 years), `expired` (expired yesterday),
+`not_yet_valid` (valid from a year from now), or `no_expiration` (`notAfter`
+of `99991231235959Z`, the RFC 5280 value for no well-defined expiration).
+Every option still signs correctly, so a sign-in that fails shows the service
+provider checks certificate dates. OIDC is unaffected because the JWKS does
+not publish certificates. Rotation returns the new key list. Rotation changes
 only the selected environment. Backups include the environment's keys.
 Restoring a backup made before key rotation existed returns the environment
 to the shared key.

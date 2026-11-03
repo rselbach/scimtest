@@ -303,7 +303,11 @@ To test signing key rollover, `GET /environments/{ENV_ID}/signing-keys`, then
 `POST /signing-keys/rotate` under the same environment with an optional
 `grace_period` such as `1h` or `0s`. New tokens and assertions use the new
 `kid` at once, and the old key stays in the JWKS and SAML metadata for the
-grace period. Rotation cannot be undone except by restoring a backup, so
+grace period. To test how an SP treats certificate dates, add
+`certificate_validity`: `expired`, `not_yet_valid`, or `no_expiration`
+(`standard` is the default). The SP must trust the new certificate from the
+metadata or `certificate.pem` first. Rotation cannot be undone except by
+restoring a backup, so
 rotate only an environment the user named. To test JWKS refetch logic, arm
 the `stale-jwks` scenario; its `count` JWKS responses leave out the active
 key.

@@ -377,7 +377,7 @@ func TestLogoutHintUsesEnvironmentKeys(t *testing.T) {
 			state, err := loadState()
 			r.NoError(err)
 			rotate := func() {
-				_, err := svc.rotateEnvironmentSigningKey(state.Apps[0], tc.grace, time.Now())
+				_, err := svc.rotateEnvironmentSigningKey(state.Apps[0], tc.grace, validityStandard, time.Now())
 				r.NoError(err)
 			}
 			if tc.rotateBeforeSignIn {

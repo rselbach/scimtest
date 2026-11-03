@@ -252,7 +252,7 @@ func TestJWTAccessTokensUseRotatedEnvironmentKey(t *testing.T) {
 	first := tokenBody(t, redeemToken(t, svc, authorizeForCode(t, svc, url.Values{"scope": {"openid offline_access"}})))
 	state, err := loadState()
 	r.NoError(err)
-	rotated, err := svc.rotateEnvironmentSigningKey(state.Apps[0], 0, time.Now())
+	rotated, err := svc.rotateEnvironmentSigningKey(state.Apps[0], 0, validityStandard, time.Now())
 	r.NoError(err)
 	key, err := svc.activeSigningKey(rotated)
 	r.NoError(err)
