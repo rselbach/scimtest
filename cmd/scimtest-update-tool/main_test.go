@@ -128,3 +128,12 @@ func TestAppcastSignsArchiveForSparkle(t *testing.T) {
 	r.NoError(err)
 	r.True(ed25519.Verify(key.Public().(ed25519.PublicKey), []byte("scimtest.app"), signature))
 }
+
+// Sparkle refuses an update whose app has no EdDSA key, so the bundle must
+// keep the key the appcast is signed with.
+func TestAppBundleKeepsSparkleKey(t *testing.T) {
+	r := require.New(t)
+	data, err := os.ReadFile(filepath.Join("..", "..", "packaging", "macos", "Info.plist"))
+	r.NoError(err)
+	r.Contains(string(data), "<key>SUPublicEDKey</key>\n\t<string>"+update.PublicKey+"</string>")
+}

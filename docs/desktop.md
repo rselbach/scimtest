@@ -168,8 +168,9 @@ is ready. A copy that cannot replace itself, such as one run from the disk
 image, offers the download instead.
 
 Releases still publish a Sparkle `appcast.xml` signed with the same key, so
-versions from before this updater can update to the current release. Remove it
-once those versions are no longer in use.
+versions from before this updater can update to the current release. Sparkle
+rejects an update whose app drops `SUPublicEDKey`, so `Info.plist` keeps that
+key. Remove both once those versions are no longer in use.
 
 ## GitHub account gate
 

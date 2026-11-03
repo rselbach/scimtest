@@ -35,5 +35,9 @@
 	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<!-- Sparkle rejects an update whose app drops this key, so it stays while
+	     releases publish the legacy appcast. -->
+	<key>SUPublicEDKey</key>
+	<string>2obyIySbPw8xSuXQwzSw2sCbOixUww08jk95se82unc=</string>
 </dict>
 </plist>
