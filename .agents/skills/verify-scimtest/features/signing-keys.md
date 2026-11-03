@@ -49,7 +49,7 @@ Preconditions:
 - **Bad certificate dates.** Select `No grace period` and
   `New certificate: Expired yesterday`, then rotate. The new row's
   `Certificate valid` ends yesterday, and Recent activity reads
-  `(expired certificate)`. Repeat with `No expiration (9999-12-31)`; the row
+  `(expired certificate)`. Repeat with `No expiration`; the row
   ends `9999-12-31T23:59:59Z`. `GET /signing-keys` returns the same
   `not_before` and `not_after`.
 - **Check isolation.** `/oidc/city-college/jwks` still lists only
