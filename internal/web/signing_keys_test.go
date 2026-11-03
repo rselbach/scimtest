@@ -276,6 +276,12 @@ func TestSigningKeyRotationCertificateValidity(t *testing.T) {
 			wantNotBefore: func(now time.Time) time.Time { return now.Add(-time.Hour) },
 			wantNotAfter:  func(time.Time) time.Time { return noWellDefinedExpiration },
 		},
+		"zero time": {
+			validity:       "zero_time",
+			wantNotBefore:  func(now time.Time) time.Time { return now.Add(-time.Hour) },
+			wantNotAfter:   func(time.Time) time.Time { return time.Time{} },
+			wantDateReject: true,
+		},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -295,16 +301,16 @@ func TestSigningKeyRotationCertificateValidity(t *testing.T) {
 			r.Equal(cert.NotAfter.UTC().Format(time.RFC3339), keys[0].NotAfter)
 			r.Equal([][]byte{der}, samlMetadataCertificates(t, handler, "greendale"))
 
-			// The new key signs correctly; only the certificate dates are off,
-			// so a validator that checks dates rejects the assertion and one
-			// with a clock inside the validity period accepts it.
+			// The new key signs correctly; only the certificate dates are off.
+			// A validator that ignores dates, modeled by trusting a copy with
+			// widened dates, accepts the assertion; one that checks them
+			// rejects it.
 			assertion := signingKeysSAMLAssertion(t, handler, greendale.ID, troy.ID)
-			validator := dsig.NewDefaultValidationContext(&dsig.MemoryX509CertificateStore{Roots: []*x509.Certificate{cert}})
-			validator.Clock = dsig.NewFakeClockAt(cert.NotBefore.Add(time.Minute))
-			_, err = validator.Validate(assertion.Copy())
+			undated := *cert
+			undated.NotBefore, undated.NotAfter = time.Time{}, noWellDefinedExpiration
+			_, err = dsig.NewDefaultValidationContext(&dsig.MemoryX509CertificateStore{Roots: []*x509.Certificate{&undated}}).Validate(assertion.Copy())
 			r.NoError(err)
-			validator.Clock = nil
-			_, err = validator.Validate(assertion)
+			_, err = dsig.NewDefaultValidationContext(&dsig.MemoryX509CertificateStore{Roots: []*x509.Certificate{cert}}).Validate(assertion)
 			if tc.wantDateReject {
 				r.ErrorContains(err, "not valid at this time")
 				return
@@ -322,6 +328,20 @@ func TestNoExpirationCertificateUsesGeneralizedTime(t *testing.T) {
 	r.NoError(err)
 	// RFC 5280 encodes 9999-12-31 23:59:59 as a GeneralizedTime (tag 0x18).
 	r.True(bytes.Contains(der, append([]byte{0x18, 15}, "99991231235959Z"...)))
+}
+
+func TestZeroTimeCertificateRoundTripsAsZero(t *testing.T) {
+	r := require.New(t)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	r.NoError(err)
+	der, err := selfSignedCertWithValidity(key, validityZeroTime, time.Now())
+	r.NoError(err)
+	// Go's zero time.Time encodes as a GeneralizedTime in year 1, and a Go
+	// relying party parses it back as the zero value.
+	r.True(bytes.Contains(der, append([]byte{0x18, 15}, "00010101000000Z"...)))
+	cert, err := x509.ParseCertificate(der)
+	r.NoError(err)
+	r.True(cert.NotAfter.IsZero())
 }
 
 func TestSigningKeyRotationRejectsUnknownCertificateValidity(t *testing.T) {

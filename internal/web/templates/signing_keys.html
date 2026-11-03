@@ -1,7 +1,7 @@
 {{define "signing-keys"}}
 <section class="card inspector-card" aria-labelledby="signing-keys-heading">
   <h2 id="signing-keys-heading">Signing keys</h2>
-  <p class="hint">The JWKS and SAML metadata publish these keys. Rotating signs new tokens and assertions with a new key and keeps the old key published for the grace period, so you can test how your app refetches keys and replaces a pinned certificate. An expired, not-yet-valid, or no-expiration certificate tests whether your app checks certificate dates; the new key still signs correctly.</p>
+  <p class="hint">The JWKS and SAML metadata publish these keys. Rotating signs new tokens and assertions with a new key and keeps the old key published for the grace period, so you can test how your app refetches keys and replaces a pinned certificate. An expired, not-yet-valid, or no-expiration certificate tests whether your app checks certificate dates; the new key still signs correctly. No expiration uses 9999-12-31, the RFC 5280 value; Go zero time uses 0001-01-01, what a Go issuer that never sets the date produces.</p>
   <div class="table-wrap"><table>
     <thead><tr><th>Key ID</th><th>Status</th><th>Created</th><th>Certificate valid</th></tr></thead>
     <tbody>
@@ -30,6 +30,7 @@
         <option value="expired">Expired yesterday</option>
         <option value="not_yet_valid">Not valid until next year</option>
         <option value="no_expiration">No expiration</option>
+        <option value="zero_time">No expiration (Go zero time)</option>
       </select>
     </label>
     <div class="form-actions"><button class="btn" type="submit">Rotate signing key</button></div>

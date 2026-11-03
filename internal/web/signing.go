@@ -22,6 +22,7 @@ const (
 	validityExpired      certificateValidity = "expired"
 	validityNotYetValid  certificateValidity = "not_yet_valid"
 	validityNoExpiration certificateValidity = "no_expiration"
+	validityZeroTime     certificateValidity = "zero_time"
 )
 
 // noWellDefinedExpiration is the notAfter value RFC 5280 section 4.1.2.5
@@ -34,16 +35,19 @@ func parseCertificateValidity(raw string) (certificateValidity, error) {
 	switch validity {
 	case "":
 		return validityStandard, nil
-	case validityStandard, validityExpired, validityNotYetValid, validityNoExpiration:
+	case validityStandard, validityExpired, validityNotYetValid, validityNoExpiration, validityZeroTime:
 		return validity, nil
 	default:
-		return "", fmt.Errorf("certificate validity %q is not standard, expired, not_yet_valid, or no_expiration", raw)
+		return "", fmt.Errorf("certificate validity %q is not standard, expired, not_yet_valid, no_expiration, or zero_time", raw)
 	}
 }
 
 // period returns the certificate's notBefore and notAfter relative to now.
 // A not-yet-valid certificate starts a year out so it stays invalid for a
-// whole test session.
+// whole test session. A zero-time certificate has Go's zero time.Time as
+// notAfter, as a Go issuer that never sets NotAfter produces; it encodes as
+// 00010101000000Z, which strict validators read as long expired and code
+// that checks NotAfter.IsZero() may read as never expiring.
 func (v certificateValidity) period(now time.Time) (time.Time, time.Time) {
 	switch v {
 	case validityExpired:
@@ -52,6 +56,8 @@ func (v certificateValidity) period(now time.Time) (time.Time, time.Time) {
 		return now.AddDate(1, 0, 0), now.AddDate(11, 0, 0)
 	case validityNoExpiration:
 		return now.Add(-time.Hour), noWellDefinedExpiration
+	case validityZeroTime:
+		return now.Add(-time.Hour), time.Time{}
 	default:
 		return now.Add(-time.Hour), now.AddDate(10, 0, 0)
 	}

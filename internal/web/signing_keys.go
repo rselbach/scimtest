@@ -174,6 +174,8 @@ func (a *webApp) rotateEnvironmentSigningKey(foundApp app, grace time.Duration, 
 		active += " (not-yet-valid certificate)"
 	case validityNoExpiration:
 		active += " (certificate with no expiration)"
+	case validityZeroTime:
+		active += " (certificate with zero-time expiration)"
 	}
 	detail := fmt.Sprintf("Signing with %s; %s removed from the JWKS and SAML metadata", active, retired.ID)
 	if grace > 0 {

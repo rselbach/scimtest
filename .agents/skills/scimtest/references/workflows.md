@@ -304,7 +304,8 @@ To test signing key rollover, `GET /environments/{ENV_ID}/signing-keys`, then
 `grace_period` such as `1h` or `0s`. New tokens and assertions use the new
 `kid` at once, and the old key stays in the JWKS and SAML metadata for the
 grace period. To test how an SP treats certificate dates, add
-`certificate_validity`: `expired`, `not_yet_valid`, or `no_expiration`
+`certificate_validity`: `expired`, `not_yet_valid`, `no_expiration`
+(RFC 5280's 9999-12-31), or `zero_time` (Go's zero time, 0001-01-01)
 (`standard` is the default). The SP must trust the new certificate from the
 metadata or `certificate.pem` first. Rotation cannot be undone except by
 restoring a backup, so

@@ -276,8 +276,10 @@ Rotation accepts an optional `grace_period` duration from `0s` to `168h`; the
 default is `24h`, and `0s` removes the old key at once. It also accepts an
 optional `certificate_validity` for the new key's self-signed certificate:
 `standard` (the default, valid for 10 years), `expired` (expired yesterday),
-`not_yet_valid` (valid from a year from now), or `no_expiration` (`notAfter`
-of `99991231235959Z`, the RFC 5280 value for no well-defined expiration).
+`not_yet_valid` (valid from a year from now), `no_expiration` (`notAfter`
+of `99991231235959Z`, the RFC 5280 value for no well-defined expiration), or
+`zero_time` (`notAfter` of `00010101000000Z`, Go's zero `time.Time`, which a
+Go issuer that never sets `NotAfter` produces).
 Every option still signs correctly, so a sign-in that fails shows the service
 provider checks certificate dates. OIDC is unaffected because the JWKS does
 not publish certificates. Rotation returns the new key list. Rotation changes

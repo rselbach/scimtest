@@ -9,8 +9,8 @@ SAML metadata for a grace period.
 - `keys-inspector-card` lists published keys in both inspectors.
 - `keys-rotate-ui` rotates from an inspector with a chosen grace period.
 - `keys-rotate-api` rotates through `POST /signing-keys/rotate`.
-- `keys-cert-validity` gives the new key an expired, not-yet-valid, or
-  no-expiration certificate.
+- `keys-cert-validity` gives the new key an expired, not-yet-valid,
+  no-expiration, or Go zero-time certificate.
 - `keys-publish` lists the active and retired keys in the JWKS and SAML
   metadata, and new tokens carry the new `kid`.
 - `keys-isolation` leaves other environments on their own keys.
@@ -50,7 +50,8 @@ Preconditions:
   `New certificate: Expired yesterday`, then rotate. The new row's
   `Certificate valid` ends yesterday, and Recent activity reads
   `(expired certificate)`. Repeat with `No expiration`; the row
-  ends `9999-12-31T23:59:59Z`. `GET /signing-keys` returns the same
+  ends `9999-12-31T23:59:59Z`. Repeat with `No expiration (Go zero time)`;
+  the row ends `0001-01-01T00:00:00Z`. `GET /signing-keys` returns the same
   `not_before` and `not_after`.
 - **Check isolation.** `/oidc/city-college/jwks` still lists only
   `scimtest-dev`.
