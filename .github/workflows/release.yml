@@ -9,22 +9,23 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version to embed in preview desktop artifacts
+        description: Numeric beta version (0.0.0 disables the beta's updater)
         required: true
         default: "0.0.0"
         type: string
       desktop_implementation:
-        description: Desktop implementation for signed preview artifacts
+        description: Desktop implementation for a manual beta (artifacts only)
         required: true
-        default: go
+        default: rust
         type: choice
-        options: [go, rust]
+        options: [rust, go]
 
 permissions:
   contents: read
 
 env:
-  RELEASE_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.version || '0.0.0' }}
+  GOFLAGS: -mod=readonly
+  RELEASE_VERSION: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.version || '0.0.0' }}
   DESKTOP_IMPLEMENTATION: ${{ inputs.desktop_implementation || 'go' }}
   DESKTOP_BACKEND: ${{ inputs.desktop_implementation == 'rust' && 'gpui' || 'webview' }}
 
@@ -34,6 +35,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Validate desktop version
+        shell: bash
+        run: |
+          version="${RELEASE_VERSION#v}"
+          if [[ ! "${version}" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+            echo "::error::Use one to three numeric version components, such as 0.0.0"
+            exit 1
+          fi
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -47,8 +56,8 @@ jobs:
         if: env.DESKTOP_IMPLEMENTATION == 'rust'
         run: |
           cargo fmt --all -- --check
-          cargo clippy -p scimtest-core --all-targets --locked -- -D warnings
-          cargo test -p scimtest-core --locked
+          cargo clippy -p scimtest-core -p scimtest-server -p scimtest-protocol --all-targets --locked -- -D warnings
+          cargo test -p scimtest-core -p scimtest-server -p scimtest-protocol --locked
 
   release-notes:
     name: Generate release notes
@@ -60,7 +69,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Generate tagged release notes
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: rselbach/actions/pi-release-notes@pi-release-notes-v1
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -69,12 +78,13 @@ jobs:
           project-description: Local identity provider and SCIM client for testing OIDC, SAML, and SCIM integrations.
           output-file: build/release-notes.md
       - name: Write preview release notes
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           mkdir -p build
-          printf '# scimtest %s\n\nDevelopment preview build.\n' \
-            "${RELEASE_VERSION}" > build/release-notes.md
+          printf '# scimtest %s\n\nDevelopment %s beta.\n\nCommit: %s\nBuild: %s\n' \
+            "${RELEASE_VERSION}" "${DESKTOP_IMPLEMENTATION}" \
+            "${GITHUB_SHA}" "${GITHUB_RUN_NUMBER}" > build/release-notes.md
       - uses: actions/upload-artifact@v7
         with:
           name: scimtest-release-notes
@@ -538,6 +548,33 @@ jobs:
           fi
           rm -f "${RUNNER_TEMP}/developer-id.p12"
 
+  beta-summary:
+    name: Manual beta downloads
+    if: github.event_name == 'workflow_dispatch'
+    needs:
+      - package-desktop
+      - package-desktop-linux
+      - package-desktop-linux-native
+    runs-on: ubuntu-latest
+    steps:
+      - name: Describe beta artifacts
+        shell: bash
+        run: |
+          {
+            printf '## Manual %s beta\n\n' "${DESKTOP_IMPLEMENTATION}"
+            printf 'Version: **%s** · build: **%s**\n\n' \
+              "${RELEASE_VERSION}" "${GITHUB_RUN_NUMBER}"
+            printf 'Source: [%s](%s/%s/commit/%s)\n\n' \
+              "${GITHUB_SHA}" "${GITHUB_SERVER_URL}" \
+              "${GITHUB_REPOSITORY}" "${GITHUB_SHA}"
+            printf 'Download artifacts from this run within seven days:\n\n'
+            printf -- '- **scimtest-desktop-release**: signed, notarized macOS ZIP, DMG and checksums.\n'
+            printf -- '- **scimtest-desktop-linux-release**: Debian package and checksums.\n'
+            printf -- '- **scimtest-desktop-linux-rpm-release**: Fedora RPM and checksums.\n'
+            printf -- '- **scimtest-desktop-linux-arch-release**: Arch package and checksums.\n\n'
+            printf 'This beta is available by manual download only. It is not offered as an automatic update.\n'
+          } >>"${GITHUB_STEP_SUMMARY}"
+
   release-server:
     name: Publish server release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
@@ -614,7 +651,7 @@ jobs:
 
   update-feed:
     name: Sign update feed
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs:
       - release-notes
       - package-desktop
@@ -694,7 +731,7 @@ jobs:
 
   deploy-appcast:
     name: Publish update feeds
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs:
       - release-desktop
       - update-feed

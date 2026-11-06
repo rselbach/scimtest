@@ -475,11 +475,37 @@ Debian, RPM, and Arch packages, installs the Linux packages, and checks window
 startup, account protection, saved-port restart, and shutdown with disposable
 state. Its tunnel profile points to an unavailable loopback server.
 
-For a signed Rust preview, manually dispatch **Release** with
-`desktop_implementation=rust` and the desired version. It uses the existing
-Developer ID, notarization, signed feed, and Homebrew packaging path; manual
-preview runs upload artifacts without publishing them. Tagged releases still
-select Go until the remaining acceptance checks pass.
+For a beta you can download and test manually, dispatch **Release** on the
+rewrite branch. Manual runs default to Rust and upload Actions artifacts for
+seven days. They use the existing Developer ID signing and notarization steps.
+They cannot publish a GitHub release, sign or deploy the stable update feed or
+legacy Sparkle appcast, or update the Homebrew cask, even when dispatched on a
+tag. Installed stable versions discover updates only through those feeds.
+Tagged releases still select Go until the remaining acceptance checks pass.
+
+After pushing the branch, start a beta with:
+
+```sh
+gh workflow run release.yml --ref rselbach/rust-gpui-rewrite \
+  -f desktop_implementation=rust -f version=0.0.0
+gh run list --workflow release.yml --branch rselbach/rust-gpui-rewrite
+gh run download <run-id> --name scimtest-desktop-release --dir build/rust-beta
+```
+
+Wait for the run to finish before downloading. Its **Manual beta downloads**
+summary lists the macOS and Linux artifacts. The macOS artifact contains the
+signed, notarized ZIP and DMG plus checksums; verify the files with
+`shasum -a 256 -c scimtest-desktop_0.0.0_checksums.txt` from the download folder.
+The default `0.0.0` also disables the beta's own updater. App versions must have
+one to three numeric components; the source commit and Actions build number in
+What's New identify each beta. Keep the installed app and extract the beta ZIP
+to a separate folder for testing. Quit the installed app before opening the
+beta. Rust uses its separate preview state by default, so an ordinary launch
+does not migrate the installed Go app's data.
+
+Use manual dispatch for betas; `v*` tag pushes run the normal release pipeline.
+Dispatching the signed workflow includes notarization, which remains pending
+until the earlier notarization deferral is lifted.
 
 Build a release executable locally with the public application profile ID:
 
