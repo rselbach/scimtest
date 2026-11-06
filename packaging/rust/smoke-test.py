@@ -82,10 +82,13 @@ def main():
                             time.sleep(0.1)
                         else:
                             raise RuntimeError("native GPUI window did not appear")
-                    time.sleep(0.5)
-                    process.send_signal(signal.SIGTERM)
-                    if process.wait(timeout=10) != 0:
-                        raise RuntimeError("desktop shutdown failed")
+                    with socket.create_connection(("127.0.0.1", port), timeout=5) as pending:
+                        # Keep an unfinished request open during bounded shutdown.
+                        pending.sendall(b"GET /-/ready HTTP/1.1\r\nHost: localhost\r\n")
+                        time.sleep(0.5)
+                        process.send_signal(signal.SIGTERM)
+                        if process.wait(timeout=10) != 0:
+                            raise RuntimeError("desktop shutdown failed")
                     if lock.read_bytes():
                         raise RuntimeError("desktop did not clear its instance metadata")
                 except Exception:

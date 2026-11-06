@@ -52,8 +52,6 @@ fn main() -> Result<()> {
     eprintln!("Preview state: {}", service.state_file.display());
     let service = Rc::new(RefCell::new(Some(service)));
     let quitting_service = service.clone();
-    let stopped = Rc::new(RefCell::new(None));
-    let quitting_task = stopped.clone();
     let quitting_executor = executor.handle().clone();
     let termination = executor.spawn(scimtest_core::runtime::wait_for_termination());
     let application = gpui_platform::application().with_assets(assets::Assets);
@@ -75,7 +73,10 @@ fn main() -> Result<()> {
         .detach();
         cx.on_app_quit(move |_| {
             if let Some(service) = quitting_service.borrow_mut().take() {
-                *quitting_task.borrow_mut() = Some(quitting_executor.spawn(service.shutdown()));
+                // AppKit can exit without returning from application.run().
+                if let Err(error) = quitting_executor.block_on(service.shutdown()) {
+                    eprintln!("Shutdown scimtest: {error:#}");
+                }
             }
             async {}
         })
@@ -132,11 +133,7 @@ fn main() -> Result<()> {
     if let Some(task) = update_task {
         executor.block_on(task).context("Join update worker")?;
     }
-    if let Some(task) = stopped.borrow_mut().take() {
-        executor
-            .block_on(task)
-            .context("Join scimtest shutdown")??;
-    } else if let Some(service) = service.borrow_mut().take() {
+    if let Some(service) = service.borrow_mut().take() {
         executor.block_on(service.shutdown())?;
     }
     if let Some(updater) = updater
