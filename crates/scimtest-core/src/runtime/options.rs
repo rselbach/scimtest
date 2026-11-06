@@ -3,9 +3,9 @@ use std::{ffi::OsString, path::PathBuf};
 
 #[derive(Clone, Debug, Default, Parser)]
 #[command(name = "scimtest", version = version(), about = "scimtest identity test environment", args_override_self = true,
-    after_help = "Environment:\n  SCIMTEST_STATE_FILE       SQLite state file\n  SCIMTEST_RUST_STATE_FILE  Rust preview state-file alias\n  SCIMTEST_PORT             Require this admin port\n  PORT                     Deprecated port alias")]
+    after_help = "Environment:\n  SCIMTEST_STATE_FILE       SQLite state file\n  SCIMTEST_PORT             Require this admin port\n  PORT                     Deprecated port alias")]
 pub struct Options {
-    /// SQLite state file. Defaults to a separate Rust preview directory.
+    /// SQLite state file. Defaults to the shared user config directory.
     #[arg(long)]
     pub state_file: Option<PathBuf>,
     /// Require this loopback API port; otherwise prefer the last port or 8080.
@@ -32,11 +32,6 @@ impl Options {
             .filter(|path| !path.as_os_str().is_empty())
             .or_else(|| {
                 std::env::var_os("SCIMTEST_STATE_FILE")
-                    .filter(|value| !value.is_empty())
-                    .map(PathBuf::from)
-            })
-            .or_else(|| {
-                std::env::var_os("SCIMTEST_RUST_STATE_FILE")
                     .filter(|value| !value.is_empty())
                     .map(PathBuf::from)
             });

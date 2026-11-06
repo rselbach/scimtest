@@ -9,7 +9,7 @@ standard library. It needs no client package.
 Run the source application with a separate state file:
 
 ```sh
-cargo run --locked -p scimtest-core --bin scimtest-rust -- --no-open --state-file /tmp/greendale-agent/state.db
+cargo run --locked -p scimtest-core --bin scimtest -- --no-open --state-file /tmp/greendale-agent/state.db
 ```
 
 Keep that process running. In another terminal, run the example below. The
@@ -18,8 +18,8 @@ avoids guessing the port, which can change between installations.
 
 For an already running desktop app, replace the path with its state file.
 The default on macOS is
-`~/Library/Application Support/scimtest-rust/state.db`. On Linux it is
-`${XDG_CONFIG_HOME:-$HOME/.config}/scimtest-rust/state.db`. A desktop build still
+`~/Library/Application Support/scimtest/state.db`. On Linux it is
+`${XDG_CONFIG_HOME:-$HOME/.config}/scimtest/state.db`. A desktop build still
 requires its normal GitHub account sign-in. `GET /api/v1/account` reports its
 authorization state and enrollment details.
 

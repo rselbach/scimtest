@@ -262,12 +262,12 @@ pencil button to edit a resource and its **···** menu for history, activation
 or restore. **Set up this environment** opens the configuration sections.
 **Tools** provides directory actions and backup save/restore.
 
-The default database remains separate from the Go installation:
-`<user-config-directory>/scimtest-rust/state.db`. On macOS this is
-`~/Library/Application Support/scimtest-rust/state.db`; on Linux it normally
-uses `~/.config/scimtest-rust/state.db`.
+The default database is shared with the Go installation:
+`<user-config-directory>/scimtest/state.db`. On macOS this is
+`~/Library/Application Support/scimtest/state.db`; on Linux it normally
+uses `~/.config/scimtest/state.db`.
 
-Choose a different file with `--state-file` or `SCIMTEST_RUST_STATE_FILE`:
+Choose a different file with `--state-file` or `SCIMTEST_STATE_FILE`:
 
 ```sh
 cargo run --locked -p scimtest-desktop -- \
@@ -276,8 +276,8 @@ cargo run --locked -p scimtest-desktop -- \
 
 The preview can read and write current Go schema version 8. Its runtime
 shares the Go app's canonical instance lock and acquires it before opening
-or migrating state. The default uses separate state so the preview can run
-alongside the installed app. When SQLite state is empty, the preview imports
+or migrating state. Because the default path matches the Go app's, installing
+the preview over it keeps existing environments. When SQLite state is empty, the preview imports
 the sibling `state.json` once, preserving the JSON and saving a private copy.
 Old directories without apps become a Default environment so their identities
 remain accessible.
@@ -285,7 +285,7 @@ remain accessible.
 Run the same service without a window:
 
 ```sh
-cargo run --locked -p scimtest-core --bin scimtest-rust -- \
+cargo run --locked -p scimtest-core --bin scimtest -- \
   --state-file /tmp/greendale-rust/state.db
 ```
 

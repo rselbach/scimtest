@@ -25,7 +25,7 @@ run:
   cargo run --locked -p scimtest-desktop
 
 run-api:
-  cargo run --locked -p scimtest-core --bin scimtest-rust
+  cargo run --locked -p scimtest-core --bin scimtest
 
 run-server:
   cargo run --locked -p scimtest-server

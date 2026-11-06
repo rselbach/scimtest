@@ -22,7 +22,7 @@ async fn headless_sigterm_clears_metadata_and_allows_a_clean_restart() {
     drop(occupied);
     let mut previous_url = None;
     for _ in 0..2 {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_scimtest-rust"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_scimtest"));
         command
             .arg("--no-open")
             .env("SCIMTEST_STATE_FILE", &path)

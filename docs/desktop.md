@@ -17,7 +17,7 @@ Start the desktop or the headless API:
 
 ```sh
 cargo run --locked -p scimtest-desktop
-cargo run --locked -p scimtest-core --bin scimtest-rust -- --no-open
+cargo run --locked -p scimtest-core --bin scimtest -- --no-open
 ```
 
 Source builds work locally without GitHub enrollment. Their default state is

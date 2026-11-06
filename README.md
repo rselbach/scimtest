@@ -68,7 +68,7 @@ identity, so the public tunnel is unavailable and OIDC/SAML are served on
 this machine only:
 
 ```sh
-cargo run --locked -p scimtest-core --bin scimtest-rust --
+cargo run --locked -p scimtest-core --bin scimtest --
 ```
 
 ### Desktop app
@@ -440,13 +440,13 @@ nearby free port. `--port` and the environment variables pin the exact
 port; startup fails if it cannot be bound.
 
 **State.** State lives at the OS user config path under
-`scimtest-rust/state.db`. Use `--state-file` (or `SCIMTEST_STATE_FILE`) for an
+`scimtest/state.db`. Use `--state-file` (or `SCIMTEST_STATE_FILE`) for an
 isolated state file — also how you run a second instance next to a running
 one, since only one process runs per state file; launching `scimtest`
 again just opens the existing admin UI. Before schema migrations, a copy
 of the database is written to a `backups/` directory next to it.
 
-**Headless API runner.** `cargo run --locked -p scimtest-core --bin scimtest-rust -- --help` lists the
+**Headless API runner.** `cargo run --locked -p scimtest-core --bin scimtest -- --help` lists the
 development CLI flags. Use `--no-open` to start without opening a browser and
 `--debug` to print redacted OIDC and SAML interactions to stdout
 (`--debug-secrets` includes raw credentials; its output is sensitive). This

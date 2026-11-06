@@ -313,7 +313,7 @@ impl Drop for Runtime {
 
 fn default_state_path() -> Result<PathBuf> {
     let directory = dirs::config_dir().context("Find the user configuration directory")?;
-    Ok(directory.join("scimtest-rust").join("state.db"))
+    Ok(directory.join("scimtest").join("state.db"))
 }
 
 fn canonical_state_path(path: &Path) -> Result<PathBuf> {
