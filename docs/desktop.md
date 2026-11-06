@@ -45,7 +45,7 @@ Desktop builds use CGO and require an Apple silicon Mac with Xcode Command Line
 Tools. Inject the same public application profile ID used by release builds:
 
 ```sh
-go build -tags desktop \
+go build -mod=readonly -tags desktop \
   -ldflags="-X=github.com/rselbach/scimtest/internal/web.tunnelApplicationProfileID=$SCIMTEST_APPLICATION_PROFILE_ID -X=github.com/rselbach/scimtest/internal/web.tunnelReleaseProfileRequired=true" \
   -o scimtest-desktop ./cmd/scimtest-desktop
 ```
@@ -55,7 +55,7 @@ Release builds set `MACOSX_DEPLOYMENT_TARGET=26.0`.
 Run the macOS desktop tests:
 
 ```sh
-go test -tags desktop ./cmd/scimtest-desktop
+go test -mod=readonly -tags desktop ./cmd/scimtest-desktop
 ```
 
 ## Build locally on Linux

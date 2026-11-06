@@ -25,6 +25,9 @@ on:
 permissions:
   contents: read
 
+env:
+  GOFLAGS: -mod=readonly
+
 jobs:
   build:
     name: scimtest-desktop-darwin-arm64

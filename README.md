@@ -68,7 +68,7 @@ identity, so the public tunnel is unavailable and OIDC/SAML are served on
 this machine only:
 
 ```sh
-go run ./cmd/scimtest
+go run -mod=readonly ./cmd/scimtest
 ```
 
 ### Desktop app
@@ -447,7 +447,7 @@ one, since only one process runs per state file; launching `scimtest`
 again just opens the existing admin UI. Before schema migrations, a copy
 of the database is written to a `backups/` directory next to it.
 
-**Source-only browser runner.** `go run ./cmd/scimtest --help` lists the
+**Source-only browser runner.** `go run -mod=readonly ./cmd/scimtest --help` lists the
 development CLI flags. Use `--no-open` to start without opening a browser and
 `--debug` to print redacted OIDC and SAML interactions to stdout
 (`--debug-secrets` includes raw credentials; its output is sensitive). This

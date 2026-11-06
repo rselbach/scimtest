@@ -43,7 +43,7 @@ legacy key separately disables authentication for every remaining legacy record.
 ```sh
 SCIMTEST_GITHUB_CLIENT_ID=... \
 SCIMTEST_GITHUB_CLIENT_SECRET=... \
-go run ./cmd/scimtest-server \
+go run -mod=readonly ./cmd/scimtest-server \
   --addr :7000 \
   --domain localhost:7000 \
   --dashboard-domain admin.localhost:7000 \
