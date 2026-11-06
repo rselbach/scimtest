@@ -6,7 +6,7 @@ set -euo pipefail
 stage_dir=""
 
 usage() {
-  echo "usage: $0 BINARY OUTPUT_DEB VERSION ARCHITECTURE [webview|gpui]" >&2
+  echo "usage: $0 BINARY OUTPUT_DEB VERSION ARCHITECTURE" >&2
 }
 
 cleanup() {
@@ -16,7 +16,7 @@ cleanup() {
 }
 
 main() {
-  if (( $# < 4 || $# > 5 )); then
+  if (( $# != 4 )); then
     usage
     return 2
   fi
@@ -28,17 +28,9 @@ main() {
   local script_dir
   local version="$3"
   local dependencies
-  case "${5:-webview}" in
-    webview)
-      dependencies="ca-certificates, libgtk-3-0t64, libwebkit2gtk-4.1-0, xdg-utils"
-      ;;
-    gpui)
-      dependencies="ca-certificates, libfontconfig1, libfreetype6, libxcb1, "
-      dependencies+="libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, "
-      dependencies+="libwayland-cursor0, libvulkan1, xdg-utils"
-      ;;
-    *) echo "unsupported desktop backend: $5" >&2; return 2 ;;
-  esac
+  dependencies="ca-certificates, libfontconfig1, libfreetype6, libxcb1, "
+  dependencies+="libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, "
+  dependencies+="libwayland-cursor0, libvulkan1, xdg-utils"
 
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   project_root="$(cd "${script_dir}/../.." && pwd)"

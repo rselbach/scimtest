@@ -134,7 +134,7 @@ impl State {
             let mut response = text_response(
                 StatusCode::OK,
                 "application/javascript; charset=utf-8",
-                include_str!("../../../internal/server/templates/dashboard.js"),
+                include_str!("../templates/dashboard.js"),
             );
             response
                 .headers_mut()

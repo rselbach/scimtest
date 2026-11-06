@@ -47,7 +47,7 @@ impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
         if path == "app-icon.png" {
             return Ok(Some(Cow::Borrowed(include_bytes!(
-                "../../../internal/web/assets/app-icon.png"
+                "../assets/app-icon.png"
             ))));
         }
         Ok(ICONS

@@ -230,9 +230,10 @@ Broader VoiceOver workflows for protocols, provisioning, lifecycle results,
 reader links and other controls, native AT-SPI reader selection, and remaining
 keyboard coverage are deferred to that future accessibility pass.
 
-Shared Go/Rust acceptance now includes tunnel enrollment, account switching,
+Earlier Go/Rust comparison runs covered tunnel enrollment, account switching,
 recovery, identity forwarding, local route isolation, and reconnect/restart
-stability. The current Developer ID signed macOS app and DMG pass startup,
+stability. These comparisons are historical evidence; their harnesses have been
+removed. The previously checked Developer ID signed macOS app and DMG pass startup,
 saved-port restart and shutdown checks. ARM64 Debian and RPM packages also pass
 installation, native-window, and runtime smoke checks. A final current-source
 AMD64 pass repeats these checks on Ubuntu 24.04, Fedora 44, and rolling Arch
@@ -241,8 +242,8 @@ current signed artifact with quarantine intact; macOS then blocks it before
 Rust starts and reports that Apple could not verify it is free of malware.
 The updater's production verifier accepts the existing notarized app and
 correctly rejects the new signed but unnotarized Rust candidate. Notarization,
-quarantined launch and installation of a notarized Rust update remain pending
-at the user's request.
+quarantined launch and installation of a notarized Rust update remain part of
+beta release validation.
 The remaining work is tracked in [the parity checklist](rust-parity.md).
 
 ## Run
@@ -327,7 +328,7 @@ Supported paths include configuration, environments, users, groups, bulk
 selection, restore, operation history, directory tools, and backup/restore.
 Public protocol endpoints under `/oidc/{slug}` and `/saml/{slug}` do not require the instance
 token. They still enforce the local Host boundary. The catalog lists only
-implemented management routes. The complete Go contract is
+implemented management routes. The contract is
 specified in [the API guide](api.md).
 
 PATCH preserves omitted fields and accepts explicit `false`, empty strings,
@@ -341,153 +342,40 @@ Changing the SCIM endpoint resets remote tracking, matching the Go app.
 
 ## Verification
 
-`scimtest-core` owns models, SQLite transactions, validation, backups, the
-Axum API, and listener lifecycle. `scimtest-desktop` owns GPUI presentation
-and runs disk operations off the UI thread.
-
-The compatibility tests create isolated state with the actual Go core,
-mutate it through Rust, and reopen it with Go. They compare legacy SQLite
-migrations and verify backup restore in both directions, including signing
-material, installation credentials, sync state, history, and unrelated
-configuration. Go also verifies Rust JWT/XML signatures, decrypts encrypted SAML
-assertions, and signs Redirect requests for Rust to verify. The test suite requires
-Go from `go.mod` as well as Rust.
-
-The hosted-service rewrite includes a `scimtest-server` executable. It reads and
-writes the Go server's JSON store, preserving profiles, dashboard sessions,
-enrolled identities, revocations, timestamps and tunnel-name reservations.
-Integration tests exchange saved state with the actual Go store in both
-directions and compare route rules, key parsing and identity fingerprints with
-Go. Tests also cover failed-write rollback, concurrent reservations, idle cleanup,
-capacity limits and token-bucket refill. The executable serves health/readiness,
-aggregate metrics, the original landing page and signed WebSocket tunnels.
-GitHub OAuth uses PKCE, expiring single-use login state and host-only dashboard
-cookies. New installations can compare their verification code or use the
-single-use browser handoff, authorize with GitHub, poll and redeem a grant
-bound to their exact signing key. GitHub access tokens stay on the server;
-pending enrollment credentials stay in memory and are excluded from saved state
-and the desktop's account information. Installation limits count
-approved setups that have not connected; the replacement chooser can cancel
-those setups or explicitly revoke and disconnect an existing installation.
-Dashboard controls create, edit and delete profiles, release reserved names,
-revoke or restore installations, disconnect tunnels and sign out. The pages
-retain the Go service's styles and text with escaped template values.
-Real Go clients exchange binary HTTP bodies
-through Rust using enrolled and legacy signatures. Tests cover route/host/origin
-boundaries, trusted proxy headers, hop-header removal, preserved reservations,
-duplicate connections, body/rate/concurrency limits, status clamping and pending
-request cancellation. A small WebSocket patch changes the registration size limit
-after authentication without discarding buffered frames. The client and server
-share `scimtest-protocol` for wire messages, Base64 bodies and numeric ranges.
-CLI checks load actual Go state, stop with SIGTERM, reuse the port and preserve
-the state file exactly. The deployed public service is still Go. Real Go-client
-tests now cover first
-enrollment, polling and forwarding. The current Rust client also enrolls,
-recovers after revocation/retry, switches from Troy to Abed with a new identity,
-and restarts with its saved public URL against the Rust service. Additional
-tests cover OAuth replay, grant binding, concurrent redemption, failed-write
-recovery, CSRF, account ownership, expiration and network limits.
-Current macOS and Linux ARM64 checks pass 43 server tests, two protocol tests,
-ten client/export regressions, service Clippy and Go race tests for
-the original server/auth/client/protocol/header packages. Shared policies include
-421 route/key comparisons, 342 confirmation-origin comparisons and 36 enrollment
-status/network comparisons with Go, with matching source hashes on both platforms.
-Five shared full-server acceptance tests add 75 complete-router comparisons and
-cover dashboard sessions/CSRF/profile management, installation key binding,
-replacement ownership, revocation and cancellation of an unconnected setup.
-The same browser workflow passes against Go and Rust, including OAuth cookies,
-profile confirmations, enrollment, narrow layouts, live refresh, replacement,
-revoke/restore, saved-name release and logout. A live executable rehearsal keeps
-the actual Go client and Rust desktop runtime running through
-Go → Rust → Go rollback → Rust, preserving identity exchanges, keys, names,
-dashboard sessions and state written by each implementation. An older Go-server
-registration race found by this rehearsal is handled by a bounded client queue;
-requests wait for registration, and excess count/bytes fail without forwarding.
-Large legal WebSocket frames are also accepted.
-GitHub authorization/token/user endpoints use a local provider; no live GitHub
-account was used. Static Linux AMD64 release checks also pass under QEMU:
-the same 43 server, two protocol and ten client/export tests, Clippy and the
-AMD64 Go reference tests. ELF checks verify the target architecture and absence
-of dynamic dependencies. Migration and restart/shutdown also pass against the
-exact standalone release artifact, independently of Cargo's test dependency
-features. A native AMD64 static-server CI job is configured; remote CI has not
-run for this change. Remaining release checks are tracked in
-[the parity checklist](rust-parity.md). See
-[the hosted migration guide](rust-server-migration.md) for cutover, rollback and
-reproducible acceptance commands. No service deployment has occurred.
-
-To run the hosted preview with a copy of an existing Go server store:
-
-```sh
-cargo run --locked -p scimtest-server -- --addr 127.0.0.1:7001 \
-  --domain localhost:7001 --data /path/to/server-state-copy.json
-```
-
-To enable GitHub sign-in and new installations, set
-`SCIMTEST_GITHUB_CLIENT_ID` and `SCIMTEST_GITHUB_CLIENT_SECRET`, and pass a
-distinct `--dashboard-domain`, such as `admin.localhost:7001`. Register
-`http://admin.localhost:7001/auth/github/callback` as the OAuth callback for
-that local configuration. The hosted configuration is described in
-[the server guide](server.md).
-
-Tunnel tests exercise enrollment, cancellation, account switching, forwarding
-limits, reconnects, proxy authentication, and local/public access boundaries.
-An interoperability test launches the actual Go tunnel server and verifies Rust
-OIDC authorization/token/userinfo and SAML metadata through it, plus stable public
-URLs after restarting the Rust runtime. Local API comparison tests launch the Go
-runner beside an isolated Rust runtime and compare response and request behavior.
-Those checks cover configured and empty environments, response omissions,
-authentication/origin/method boundaries, case-insensitive JSON fields, directory
-mutations, resource creation, and sample managers/memberships. Mutations are
-rejected before body validation while a SCIM job holds the write guard.
-Identifier matching and Unicode lowercase are checked against Go over every
-Unicode scalar value.
-
-The core test command also runs the original Go API acceptance scenarios
-against both implementations. Eleven shared scenarios cover directory and
-backup workflows, custom attributes, OIDC/SAML sign-in, provider personas,
-Entra group overage and its failure history, SCIM configuration/deletion/sync/
-import, recording privacy, and API request boundaries. Each Rust scenario
-launches the real headless executable with disposable state and authenticated
-HTTP requests. Seven additional shared scenarios cover OIDC/SAML chooser
-submission, hints, authentication strength, session reuse, SAML Single Logout
-over both bindings and directions, playground validation, counted fault
-recovery, and SCIM joiner/mover/leaver workflows. Go independently verifies the
-SAML logout signatures from both implementations. Browser RP coverage includes
-public-client PKCE, callbacks, refresh, scope narrowing, and inspector controls.
-Three shared tunnel scenarios cover enrollment, account switching, recovery,
-forwarding, route isolation, reconnects, and identity stability after restart.
+The workspace is Rust-only. The Go reference implementation, shared comparison
+harnesses, and compatibility suites were removed at the user's request.
+Remaining Rust tests cover the local API, saved state, directory operations,
+identity flows, SCIM, lifecycle scenarios, tunnel enrollment and recovery,
+traffic redaction, update verification, and release signing. Beta testing is
+manual; further accessibility work remains a future improvement.
 
 ```sh
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-GOFLAGS=-mod=readonly cargo test -p scimtest-core -p scimtest-server -p scimtest-protocol --locked
-cargo test -p scimtest-desktop --locked
-cargo build -p scimtest-desktop --locked
+cargo test --workspace --locked
+cargo build --workspace --locked
 ```
 
-CI checks both Rust service crates and Go compatibility on Linux, and tests and
-builds the GPUI application on macOS. Go commands use `-mod=readonly` because the
-repository's `vendor` directory contains Rust dependencies. Existing release
-workflows continue to ship the Go app.
-The **Rust desktop packaging** workflow builds an ad-hoc macOS app/DMG and
-Debian, RPM, and Arch packages, installs the Linux packages, and checks window
-startup, account protection, saved-port restart, and shutdown with disposable
-state. Its tunnel profile points to an unavailable loopback server.
+CI tests the services and release tools on Linux and the GPUI desktop on macOS.
+The **Desktop packaging** workflow builds an ad-hoc macOS app/DMG and Debian,
+RPM, and Arch packages with disposable state. The **Release** workflow uses
+Rust for the desktop, tunnel server archives, signed update feed and legacy
+Sparkle appcast. See [the server guide](server.md) for the hosted service and
+[the migration guide](rust-server-migration.md) before replacing an existing
+deployment.
 
 For a beta you can download and test manually, dispatch **Release** on the
-rewrite branch. Manual runs default to Rust and upload Actions artifacts for
+rewrite branch. Manual runs build Rust and upload Actions artifacts for
 seven days. They use the existing Developer ID signing and notarization steps.
 They cannot publish a GitHub release, sign or deploy the stable update feed or
 legacy Sparkle appcast, or update the Homebrew cask, even when dispatched on a
 tag. Installed stable versions discover updates only through those feeds.
-Tagged releases still select Go until the remaining acceptance checks pass.
 
 After pushing the branch, start a beta with:
 
 ```sh
 gh workflow run release.yml --ref rselbach/rust-gpui-rewrite \
-  -f desktop_implementation=rust -f version=0.0.0
+  -f version=0.0.0
 gh run list --workflow release.yml --branch rselbach/rust-gpui-rewrite
 gh run download <run-id> --name scimtest-desktop-release --dir build/rust-beta
 ```
@@ -504,8 +392,7 @@ beta. Rust uses its separate preview state by default, so an ordinary launch
 does not migrate the installed Go app's data.
 
 Use manual dispatch for betas; `v*` tag pushes run the normal release pipeline.
-Dispatching the signed workflow includes notarization, which remains pending
-until the earlier notarization deferral is lifted.
+Dispatching the signed workflow includes Developer ID signing and notarization.
 
 Build a release executable locally with the public application profile ID:
 
@@ -514,6 +401,6 @@ SCIMTEST_APPLICATION_PROFILE_ID='<32-character-profile-id>' \
   ./packaging/rust/build-desktop.sh build/scimtest-desktop 0.0.0 macos
 ```
 
-Use `deb`, `rpm`, or `pkg.tar.zst` instead of `macos` on Linux, then pass `gpui`
-as the fifth argument to the corresponding Linux packaging script. Those
-packages declare GPUI's font, window-system, and Vulkan dependencies.
+Use `deb`, `rpm`, or `pkg.tar.zst` instead of `macos` on Linux. The Linux
+packaging scripts take the binary, output package, version and architecture;
+they declare GPUI's font, window-system, and Vulkan dependencies.

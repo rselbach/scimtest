@@ -188,7 +188,7 @@ async fn dispatch(
             let mut response = text_response(
                 StatusCode::OK,
                 "text/html; charset=utf-8",
-                include_str!("../../../internal/server/templates/landing.html"),
+                include_str!("../templates/landing.html"),
             );
             response
                 .headers_mut()

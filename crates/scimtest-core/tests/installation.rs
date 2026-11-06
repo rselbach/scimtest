@@ -1,41 +1,4 @@
-mod support;
-use base64::{Engine, engine::general_purpose::STANDARD};
 use scimtest_core::Store;
-use serde_json::{Value, json};
-
-#[test]
-fn installation_credentials_and_challenge_signatures_interoperate_with_go() {
-    let temporary = tempfile::tempdir().unwrap();
-    let path = temporary.path().join("state.db");
-    let store = Store::open(&path).unwrap();
-    let first = store.installation_identity().unwrap();
-    let go: Value =
-        serde_json::from_slice(&support::bridge("installation-identity", &path)).unwrap();
-    assert_eq!(
-        go,
-        json!({"instance_id":first.instance_id,"public_key":first.public_key(),"fingerprint":first.fingerprint()})
-    );
-    let signature = first.sign_challenge("0123456789abcdef0123456789abcdef", "greendale-challenge");
-    let verified:Value=serde_json::from_slice(&support::bridge_input("verify-installation-signature",&path,&serde_json::to_vec(&json!({"profile":"0123456789abcdef0123456789abcdef","public_key":first.public_key(),"instance_id":first.instance_id,"challenge":"greendale-challenge","signature":STANDARD.encode(signature)})).unwrap())).unwrap();
-    assert_eq!(verified["valid"], true);
-    drop(store);
-    let store = Store::open(&path).unwrap();
-    assert_eq!(
-        store.installation_identity().unwrap().fingerprint(),
-        first.fingerprint()
-    );
-    let second = store.rotate_installation_identity().unwrap();
-    assert_ne!(second.instance_id, first.instance_id);
-    assert_ne!(second.fingerprint(), first.fingerprint());
-    let go: Value =
-        serde_json::from_slice(&support::bridge("installation-identity", &path)).unwrap();
-    assert_eq!(go["fingerprint"], second.fingerprint());
-    let go: Value = serde_json::from_slice(&support::bridge("rotate-installation", &path)).unwrap();
-    let third = store.installation_identity().unwrap();
-    assert_eq!(go["instance_id"], third.instance_id);
-    assert_eq!(go["fingerprint"], third.fingerprint());
-    assert_ne!(third.fingerprint(), second.fingerprint());
-}
 
 #[test]
 fn legacy_ids_are_preserved_but_invalid_credentials_are_repaired_and_rotation_is_atomic() {

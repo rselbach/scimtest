@@ -1,6 +1,3 @@
-#[allow(dead_code)]
-mod support;
-
 use base64::{Engine, engine::general_purpose::STANDARD};
 use ed25519_dalek::{Signer, SigningKey};
 use scimtest_core::update::*;
@@ -26,14 +23,9 @@ fn key() -> String {
 }
 
 #[test]
-fn signed_feed_matches_go_and_rejects_tampering_and_untrusted_artifacts() {
-    let temporary = tempfile::tempdir().unwrap();
+fn signed_feed_rejects_tampering_and_untrusted_artifacts() {
     let value = serde_json::to_value(release()).unwrap();
-    let feed = support::bridge_input(
-        "sign-update-feed",
-        &temporary.path().join("state.db"),
-        &serde_json::to_vec(&json!({"key":STANDARD.encode([42;32]),"release":value})).unwrap(),
-    );
+    let feed = sign(&value, b"scimtest-update-feed-v1\n");
     let verified = verify_feed(&feed, &key()).unwrap();
     assert_eq!((verified.version.as_str(), verified.build), ("2.1.0", 42));
     let mut cases = vec![("valid", value.clone(), true)];
@@ -85,16 +77,6 @@ fn signed_feed_matches_go_and_rejects_tampering_and_untrusted_artifacts() {
     cases.push(("null arrays", nulls, true));
     for (name, value, want) in cases {
         let feed = sign(&value, b"scimtest-update-feed-v1\n");
-        let go: Value = serde_json::from_slice(&support::bridge_input(
-            "verify-update-feed",
-            &temporary.path().join("state.db"),
-            &serde_json::to_vec(
-                &json!({"key":key(),"feed":serde_json::from_slice::<Value>(&feed).unwrap()}),
-            )
-            .unwrap(),
-        ))
-        .unwrap();
-        assert_eq!(go["valid"], want, "Go {name}");
         assert_eq!(verify_feed(&feed, &key()).is_ok(), want, "Rust {name}");
     }
     assert!(verify_feed(&sign(&value, b""), &key()).is_err());

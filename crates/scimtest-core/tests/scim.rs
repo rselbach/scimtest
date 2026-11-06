@@ -1,5 +1,3 @@
-#[allow(dead_code)]
-mod support;
 use axum::{
     Router,
     extract::{Request, State},
@@ -331,32 +329,12 @@ impl Fixture {
 }
 
 #[tokio::test]
-async fn provisioning_matches_go_requests_and_reconciles_remote_changes() {
+async fn provisioning_tracks_resources_and_reconciles_remote_changes() {
     let server = Server::new().await;
     let f = Fixture::new(&server.url, "generic");
-    let path = f._temporary.path().join("state.db");
-    let id = f.id.clone();
-    let go = tokio::task::spawn_blocking(move || {
-        support::bridge_input(
-            "scim-run",
-            &path,
-            &serde_json::to_vec(&json!({"environment_id":id,"mode":"sync"})).unwrap(),
-        )
-    })
-    .await
-    .unwrap();
-    let go: Value = serde_json::from_slice(&go).unwrap();
-    assert_eq!(go["failed"], false, "{go}");
-    let go_requests = server.requests();
-    {
-        let mut remote = server.provider.0.lock().unwrap();
-        remote.resources.clear();
-        remote.requests.clear();
-    }
     let job = f.run(Mode::Sync).await;
     assert!(job.success, "{}", job.message);
     assert_eq!(job.percent, 100);
-    assert_eq!(server.requests(), go_requests);
     let directory = f.store.directory(&f.id).unwrap();
     assert!(
         directory
@@ -378,7 +356,6 @@ async fn provisioning_matches_go_requests_and_reconciles_remote_changes() {
             format!("remote_{}", f.abed)
         );
     }
-    assert_eq!(job.message, go["status"]);
     {
         let mut remote = server.provider.0.lock().unwrap();
         remote
@@ -871,7 +848,7 @@ async fn management_api_exposes_scim_jobs_plans_and_import_previews() {
 }
 
 #[tokio::test]
-async fn entra_adoption_sends_the_same_path_patches_as_go() {
+async fn entra_adoption_uses_path_patches_and_title_case_booleans() {
     let server = Server::new().await;
     let f = Fixture::new(&server.url, "entra");
     let directory = f.store.directory(&f.id).unwrap();
@@ -888,30 +865,10 @@ async fn entra_adoption_sends_the_same_path_patches_as_go() {
     let mut group = json!({"id":format!("remote_{}",f.group),"externalId":f.group,"displayName":"City College","members":[]});
     group["schemas"] = json!([scimtest_core::scim::GROUP_SCHEMA]);
     seeded.insert(format!("/Groups/remote_{}", f.group), group);
-    server.provider.0.lock().unwrap().resources = seeded.clone();
-    let path = f._temporary.path().join("state.db");
-    let id = f.id.clone();
-    let go = tokio::task::spawn_blocking(move || {
-        support::bridge_input(
-            "scim-run",
-            &path,
-            &serde_json::to_vec(&json!({"environment_id":id,"mode":"sync"})).unwrap(),
-        )
-    })
-    .await
-    .unwrap();
-    let go: Value = serde_json::from_slice(&go).unwrap();
-    assert_eq!(go["failed"], false, "{go}");
-    let requests = server.requests();
-    {
-        let mut remote = server.provider.0.lock().unwrap();
-        remote.resources = seeded;
-        remote.requests.clear();
-    }
+    server.provider.0.lock().unwrap().resources = seeded;
     let job = f.run(Mode::Sync).await;
     assert!(job.success, "{}", job.message);
-    assert_eq!(job.message, go["status"]);
-    assert_eq!(server.requests(), requests);
+    let requests = server.requests();
     assert!(
         requests
             .iter()

@@ -1,8 +1,8 @@
-# Rust tunnel server migration rehearsal
+# Tunnel server migration
 
 The Rust server uses the Go server's JSON state and command-line options. The
-deployment recipe still builds Go. This guide describes the Rust candidate and
-its rehearsal; it does not switch the deployed service.
+deployment recipe builds Rust. This guide describes a manual cutover;
+changing the branch does not switch the deployed service.
 
 Build for the server's operating system and architecture:
 
@@ -23,18 +23,11 @@ CC_x86_64_unknown_linux_musl=musl-gcc \
 ```
 
 The executable is `target/x86_64-unknown-linux-musl/release/scimtest-server`.
-The static-server CI job is configured to run hosted acceptance, actual
-Go-client interoperability and executable migration tests for this target.
-It then rebuilds the standalone release executable, checks its ELF architecture
-and absence of dynamic-library dependencies, and runs migration and restart
-tests against that exact artifact. Its hash must remain unchanged throughout
-those tests. The separate build matters because Cargo unifies additional
-dependency features while building tests.
-
-Local static AMD64 checks use a native ARM64 compiler and QEMU user emulation.
-The full hosted/client suites and the exact standalone artifact rehearsals
-pass in that setup. Native AMD64 CI is configured but has not run for this
-change.
+The static-server CI job checks the Rust service and tunnel client tests, then
+verifies that the standalone server has no dynamic interpreter or shared-library
+dependencies. The earlier Go comparison and migration rehearsal tests were
+removed at the user's request. Keep the existing deployed executable for a
+manual rollback; this branch does not retain its Go source.
 
 Keep the public domain, dashboard domain, scheme, proxy trust, connect path,
 limits, state path and GitHub OAuth environment unchanged during a cutover.
@@ -64,48 +57,17 @@ JSON state and the same configuration. This preserves profiles, enrollments,
 revocations and name releases written after the upgrade. Keep the pre-upgrade
 snapshot separately so it cannot silently replace newer changes.
 
-The automated rehearsal runs the actual Go and Rust executables on one
-disposable listener. A current Rust desktop runtime and the actual Go legacy
-client remain running through Go → Rust → Go rollback → Rust. It checks stable
-public names, OIDC discovery/JWKS/authorization/token/userinfo, SAML metadata,
-signing-key publication, dashboard sessions, revocation deny records, name
-release, and profile changes written in both directions. It also checks a failed
-candidate preflight while Go remains running and pending enrollment expiry
-across the transition.
-
-The existing Go service can send a forwarded request before its registration
-confirmation. The Rust client holds up to 32 such requests within one
-message-sized aggregate until registration succeeds. Exceeding either limit
-fails the connection without forwarding. In-flight forwarding retains its
-separate 32-request limit. The WebSocket frame and message limits both allow
-the protocol's 32 MiB body plus Base64 and header overhead.
+Test the cutover with a disposable state copy before changing the live service.
+Run the remaining Rust service checks with:
 
 ```sh
-GOFLAGS=-mod=readonly cargo test --locked -p scimtest-server --test migration
+cargo test --locked -p scimtest-server -p scimtest-protocol
+cargo test --locked -p scimtest-core --test tunnel --test connection
 ```
 
-Shared hosted acceptance runs identical dashboard, enrollment and replacement
-workflows against the full Go and Rust HTTP servers. The router comparison also
-checks methods, errors, malformed forms and response privacy headers.
+The Rust client buffers bounded early traffic until registration succeeds,
+then preserves the public URL across reconnects. Recheck sign-in, enrollment,
+revocation, reserved names and reconnects manually against the candidate build.
 
-```sh
-GOFLAGS=-mod=readonly cargo test --locked -p scimtest-server --lib shared_
-```
-
-For the browser pass, install Playwright CLI and run:
-
-```sh
-python3 crates/scimtest-server/tests/browser/verify.py
-```
-
-This starts isolated Go and Rust fixtures and a headless browser. Authorization,
-token and user endpoints use a local test provider. The same browser workflow
-checks sign-in and cookies, profile edits and confirmations, enrollment,
-responsive authorization pages, live tunnel refresh, replacement, revocation,
-restoration, name release and logout. The runner prints its artifact directory
-under `build/rust-hosted-browser`, closes its browser sessions and removes the
-disposable server state. Its ignored Rust fixture is not part of the ordinary
-test count.
-
-Current evidence and unfinished release checks are recorded in
+Current features and unfinished release checks are recorded in
 [the parity checklist](rust-parity.md).

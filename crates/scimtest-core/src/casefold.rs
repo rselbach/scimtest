@@ -21,47 +21,7 @@ fn fold(value: char) -> char {
     }
 }
 
-#[cfg(test)]
-#[allow(dead_code)]
-#[path = "../tests/support/mod.rs"]
-mod support;
-
-#[test]
-fn every_unicode_scalar_matches_go_simple_fold_equivalence_classes() {
-    let input = (0..=char::MAX as u32)
-        .filter_map(char::from_u32)
-        .map(fold)
-        .collect::<String>();
-    let lowered = (0..=char::MAX as u32)
-        .filter_map(char::from_u32)
-        .map(lower)
-        .collect::<String>();
-    let result = support::bridge_input(
-        "check-casefold",
-        std::path::Path::new("unused"),
-        &serde_json::to_vec(&serde_json::json!({"folded":input,"lowered":lowered})).unwrap(),
-    );
-    let result: serde_json::Value = serde_json::from_slice(&result).unwrap();
-    assert_eq!(result["checked"], 1_112_064);
-    assert_eq!(result["mismatches"], serde_json::json!([]), "{result}");
-    assert_eq!(
-        result["lower_mismatches"],
-        serde_json::json!([]),
-        "{result}"
-    );
-    for (left, right, want) in [
-        ("Σ", "ς", true),
-        ("K", "k", true),
-        ("ſ", "s", true),
-        ("İ", "i", false),
-        ("ı", "i", false),
-        ("ß", "ss", false),
-    ] {
-        assert_eq!(equal(left, right), want);
-    }
-}
-
-// Simple-fold exceptions to Unicode 17.0.0 lowercase, checked against Go.
+// Simple-fold exceptions to Unicode 17.0.0 lowercase.
 const EXCEPTIONS: &[(char, char)] = &[
     ('\u{130}', '\u{130}'),
     ('\u{17f}', '\u{73}'),

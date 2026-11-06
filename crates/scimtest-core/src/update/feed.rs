@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use ed25519_dalek::{Signature, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 pub(super) const MAX_FEED_BYTES: usize = 64 * 1024;
@@ -89,6 +89,18 @@ pub fn verify_feed(bytes: &[u8], public_key: &str) -> Result<Release> {
     let release: Release = serde_json::from_slice(&payload).context("Decode verified release")?;
     validate_release(&release)?;
     Ok(release)
+}
+
+pub fn sign_feed(release: &Release, key: &SigningKey) -> Result<Vec<u8>> {
+    validate_release(release)?;
+    let payload = serde_json::to_vec(release)?;
+    let signature = key.sign(&[SIGNING_CONTEXT, &payload].concat());
+    let mut envelope = serde_json::to_vec_pretty(&serde_json::json!({
+        "payload": STANDARD.encode(&payload),
+        "signature": STANDARD.encode(signature.to_bytes()),
+    }))?;
+    envelope.push(b'\n');
+    Ok(envelope)
 }
 
 fn validate_release(release: &Release) -> Result<()> {

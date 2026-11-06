@@ -1,5 +1,3 @@
-#[allow(dead_code)]
-mod support;
 use axum::{
     Router,
     body::Body,
@@ -307,15 +305,6 @@ async fn authorization_refresh_and_revocation_work_over_public_http_routes() {
     assert_eq!(claims["groups"], json!(["Study Group"]));
     assert_eq!(claims["acr"], "https://refeds.org/profile/mfa");
     let key = f.store.active_signing_key(&f.id).unwrap();
-    let verified = parse(&support::bridge_input(
-        "verify-jwt",
-        &f._temporary.path().join("state.db"),
-        &serde_json::to_vec(
-            &json!({"token":response["id_token"],"certificate_pem":key.stored.certificate_pem}),
-        )
-        .unwrap(),
-    ));
-    assert_eq!(verified["claims"], claims);
     let (status, _, body) = send(&f.app, "GET", "/oidc/greendale/jwks", "", &[]).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(parse(&body)["keys"][0], key.jwk());

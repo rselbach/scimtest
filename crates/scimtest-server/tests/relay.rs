@@ -12,7 +12,7 @@ use scimtest_server::{
 };
 use serde_json::json;
 use std::time::Duration;
-use support::{GoFixture, public_key};
+use support::public_key;
 use tokio::{net::TcpListener, task::JoinHandle};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungstenite};
 use tokio_util::sync::CancellationToken;
@@ -465,74 +465,6 @@ async fn oversized_registration_closes_with_the_go_message_size_code() {
     assert_eq!(u16::from(close.code), 1009);
     assert_eq!(close.reason, "read limit exceeded");
     app.active(0).await;
-    app.stop().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn actual_go_client_forwards_through_rust_for_enrolled_and_legacy_identities() {
-    let app = Running::new(|_, _| {}).await;
-    for legacy in [false, true] {
-        let ready = app
-            ._directory
-            .path()
-            .join(format!("go-ready-{legacy}.json"));
-        let stop = app._directory.path().join(format!("go-stop-{legacy}.json"));
-        let input = json!({"kind":"client","client":{"server_url":app.base.replacen("http","ws",1)+"/api/connect","profile_id":app.profile,"ready_path":ready,"stop_path":stop,"legacy":legacy}});
-        let go = tokio::task::spawn_blocking(move || GoFixture::new().run(input));
-        let registered: serde_json::Value = tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                if let Ok(bytes) = std::fs::read(&ready)
-                    && let Ok(value) = serde_json::from_slice(&bytes)
-                {
-                    break value;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .unwrap();
-        assert_eq!(registered["github_user_id"], if legacy { 0 } else { 101 });
-        assert_eq!(
-            registered["github_login"],
-            if legacy { "" } else { "troy-barnes" }
-        );
-        let root = if legacy {
-            "human-timeline-club"
-        } else {
-            "greendale-study-group"
-        };
-        let body: Vec<u8> = (0..131072).map(|index| (index % 256) as u8).collect();
-        let response = app
-            .client
-            .post(format!(
-                "{}/{root}/echo/troy?team=Troy%20and%20Abed",
-                app.base
-            ))
-            .header("host", "public.greendale.test")
-            .header("x-forwarded-for", "198.51.100.42")
-            .header("proxy-authorization", "Basic test-only")
-            .body(body.clone())
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(response.headers()["x-greendale-client"], "Go");
-        assert_eq!(response.headers().get_all("set-cookie").iter().count(), 2);
-        let echoed: serde_json::Value = response.json().await.unwrap();
-        assert_eq!(echoed["method"], "POST");
-        assert_eq!(echoed["path"], format!("/{root}/echo/troy"));
-        assert_eq!(echoed["query"], "team=Troy%20and%20Abed");
-        assert_eq!(echoed["host"], "public.greendale.test");
-        assert_eq!(echoed["headers"]["X-Forwarded-For"], json!(["127.0.0.1"]));
-        assert!(echoed["headers"].get("Proxy-Authorization").is_none());
-        assert_eq!(
-            STANDARD.decode(echoed["body"].as_str().unwrap()).unwrap(),
-            body
-        );
-        std::fs::write(stop, b"stop").unwrap();
-        assert_eq!(go.await.unwrap(), json!({"stopped":true}));
-        app.active(0).await;
-    }
     app.stop().await;
 }
 

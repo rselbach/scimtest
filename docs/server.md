@@ -43,7 +43,7 @@ legacy key separately disables authentication for every remaining legacy record.
 ```sh
 SCIMTEST_GITHUB_CLIENT_ID=... \
 SCIMTEST_GITHUB_CLIENT_SECRET=... \
-go run -mod=readonly ./cmd/scimtest-server \
+cargo run --locked -p scimtest-server -- \
   --addr :7000 \
   --domain localhost:7000 \
   --dashboard-domain admin.localhost:7000 \
@@ -73,54 +73,28 @@ GET,POST /scim/v2/Users
 GET,PUT,PATCH,DELETE /scim/v2/Users/{id}
 ```
 
-### Embed the Tunnel Client
+### Tunnel client
 
-Applications use the public client package to connect. `InstancePrivateKey` is
-the installation's own generated key; persist it locally and reuse it so the
-installation keeps its identity and public name. Generic clients should open
-`URL` in the user's browser (or display it in a terminal) and show
-`VerificationCode` independently for comparison with the page. A trusted local
-UI may instead open `BrowserHandoffURL` to go directly to GitHub OAuth. That URL
-is short-lived and single-use, so do not log or persist it.
+The desktop's tunnel client is implemented by `scimtest_core::tunnel::Service`.
+It enrolls an installation, polls for authorization, reconnects using its
+installation key, and forwards the approved public routes to the local server.
+The wire messages and signature payloads are defined in `scimtest-protocol`.
 
-```go
-import (
-	"log"
-
-	scimtestclient "github.com/rselbach/scimtest/client"
-)
-
-tunnel, err := scimtestclient.Start(ctx, scimtestclient.Config{
-	ServerBaseURL:         "https://tunnels.example.com",
-	ApplicationProfileID: "0123456789abcdef0123456789abcdef",
-	InstanceID:            installationID,
-	InstancePrivateKey:    installationKey,
-	LocalPort:             3000,
-	OnEnrollmentRequired: func(enrollment scimtestclient.Enrollment) {
-		log.Printf("Authorize this installation at %s and compare code %s", enrollment.URL, enrollment.VerificationCode)
-	},
-})
-if err != nil {
-	return err
-}
-defer tunnel.Close()
-
-publicBaseURL := tunnel.PublicURL
-```
-
-Each tunnel uses its stable ID as a root path. For example, a tunnel with the
-public URL `https://tunnels.example.com/human-timeline-club` exposes the
-allowed route `/scim/v2/Users` at
-`/human-timeline-club/scim/v2/Users`. The full public path, including the
-tunnel root, is forwarded to the client application unchanged.
-
-The client polls while the browser flow is pending, reconnects with the
-single-use credential after approval, and then forgets it. It reconnects
-transient failures automatically. Invalid profile IDs, instance IDs, or
-signatures are terminal errors. `ApplicationPrivateKey` remains available only
-for a previously registered legacy client connecting to an older handshake.
+Each tunnel has a stable root path. A public URL such as
+`https://tunnels.example.com/human-timeline-club` exposes an allowed route
+`/scim/v2/Users` at `/human-timeline-club/scim/v2/Users`. The client removes its
+own tunnel prefix before dispatching to the local identity service.
 
 ### Production
+
+Build the service with `cargo build --locked --release -p scimtest-server`.
+The release workflow packages Rust server archives for Linux and macOS on
+AMD64 and ARM64. Linux release binaries use the static musl target.
+
+The deployment helper cross-compiles Linux AMD64 with `cargo zigbuild` before
+using the existing service installation and rollback procedure. Install Zig,
+`cargo-zigbuild`, and the `x86_64-unknown-linux-musl` Rust target before running
+`just deploy-server`. Changing this branch does not deploy the service.
 
 Configure a reverse proxy to forward both the public tunnel host and the
 separate dashboard host to the server:

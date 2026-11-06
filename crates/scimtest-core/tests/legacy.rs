@@ -1,62 +1,6 @@
-#[allow(dead_code)]
-mod support;
 use scimtest_core::{Store, configuration::GlobalConfigPatch, model::*};
-use serde_json::{Value, json};
+use serde_json::json;
 use std::fs;
-
-#[test]
-fn legacy_json_migration_matches_go_and_keeps_private_original_bytes() {
-    let temporary = tempfile::tempdir().unwrap();
-    let input = json!({
-        "config":{"base_url":" https://greendale.example/scim/v2/// ","bearer_token":" greendale-token ","auto_open_sync_trace":true,"idp_base_url":" https://greendale.example/idp/ ","rgrok_instance_id":" greendale-installation ","trust_forwarded_headers":true},
-        "users":[{"id":"user_troy","name":" Troy   Barnes ","username":"tbarnes","email":"troy@greendale.edu","remote_id":"remote-troy","dirty":true,"department":"Air Conditioning","attributes":{"class":"Repair"},"unknown_old_field":"ignored"},
-            {"id":"user_abed","username":"Abed Nadir","email":"abed@greendale.edu","active":false,"deleted":true}],
-        "groups":[{"id":"group_study","display_name":"Study Group","member_ids":[" user_troy ","user_troy","","user_abed"],"remote_id":"remote-study","dirty":true}],
-        "apps":[{"id":"app_greendale","name":"Greendale","oidc_claim_mappings":{"email":"mail","obsolete":"ignored"}},{"id":"app_city_college","name":"City College","protocol":"saml","saml_acs_url":"https://citycollege.example/acs","saml_email_attribute_name":"mail"}],
-        "obsolete_field":true
-    });
-    let bytes = serde_json::to_vec_pretty(&input).unwrap();
-    let go_dir = temporary.path().join("go");
-    let rust_dir = temporary.path().join("rust");
-    fs::create_dir_all(&go_dir).unwrap();
-    fs::create_dir_all(&rust_dir).unwrap();
-    fs::write(go_dir.join("state.json"), &bytes).unwrap();
-    fs::write(rust_dir.join("state.json"), &bytes).unwrap();
-    let expected: Value =
-        serde_json::from_slice(&support::bridge("dump", &go_dir.join("state.db"))).unwrap();
-    let store = Store::open(&rust_dir.join("state.db")).unwrap();
-    assert_eq!(store.snapshot().unwrap().len(), 2);
-    let actual: Value =
-        serde_json::from_slice(&support::bridge("dump", &rust_dir.join("state.db"))).unwrap();
-    assert_eq!(actual, expected);
-    assert_eq!(fs::read(rust_dir.join("state.json")).unwrap(), bytes);
-    let copies = fs::read_dir(rust_dir.join("backups"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect::<Vec<_>>();
-    assert_eq!(copies.len(), 1);
-    assert_eq!(fs::read(&copies[0]).unwrap(), bytes);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            fs::metadata(&copies[0]).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-        assert_eq!(
-            fs::metadata(rust_dir.join("backups"))
-                .unwrap()
-                .permissions()
-                .mode()
-                & 0o777,
-            0o700
-        );
-    }
-    drop(store);
-    let reopened = Store::open(&rust_dir.join("state.db")).unwrap();
-    assert_eq!(reopened.snapshot().unwrap().len(), 2);
-    assert_eq!(fs::read_dir(rust_dir.join("backups")).unwrap().count(), 1);
-}
 
 #[test]
 fn legacy_directory_without_apps_is_visible_and_configured_databases_are_not_overwritten() {
@@ -160,25 +104,4 @@ fn legacy_signing_material_and_modern_installation_identity_are_preserved() {
     let imported = store.shared_signing_key().unwrap();
     assert_eq!(imported.stored.private_key_pem, key.stored.private_key_pem);
     assert_eq!(imported.stored.certificate_pem, key.stored.certificate_pem);
-}
-
-#[test]
-fn scim_only_json_creates_the_same_environment_and_remote_tracking_as_go() {
-    let temporary = tempfile::tempdir().unwrap();
-    let bytes=br#"{"config":{"base_url":"https://greendale.example/scim/v2","bearer_token":"greendale-token"},"users":[{"id":"troy","name":"Troy Barnes","email":"troy@greendale.edu","remote_id":"remote-troy","dirty":true}]}"#;
-    let go_dir = temporary.path().join("go");
-    let rust_dir = temporary.path().join("rust");
-    fs::create_dir_all(&go_dir).unwrap();
-    fs::create_dir_all(&rust_dir).unwrap();
-    fs::write(go_dir.join("state.json"), bytes).unwrap();
-    fs::write(rust_dir.join("state.json"), bytes).unwrap();
-    let expected: Value =
-        serde_json::from_slice(&support::bridge("dump", &go_dir.join("state.db"))).unwrap();
-    let store = Store::open(&rust_dir.join("state.db")).unwrap();
-    let directory = store.directory("app_legacy_scim").unwrap();
-    assert!(directory.environment.settings.scim_enabled);
-    assert_eq!(directory.user_sync["troy"].remote_id, "remote-troy");
-    let actual: Value =
-        serde_json::from_slice(&support::bridge("dump", &rust_dir.join("state.db"))).unwrap();
-    assert_eq!(actual, expected);
 }

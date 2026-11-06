@@ -1,4 +1,4 @@
-name: Rust desktop packaging
+name: Desktop packaging
 
 on:
   workflow_dispatch:
@@ -69,14 +69,14 @@ jobs:
         if: matrix.kind == 'deb'
         run: |
           mkdir -p release
-          ./packaging/linux/build-deb.sh build/scimtest-desktop release/scimtest-rust.deb 0.0.0 amd64 gpui
+          ./packaging/linux/build-deb.sh build/scimtest-desktop release/scimtest-rust.deb 0.0.0 amd64
           dpkg-deb --info release/scimtest-rust.deb
           apt-get install -y ./release/scimtest-rust.deb
       - name: Build and install RPM
         if: matrix.kind == 'rpm'
         run: |
           mkdir -p release
-          ./packaging/linux/build-rpm.sh build/scimtest-desktop release/scimtest-rust.rpm 0.0.0 amd64 gpui
+          ./packaging/linux/build-rpm.sh build/scimtest-desktop release/scimtest-rust.rpm 0.0.0 amd64
           rpm -qip release/scimtest-rust.rpm
           dnf install -y release/scimtest-rust.rpm
       - name: Build and install Arch package
@@ -85,7 +85,7 @@ jobs:
           mkdir -p release
           useradd --create-home package-builder
           chown -R package-builder:package-builder build release
-          runuser -u package-builder -- ./packaging/linux/build-arch-package.sh build/scimtest-desktop release/scimtest-rust.pkg.tar.zst 0.0.0 amd64 gpui
+          runuser -u package-builder -- ./packaging/linux/build-arch-package.sh build/scimtest-desktop release/scimtest-rust.pkg.tar.zst 0.0.0 amd64
           pacman -Qip release/scimtest-rust.pkg.tar.zst
           pacman -U --noconfirm release/scimtest-rust.pkg.tar.zst
       - name: Verify installed GPUI window and runtime

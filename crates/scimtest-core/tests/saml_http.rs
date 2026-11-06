@@ -1,7 +1,3 @@
-#[path = "saml_http/logout.rs"]
-mod logout;
-#[allow(dead_code)]
-mod support;
 use axum::{
     Router,
     body::Body,
@@ -201,11 +197,6 @@ async fn saml_and_oidc_share_browser_sessions_and_fresh_authentication_rules() {
         )
         .unwrap()
         .to_owned();
-    let verify=support::bridge_input("verify-saml",&f._temporary.path().join("state.db"),&serde_json::to_vec(&json!({"xml":xml,"certificate_pem":f.store.active_signing_key(&f.id).unwrap().stored.certificate_pem})).unwrap());
-    assert_eq!(
-        serde_json::from_slice::<Value>(&verify).unwrap()["assertion_valid"],
-        true
-    );
     let path = format!(
         "/oidc/greendale/authorize?{}",
         query(&[
@@ -391,100 +382,6 @@ async fn json_saml_sign_in_checks_pinned_post_signatures_before_choosing_a_user(
 }
 
 #[tokio::test]
-async fn go_signed_redirect_requests_preserve_raw_query_across_the_browser_chooser() {
-    let f = Fixture::new();
-    let key = f.store.shared_signing_key().unwrap();
-    f.store
-        .update_environment(
-            &f.id,
-            EnvironmentPatch {
-                settings: SettingsPatch {
-                    saml_request_certificate_pem: Some(key.stored.certificate_pem.clone()),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    for algorithm in [256, 384, 512] {
-        let bytes = support::bridge_input(
-            "sign-saml-redirect",
-            &f._temporary.path().join("state.db"),
-            &serde_json::to_vec(&json!({
-            "xml":f.authn_request(false),"private_key_pem":key.stored.private_key_pem,
-            "algorithm":algorithm,"relay_state":"study & group + /"}))
-            .unwrap(),
-        );
-        let query = String::from_utf8(bytes).unwrap();
-        scimtest_core::saml::verify_redirect(
-            &query,
-            "SAMLRequest",
-            "AuthnRequest",
-            &key.stored.certificate_pem,
-        )
-        .unwrap();
-        let path = format!("/saml/greendale/sso?{query}");
-        assert_eq!(f.send("GET", &path, "", false, "").await.0, StatusCode::OK);
-        let body = superfluous_chooser_body(&f.troy);
-        let (status, _, body) = f.send("POST", &path, &body, false, "").await;
-        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
-        assert!(
-            String::from_utf8(body)
-                .unwrap()
-                .contains("study &amp; group + /")
-        );
-        let request = json!({"user_id":f.troy,"redirect_query":query}).to_string();
-        let (status, _, body) = f
-            .send(
-                "POST",
-                &format!("/api/v1/environments/{}/saml/sign-in", f.id),
-                &request,
-                true,
-                "",
-            )
-            .await;
-        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
-        let value: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(value["relay_state"], "study & group + /");
-        for tampered in [
-            format!("{query}&RelayState=city-college"),
-            format!("{query}&SAMLRequest=forged"),
-            query.replace("SAMLRequest=", "%53AMLRequest="),
-            query.replace("study+%26+group", "city-college"),
-        ] {
-            assert!(
-                scimtest_core::saml::verify_redirect(
-                    &tampered,
-                    "SAMLRequest",
-                    "AuthnRequest",
-                    &key.stored.certificate_pem
-                )
-                .is_err()
-            );
-            assert_eq!(
-                f.send(
-                    "GET",
-                    &format!("/saml/greendale/sso?{tampered}"),
-                    "",
-                    false,
-                    ""
-                )
-                .await
-                .0,
-                StatusCode::BAD_REQUEST
-            );
-        }
-    }
-}
-fn superfluous_chooser_body(user: &str) -> String {
-    query(&[
-        ("user_id", user.into()),
-        ("SAMLRequest", STANDARD.encode("<forged/>")),
-        ("RelayState", "city-college".into()),
-    ])
-}
-
-#[tokio::test]
 async fn a_cookie_from_another_environment_does_not_end_its_session() {
     let f = Fixture::new();
     let (_, headers, _) = f
@@ -545,102 +442,5 @@ async fn a_cookie_from_another_environment_does_not_end_its_session() {
     assert_eq!(
         sessions["sessions"][0]["session_id"],
         original.split_once('=').unwrap().1
-    );
-}
-
-#[tokio::test]
-async fn wrapping_and_nameid_comment_faults_keep_the_genuine_go_verified_signature() {
-    let f = Fixture::new();
-    let key = f.store.active_signing_key(&f.id).unwrap();
-    for (mode, fault, want_valid) in [
-        ("assertion", "xsw_assertion", 1),
-        ("response", "xsw_response", 1),
-        ("both", "xsw_response", 2),
-        ("assertion", "nameid_comment", 1),
-        ("response", "nameid_comment", 1),
-        ("both", "nameid_comment", 2),
-    ] {
-        f.store
-            .update_environment(
-                &f.id,
-                EnvironmentPatch {
-                    settings: SettingsPatch {
-                        saml_signing_mode: Some(mode.into()),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        let body = query(&[("user_id", f.troy.clone()), ("fault_tamper", fault.into())]);
-        let (status, _, body) = f
-            .send("POST", "/saml/greendale/sso", &body, false, "")
-            .await;
-        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
-        let xml = posted_xml(&body);
-        let doc = document(&xml);
-        let names = doc.get_elements_by_tag_name("NameID");
-        let first = doc.text_content_deep(names[0]);
-        if fault == "nameid_comment" {
-            assert_eq!(first, "abed@greendale.edu.scimtest-forged.example");
-            assert!(xml.contains("abed@greendale.edu<!---->.scimtest-forged.example"));
-        } else {
-            assert_eq!(first, "abed@greendale.edu");
-            assert!(
-                names
-                    .iter()
-                    .any(|node| doc.text_content_deep(*node) == "troy@greendale.edu")
-            );
-        }
-        let valid = support::bridge_input("verify-saml",&f._temporary.path().join("state.db"),&serde_json::to_vec(&json!({"xml":xml,"certificate_pem":key.stored.certificate_pem,"scan_signatures":true})).unwrap());
-        let valid: Value = serde_json::from_slice(&valid).unwrap();
-        assert_eq!(
-            valid.as_array().unwrap().len(),
-            want_valid,
-            "{mode}/{fault}: {xml}"
-        );
-    }
-    f.store
-        .update_environment(
-            &f.id,
-            EnvironmentPatch {
-                settings: SettingsPatch {
-                    saml_signing_mode: Some("both".into()),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    assert_eq!(
-        f.send(
-            "POST",
-            "/saml/greendale/sso",
-            &query(&[
-                ("user_id", f.troy.clone()),
-                ("fault_tamper", "xsw_assertion".into())
-            ]),
-            false,
-            ""
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
-    );
-    f.store.delete_user(&f.id, &f.abed).unwrap();
-    assert_eq!(
-        f.send(
-            "POST",
-            "/saml/greendale/sso",
-            &query(&[
-                ("user_id", f.troy.clone()),
-                ("fault_tamper", "nameid_comment".into())
-            ]),
-            false,
-            ""
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
     );
 }

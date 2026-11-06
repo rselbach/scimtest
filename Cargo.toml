@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/scimtest-core", "crates/scimtest-desktop", "crates/scimtest-server", "crates/scimtest-protocol"]
+members = ["crates/scimtest-core", "crates/scimtest-desktop", "crates/scimtest-server", "crates/scimtest-protocol", "crates/scimtest-update-tool"]
 exclude = ["vendor/gpui-base", "vendor/gpui-pre-linux", "vendor/gpui-pre-macos", "vendor/accesskit", "vendor/accesskit_macos", "vendor/accesskit_atspi_common", "vendor/accesskit_unix", "vendor/tokio-tungstenite"]
 resolver = "2"
 
