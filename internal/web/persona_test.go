@@ -15,6 +15,13 @@ import (
 const personaGUIDPattern = `^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
 
 func TestAPIAcceptancePersonaClaims(t *testing.T) {
+	acceptancePersonaClaims(t, func(t *testing.T) http.Handler {
+		_, handler := newAcceptanceAPI(t)
+		return handler
+	})
+}
+
+func acceptancePersonaClaims(t *testing.T, newAPI func(*testing.T) http.Handler) {
 	tests := map[string]struct {
 		persona string
 		want    map[string]any
@@ -45,7 +52,7 @@ func TestAPIAcceptancePersonaClaims(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			r := require.New(t)
-			_, handler := newAcceptanceAPI(t)
+			handler := newAPI(t)
 			environment := personaEnvironment(t, handler, fmt.Sprintf(`"persona":%q`, tc.persona))
 			r.Equal(tc.persona, environment.Persona)
 			base := "/api/v1/environments/" + environment.ID
@@ -102,8 +109,12 @@ func TestEntraIdentifiersAreStable(t *testing.T) {
 }
 
 func TestAPIAcceptanceEntraGroupsOverage(t *testing.T) {
-	r := require.New(t)
 	_, handler := newAcceptanceAPI(t)
+	acceptanceEntraGroupsOverage(t, handler)
+}
+
+func acceptanceEntraGroupsOverage(t *testing.T, handler http.Handler) {
+	r := require.New(t)
 	environment := personaEnvironment(t, handler, `"persona":"entra","groups_overage_threshold":1`)
 	r.Equal(1, environment.GroupsOverageThreshold)
 	base := "/api/v1/environments/" + environment.ID
@@ -115,7 +126,7 @@ func TestAPIAcceptanceEntraGroupsOverage(t *testing.T) {
 	troyClaims, troyToken := personaSignIn(t, handler, base, troy.ID, "openid profile groups")
 	r.NotContains(troyClaims, "groups")
 	r.Equal(map[string]any{"groups": "src1"}, troyClaims["_claim_names"])
-	endpoint := "http://127.0.0.1:8080/oidc/greendale/users/" + troyClaims["oid"].(string) + "/getMemberObjects"
+	endpoint := troyClaims["iss"].(string) + "/users/" + troyClaims["oid"].(string) + "/getMemberObjects"
 	r.Equal(map[string]any{"src1": map[string]any{"endpoint": endpoint}}, troyClaims["_claim_sources"])
 	r.Equal(troyClaims["_claim_sources"], personaUserinfo(t, handler, troyToken)["_claim_sources"])
 
@@ -124,13 +135,22 @@ func TestAPIAcceptanceEntraGroupsOverage(t *testing.T) {
 	r.NotContains(abedClaims, "_claim_names")
 	_, troyWithoutGroups := personaSignIn(t, handler, base, troy.ID, "openid profile")
 
-	path := strings.TrimPrefix(endpoint, "http://127.0.0.1:8080")
+	endpointURL, err := url.Parse(endpoint)
+	r.NoError(err)
+	path := endpointURL.RequestURI()
+	r.Equal(http.StatusOK, personaMemberObjects(handler, path, "Bearer "+troyToken, `{"securityEnabledOnly":false}`).Code)
+	var flows []flowEvent
+	r.NoError(json.Unmarshal(acceptanceRequest(t, handler, http.MethodGet, base+"/flows", "", http.StatusOK).Body.Bytes(), &flows))
+	r.NotEmpty(flows)
+	r.Equal("groups overage", flows[0].Stage)
+	r.Equal("ok", flows[0].Outcome)
 	tests := map[string]struct {
 		path          string
 		authorization string
 		body          string
 		want          int
 		wantBody      string
+		wantMessage   string
 	}{
 		"own groups": {
 			path: path, authorization: "Bearer " + troyToken, body: `{"securityEnabledOnly":false}`,
@@ -139,10 +159,12 @@ func TestAPIAcceptanceEntraGroupsOverage(t *testing.T) {
 		"missing token": {
 			path: path, body: `{"securityEnabledOnly":false}`,
 			want: http.StatusUnauthorized, wantBody: `"code":"InvalidAuthenticationToken"`,
+			wantMessage: "Access token is empty.",
 		},
 		"unknown token": {
 			path: path, authorization: "Bearer chang-was-here", body: `{"securityEnabledOnly":false}`,
 			want: http.StatusUnauthorized, wantBody: `"code":"InvalidAuthenticationToken"`,
+			wantMessage: "Access token is invalid or expired.",
 		},
 		"another user's token": {
 			path: path, authorization: "Bearer " + abedToken, body: `{"securityEnabledOnly":false}`,
@@ -160,10 +182,20 @@ func TestAPIAcceptanceEntraGroupsOverage(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			rec := personaMemberObjects(handler, tc.path, tc.authorization, tc.body)
-			require.Equal(t, tc.want, rec.Code, rec.Body.String())
-			require.Contains(t, rec.Body.String(), tc.wantBody)
+			r := require.New(t)
+			r.Equal(tc.want, rec.Code, rec.Body.String())
+			r.Contains(rec.Body.String(), tc.wantBody)
+			if tc.wantMessage != "" {
+				r.Contains(rec.Body.String(), tc.wantMessage)
+			}
 		})
 	}
+	r.Equal(http.StatusUnauthorized, personaMemberObjects(handler, path, "", `{"securityEnabledOnly":false}`).Code)
+	r.NoError(json.Unmarshal(acceptanceRequest(t, handler, http.MethodGet, base+"/flows", "", http.StatusOK).Body.Bytes(), &flows))
+	r.NotEmpty(flows)
+	r.Equal("groups overage", flows[0].Stage)
+	r.Equal("failed", flows[0].Outcome)
+	r.Equal("InvalidAuthenticationToken: Access token is empty.", flows[0].Detail)
 
 	acceptanceRequest(t, handler, http.MethodPatch, base, `{"persona":"okta"}`, http.StatusOK)
 	rec := personaMemberObjects(handler, path, "Bearer "+troyToken, `{"securityEnabledOnly":false}`)
@@ -171,8 +203,12 @@ func TestAPIAcceptanceEntraGroupsOverage(t *testing.T) {
 }
 
 func TestAPIAcceptancePersonaSettingsPersist(t *testing.T) {
-	r := require.New(t)
 	_, handler := newAcceptanceAPI(t)
+	acceptancePersonaSettingsPersist(t, handler)
+}
+
+func acceptancePersonaSettingsPersist(t *testing.T, handler http.Handler) {
+	r := require.New(t)
 	environment := personaEnvironment(t, handler, `"persona":"entra","groups_overage_threshold":150`)
 	base := "/api/v1/environments/" + environment.ID
 	stored := func() app {

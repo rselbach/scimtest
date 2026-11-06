@@ -28,6 +28,8 @@ type GitHubClient struct {
 	HTTPClient   *http.Client
 	TokenURL     string
 	UserURL      string
+	// AuthorizeBaseURL overrides the authorization endpoint when set.
+	AuthorizeBaseURL string
 }
 
 type GitHubUser struct {
@@ -120,7 +122,11 @@ func (c GitHubClient) AuthorizeURL(state, redirectURI, codeChallenge string) str
 		query.Set("code_challenge", codeChallenge)
 		query.Set("code_challenge_method", "S256")
 	}
-	return GitHubAuthorizeURL + "?" + query.Encode()
+	baseURL := c.AuthorizeBaseURL
+	if baseURL == "" {
+		baseURL = GitHubAuthorizeURL
+	}
+	return baseURL + "?" + query.Encode()
 }
 
 func (c GitHubClient) postForm(ctx context.Context, endpoint string, form url.Values, out any) error {

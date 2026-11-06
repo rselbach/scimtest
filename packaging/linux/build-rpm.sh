@@ -6,7 +6,7 @@ set -euo pipefail
 top_dir=""
 
 usage() {
-  echo "usage: $0 BINARY OUTPUT_RPM VERSION ARCHITECTURE" >&2
+  echo "usage: $0 BINARY OUTPUT_RPM VERSION ARCHITECTURE [webview|gpui]" >&2
 }
 
 cleanup() {
@@ -16,7 +16,7 @@ cleanup() {
 }
 
 main() {
-  if (( $# != 4 )); then
+  if (( $# < 4 || $# > 5 )); then
     usage
     return 2
   fi
@@ -30,6 +30,18 @@ main() {
   local rpm_version
   local script_dir
   local version="$3"
+  local dependencies
+  case "${5:-webview}" in
+    webview) dependencies=$'Requires: gtk3\nRequires: webkit2gtk4.1' ;;
+    gpui)
+      dependencies=$'Requires: fontconfig\nRequires: freetype\nRequires: libxcb'
+      dependencies+=$'\nRequires: libxkbcommon\nRequires: libxkbcommon-x11'
+      dependencies+=$'\nRequires: libwayland-client.so.0()(64bit)'
+      dependencies+=$'\nRequires: libwayland-cursor.so.0()(64bit)'
+      dependencies+=$'\nRequires: vulkan-loader'
+      ;;
+    *) echo "unsupported desktop backend: $5" >&2; return 2 ;;
+  esac
   local -a rpm_paths=()
 
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -85,8 +97,7 @@ License: Apache-2.0
 URL: https://github.com/rselbach/scimtest
 BuildArch: ${rpm_arch}
 Requires: ca-certificates
-Requires: gtk3
-Requires: webkit2gtk4.1
+${dependencies}
 Requires: xdg-utils
 
 %description

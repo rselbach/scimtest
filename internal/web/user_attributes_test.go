@@ -15,6 +15,10 @@ import (
 
 func TestAPIAcceptanceUserAttributes(t *testing.T) {
 	_, handler := newAcceptanceAPI(t)
+	acceptanceUserAttributes(t, handler)
+}
+
+func acceptanceUserAttributes(t *testing.T, handler http.Handler) {
 	environment := acceptanceEnvironment(t, handler, `{"name":"Greendale Portal","slug":"greendale","oidc_enabled":true,"oidc_client_id":"greendale-client","oidc_client_secret":"study-group-secret","oidc_redirect_uris":["http://greendale.test/callback"],"saml_enabled":true,"saml_entity_id":"greendale-sp","saml_acs_url":"http://greendale.test/saml"}`)
 	base := "/api/v1/environments/" + environment.ID
 	rec := acceptanceRequest(t, handler, http.MethodPost, base+"/users", `{"given_name":"Craig","family_name":"Pelton","email":"dean@greendale.edu","department":"Office of the Dean"}`, http.StatusCreated)

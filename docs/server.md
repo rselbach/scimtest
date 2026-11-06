@@ -208,6 +208,11 @@ The systemd unit, environment example, and deployment script live in
 
 ### Current Limits
 
+The native rewrite also provides a Rust `scimtest-server` candidate. Its shared
+acceptance and local migration/rollback rehearsal are described in
+[the Rust server migration guide](rust-server-migration.md). The deployment
+recipe above continues to build Go.
+
 One complete HTTP request and response is carried in each tunnel message.
 Streaming and raw TCP forwarding are not supported, and request or response
 bodies are capped by `--max-body` (32 MiB by default).

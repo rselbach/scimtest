@@ -1,0 +1,98 @@
+name: Rust desktop packaging
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/rust-desktop-packaging.yml
+      - Cargo.toml
+      - Cargo.lock
+      - crates/**
+      - vendor/**
+      - packaging/**
+
+permissions:
+  contents: read
+
+env:
+  SCIMTEST_APPLICATION_PROFILE_ID: "00000000000000000000000000000000"
+  SCIMTEST_TUNNEL_SERVER: http://127.0.0.1:9
+
+jobs:
+  macos:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build GPUI executable
+        run: ./packaging/rust/build-desktop.sh build/scimtest-desktop 0.0.0 macos
+      - name: Assemble and check application and DMG
+        run: |
+          mkdir -p release
+          printf '# scimtest Rust preview\n\nDisposable CI build.\n' > build/notes.md
+          ./packaging/macos/build-app.sh build/scimtest-desktop build 0.0.0 "${GITHUB_RUN_NUMBER}" build/notes.md
+          ./packaging/macos/sign-app.sh build/scimtest.app -
+          codesign --verify --deep --strict build/scimtest.app
+          python3 packaging/rust/smoke-test.py build/scimtest.app/Contents/MacOS/scimtest --expect-account
+          ditto -c -k --sequesterRsrc --keepParent build/scimtest.app release/scimtest-rust-arm64.zip
+          ./packaging/macos/create-dmg.sh build/scimtest.app release/scimtest-rust-arm64.dmg
+      - uses: actions/upload-artifact@v7
+        with:
+          name: scimtest-rust-macos-arm64
+          path: release/*
+          if-no-files-found: error
+          retention-days: 14
+
+  linux:
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kind: deb
+            container: ubuntu:24.04
+          - kind: rpm
+            container: fedora:44
+          - kind: pkg.tar.zst
+            container: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install GPUI and package dependencies
+        run: ./packaging/rust/install-linux-deps.sh
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build GPUI executable
+        env:
+          PACKAGE_KIND: ${{ matrix.kind }}
+        run: ./packaging/rust/build-desktop.sh build/scimtest-desktop 0.0.0 "${PACKAGE_KIND}"
+      - name: Build and install Debian package
+        if: matrix.kind == 'deb'
+        run: |
+          mkdir -p release
+          ./packaging/linux/build-deb.sh build/scimtest-desktop release/scimtest-rust.deb 0.0.0 amd64 gpui
+          dpkg-deb --info release/scimtest-rust.deb
+          apt-get install -y ./release/scimtest-rust.deb
+      - name: Build and install RPM
+        if: matrix.kind == 'rpm'
+        run: |
+          mkdir -p release
+          ./packaging/linux/build-rpm.sh build/scimtest-desktop release/scimtest-rust.rpm 0.0.0 amd64 gpui
+          rpm -qip release/scimtest-rust.rpm
+          dnf install -y release/scimtest-rust.rpm
+      - name: Build and install Arch package
+        if: matrix.kind == 'pkg.tar.zst'
+        run: |
+          mkdir -p release
+          useradd --create-home package-builder
+          chown -R package-builder:package-builder build release
+          runuser -u package-builder -- ./packaging/linux/build-arch-package.sh build/scimtest-desktop release/scimtest-rust.pkg.tar.zst 0.0.0 amd64 gpui
+          pacman -Qip release/scimtest-rust.pkg.tar.zst
+          pacman -U --noconfirm release/scimtest-rust.pkg.tar.zst
+      - name: Verify installed GPUI window and runtime
+        run: dbus-run-session -- xvfb-run -a python3 packaging/rust/smoke-test.py /usr/bin/scimtest-desktop --expect-account
+      - uses: actions/upload-artifact@v7
+        with:
+          name: scimtest-rust-linux-${{ matrix.kind }}
+          path: release/*
+          if-no-files-found: error
+          retention-days: 14

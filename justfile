@@ -7,30 +7,45 @@ default:
   just --list
 
 build:
-  go build ./...
+  go build -mod=readonly ./...
 
 build-desktop-linux application_profile_id:
   mkdir -p ./bin
   PKG_CONFIG="${PWD}/packaging/linux/pkg-config-webkit2gtk-4.1.sh" \
-    go build -tags desktop \
+    go build -mod=readonly -tags desktop \
     -ldflags="-X=github.com/rselbach/scimtest/internal/web.tunnelApplicationProfileID={{application_profile_id}} -X=github.com/rselbach/scimtest/internal/web.tunnelReleaseProfileRequired=true" \
     -o ./bin/scimtest-desktop ./cmd/scimtest-desktop
 
 test:
-  go test ./...
+  go test -mod=readonly ./...
 
 test-desktop-linux:
   PKG_CONFIG="${PWD}/packaging/linux/pkg-config-webkit2gtk-4.1.sh" \
-    go test -tags desktop ./cmd/scimtest-desktop
+    go test -mod=readonly -tags desktop ./cmd/scimtest-desktop
 
 run:
-  go run ./cmd/scimtest
+  go run -mod=readonly ./cmd/scimtest
+
+run-rust-desktop:
+  cargo run --locked -p scimtest-desktop
+
+run-rust-api:
+  cargo run --locked -p scimtest-core --bin scimtest-rust
+
+run-rust-server:
+  cargo run --locked -p scimtest-server
+
+test-rust:
+  cargo fmt --all -- --check
+  cargo clippy --workspace --all-targets --locked -- -D warnings
+  GOFLAGS=-mod=readonly cargo test -p scimtest-core -p scimtest-server -p scimtest-protocol --locked
+  cargo test -p scimtest-desktop --locked
 
 run-server:
-  go run ./cmd/scimtest-server
+  go run -mod=readonly ./cmd/scimtest-server
 
 build-server:
-  go build -o ./bin/{{SERVER_BINARY}} ./cmd/scimtest-server
+  go build -mod=readonly -o ./bin/{{SERVER_BINARY}} ./cmd/scimtest-server
 
 deploy-server: test
   ./deploy/deploy.sh

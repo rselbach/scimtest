@@ -1,5 +1,12 @@
 # scimtest
 
+The Rust/GPUI rewrite includes the native desktop UI, local identity service
+and API, and hosted tunnel server. Run `cargo run --locked -p scimtest-desktop`
+to try it with separate preview state. Published packages still use Go while
+Rust notarization and its dependent release checks remain pending. See
+[the Rust preview guide](docs/rust-preview.md) for features and development
+commands, and [the parity checklist](docs/rust-parity.md) for remaining gates.
+
 `scimtest` is a local auth testing service: it plays the identity provider
 (and SCIM client) so you can test your app's SAML, OIDC, and SCIM
 implementations without touching a real IDP. It combines:

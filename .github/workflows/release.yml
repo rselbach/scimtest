@@ -13,12 +13,20 @@ on:
         required: true
         default: "0.0.0"
         type: string
+      desktop_implementation:
+        description: Desktop implementation for signed preview artifacts
+        required: true
+        default: go
+        type: choice
+        options: [go, rust]
 
 permissions:
   contents: read
 
 env:
   RELEASE_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.version || '0.0.0' }}
+  DESKTOP_IMPLEMENTATION: ${{ inputs.desktop_implementation || 'go' }}
+  DESKTOP_BACKEND: ${{ inputs.desktop_implementation == 'rust' && 'gpui' || 'webview' }}
 
 jobs:
   test:
@@ -31,6 +39,16 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: go test ./...
+      - uses: dtolnay/rust-toolchain@stable
+        if: env.DESKTOP_IMPLEMENTATION == 'rust'
+        with:
+          components: clippy, rustfmt
+      - name: Verify Rust and Go contracts
+        if: env.DESKTOP_IMPLEMENTATION == 'rust'
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy -p scimtest-core --all-targets --locked -- -D warnings
+          cargo test -p scimtest-core --locked
 
   release-notes:
     name: Generate release notes
@@ -88,6 +106,7 @@ jobs:
       - name: Test desktop shell
         run: go test -tags desktop ./cmd/scimtest-desktop
       - name: Build desktop executable
+        if: env.DESKTOP_IMPLEMENTATION != 'rust'
         shell: bash
         run: |
           mkdir -p build
@@ -96,6 +115,11 @@ jobs:
             -o build/scimtest-desktop ./cmd/scimtest-desktop
           file build/scimtest-desktop
           vtool -show-build build/scimtest-desktop
+      - uses: dtolnay/rust-toolchain@stable
+        if: env.DESKTOP_IMPLEMENTATION == 'rust'
+      - name: Build Rust desktop executable
+        if: env.DESKTOP_IMPLEMENTATION == 'rust'
+        run: ./packaging/rust/build-desktop.sh build/scimtest-desktop "${RELEASE_VERSION#v}" macos
       - uses: actions/upload-artifact@v7
         with:
           name: scimtest-desktop-arm64
@@ -137,7 +161,18 @@ jobs:
           fi
       - name: Test desktop shell
         run: go test -tags desktop ./cmd/scimtest-desktop
+      - name: Install GPUI dependencies
+        if: env.DESKTOP_IMPLEMENTATION == 'rust'
+        run: ./packaging/rust/install-linux-deps.sh
+      - uses: dtolnay/rust-toolchain@stable
+        if: env.DESKTOP_IMPLEMENTATION == 'rust'
+      - name: Build Rust desktop executable
+        if: env.DESKTOP_IMPLEMENTATION == 'rust'
+        run: |
+          mkdir -p release
+          ./packaging/rust/build-desktop.sh build/scimtest-desktop "${RELEASE_VERSION#v}" deb
       - name: Build desktop executable
+        if: env.DESKTOP_IMPLEMENTATION != 'rust'
         shell: bash
         run: |
           mkdir -p build release
@@ -153,7 +188,7 @@ jobs:
             build/scimtest-desktop \
             "${package_path}" \
             "${version}" \
-            amd64
+            amd64 "${DESKTOP_BACKEND}"
           dpkg-deb --info "${package_path}"
           dpkg-deb --contents "${package_path}"
           sha256sum "${package_path}" \
@@ -161,7 +196,11 @@ jobs:
       - name: Install Linux desktop app
         run: sudo apt-get install -y ./release/*.deb
       - name: Smoke-test installed desktop app
+        if: env.DESKTOP_IMPLEMENTATION != 'rust'
         run: xvfb-run -a ./packaging/linux/smoke-test.sh /usr/bin/scimtest-desktop
+      - name: Smoke-test installed Rust desktop app
+        if: env.DESKTOP_IMPLEMENTATION == 'rust'
+        run: dbus-run-session -- xvfb-run -a python3 packaging/rust/smoke-test.py /usr/bin/scimtest-desktop --expect-account
       - uses: actions/upload-artifact@v7
         with:
           name: scimtest-desktop-linux-release
@@ -229,7 +268,20 @@ jobs:
           fi
       - name: Test desktop shell
         run: go test -tags desktop ./cmd/scimtest-desktop
+      - name: Install GPUI dependencies
+        if: env.DESKTOP_IMPLEMENTATION == 'rust'
+        run: ./packaging/rust/install-linux-deps.sh
+      - uses: dtolnay/rust-toolchain@stable
+        if: env.DESKTOP_IMPLEMENTATION == 'rust'
+      - name: Build Rust desktop executable
+        if: env.DESKTOP_IMPLEMENTATION == 'rust'
+        env:
+          PACKAGE_KIND: ${{ matrix.kind }}
+        run: |
+          mkdir -p release
+          ./packaging/rust/build-desktop.sh build/scimtest-desktop "${RELEASE_VERSION#v}" "${PACKAGE_KIND}"
       - name: Build desktop executable
+        if: env.DESKTOP_IMPLEMENTATION != 'rust'
         shell: bash
         run: |
           mkdir -p build release
@@ -246,7 +298,7 @@ jobs:
             build/scimtest-desktop \
             "${package_path}" \
             "${version}" \
-            amd64
+            amd64 "${DESKTOP_BACKEND}"
           rpm -qip "${package_path}"
           rpm -qlp "${package_path}"
           sha256sum "${package_path}" \
@@ -265,14 +317,18 @@ jobs:
               build/scimtest-desktop \
               "${package_path}" \
               "${version}" \
-              amd64
+              amd64 "${DESKTOP_BACKEND}"
           pacman -Qip "${package_path}"
           pacman -Qlp "${package_path}"
           sha256sum "${package_path}" \
             >"release/scimtest-desktop_${version}_linux_x86_64_arch_checksums.txt"
           pacman -U --noconfirm "${package_path}"
       - name: Smoke-test installed desktop app
+        if: env.DESKTOP_IMPLEMENTATION != 'rust'
         run: xvfb-run -a ./packaging/linux/smoke-test.sh /usr/bin/scimtest-desktop
+      - name: Smoke-test installed Rust desktop app
+        if: env.DESKTOP_IMPLEMENTATION == 'rust'
+        run: dbus-run-session -- xvfb-run -a python3 packaging/rust/smoke-test.py /usr/bin/scimtest-desktop --expect-account
       - uses: actions/upload-artifact@v7
         with:
           name: scimtest-desktop-linux-${{ matrix.package }}-release
@@ -411,6 +467,9 @@ jobs:
             "${MACOS_SIGNING_IDENTITY}" \
             --timestamp
           codesign --verify --deep --strict --verbose=2 package/scimtest.app
+      - name: Smoke-test signed Rust application
+        if: env.DESKTOP_IMPLEMENTATION == 'rust'
+        run: python3 packaging/rust/smoke-test.py package/scimtest.app/Contents/MacOS/scimtest --expect-account
       - name: Notarize application
         shell: bash
         run: |

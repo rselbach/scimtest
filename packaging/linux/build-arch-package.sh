@@ -6,7 +6,7 @@ set -euo pipefail
 stage_dir=""
 
 usage() {
-  echo "usage: $0 BINARY OUTPUT_PACKAGE VERSION ARCHITECTURE" >&2
+  echo "usage: $0 BINARY OUTPUT_PACKAGE VERSION ARCHITECTURE [webview|gpui]" >&2
 }
 
 cleanup() {
@@ -16,7 +16,7 @@ cleanup() {
 }
 
 main() {
-  if (( $# != 4 )); then
+  if (( $# < 4 || $# > 5 )); then
     usage
     return 2
   fi
@@ -34,6 +34,15 @@ main() {
   local project_root
   local script_dir
   local version="$3"
+  local dependencies
+  case "${5:-webview}" in
+    webview) dependencies="'gtk3' 'webkit2gtk-4.1'" ;;
+    gpui)
+      dependencies="'fontconfig' 'freetype2' 'libxcb' 'libxkbcommon' "
+      dependencies+="'libxkbcommon-x11' 'wayland' 'vulkan-icd-loader'"
+      ;;
+    *) echo "unsupported desktop backend: $5" >&2; return 2 ;;
+  esac
   local -a package_paths=()
 
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -99,7 +108,7 @@ pkgdesc='Local SCIM, OIDC, and SAML integration testing'
 arch=('${arch_package}')
 url='https://github.com/rselbach/scimtest'
 license=('Apache-2.0')
-depends=('ca-certificates' 'gtk3' 'webkit2gtk-4.1' 'xdg-utils')
+depends=('ca-certificates' ${dependencies} 'xdg-utils')
 options=('!debug')
 source=('scimtest-desktop' 'com.rselbach.scimtest.desktop' 'scimtest.png' 'LICENSE')
 sha256sums=('${binary_sha256}' '${desktop_sha256}' '${icon_sha256}' '${license_sha256}')

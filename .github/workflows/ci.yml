@@ -6,7 +6,110 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  GOFLAGS: -mod=readonly
+
 jobs:
+  rust-core:
+    name: Rust services and Go compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy -p scimtest-core -p scimtest-server -p scimtest-protocol --all-targets --locked -- -D warnings
+      - run: cargo test -p scimtest-core -p scimtest-server -p scimtest-protocol --locked
+
+  rust-server-static:
+    name: Static Rust server on Linux AMD64
+    runs-on: ubuntu-24.04
+    env:
+      CGO_ENABLED: 0
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+      CC_x86_64_unknown_linux_musl: musl-gcc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: Install musl compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+      - name: Test hosted workflows and executable migration
+        run: >-
+          cargo test --locked --release --target x86_64-unknown-linux-musl
+          -p scimtest-server -p scimtest-protocol
+      - name: Test desktop tunnel interoperability
+        run: >-
+          cargo test --locked --release --target x86_64-unknown-linux-musl
+          -p scimtest-core --test tunnel --test tunnel_go --test connection
+      - name: Check standalone static release executable
+        run: |
+          cargo test --locked --release --target x86_64-unknown-linux-musl \
+            -p scimtest-server --test migration --test runtime --no-run \
+            --message-format=json > target/static-server-checks.jsonl
+          cargo build --locked --release --target x86_64-unknown-linux-musl \
+            -p scimtest-server
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import struct
+          import subprocess
+          binary = Path('target/x86_64-unknown-linux-musl/release/scimtest-server')
+          header = binary.read_bytes()[:64]
+          digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+          assert header[:6] == b'\x7fELF\x02\x01'
+          assert struct.unpack_from('<H', header, 18)[0] == 62
+          assert 'INTERP' not in subprocess.check_output(['readelf', '-l', str(binary)], text=True)
+          assert 'NEEDED' not in subprocess.check_output(['readelf', '-d', str(binary)], text=True)
+          tests = {}
+          for line in Path('target/static-server-checks.jsonl').read_text().splitlines():
+              item = json.loads(line)
+              if item.get('reason') == 'compiler-artifact' and item.get('executable'):
+                  name = item['target']['name']
+                  if name in ['migration', 'runtime']:
+                      tests[name] = item['executable']
+          assert sorted(tests) == ['migration', 'runtime']
+          for executable in tests.values():
+              subprocess.run([executable], check=True)
+              assert hashlib.sha256(binary.read_bytes()).hexdigest() == digest
+          PY
+
+  rust-desktop:
+    name: Rust GPUI desktop
+    runs-on: macos-latest
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy -p scimtest-desktop --all-targets --locked -- -D warnings
+      - run: cargo test -p scimtest-desktop --locked
+      - name: Test the patched macOS GPUI platform
+        run: >-
+          cargo test --locked -p scimtest-desktop -p gpui-pre-macos
+          --features gpui_platform/test-support --lib
+      - name: Test the GPUI accessibility and focus patches
+        run: cargo test --manifest-path vendor/gpui-base/Cargo.toml --locked --features test-support --lib
+      - name: Test the AccessKit text editing patches
+        run: |
+          cargo test --manifest-path vendor/accesskit/Cargo.toml --locked --features serde,schemars
+          cargo test --manifest-path vendor/accesskit_atspi_common/Cargo.toml --locked
+          cargo test --manifest-path vendor/accesskit_unix/Cargo.toml --locked --lib
+      - run: cargo build -p scimtest-desktop --locked
+
   test:
     runs-on: ubuntu-latest
     steps:

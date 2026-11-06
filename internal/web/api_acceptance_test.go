@@ -60,6 +60,10 @@ func acceptanceUser(t *testing.T, handler http.Handler, environmentID string) us
 
 func TestAPIAcceptancePartialSCIMConfiguration(t *testing.T) {
 	_, handler := newAcceptanceAPI(t)
+	acceptancePartialSCIMConfiguration(t, handler)
+}
+
+func acceptancePartialSCIMConfiguration(t *testing.T, handler http.Handler) {
 	environment := acceptanceEnvironment(t, handler, `{"name":"Greendale Directory","slug":"greendale-directory","scim_enabled":true,"scim_base_url":"http://greendale.test/scim/v2"}`)
 	base := "/api/v1/environments/" + environment.ID
 	require.False(t, environment.SCIMEnabled)
@@ -87,6 +91,10 @@ func TestAPIAcceptancePartialSCIMConfiguration(t *testing.T) {
 
 func TestAPIAcceptanceSCIMDeletionHistory(t *testing.T) {
 	_, handler := newAcceptanceAPI(t)
+	acceptanceSCIMDeletionHistory(t, handler)
+}
+
+func acceptanceSCIMDeletionHistory(t *testing.T, handler http.Handler) {
 	environment := acceptanceEnvironment(t, handler, `{"name":"Greendale Directory","slug":"greendale-directory","scim_enabled":true,"scim_base_url":"http://greendale.test/scim/v2","scim_bearer_token":"greendale-test-token"}`)
 	base := "/api/v1/environments/" + environment.ID
 	troy := acceptanceUser(t, handler, environment.ID)
@@ -114,15 +122,31 @@ func TestAPIAcceptanceSCIMDeletionHistory(t *testing.T) {
 }
 
 func TestAPIAcceptanceRecordingDisablesSecrets(t *testing.T) {
-	service, handler := newAcceptanceAPI(t)
+	_, handler := newAcceptanceAPI(t)
+	acceptanceRecordingDisablesSecrets(t, handler)
+}
+
+func acceptanceRecordingDisablesSecrets(t *testing.T, handler http.Handler) {
+	r := require.New(t)
 	acceptanceRequest(t, handler, http.MethodPatch, "/api/v1/config", `{"record_traffic":true,"record_secrets":true}`, http.StatusOK)
-	require.True(t, service.debugSecrets.Load())
+	rec := acceptanceRequest(t, handler, http.MethodGet, "/api/v1/config", "", http.StatusOK)
+	var settings struct {
+		RecordSecrets bool `json:"record_secrets"`
+	}
+	r.NoError(json.Unmarshal(rec.Body.Bytes(), &settings))
+	r.True(settings.RecordSecrets)
 	acceptanceRequest(t, handler, http.MethodPatch, "/api/v1/config", `{"record_traffic":false}`, http.StatusOK)
-	require.False(t, service.debugSecrets.Load())
+	rec = acceptanceRequest(t, handler, http.MethodGet, "/api/v1/config", "", http.StatusOK)
+	r.NoError(json.Unmarshal(rec.Body.Bytes(), &settings))
+	r.False(settings.RecordSecrets)
 }
 
 func TestAPIAcceptanceDirectoryAndBackup(t *testing.T) {
 	_, handler := newAcceptanceAPI(t)
+	acceptanceDirectoryAndBackup(t, handler)
+}
+
+func acceptanceDirectoryAndBackup(t *testing.T, handler http.Handler) {
 	first := acceptanceEnvironment(t, handler, `{"name":"Greendale Portal","slug":"greendale","oidc_enabled":true,"oidc_client_id":"greendale-client","oidc_client_secret":"study-group-secret","oidc_redirect_uris":["http://greendale.test/callback"]}`)
 	second := acceptanceEnvironment(t, handler, `{"name":"City College","slug":"city-college"}`)
 	base := "/api/v1/environments/" + first.ID
@@ -198,6 +222,10 @@ func TestAPIAcceptanceDirectoryAndBackup(t *testing.T) {
 
 func TestAPIAcceptanceSignInProtocols(t *testing.T) {
 	_, handler := newAcceptanceAPI(t)
+	acceptanceSignInProtocols(t, handler)
+}
+
+func acceptanceSignInProtocols(t *testing.T, handler http.Handler) {
 	environment := acceptanceEnvironment(t, handler, `{"name":"Greendale Portal","slug":"greendale","oidc_enabled":true,"oidc_client_id":"greendale-client","oidc_client_secret":"study-group-secret","oidc_redirect_uris":["http://greendale.test/callback"],"saml_enabled":true,"saml_entity_id":"greendale-sp","saml_acs_url":"http://greendale.test/saml","include_groups_claim":true}`)
 	base := "/api/v1/environments/" + environment.ID
 	troy := acceptanceUser(t, handler, environment.ID)
@@ -274,6 +302,10 @@ func TestAPIAcceptanceSignInProtocols(t *testing.T) {
 
 func TestAPIAcceptanceSCIMSyncAndImport(t *testing.T) {
 	_, handler := newAcceptanceAPI(t)
+	acceptanceSCIMSyncAndImport(t, handler)
+}
+
+func acceptanceSCIMSyncAndImport(t *testing.T, handler http.Handler) {
 	var remoteMu sync.Mutex
 	var remoteUser map[string]any
 	var requests []string
@@ -388,6 +420,24 @@ func TestAPIAcceptanceSCIMSyncAndImport(t *testing.T) {
 
 func TestAPIAcceptanceGuards(t *testing.T) {
 	svc, handler := newAcceptanceAPI(t)
+	base := acceptanceGuards(t, handler)
+	svc.requireGitHubAccount = true
+	acceptanceRequest(t, handler, http.MethodGet, "/api/v1/status", "", http.StatusOK)
+	lockedHandler := svc.routes()
+	acceptanceRequest(t, lockedHandler, http.MethodGet, "/api/v1/status", "", http.StatusOK)
+	acceptanceRequest(t, lockedHandler, http.MethodGet, "/api/v1/account", "", http.StatusOK)
+	acceptanceRequest(t, lockedHandler, http.MethodGet, base, "", http.StatusUnauthorized)
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/api/v1/account", nil)
+	rec := httptest.NewRecorder()
+	lockedHandler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusUnauthorized, rec.Code)
+
+	tunnelResponse := httptest.NewRecorder()
+	svc.idpRoutes().ServeHTTP(tunnelResponse, httptest.NewRequest(http.MethodGet, "/api/v1", nil))
+	require.Equal(t, http.StatusNotFound, tunnelResponse.Code)
+}
+
+func acceptanceGuards(t *testing.T, handler http.Handler) string {
 	environment := acceptanceEnvironment(t, handler, `{"name":"Greendale"}`)
 	base := "/api/v1/environments/" + environment.ID
 	troy := acceptanceUser(t, handler, environment.ID)
@@ -404,19 +454,19 @@ func TestAPIAcceptanceGuards(t *testing.T) {
 	}{
 		"missing token":   {method: http.MethodGet, path: "/api/v1/status", want: http.StatusUnauthorized},
 		"wrong token":     {method: http.MethodGet, path: "/api/v1/status", token: "wrong", want: http.StatusUnauthorized},
-		"wrong host":      {method: http.MethodGet, path: "/api/v1/status", token: svc.instanceToken, host: "example.test", want: http.StatusMisdirectedRequest},
-		"cross origin":    {method: http.MethodPatch, path: base, body: `{"name":"City College"}`, token: svc.instanceToken, origin: "https://example.test", want: http.StatusForbidden},
-		"unknown route":   {method: http.MethodGet, path: "/api/v1/unknown", token: svc.instanceToken, want: http.StatusNotFound},
-		"unknown method":  {method: http.MethodPut, path: "/api/v1/environments", body: `{}`, token: svc.instanceToken, want: http.StatusMethodNotAllowed},
-		"null body":       {method: http.MethodPatch, path: base, body: `null`, token: svc.instanceToken, want: http.StatusBadRequest},
-		"null field":      {method: http.MethodPatch, path: base, body: `{"name":null}`, token: svc.instanceToken, want: http.StatusBadRequest},
-		"malformed body":  {method: http.MethodPatch, path: base, body: `{"name":`, token: svc.instanceToken, want: http.StatusBadRequest},
-		"trailing object": {method: http.MethodPatch, path: base, body: `{"name":"Changed"} {}`, token: svc.instanceToken, want: http.StatusBadRequest},
-		"unknown field":   {method: http.MethodPatch, path: base, body: `{"name":"Changed","unknown":true}`, token: svc.instanceToken, want: http.StatusBadRequest},
-		"wrong type":      {method: http.MethodPatch, path: base, body: `{"oidc_enabled":"true"}`, token: svc.instanceToken, want: http.StatusBadRequest},
-		"plain text":      {method: http.MethodPatch, path: base, body: `{"name":"Changed"}`, token: svc.instanceToken, contentType: "text/plain", want: http.StatusUnsupportedMediaType},
-		"invalid action":  {method: http.MethodPost, path: base + "/tools/clear-local", body: `{"unknown":true}`, token: svc.instanceToken, want: http.StatusBadRequest},
-		"missing sync":    {method: http.MethodPost, path: "/api/v1/environments/missing/sync/start", body: `{}`, token: svc.instanceToken, want: http.StatusNotFound},
+		"wrong host":      {method: http.MethodGet, path: "/api/v1/status", token: "greendale-local-instance", host: "example.test", want: http.StatusMisdirectedRequest},
+		"cross origin":    {method: http.MethodPatch, path: base, body: `{"name":"City College"}`, token: "greendale-local-instance", origin: "https://example.test", want: http.StatusForbidden},
+		"unknown route":   {method: http.MethodGet, path: "/api/v1/unknown", token: "greendale-local-instance", want: http.StatusNotFound},
+		"unknown method":  {method: http.MethodPut, path: "/api/v1/environments", body: `{}`, token: "greendale-local-instance", want: http.StatusMethodNotAllowed},
+		"null body":       {method: http.MethodPatch, path: base, body: `null`, token: "greendale-local-instance", want: http.StatusBadRequest},
+		"null field":      {method: http.MethodPatch, path: base, body: `{"name":null}`, token: "greendale-local-instance", want: http.StatusBadRequest},
+		"malformed body":  {method: http.MethodPatch, path: base, body: `{"name":`, token: "greendale-local-instance", want: http.StatusBadRequest},
+		"trailing object": {method: http.MethodPatch, path: base, body: `{"name":"Changed"} {}`, token: "greendale-local-instance", want: http.StatusBadRequest},
+		"unknown field":   {method: http.MethodPatch, path: base, body: `{"name":"Changed","unknown":true}`, token: "greendale-local-instance", want: http.StatusBadRequest},
+		"wrong type":      {method: http.MethodPatch, path: base, body: `{"oidc_enabled":"true"}`, token: "greendale-local-instance", want: http.StatusBadRequest},
+		"plain text":      {method: http.MethodPatch, path: base, body: `{"name":"Changed"}`, token: "greendale-local-instance", contentType: "text/plain", want: http.StatusUnsupportedMediaType},
+		"invalid action":  {method: http.MethodPost, path: base + "/tools/clear-local", body: `{"unknown":true}`, token: "greendale-local-instance", want: http.StatusBadRequest},
+		"missing sync":    {method: http.MethodPost, path: "/api/v1/environments/missing/sync/start", body: `{}`, token: "greendale-local-instance", want: http.StatusNotFound},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -449,18 +499,5 @@ func TestAPIAcceptanceGuards(t *testing.T) {
 	require.Equal(t, "Greendale", unchanged.Name)
 	acceptanceRequest(t, handler, http.MethodGet, base+"/users/"+troy.ID, "", http.StatusOK)
 
-	svc.requireGitHubAccount = true
-	acceptanceRequest(t, handler, http.MethodGet, "/api/v1/status", "", http.StatusOK)
-	lockedHandler := svc.routes()
-	acceptanceRequest(t, lockedHandler, http.MethodGet, "/api/v1/status", "", http.StatusOK)
-	acceptanceRequest(t, lockedHandler, http.MethodGet, "/api/v1/account", "", http.StatusOK)
-	acceptanceRequest(t, lockedHandler, http.MethodGet, base, "", http.StatusUnauthorized)
-	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/api/v1/account", nil)
-	rec = httptest.NewRecorder()
-	lockedHandler.ServeHTTP(rec, req)
-	require.Equal(t, http.StatusUnauthorized, rec.Code)
-
-	tunnelResponse := httptest.NewRecorder()
-	svc.idpRoutes().ServeHTTP(tunnelResponse, httptest.NewRequest(http.MethodGet, "/api/v1", nil))
-	require.Equal(t, http.StatusNotFound, tunnelResponse.Code)
+	return base
 }

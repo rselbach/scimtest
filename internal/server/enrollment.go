@@ -517,7 +517,12 @@ func (s *Server) renderEnrollmentAuthorization(w http.ResponseWriter, r *http.Re
 	})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://github.com; frame-ancestors 'none'")
+	authorizeURL, err := url.Parse(s.github.AuthorizeURL("", "", ""))
+	if err != nil {
+		http.Error(w, "invalid authorization URL", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' "+authorizeURL.Scheme+"://"+authorizeURL.Host+"; frame-ancestors 'none'")
 	if err := enrollmentTemplate.Execute(w, enrollmentPageData{
 		UserCode:             userCode,
 		CSRFToken:            csrfToken,
