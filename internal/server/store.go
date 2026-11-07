@@ -1,0 +1,609 @@
+package server
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/rselbach/scimtest/internal/atomicfile"
+)
+
+const sessionLifetime = 30 * 24 * time.Hour
+
+type Store struct {
+	path string
+	mu   sync.Mutex
+	data storeData
+}
+
+type storeData struct {
+	Sessions            map[string]StoredSession            `json:"sessions"`
+	ApplicationProfiles map[string]StoredApplicationProfile `json:"application_profiles"`
+}
+
+type StoredSession struct {
+	ID        string    `json:"id"`
+	Login     string    `json:"login"`
+	Admin     bool      `json:"admin"`
+	CSRFToken string    `json:"csrf_token"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+func OpenStore(path string) (*Store, error) {
+	if path == "" {
+		path = "scimtest-server.json"
+	}
+	s := &Store{path: path}
+	if err := s.load(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *Store) CreateSession(login string, admin bool) (StoredSession, error) {
+	login = normalizeLogin(login)
+	if login != "rselbach" || !admin {
+		return StoredSession{}, errors.New("dashboard access is restricted to rselbach")
+	}
+	id, err := randomHex(32)
+	if err != nil {
+		return StoredSession{}, err
+	}
+	csrfToken, err := randomHex(32)
+	if err != nil {
+		return StoredSession{}, err
+	}
+	now := time.Now().UTC()
+	session := StoredSession{
+		ID:        id,
+		Login:     login,
+		Admin:     admin,
+		CSRFToken: csrfToken,
+		CreatedAt: now,
+		ExpiresAt: now.Add(sessionLifetime),
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data.Sessions[id] = session
+	if err := s.saveLocked(); err != nil {
+		delete(s.data.Sessions, id)
+		return StoredSession{}, err
+	}
+	return session, nil
+}
+
+func (s *Store) Session(id string) (StoredSession, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, ok := s.data.Sessions[id]
+	if !ok {
+		return StoredSession{}, false, nil
+	}
+	if session.Login == "rselbach" && session.Admin && session.CSRFToken != "" && time.Now().UTC().Before(session.ExpiresAt) {
+		return session, true, nil
+	}
+	delete(s.data.Sessions, id)
+	if err := s.saveLocked(); err != nil {
+		s.data.Sessions[id] = session
+		return StoredSession{}, false, err
+	}
+	return StoredSession{}, false, nil
+}
+
+func (s *Store) DeleteSession(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, exists := s.data.Sessions[id]
+	delete(s.data.Sessions, id)
+	if err := s.saveLocked(); err != nil {
+		if exists {
+			s.data.Sessions[id] = session
+		}
+		return err
+	}
+	return nil
+}
+
+type applicationProfileValues struct {
+	name                 string
+	publicKey            string
+	publicKeyFingerprint string
+	routes               []StoredApplicationRoute
+	requestsPerMinute    int
+	requestBurst         int
+	concurrentRequests   int
+}
+
+func applicationProfileValuesFrom(name, publicKey string, routes []StoredApplicationRoute, requestsPerMinute, requestBurst, concurrentRequests int) (applicationProfileValues, error) {
+	name = strings.Join(strings.Fields(name), " ")
+	if name == "" {
+		return applicationProfileValues{}, errors.New("application name is required")
+	}
+	if len(name) > applicationNameMaxLength {
+		return applicationProfileValues{}, errors.New("application name must be 80 characters or less")
+	}
+	canonicalKey, _, fingerprint, err := parseEd25519PublicKey(publicKey)
+	if err != nil {
+		return applicationProfileValues{}, err
+	}
+	if len(routes) == 0 {
+		return applicationProfileValues{}, errors.New("at least one route is required")
+	}
+	if requestsPerMinute <= 0 || requestBurst <= 0 || concurrentRequests <= 0 {
+		return applicationProfileValues{}, errors.New("application limits must be positive")
+	}
+	return applicationProfileValues{
+		name:                 name,
+		publicKey:            canonicalKey,
+		publicKeyFingerprint: fingerprint,
+		routes:               cloneApplicationRoutes(routes),
+		requestsPerMinute:    requestsPerMinute,
+		requestBurst:         requestBurst,
+		concurrentRequests:   concurrentRequests,
+	}, nil
+}
+
+func (s *Store) CreateApplicationProfile(name, publicKey string, routes []StoredApplicationRoute, requestsPerMinute, requestBurst, concurrentRequests int) (StoredApplicationProfile, error) {
+	values, err := applicationProfileValuesFrom(name, publicKey, routes, requestsPerMinute, requestBurst, concurrentRequests)
+	if err != nil {
+		return StoredApplicationProfile{}, err
+	}
+	id, err := randomHex(16)
+	if err != nil {
+		return StoredApplicationProfile{}, err
+	}
+	profile := StoredApplicationProfile{
+		ID:                   id,
+		Name:                 values.name,
+		PublicKey:            values.publicKey,
+		PublicKeyFingerprint: values.publicKeyFingerprint,
+		Routes:               values.routes,
+		RequestsPerMinute:    values.requestsPerMinute,
+		RequestBurst:         values.requestBurst,
+		ConcurrentRequests:   values.concurrentRequests,
+		Instances:            make(map[string]StoredApplicationInstance),
+		CreatedAt:            time.Now().UTC(),
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, existing := range s.data.ApplicationProfiles {
+		if existing.PublicKey == values.publicKey {
+			return StoredApplicationProfile{}, errors.New("public key is already used by another application")
+		}
+	}
+	s.data.ApplicationProfiles[id] = profile
+	if err := s.saveLocked(); err != nil {
+		delete(s.data.ApplicationProfiles, id)
+		return StoredApplicationProfile{}, err
+	}
+	return cloneApplicationProfile(profile), nil
+}
+
+func (s *Store) UpdateApplicationProfile(id, name, publicKey string, routes []StoredApplicationRoute, requestsPerMinute, requestBurst, concurrentRequests int) (StoredApplicationProfile, error) {
+	values, err := applicationProfileValuesFrom(name, publicKey, routes, requestsPerMinute, requestBurst, concurrentRequests)
+	if err != nil {
+		return StoredApplicationProfile{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	profile, ok := s.data.ApplicationProfiles[id]
+	if !ok {
+		return StoredApplicationProfile{}, errors.New("application profile not found")
+	}
+	previous := cloneApplicationProfile(profile)
+	for existingID, existing := range s.data.ApplicationProfiles {
+		if existingID != id && existing.PublicKey == values.publicKey {
+			return StoredApplicationProfile{}, errors.New("public key is already used by another application")
+		}
+	}
+	profile.Name = values.name
+	profile.PublicKey = values.publicKey
+	profile.PublicKeyFingerprint = values.publicKeyFingerprint
+	profile.Routes = values.routes
+	profile.RequestsPerMinute = values.requestsPerMinute
+	profile.RequestBurst = values.requestBurst
+	profile.ConcurrentRequests = values.concurrentRequests
+	s.data.ApplicationProfiles[id] = profile
+	if err := s.saveLocked(); err != nil {
+		s.data.ApplicationProfiles[id] = previous
+		return StoredApplicationProfile{}, err
+	}
+	return cloneApplicationProfile(profile), nil
+}
+
+func (s *Store) ApplicationProfile(id string) (StoredApplicationProfile, bool) {
+	if !applicationIDRE.MatchString(id) {
+		return StoredApplicationProfile{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	profile, ok := s.data.ApplicationProfiles[id]
+	if !ok {
+		return StoredApplicationProfile{}, false
+	}
+	return cloneApplicationProfile(profile), true
+}
+
+func (s *Store) ListApplicationProfiles() []StoredApplicationProfile {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	profiles := make([]StoredApplicationProfile, 0, len(s.data.ApplicationProfiles))
+	for _, profile := range s.data.ApplicationProfiles {
+		profiles = append(profiles, cloneApplicationProfile(profile))
+	}
+	sort.Slice(profiles, func(i, j int) bool {
+		return profiles[i].Name < profiles[j].Name
+	})
+	return profiles
+}
+
+func (s *Store) DeleteApplicationProfile(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	profile, ok := s.data.ApplicationProfiles[id]
+	if !ok {
+		return errors.New("application profile not found")
+	}
+	delete(s.data.ApplicationProfiles, id)
+	if err := s.saveLocked(); err != nil {
+		s.data.ApplicationProfiles[id] = profile
+		return err
+	}
+	return nil
+}
+
+// TunnelIDReserved reports whether id is remembered for any application
+// instance, so another application instance cannot take the same name.
+func (s *Store) TunnelIDReserved(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, profile := range s.data.ApplicationProfiles {
+		for _, instance := range profile.Instances {
+			if instance.TunnelID == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *Store) ApplicationInstance(profileID, instanceID string) (StoredApplicationInstance, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	instance, ok := s.data.ApplicationProfiles[profileID].Instances[instanceID]
+	return instance, ok
+}
+
+// EnrollApplicationInstance records a per-install public key and its GitHub
+// actor under the key's fingerprint-derived instance ID.
+func (s *Store) EnrollApplicationInstance(
+	profileID, instanceID, publicKey string,
+	actor enrollmentActor,
+) error {
+	actor.GitHubLogin = strings.TrimSpace(actor.GitHubLogin)
+	if actor.GitHubUserID <= 0 || actor.GitHubLogin == "" {
+		return errors.New("github enrollment identity is required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	profile, ok := s.data.ApplicationProfiles[profileID]
+	if !ok {
+		return errors.New("application profile not found")
+	}
+	previous := profile
+	profile = cloneApplicationProfile(profile)
+	if profile.Instances == nil {
+		profile.Instances = make(map[string]StoredApplicationInstance)
+	}
+	if existing, exists := profile.Instances[instanceID]; exists && existing.Enrolled() {
+		if existing.PublicKey != publicKey {
+			return errors.New("instance id is already enrolled with a different key")
+		}
+		if existing.Revoked {
+			return errors.New(revokedInstanceMessage)
+		}
+	}
+	now := time.Now().UTC()
+	for id, instance := range profile.Instances {
+		if id != instanceID && !instance.Revoked && now.Sub(instance.LastUsedAt) > applicationInstanceMaxIdle {
+			delete(profile.Instances, id)
+		}
+	}
+	instance := profile.Instances[instanceID]
+	if instance.CreatedAt.IsZero() {
+		instance.CreatedAt = now
+	}
+	instance.PublicKey = publicKey
+	instance.GitHubUserID = actor.GitHubUserID
+	instance.GitHubLogin = actor.GitHubLogin
+	instance.LastUsedAt = now
+	if _, exists := previous.Instances[instanceID]; !exists && len(profile.Instances) >= applicationInstancesMax {
+		return errors.New("application has too many remembered instances")
+	}
+	profile.Instances[instanceID] = instance
+	s.data.ApplicationProfiles[profileID] = profile
+	if err := s.saveLocked(); err != nil {
+		s.data.ApplicationProfiles[profileID] = previous
+		return err
+	}
+	return nil
+}
+
+// CountApplicationInstancesByGitHubUserID returns the number of non-revoked
+// enrolled identities attributed to a GitHub account for one application.
+func (s *Store) CountApplicationInstancesByGitHubUserID(profileID string, userID int64) int {
+	if userID <= 0 {
+		return 0
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for _, instance := range s.data.ApplicationProfiles[profileID].Instances {
+		if instance.Enrolled() && !instance.Revoked && instance.GitHubUserID == userID {
+			count++
+		}
+	}
+	return count
+}
+
+// PruneIdleApplicationInstances removes enrolled, non-revoked installations
+// that have not been used since cutoff. Instance IDs in retained are preserved.
+func (s *Store) PruneIdleApplicationInstances(profileID string, cutoff time.Time, retained map[string]bool) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	profile, ok := s.data.ApplicationProfiles[profileID]
+	if !ok {
+		return 0, errors.New("application profile not found")
+	}
+	previous := profile
+	profile = cloneApplicationProfile(profile)
+	pruned := 0
+	for instanceID, instance := range profile.Instances {
+		if retained[instanceID] || instance.Revoked || !instance.Enrolled() || !instance.LastUsedAt.Before(cutoff) {
+			continue
+		}
+		delete(profile.Instances, instanceID)
+		pruned++
+	}
+	if pruned == 0 {
+		return 0, nil
+	}
+	s.data.ApplicationProfiles[profileID] = profile
+	if err := s.saveLocked(); err != nil {
+		s.data.ApplicationProfiles[profileID] = previous
+		return 0, err
+	}
+	return pruned, nil
+}
+
+// RevokeApplicationInstanceForGitHubUser revokes an enrolled installation
+// only when it belongs to userID in the requested application profile.
+func (s *Store) RevokeApplicationInstanceForGitHubUser(profileID, instanceID string, userID int64) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	profile, ok := s.data.ApplicationProfiles[profileID]
+	if !ok {
+		return false, nil
+	}
+	instance, ok := profile.Instances[instanceID]
+	if !ok || !instance.Enrolled() || instance.Revoked || instance.GitHubUserID != userID {
+		return false, nil
+	}
+	previous := profile
+	profile = cloneApplicationProfile(profile)
+	instance.Revoked = true
+	profile.Instances[instanceID] = instance
+	s.data.ApplicationProfiles[profileID] = profile
+	if err := s.saveLocked(); err != nil {
+		s.data.ApplicationProfiles[profileID] = previous
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Store) SetApplicationInstanceRevoked(profileID, instanceID string, revoked bool) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	profile, ok := s.data.ApplicationProfiles[profileID]
+	if !ok {
+		return false, nil
+	}
+	instance, ok := profile.Instances[instanceID]
+	if !ok || !instance.Enrolled() {
+		return false, nil
+	}
+	previous := profile
+	profile = cloneApplicationProfile(profile)
+	instance.Revoked = revoked
+	profile.Instances[instanceID] = instance
+	s.data.ApplicationProfiles[profileID] = profile
+	if err := s.saveLocked(); err != nil {
+		s.data.ApplicationProfiles[profileID] = previous
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Store) ApplicationTunnelID(profileID, instanceID string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.data.ApplicationProfiles[profileID].Instances[instanceID].TunnelID
+}
+
+func (s *Store) RememberApplicationTunnel(profileID, instanceID, tunnelID string) error {
+	return s.rememberApplicationTunnel(profileID, instanceID, tunnelID, false)
+}
+
+// RememberAuthenticatedApplicationTunnel updates a tunnel reservation only if
+// the authenticated identity still exists and remains allowed.
+func (s *Store) RememberAuthenticatedApplicationTunnel(profileID, instanceID, tunnelID string) error {
+	return s.rememberApplicationTunnel(profileID, instanceID, tunnelID, true)
+}
+
+func (s *Store) rememberApplicationTunnel(profileID, instanceID, tunnelID string, requireExisting bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	profile, ok := s.data.ApplicationProfiles[profileID]
+	if !ok {
+		return errors.New("application profile not found")
+	}
+	previous := profile
+	profile = cloneApplicationProfile(profile)
+	if profile.Instances == nil {
+		profile.Instances = make(map[string]StoredApplicationInstance)
+	}
+	now := time.Now().UTC()
+	for id, instance := range profile.Instances {
+		if id != instanceID && !instance.Revoked && now.Sub(instance.LastUsedAt) > applicationInstanceMaxIdle {
+			delete(profile.Instances, id)
+		}
+	}
+	instance, exists := profile.Instances[instanceID]
+	if requireExisting && !exists {
+		return errors.New("application instance authorization no longer exists")
+	}
+	if !exists && len(profile.Instances) >= applicationInstancesMax {
+		return errors.New("application has too many remembered instances")
+	}
+	if instance.Enrolled() && instance.Revoked {
+		return errors.New(revokedInstanceMessage)
+	}
+	if instance.CreatedAt.IsZero() {
+		instance.CreatedAt = now
+	}
+	instance.TunnelID = tunnelID
+	instance.LastUsedAt = now
+	profile.Instances[instanceID] = instance
+	s.data.ApplicationProfiles[profileID] = profile
+	if err := s.saveLocked(); err != nil {
+		s.data.ApplicationProfiles[profileID] = previous
+		return err
+	}
+	return nil
+}
+
+func (s *Store) UnreserveApplicationTunnel(profileID, instanceID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	profile, ok := s.data.ApplicationProfiles[profileID]
+	if !ok {
+		return false, nil
+	}
+	instance, ok := profile.Instances[instanceID]
+	if !ok {
+		return false, nil
+	}
+	previous := profile
+	profile = cloneApplicationProfile(profile)
+	if instance.Enrolled() {
+		instance.TunnelID = ""
+		profile.Instances[instanceID] = instance
+	} else {
+		delete(profile.Instances, instanceID)
+	}
+	s.data.ApplicationProfiles[profileID] = profile
+	if err := s.saveLocked(); err != nil {
+		s.data.ApplicationProfiles[profileID] = previous
+		return false, err
+	}
+	return true, nil
+}
+
+func cloneApplicationProfile(profile StoredApplicationProfile) StoredApplicationProfile {
+	profile.Routes = cloneApplicationRoutes(profile.Routes)
+	instances := profile.Instances
+	profile.Instances = make(map[string]StoredApplicationInstance, len(instances))
+	for id, instance := range instances {
+		profile.Instances[id] = instance
+	}
+	return profile
+}
+
+func cloneApplicationRoutes(routes []StoredApplicationRoute) []StoredApplicationRoute {
+	cloned := make([]StoredApplicationRoute, len(routes))
+	for i, route := range routes {
+		cloned[i] = route
+		cloned[i].Methods = append([]string(nil), route.Methods...)
+	}
+	return cloned
+}
+
+func (s *Store) load() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data = storeData{
+		Sessions:            make(map[string]StoredSession),
+		ApplicationProfiles: make(map[string]StoredApplicationProfile),
+	}
+
+	file, err := os.Open(s.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := json.NewDecoder(file).Decode(&s.data); err != nil {
+		return errors.Join(err, file.Close())
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if s.data.ApplicationProfiles == nil {
+		s.data.ApplicationProfiles = make(map[string]StoredApplicationProfile)
+	}
+	if s.data.Sessions == nil {
+		s.data.Sessions = make(map[string]StoredSession)
+	}
+	if s.migrateApplicationInstancesLocked() {
+		return s.saveLocked()
+	}
+	return nil
+}
+
+func (s *Store) migrateApplicationInstancesLocked() bool {
+	changed := false
+	for id, profile := range s.data.ApplicationProfiles {
+		for instanceID, instance := range profile.Instances {
+			if !instance.CreatedAt.IsZero() {
+				continue
+			}
+			instance.CreatedAt = instance.LastUsedAt
+			if instance.CreatedAt.IsZero() {
+				instance.CreatedAt = profile.CreatedAt
+			}
+			profile.Instances[instanceID] = instance
+			changed = true
+		}
+		s.data.ApplicationProfiles[id] = profile
+	}
+	return changed
+}
+
+func (s *Store) saveLocked() error {
+	return atomicfile.WriteJSON(s.path, s.data)
+}
+
+func normalizeLogin(login string) string {
+	return strings.ToLower(strings.TrimSpace(login))
+}
+
+func randomHex(bytes int) (string, error) {
+	b := make([]byte, bytes)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}

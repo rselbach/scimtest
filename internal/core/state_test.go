@@ -1,0 +1,1974 @@
+package core
+
+import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"database/sql"
+	"encoding/json"
+	"encoding/pem"
+	"fmt"
+	"math/big"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
+)
+
+func TestRememberAdminPortRoundTrip(t *testing.T) {
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r := require.New(t)
+
+	port, err := LastAdminPort()
+	r.NoError(err)
+	r.Empty(port)
+
+	r.NoError(RememberAdminPort("8085"))
+	port, err = LastAdminPort()
+	r.NoError(err)
+	r.Equal("8085", port)
+
+	r.NoError(RememberAdminPort("8090"))
+	port, err = LastAdminPort()
+	r.NoError(err)
+	r.Equal("8090", port)
+}
+
+func TestSaveAndLoadState(t *testing.T) {
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r := require.New(t)
+
+	want := AppState{
+		Config: Config{
+			IDPBaseURL:       "https://scimtest.rselbach.com/human-timeline-club",
+			TunnelInstanceID: "12345678-1234-4234-8234-123456789abc",
+		},
+		Users: []User{{
+			ID:         "local-1",
+			GivenName:  "Troy",
+			FamilyName: "Barnes",
+			Email:      "troy@greendale.edu",
+			Username:   "troy",
+			Active:     true,
+			RemoteID:   "remote-1",
+			Dirty:      true,
+		}},
+		Groups: []Group{{
+			ID:          "group-1",
+			DisplayName: "Study Group",
+			MemberIDs:   []string{"local-1"},
+			RemoteID:    "remote-group-1",
+			Dirty:       true,
+		}},
+		Apps: []App{{
+			ID:                     "app-1",
+			Name:                   "Study App",
+			Slug:                   "study-app",
+			Protocol:               "saml",
+			SAMLACSURL:             "https://example.com/saml/acs",
+			SAMLNameIDField:        "username",
+			SAMLNameIDFormat:       SAMLNameIDFormatUnspecified,
+			SAMLEmailAttributeName: DefaultSAMLEmailAttributeName,
+			SAMLRequestCertPEM:     "pinned certificate",
+			SAMLEncryptionCertPEM:  "encryption certificate",
+			SCIMEnabled:            true,
+			SCIMBaseURL:            "https://example.com/scim/v2",
+			SCIMBearerToken:        "secret",
+			SCIMAutoOpenTrace:      true,
+			OIDCClaimMappings: OIDCClaimMappings{
+				Name: "display_name", GivenName: "first_name", FamilyName: "last_name",
+				Username: "login", Email: "mail", Groups: "roles",
+			},
+			SAMLAttributeMappings: SAMLAttributeMappings{
+				GivenName: "first_name", FamilyName: "last_name", Username: "login",
+				Email: "mail", Groups: "roles",
+			},
+			ChooserMode: ChooserModeIdentifier,
+		}},
+		UserSync: map[string]map[string]ResourceSyncState{
+			"app-1": {"local-1": {RemoteID: "remote-1", Dirty: true}},
+		},
+		GroupSync: map[string]map[string]ResourceSyncState{
+			"app-1": {"group-1": {RemoteID: "remote-group-1", Dirty: true}},
+		},
+		UserOperations: map[string][]OperationLog{
+			"local-1": {{
+				Kind:               "sync",
+				Summary:            "Created",
+				Operation:          "create",
+				Method:             "POST",
+				Path:               "/Users",
+				RequestBody:        `{"userName":"troy"}`,
+				Status:             "201 Created",
+				ResponseRetryAfter: "60",
+				ResponseBody:       `{"id":"remote-1"}`,
+				CreatedAt:          "2026-05-01T10:00:00Z",
+			}},
+		},
+		GroupOperations: map[string][]OperationLog{
+			"group-1": {{
+				Kind:         "sync",
+				Summary:      "Synced",
+				Operation:    "update",
+				Method:       "PUT",
+				Path:         "/Groups/remote-group-1",
+				RequestBody:  `{"displayName":"Study Group"}`,
+				Status:       "200 OK",
+				ResponseBody: "",
+				CreatedAt:    "2026-05-01T10:01:00Z",
+			}},
+		},
+	}
+
+	r.NoError(SaveState(want))
+	want.Users[0].RemoteID = ""
+	want.Users[0].Dirty = false
+	want.Groups[0].RemoteID = ""
+	want.Groups[0].Dirty = false
+	want.Environment = Environment{ID: DefaultEnvironmentID, Name: "Directory", Slug: "directory"}
+
+	got, err := LoadState()
+	r.NoError(err)
+	r.Equal(want, got)
+
+	path, err := stateFilePath()
+	r.NoError(err)
+
+	info, err := os.Stat(path)
+	r.NoError(err)
+	r.NotZero(info.Size())
+}
+
+func TestSAMLRequestVerificationSQLiteMirrorFollowsCertificatePresence(t *testing.T) {
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r := require.New(t)
+	certificate := testRSAPEMCertificate(t, currentTime().Add(-time.Hour), currentTime().AddDate(1, 0, 0))
+	state := AppState{Apps: []App{
+		{ID: "app-signed", Name: "Greendale", Slug: "greendale", SAMLRequestCertPEM: certificate},
+		{ID: "app-unsigned", Name: "City College", Slug: "city-college"},
+	}}
+	r.NoError(SaveState(state))
+
+	db, err := openStateDB()
+	r.NoError(err)
+	var signedMirror int
+	var unsignedMirror int
+	r.NoError(db.QueryRow(`SELECT saml_verify_requests FROM apps WHERE id = ?`, "app-signed").Scan(&signedMirror))
+	r.NoError(db.QueryRow(`SELECT saml_verify_requests FROM apps WHERE id = ?`, "app-unsigned").Scan(&unsignedMirror))
+	r.Equal(1, signedMirror)
+	r.Equal(0, unsignedMirror)
+
+	_, err = db.Exec(`UPDATE apps SET saml_verify_requests = CASE id WHEN 'app-signed' THEN 0 ELSE 1 END`)
+	r.NoError(err)
+	loaded, err := LoadState()
+	r.NoError(err)
+	r.Len(loaded.Apps, 2)
+	r.NotEmpty(loaded.Apps[0].SAMLRequestCertPEM)
+	r.Empty(loaded.Apps[1].SAMLRequestCertPEM)
+
+	r.NoError(SaveState(loaded))
+	r.NoError(db.QueryRow(`SELECT saml_verify_requests FROM apps WHERE id = ?`, "app-signed").Scan(&signedMirror))
+	r.NoError(db.QueryRow(`SELECT saml_verify_requests FROM apps WHERE id = ?`, "app-unsigned").Scan(&unsignedMirror))
+	r.Equal(1, signedMirror)
+	r.Equal(0, unsignedMirror)
+}
+
+func TestLegacySAMLRequestVerificationJSONIsIgnored(t *testing.T) {
+	r := require.New(t)
+	var app App
+	r.NoError(json.Unmarshal([]byte(`{"id":"app-1","saml_verify_requests":true}`), &app))
+
+	data, err := json.Marshal(app)
+	r.NoError(err)
+	r.NotContains(string(data), "saml_verify_requests")
+}
+
+func TestSaveEnvironmentStatePreservesGlobalConfig(t *testing.T) {
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r := require.New(t)
+	r.NoError(SaveState(AppState{Apps: []App{{
+		ID: "study-app", Name: "Study App", Slug: "study-app", Protocol: "oidc",
+	}}}))
+
+	want := Config{
+		IDPBaseURL:            "https://idp.greendale.edu",
+		TrustForwardedHeaders: true,
+		TunnelInstanceID:      "current-instance",
+		SigningPrivateKeyPEM:  "current-private-key",
+		SigningCertificatePEM: "current-certificate",
+	}
+	r.NoError(SaveGlobalConfig(want))
+
+	stale, err := LoadStateForApp("study-app")
+	r.NoError(err)
+	stale.Config.IDPBaseURL = "https://old-idp.greendale.edu"
+	stale.Config.TrustForwardedHeaders = false
+	stale.Config.TunnelInstanceID = "old-instance"
+	stale.Config.SigningPrivateKeyPEM = "old-private-key"
+	stale.Config.SigningCertificatePEM = "old-certificate"
+	r.NoError(SaveEnvironmentState(stale))
+
+	got, err := LoadStateForApp("study-app")
+	r.NoError(err)
+	r.Equal(want.IDPBaseURL, got.Config.IDPBaseURL)
+	r.Equal(want.TrustForwardedHeaders, got.Config.TrustForwardedHeaders)
+	r.Equal(want.TunnelInstanceID, got.Config.TunnelInstanceID)
+	r.Equal(want.SigningPrivateKeyPEM, got.Config.SigningPrivateKeyPEM)
+	r.Equal(want.SigningCertificatePEM, got.Config.SigningCertificatePEM)
+}
+
+func TestSigningKeysStayWithTheirEnvironment(t *testing.T) {
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r := require.New(t)
+	// The global state takes its config from the last environment, so the
+	// ring goes there to prove LoadState drops it.
+	r.NoError(SaveState(AppState{Apps: []App{
+		{ID: "city-college", Name: "City College", Slug: "city-college", Protocol: "saml"},
+		{ID: "greendale", Name: "Greendale", Slug: "greendale", Protocol: "oidc"},
+	}}))
+	rotated := []SigningKey{
+		{ID: "scimtest-dev", PrivateKeyPEM: "shared-private-key", CertificatePEM: "shared-certificate", PublishedUntil: time.Date(2026, 10, 3, 9, 0, 0, 0, time.UTC)},
+		{ID: "scimtest_new", PrivateKeyPEM: "new-private-key", CertificatePEM: "new-certificate", CreatedAt: time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)},
+	}
+
+	greendale, err := LoadStateForApp("greendale")
+	r.NoError(err)
+	r.Empty(greendale.Config.SigningKeys)
+	greendale.Config.SigningKeys = rotated
+	r.NoError(SaveEnvironmentState(greendale))
+
+	greendale, err = LoadStateForApp("greendale")
+	r.NoError(err)
+	r.Equal(rotated, greendale.Config.SigningKeys)
+	greendale.Users = append(greendale.Users, User{ID: "troy", GivenName: "Troy", Email: "troy@greendale.edu", Username: "troy", Active: true})
+	r.NoError(SaveEnvironmentState(greendale))
+	greendale, err = LoadStateForApp("greendale")
+	r.NoError(err)
+	r.Equal(rotated, greendale.Config.SigningKeys, "unrelated saves keep the key ring")
+
+	cityCollege, err := LoadStateForApp("city-college")
+	r.NoError(err)
+	r.Empty(cityCollege.Config.SigningKeys)
+	global, err := LoadState()
+	r.NoError(err)
+	r.Empty(global.Config.SigningKeys, "new environments start from global state and must not inherit a ring")
+}
+
+func TestEnsureTunnelInstanceIDGeneratesAndReusesUUID(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r.NoError(SaveState(AppState{}))
+
+	first, err := EnsureTunnelInstanceID()
+	r.NoError(err)
+	r.True(validUUID(first))
+	second, err := EnsureTunnelInstanceID()
+	r.NoError(err)
+	r.Equal(first, second)
+
+	state, err := LoadState()
+	r.NoError(err)
+	r.Equal(first, state.Config.TunnelInstanceID)
+}
+
+func TestEnsureTunnelInstanceIDRepairsInvalidValue(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r.NoError(SaveState(AppState{Config: Config{TunnelInstanceID: "invalid"}}))
+
+	instanceID, err := EnsureTunnelInstanceID()
+	r.NoError(err)
+	r.True(validUUID(instanceID))
+	r.NotEqual("invalid", instanceID)
+}
+
+func TestEnsureTunnelInstanceIDMigratesLegacyValue(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	db, err := openStateDB()
+	r.NoError(err)
+	legacyID := "12345678-1234-4234-8234-123456789abc"
+	_, err = db.Exec(`INSERT INTO config(key, value) VALUES ('rgrok_instance_id', ?)`, legacyID)
+	r.NoError(err)
+
+	instanceID, err := EnsureTunnelInstanceID()
+	r.NoError(err)
+	r.Equal(legacyID, instanceID)
+	state, err := LoadState()
+	r.NoError(err)
+	r.Equal(instanceID, state.Config.TunnelInstanceID)
+}
+
+func TestEnsureTunnelInstanceKeyGeneratesAndReusesKey(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r.NoError(SaveState(AppState{}))
+
+	first, err := EnsureTunnelInstanceKey()
+	r.NoError(err)
+	r.Len(first, ed25519.PrivateKeySize)
+	second, err := EnsureTunnelInstanceKey()
+	r.NoError(err)
+	r.Equal(first, second)
+}
+
+func TestEnsureTunnelInstanceKeyRepairsInvalidValue(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	db, err := openStateDB()
+	r.NoError(err)
+	_, err = db.Exec(`INSERT INTO config(key, value) VALUES ('tunnel_instance_key', 'not-a-key')`)
+	r.NoError(err)
+
+	first, err := EnsureTunnelInstanceKey()
+	r.NoError(err)
+	r.Len(first, ed25519.PrivateKeySize)
+	second, err := EnsureTunnelInstanceKey()
+	r.NoError(err)
+	r.Equal(first, second)
+}
+
+func TestRotateTunnelInstanceIdentityReplacesIDAndKeyTogether(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	db, err := openStateDB()
+	r.NoError(err)
+	legacyID := "12345678-1234-4234-8234-123456789abc"
+	_, err = db.Exec(`INSERT INTO config(key, value) VALUES('rgrok_instance_id', ?)`, legacyID)
+	r.NoError(err)
+
+	oldID, err := EnsureTunnelInstanceID()
+	r.NoError(err)
+	oldKey, err := EnsureTunnelInstanceKey()
+	r.NoError(err)
+
+	newID, newKey, err := RotateTunnelInstanceIdentity()
+	r.NoError(err)
+	r.True(validUUID(newID))
+	r.NotEqual(oldID, newID)
+	r.NotEqual(oldKey, newKey)
+
+	savedID, err := EnsureTunnelInstanceID()
+	r.NoError(err)
+	r.Equal(newID, savedID)
+	savedKey, err := EnsureTunnelInstanceKey()
+	r.NoError(err)
+	r.Equal(newKey, savedKey)
+
+	var legacyCount int
+	r.NoError(db.QueryRow(`SELECT COUNT(*) FROM config WHERE key = 'rgrok_instance_id'`).Scan(&legacyCount))
+	r.Zero(legacyCount)
+}
+
+func TestEnsureTunnelInstanceIDSurfacesStateError(t *testing.T) {
+	r := require.New(t)
+	root := t.TempDir()
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(root, "parent-file", "state.db"))
+	r.NoError(os.WriteFile(filepath.Join(root, "parent-file"), nil, 0o600))
+
+	_, err := EnsureTunnelInstanceID()
+	r.ErrorContains(err, "create state directory")
+}
+
+func TestConfigUnmarshalMigratesLegacyTunnelInstanceID(t *testing.T) {
+	tests := map[string]struct {
+		value string
+		want  string
+	}{
+		"legacy value": {
+			value: `{"rgrok_instance_id":"12345678-1234-4234-8234-123456789abc"}`,
+			want:  "12345678-1234-4234-8234-123456789abc",
+		},
+		"current value wins": {
+			value: `{"tunnel_instance_id":"87654321-4321-4321-8321-cba987654321","rgrok_instance_id":"12345678-1234-4234-8234-123456789abc"}`,
+			want:  "87654321-4321-4321-8321-cba987654321",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			var cfg Config
+			r.NoError(json.Unmarshal([]byte(tc.value), &cfg))
+			r.Equal(tc.want, cfg.TunnelInstanceID)
+		})
+	}
+}
+
+func TestStateDatabaseUsesPrivatePermissions(t *testing.T) {
+	r := require.New(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "nested", "state.db")
+	t.Setenv("SCIMTEST_STATE_FILE", path)
+
+	r.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
+	r.NoError(os.WriteFile(path, nil, 0o644))
+	r.NoError(os.Chmod(path, 0o644))
+
+	_, err := LoadState()
+	r.NoError(err)
+
+	info, err := os.Stat(path)
+	r.NoError(err)
+	r.Equal(os.FileMode(0o600), info.Mode().Perm())
+}
+
+// createTestEnvironment inserts an environment row directly; the product no
+// longer creates environments, but migration tests need legacy-shaped
+// databases.
+func createTestEnvironment(t *testing.T, name string) Environment {
+	t.Helper()
+	r := require.New(t)
+	id, err := NewID("env")
+	r.NoError(err)
+	env := Environment{ID: id, Name: name, Slug: Slugify(name)}
+	db, err := openStateDB()
+	r.NoError(err)
+	_, err = db.Exec(`INSERT INTO environments(id, name, slug) VALUES(?, ?, ?)`, env.ID, env.Name, env.Slug)
+	r.NoError(err)
+	return env
+}
+
+func TestMigrateSharedDirectoryCopiesResourcesIntoEveryEnvironment(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+
+	_, err := LoadState()
+	r.NoError(err)
+	db, err := openStateDB()
+	r.NoError(err)
+	_, err = db.Exec(`DELETE FROM config WHERE key = 'directory_per_environment_migrated'`)
+	r.NoError(err)
+	_, err = db.Exec(`INSERT INTO apps(id, environment_id, name, slug, protocol, scim_enabled) VALUES
+		('study-app', ?, 'Study App', 'study-app', 'oidc', 1),
+		('library-app', ?, 'Library App', 'library-app', 'saml', 1)`, DefaultEnvironmentID, DefaultEnvironmentID)
+	r.NoError(err)
+	_, err = db.Exec(`INSERT INTO users(id, environment_id, given_name, family_name, email, username, active, dirty, deleted)
+		VALUES('troy', ?, 'Troy', 'Barnes', 'troy@greendale.edu', 'troy', 1, 0, 0)`, DefaultEnvironmentID)
+	r.NoError(err)
+	_, err = db.Exec(`INSERT INTO groups(id, environment_id, display_name, dirty, deleted)
+		VALUES('study-group', ?, 'Study Group', 0, 0)`, DefaultEnvironmentID)
+	r.NoError(err)
+	_, err = db.Exec(`INSERT INTO group_members(group_id, environment_id, user_id, position)
+		VALUES('study-group', ?, 'troy', 0)`, DefaultEnvironmentID)
+	r.NoError(err)
+	_, err = db.Exec(`INSERT INTO app_user_sync(app_id, user_id, remote_id, dirty, deleted) VALUES
+		('study-app', 'troy', 'remote-study-troy', 0, 0),
+		('library-app', 'troy', 'remote-library-troy', 0, 0)`)
+	r.NoError(err)
+
+	r.NoError(migrateDirectoryOwnershipToApps(db))
+
+	study, err := LoadStateForApp("study-app")
+	r.NoError(err)
+	r.Equal(Environment{ID: "study-app", Name: "Study App", Slug: "study-app"}, study.Environment)
+	r.Len(study.Apps, 1)
+	r.Len(study.Users, 1)
+	r.Equal("remote-study-troy", study.UserSync["study-app"]["troy"].RemoteID)
+	r.Equal([]string{"troy"}, study.Groups[0].MemberIDs)
+
+	library, err := LoadStateForApp("library-app")
+	r.NoError(err)
+	r.Len(library.Users, 1)
+	r.Equal("remote-library-troy", library.UserSync["library-app"]["troy"].RemoteID)
+
+	study.Users[0].Email = "troy.barnes@greendale.edu"
+	r.NoError(SaveEnvironmentState(study))
+	library, err = LoadStateForApp("library-app")
+	r.NoError(err)
+	r.Equal("troy@greendale.edu", library.Users[0].Email)
+}
+
+func TestDefaultStateDirectoryUsesPrivatePermissions(t *testing.T) {
+	r := require.New(t)
+	root := t.TempDir()
+	t.Setenv("SCIMTEST_STATE_FILE", "")
+	t.Setenv("HOME", root)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+
+	path, err := stateFilePath()
+	r.NoError(err)
+	dir := filepath.Dir(path)
+	r.NoError(os.MkdirAll(dir, 0o755))
+	r.NoError(os.Chmod(dir, 0o755))
+
+	_, err = LoadState()
+	r.NoError(err)
+
+	info, err := os.Stat(dir)
+	r.NoError(err)
+	r.Equal(os.FileMode(0o700), info.Mode().Perm())
+}
+
+func TestLoadStateMigratesNameFromUsername(t *testing.T) {
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r := require.New(t)
+
+	path, err := legacyStateFilePath()
+	r.NoError(err)
+
+	legacyJSON := []byte(`{
+  "config": {},
+  "users": [
+    {
+      "id": "local-1",
+      "name": "Britta Perry",
+      "username": "britta",
+      "email": "britta@greendale.edu"
+    }
+  ]
+}`)
+	r.NoError(os.WriteFile(path, legacyJSON, 0o600))
+
+	got, err := LoadState()
+	r.NoError(err)
+	r.Len(got.Users, 1)
+	r.Equal("Britta", got.Users[0].GivenName)
+	r.Equal("Perry", got.Users[0].FamilyName)
+	r.Equal("britta", got.Users[0].Username)
+	r.True(got.Users[0].Active)
+}
+
+func TestSaveStateCapsOperationLogs(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	entries := make([]OperationLog, 0, maxOperationLogsPerResource+50)
+	total := maxOperationLogsPerResource + 50
+	for i := 0; i < total; i++ {
+		// Newest first, matching how AppendOperationLogs prepends entries.
+		age := total - 1 - i
+		entries = append(entries, OperationLog{
+			Kind:      "local",
+			Summary:   fmt.Sprintf("Update %d", i),
+			CreatedAt: fmt.Sprintf("2026-07-12T%02d:%02d:00Z", age/60, age%60),
+		})
+	}
+	state := AppState{
+		Users:          []User{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}},
+		UserOperations: map[string][]OperationLog{"troy": entries},
+	}
+
+	r.NoError(SaveState(state))
+
+	loaded, err := LoadState()
+	r.NoError(err)
+	r.Len(loaded.UserOperations["troy"], maxOperationLogsPerResource)
+	r.Equal("Update 0", loaded.UserOperations["troy"][0].Summary)
+}
+
+func TestSaveStatePreservesRowIDsForUpdatedEntities(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	state := AppState{
+		Users:  []User{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}},
+		Groups: []Group{{ID: "study-group", DisplayName: "Study Group", MemberIDs: []string{"troy"}}},
+		Apps:   []App{{ID: "greendale", Name: "Greendale", Slug: "greendale", Protocol: "oidc"}},
+	}
+	r.NoError(SaveState(state))
+	db, err := openStateDB()
+	r.NoError(err)
+	rowIDs := map[string]int64{}
+	for _, table := range []string{"users", "groups", "apps"} {
+		var rowID int64
+		r.NoError(db.QueryRow(`SELECT rowid FROM ` + table + ` LIMIT 1`).Scan(&rowID))
+		rowIDs[table] = rowID
+	}
+
+	state.Users[0].Email = "troy.barnes@greendale.edu"
+	state.Groups[0].DisplayName = "Save Greendale Committee"
+	state.Apps[0].Name = "Greendale Portal"
+	r.NoError(SaveState(state))
+
+	for _, table := range []string{"users", "groups", "apps"} {
+		var rowID int64
+		r.NoError(db.QueryRow(`SELECT rowid FROM ` + table + ` LIMIT 1`).Scan(&rowID))
+		r.Equal(rowIDs[table], rowID)
+	}
+}
+
+func BenchmarkSaveStateIncremental(b *testing.B) {
+	b.Setenv("SCIMTEST_STATE_FILE", filepath.Join(b.TempDir(), "state.db"))
+	users := make([]User, 500)
+	for i := range users {
+		users[i] = User{
+			ID:        fmt.Sprintf("user-%d", i),
+			GivenName: "Human",
+			Email:     fmt.Sprintf("human-%d@greendale.edu", i),
+			Username:  fmt.Sprintf("human-%d", i),
+			Active:    true,
+		}
+	}
+	state := AppState{Users: users}
+	if err := SaveState(state); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		state.Users[0].Email = fmt.Sprintf("human-%d@greendale.edu", i)
+		if err := SaveState(state); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestValidateUserAllowsEmptyFamilyName(t *testing.T) {
+	r := require.New(t)
+
+	r.NoError(ValidateUser("Magnitude", "magnitude@greendale.edu", "magnitude"))
+	r.ErrorContains(ValidateUser("", "pop@greendale.edu", "pop"), "given name is required")
+}
+
+func TestSplitName(t *testing.T) {
+	tests := map[string]struct {
+		input      string
+		wantGiven  string
+		wantFamily string
+	}{
+		"empty":        {input: "  ", wantGiven: "", wantFamily: ""},
+		"single token": {input: "Magnitude", wantGiven: "Magnitude", wantFamily: ""},
+		"two tokens":   {input: "Troy Barnes", wantGiven: "Troy", wantFamily: "Barnes"},
+		"many tokens":  {input: "Señor Ben Chang", wantGiven: "Señor", wantFamily: "Ben Chang"},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			given, family := SplitName(tc.input)
+			r.Equal(tc.wantGiven, given)
+			r.Equal(tc.wantFamily, family)
+		})
+	}
+}
+
+func TestValidateUserAllowsEmptyUsername(t *testing.T) {
+	r := require.New(t)
+
+	err := ValidateUser("Jeff", "jeff@greendale.edu", "")
+	r.NoError(err)
+}
+
+func TestLoadStateDefaultsActiveToTrue(t *testing.T) {
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r := require.New(t)
+
+	path, err := legacyStateFilePath()
+	r.NoError(err)
+
+	legacyJSON := []byte(`{
+  "config": {},
+  "users": [
+    {
+      "id": "local-2",
+      "given_name": "Abed",
+      "family_name": "Nadir",
+      "username": "abed",
+      "email": "abed@greendale.edu"
+    }
+  ]
+}`)
+	r.NoError(os.WriteFile(path, legacyJSON, 0o600))
+
+	got, err := LoadState()
+	r.NoError(err)
+	r.Len(got.Users, 1)
+	r.True(got.Users[0].Active)
+}
+
+func TestLoadStatePreservesInactiveUser(t *testing.T) {
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r := require.New(t)
+
+	path, err := legacyStateFilePath()
+	r.NoError(err)
+
+	legacyJSON := []byte(`{
+  "config": {},
+  "users": [
+    {
+      "id": "local-3",
+      "given_name": "Dean",
+      "family_name": "Pelton",
+      "username": "dean",
+      "email": "dean@greendale.edu",
+      "active": false
+    }
+  ]
+}`)
+	r.NoError(os.WriteFile(path, legacyJSON, 0o600))
+
+	got, err := LoadState()
+	r.NoError(err)
+	r.Len(got.Users, 1)
+	r.False(got.Users[0].Active)
+}
+
+func TestLoadStateMigratesLegacyOperationLogsTable(t *testing.T) {
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r := require.New(t)
+
+	path, err := stateFilePath()
+	r.NoError(err)
+
+	db, err := sql.Open("sqlite", path)
+	r.NoError(err)
+	defer func() {
+		r.NoError(db.Close())
+	}()
+
+	_, err = db.Exec(`CREATE TABLE operation_logs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		resource_type TEXT NOT NULL,
+		resource_id TEXT NOT NULL,
+		label TEXT NOT NULL,
+		operation TEXT NOT NULL,
+		method TEXT NOT NULL,
+		path TEXT NOT NULL,
+		request_body TEXT NOT NULL,
+		status TEXT NOT NULL,
+		response_body TEXT NOT NULL,
+		error_text TEXT NOT NULL,
+		created_at TEXT NOT NULL
+	)`)
+	r.NoError(err)
+
+	_, err = db.Exec(`INSERT INTO operation_logs(resource_type, resource_id, label, operation, method, path, request_body, status, response_body, error_text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"user",
+		"local-1",
+		"Troy Barnes",
+		"create",
+		"POST",
+		"/Users",
+		`{"userName":"troy"}`,
+		"201 Created",
+		`{"id":"remote-1"}`,
+		"",
+		"2026-05-01T10:00:00Z",
+	)
+	r.NoError(err)
+	r.NoError(db.Close())
+
+	state, err := LoadState()
+	r.NoError(err)
+	r.Len(state.UserOperations["local-1"], 1)
+	r.Equal("sync", state.UserOperations["local-1"][0].Kind)
+	r.Equal("", state.UserOperations["local-1"][0].Summary)
+	r.Equal("", state.UserOperations["local-1"][0].ResponseRetryAfter)
+}
+
+func TestLoadStateMigratesPreEnvironmentDatabaseIntoDefault(t *testing.T) {
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r := require.New(t)
+	path, err := stateFilePath()
+	r.NoError(err)
+	db, err := sql.Open("sqlite", path)
+	r.NoError(err)
+	_, err = db.Exec(`CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`)
+	r.NoError(err)
+	_, err = db.Exec(`CREATE TABLE users (
+		id TEXT PRIMARY KEY, given_name TEXT NOT NULL, family_name TEXT NOT NULL,
+		email TEXT NOT NULL, username TEXT NOT NULL, active INTEGER NOT NULL,
+		remote_id TEXT NOT NULL DEFAULT '', dirty INTEGER NOT NULL,
+		deleted INTEGER NOT NULL, last_error TEXT NOT NULL DEFAULT '')`)
+	r.NoError(err)
+	_, err = db.Exec(`INSERT INTO config(key, value) VALUES ('base_url', 'https://legacy.test/scim'), ('bearer_token', 'legacy-token')`)
+	r.NoError(err)
+	_, err = db.Exec(`INSERT INTO users(id, given_name, family_name, email, username, active, remote_id, dirty, deleted, last_error) VALUES ('troy', 'Troy', 'Barnes', 'troy@greendale.edu', 'troy', 1, 'remote-troy', 0, 0, '')`)
+	r.NoError(err)
+	r.NoError(db.Close())
+
+	state, err := LoadState()
+	r.NoError(err)
+	r.Equal(Environment{ID: DefaultEnvironmentID, Name: "Directory", Slug: "directory"}, state.Environment)
+	r.Empty(state.Config.BaseURL)
+	r.Empty(state.Config.BearerToken)
+	r.Len(state.Users, 1)
+	r.Empty(state.Users[0].RemoteID)
+	r.Len(state.Apps, 1)
+	r.True(state.Apps[0].SCIMEnabled)
+	r.Equal("https://legacy.test/scim", state.Apps[0].SCIMBaseURL)
+	r.Equal("legacy-token", state.Apps[0].SCIMBearerToken)
+	r.Equal("remote-troy", state.UserSync[state.Apps[0].ID]["troy"].RemoteID)
+
+	stateAgain, err := LoadState()
+	r.NoError(err)
+	r.Equal(state.Environment, stateAgain.Environment)
+	r.Empty(stateAgain.Environments)
+}
+
+func TestEnvironmentSCIMConfigurationMigratesToApps(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r.NoError(SaveState(AppState{}))
+	legacyEnvironment := createTestEnvironment(t, "Legacy Staging")
+	legacy := AppState{
+		Environment: legacyEnvironment,
+		Config:      Config{BaseURL: "https://legacy.test/scim", BearerToken: "legacy-token", AutoOpenSyncTrace: true},
+		Users:       []User{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true, RemoteID: "remote-troy"}},
+		Apps:        []App{{ID: "legacy-app", Name: "Legacy Portal", Slug: "legacy-portal", Protocol: "saml", SAMLACSURL: "https://legacy.test/acs"}},
+	}
+	db, err := openStateDB()
+	r.NoError(err)
+	r.NoError(saveStateToDB(db, legacy, false))
+	path, err := stateFilePath()
+	r.NoError(err)
+	db, err = sql.Open("sqlite", path)
+	r.NoError(err)
+	_, err = db.Exec(`DELETE FROM config WHERE key = 'app_scim_migrated'`)
+	r.NoError(err)
+	_, err = db.Exec(`UPDATE apps SET scim_enabled = 0, scim_base_url = '', scim_bearer_token = '', scim_auto_open_trace = 0`)
+	r.NoError(err)
+	_, err = db.Exec(`DELETE FROM app_user_sync`)
+	r.NoError(err)
+	r.NoError(db.Close())
+	r.NoError(resetStateDBCache())
+
+	db, err = openStateDB()
+	r.NoError(err)
+	migrated, err := loadStateFromDB(db, legacyEnvironment.ID)
+	r.NoError(err)
+	r.Len(migrated.Apps, 1)
+	r.True(migrated.Apps[0].SCIMEnabled)
+	r.Equal("https://legacy.test/scim", migrated.Apps[0].SCIMBaseURL)
+	r.Equal("legacy-token", migrated.Apps[0].SCIMBearerToken)
+	r.True(migrated.Apps[0].SCIMAutoOpenTrace)
+	r.Equal(ResourceSyncState{RemoteID: "remote-troy"}, migrated.UserSync["legacy-app"]["troy"])
+}
+
+func TestStateForAppKeepsRemoteStateIndependent(t *testing.T) {
+	r := require.New(t)
+	state := AppState{
+		Users:  []User{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}},
+		Groups: []Group{{ID: "study-group", DisplayName: "Study Group", MemberIDs: []string{"troy"}}},
+		Apps: []App{
+			{ID: "app-a", Name: "Portal A", SCIMEnabled: true, SCIMBaseURL: "https://a.test/scim", SCIMBearerToken: "token-a", SCIMFilterSupported: true, SCIMPatchSupported: true},
+			{ID: "app-b", Name: "Portal B", SCIMEnabled: true, SCIMBaseURL: "https://b.test/scim", SCIMBearerToken: "token-b"},
+		},
+		UserSync: map[string]map[string]ResourceSyncState{
+			"app-a": {"troy": {RemoteID: "remote-a"}},
+			"app-b": {"troy": {RemoteID: "remote-b", Dirty: true}},
+		},
+	}
+
+	projectedA, err := StateForApp(state, "app-a")
+	r.NoError(err)
+	r.Equal("https://a.test/scim", projectedA.Config.BaseURL)
+	r.True(projectedA.Config.FilterSupported)
+	r.True(projectedA.Config.PatchSupported)
+	r.Equal("remote-a", projectedA.Users[0].RemoteID)
+	r.False(projectedA.Users[0].Dirty)
+
+	projectedB, err := StateForApp(state, "app-b")
+	r.NoError(err)
+	r.Equal("https://b.test/scim", projectedB.Config.BaseURL)
+	r.Equal("remote-b", projectedB.Users[0].RemoteID)
+	r.True(projectedB.Users[0].Dirty)
+}
+
+func TestStateForAppKeepsLocalHistoryAndScopesSyncHistory(t *testing.T) {
+	r := require.New(t)
+	state := AppState{
+		Apps: []App{
+			{ID: "app-a", Name: "Portal A", SCIMEnabled: true},
+			{ID: "app-b", Name: "Portal B", SCIMEnabled: true},
+		},
+		UserOperations: map[string][]OperationLog{
+			"troy": {
+				{Kind: "local", Summary: "Updated locally"},
+				{AppID: "app-a", Kind: "sync", Summary: "Synced to A"},
+				{AppID: "app-b", Kind: "sync", Summary: "Synced to B"},
+				{Kind: "sync", Summary: "Legacy unscoped sync"},
+			},
+		},
+	}
+
+	projected, err := StateForApp(state, "app-a")
+	r.NoError(err)
+	r.Equal([]OperationLog{
+		{Kind: "local", Summary: "Updated locally"},
+		{AppID: "app-a", Kind: "sync", Summary: "Synced to A"},
+	}, projected.UserOperations["troy"])
+}
+
+func TestOperationLogAppIDRoundTrips(t *testing.T) {
+	r := require.New(t)
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	state := AppState{
+		Users: []User{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}},
+		Apps:  []App{{ID: "app-local", Name: "dev-local", Slug: "dev-local", Protocol: "scim", SCIMEnabled: true}},
+		UserOperations: map[string][]OperationLog{
+			"troy": {{AppID: "app-local", Kind: "sync", Summary: "Created"}},
+		},
+	}
+
+	r.NoError(SaveState(state))
+	loaded, err := LoadState()
+	r.NoError(err)
+	r.Equal("app-local", loaded.UserOperations["troy"][0].AppID)
+}
+
+func TestMarkDirtyUpdatesEverySyncApp(t *testing.T) {
+	r := require.New(t)
+	state := AppState{Apps: []App{
+		{ID: "app-a", SCIMEnabled: true},
+		{ID: "app-b", SCIMEnabled: true},
+		{ID: "app-c"},
+	}}
+
+	MarkUserDirty(&state, "troy", false)
+	MarkGroupDirty(&state, "study-group", false)
+
+	r.True(state.UserSync["app-a"]["troy"].Dirty)
+	r.True(state.UserSync["app-b"]["troy"].Dirty)
+	r.NotContains(state.UserSync, "app-c")
+	r.True(state.GroupSync["app-a"]["study-group"].Dirty)
+	r.True(state.GroupSync["app-b"]["study-group"].Dirty)
+	r.NotContains(state.GroupSync, "app-c")
+}
+
+func TestMarkDirtyUpdatesPausedAppsThatRememberResources(t *testing.T) {
+	r := require.New(t)
+	state := AppState{
+		Apps: []App{
+			{ID: "app-a", SCIMEnabled: true},
+			{ID: "app-b", SCIMEnabled: false},
+		},
+		UserSync: map[string]map[string]ResourceSyncState{
+			"app-b": {"troy": {RemoteID: "remote-b"}},
+		},
+		GroupSync: map[string]map[string]ResourceSyncState{
+			"app-b": {"study-group": {RemoteID: "remote-group-b"}},
+		},
+	}
+
+	MarkUserDirty(&state, "troy", true)
+	MarkGroupDirty(&state, "study-group", true)
+
+	r.Equal(ResourceSyncState{RemoteID: "remote-b", Dirty: true, Deleted: true}, state.UserSync["app-b"]["troy"])
+	r.Equal(ResourceSyncState{RemoteID: "remote-group-b", Dirty: true, Deleted: true}, state.GroupSync["app-b"]["study-group"])
+	r.True(state.UserSync["app-a"]["troy"].Dirty)
+	r.True(state.UserSync["app-a"]["troy"].Deleted)
+}
+
+func TestPurgeFullySyncedDeletionsWaitsForPausedAppRemotes(t *testing.T) {
+	r := require.New(t)
+	state := AppState{
+		Users:  []User{{ID: "troy", Deleted: true}},
+		Groups: []Group{{ID: "study-group", Deleted: true}},
+		Apps: []App{
+			{ID: "app-a", SCIMEnabled: true},
+			{ID: "app-b", SCIMEnabled: false},
+		},
+		UserSync: map[string]map[string]ResourceSyncState{
+			"app-a": {"troy": {Deleted: true}},
+			"app-b": {"troy": {RemoteID: "remote-b", Dirty: true, Deleted: true}},
+		},
+		GroupSync: map[string]map[string]ResourceSyncState{
+			"app-a": {"study-group": {Deleted: true}},
+			"app-b": {"study-group": {RemoteID: "remote-group-b"}},
+		},
+	}
+
+	PurgeFullySyncedDeletions(&state)
+
+	r.Len(state.Users, 1)
+	r.Equal("troy", state.Users[0].ID)
+	r.Equal("remote-b", state.UserSync["app-b"]["troy"].RemoteID)
+	r.Len(state.Groups, 1)
+	r.Equal("remote-group-b", state.GroupSync["app-b"]["study-group"].RemoteID)
+
+	state.UserSync["app-b"]["troy"] = ResourceSyncState{Deleted: true}
+	state.GroupSync["app-b"]["study-group"] = ResourceSyncState{Deleted: true}
+	PurgeFullySyncedDeletions(&state)
+	r.Empty(state.Users)
+	r.Empty(state.Groups)
+	_, userOK := state.UserSync["app-b"]["troy"]
+	_, groupOK := state.GroupSync["app-b"]["study-group"]
+	r.False(userOK)
+	r.False(groupOK)
+}
+
+func TestAppHasSyncState(t *testing.T) {
+	r := require.New(t)
+	r.False(AppHasSyncState(AppState{}, "app-a"))
+	r.True(AppHasSyncState(AppState{
+		UserSync: map[string]map[string]ResourceSyncState{"app-a": {"troy": {RemoteID: "r"}}},
+	}, "app-a"))
+}
+
+func TestMergeAppImportReplacesDirectoryAndTombstonesMissing(t *testing.T) {
+	r := require.New(t)
+	state := AppState{
+		Users: []User{
+			{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true},
+			{ID: "abed", GivenName: "Abed", FamilyName: "Nadir", Email: "abed@greendale.edu", Username: "abed", Active: true},
+		},
+		Apps: []App{{ID: "app-a", SCIMEnabled: true}},
+		UserSync: map[string]map[string]ResourceSyncState{
+			"app-a": {"troy": {RemoteID: "a-troy"}, "abed": {RemoteID: "a-abed"}},
+		},
+	}
+	imported := AppState{Users: []User{{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true, RemoteID: "a-troy"}}}
+
+	MergeAppImportState(&state, "app-a", imported)
+
+	r.Len(state.Users, 2)
+	r.True(state.Users[1].Deleted, "a user absent from the import is tombstoned")
+	r.Equal("a-troy", state.UserSync["app-a"]["troy"].RemoteID)
+	r.False(state.UserSync["app-a"]["troy"].Dirty)
+	_, abedTracked := state.UserSync["app-a"]["abed"]
+	r.False(abedTracked, "the import replaces this app's sync rows entirely")
+}
+
+func TestMergeAppImportRetainsOperationHistory(t *testing.T) {
+	r := require.New(t)
+	state := AppState{
+		Users:  []User{{ID: "troy", Active: true}},
+		Groups: []Group{{ID: "study-group", DisplayName: "Study Group"}},
+		Apps:   []App{{ID: "app-a", SCIMEnabled: true}},
+		UserOperations: map[string][]OperationLog{
+			"troy": {{AppID: "app-b", Kind: "sync", Summary: "Created", CreatedAt: "2026-05-01T10:00:00Z"}},
+		},
+		GroupOperations: map[string][]OperationLog{
+			"study-group": {{Kind: "local", Summary: "Created locally", CreatedAt: "2026-05-01T10:00:00Z"}},
+		},
+	}
+	imported := AppState{
+		Users:  []User{{ID: "troy", Active: true, RemoteID: "remote-troy"}},
+		Groups: []Group{{ID: "study-group", DisplayName: "Study Group", RemoteID: "remote-study-group"}},
+		UserOperations: map[string][]OperationLog{
+			"troy": {{Kind: "local", Summary: "Imported from SCIM", CreatedAt: "2026-05-01T11:00:00Z"}},
+		},
+		GroupOperations: map[string][]OperationLog{
+			"study-group": {{Kind: "local", Summary: "Imported from SCIM", CreatedAt: "2026-05-01T11:00:00Z"}},
+		},
+	}
+
+	MergeAppImportState(&state, "app-a", imported)
+
+	r.Equal([]string{"Imported from SCIM", "Created"}, []string{
+		state.UserOperations["troy"][0].Summary,
+		state.UserOperations["troy"][1].Summary,
+	})
+	r.Equal([]string{"Imported from SCIM", "Created locally"}, []string{
+		state.GroupOperations["study-group"][0].Summary,
+		state.GroupOperations["study-group"][1].Summary,
+	})
+}
+
+func TestAppendLocalOperationLogPrependsEntry(t *testing.T) {
+	r := require.New(t)
+	previousTime := currentTime
+	currentTime = func() time.Time {
+		return time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	}
+	defer func() {
+		currentTime = previousTime
+	}()
+
+	state := AppState{
+		UserOperations: map[string][]OperationLog{
+			"user-1": {
+				{Kind: "sync", Summary: "Synced", CreatedAt: "2026-05-01T11:00:00Z"},
+			},
+		},
+	}
+
+	AppendLocalOperationLog(&state, "user", "user-1", "Updated email")
+
+	r.Len(state.UserOperations["user-1"], 2)
+	r.Equal("local", state.UserOperations["user-1"][0].Kind)
+	r.Equal("Updated email", state.UserOperations["user-1"][0].Summary)
+	r.Equal("2026-05-01T12:00:00Z", state.UserOperations["user-1"][0].CreatedAt)
+	r.Equal("Synced", state.UserOperations["user-1"][1].Summary)
+}
+
+func TestLoadStateOrdersOperationLogsNewestFirst(t *testing.T) {
+	t.Setenv("SCIMTEST_STATE_FILE", filepath.Join(t.TempDir(), "state.db"))
+	r := require.New(t)
+
+	state := AppState{
+		Users: []User{{
+			ID:         "user-1",
+			GivenName:  "Troy",
+			FamilyName: "Barnes",
+			Email:      "troy@greendale.edu",
+			Username:   "troy",
+			Active:     true,
+		}},
+		UserOperations: map[string][]OperationLog{
+			"user-1": {
+				{Kind: "local", Summary: "Updated email", CreatedAt: "2026-05-01T12:00:00Z"},
+				{Kind: "sync", Summary: "Synced", CreatedAt: "2026-05-01T11:00:00Z"},
+			},
+		},
+	}
+
+	r.NoError(SaveState(state))
+
+	loaded, err := LoadState()
+	r.NoError(err)
+	r.Len(loaded.UserOperations["user-1"], 2)
+	r.Equal("Updated email", loaded.UserOperations["user-1"][0].Summary)
+	r.Equal("Synced", loaded.UserOperations["user-1"][1].Summary)
+}
+
+func TestUserGroupsExcludesDeletedGroups(t *testing.T) {
+	r := require.New(t)
+	state := AppState{
+		Groups: []Group{{
+			ID:          "g1",
+			DisplayName: "Study Group",
+			MemberIDs:   []string{"troy"},
+		}, {
+			ID:          "g2",
+			DisplayName: "Air Conditioning Repair",
+			MemberIDs:   []string{"troy"},
+			Deleted:     true,
+		}, {
+			ID:          "g3",
+			DisplayName: "Glee Club",
+			MemberIDs:   []string{"regionals"},
+		}},
+	}
+
+	r.Equal([]string{"Study Group"}, UserGroups(state, "troy"))
+}
+
+func TestValidateAppAllowsIncompleteSAMLAndRejectsUnsafeACSURL(t *testing.T) {
+	tests := map[string]struct {
+		acsURL  string
+		wantErr string
+	}{
+		"empty draft": {},
+		"relative": {
+			acsURL:  "/saml/acs",
+			wantErr: "absolute HTTP(S) URL",
+		},
+		"network path": {
+			acsURL:  "//sp.greendale.test/acs",
+			wantErr: "absolute HTTP(S) URL",
+		},
+		"unsafe scheme": {
+			acsURL:  "javascript:alert(1)",
+			wantErr: "absolute HTTP(S) URL",
+		},
+		"fragment": {
+			acsURL:  "https://sp.greendale.test/acs#fragment",
+			wantErr: "absolute HTTP(S) URL",
+		},
+		"valid": {
+			acsURL: "https://sp.greendale.test/acs",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			err := ValidateApp(App{
+				ID:         "app-1",
+				Name:       "Greendale",
+				Slug:       "greendale",
+				Protocol:   "saml",
+				SAMLACSURL: tc.acsURL,
+			}, nil)
+			if tc.wantErr == "" {
+				r.NoError(err)
+				return
+			}
+			r.ErrorContains(err, tc.wantErr)
+		})
+	}
+}
+
+func TestValidateHTTPBaseURL(t *testing.T) {
+	tests := map[string]struct {
+		value    string
+		required bool
+		wantErr  string
+	}{
+		"optional empty": {},
+		"required empty": {required: true, wantErr: "SCIM base URL is required"},
+		"relative":       {value: "/scim/v2", wantErr: "must be an absolute URL"},
+		"wrong scheme":   {value: "file:///tmp/scim", wantErr: "must use HTTP or HTTPS"},
+		"credentials":    {value: "https://dean:pelton@greendale.test/scim", wantErr: "must not contain credentials"},
+		"query":          {value: "https://greendale.test/scim?secret=chang", wantErr: "must not contain a query string"},
+		"fragment":       {value: "https://greendale.test/scim#users", wantErr: "must not contain a fragment"},
+		"valid":          {value: "https://greendale.test/scim/v2"},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			err := ValidateHTTPBaseURL("SCIM base URL", tc.value, tc.required)
+			if tc.wantErr == "" {
+				r.NoError(err)
+				return
+			}
+			r.ErrorContains(err, tc.wantErr)
+		})
+	}
+}
+
+func TestValidateAppAllowsIncompleteOIDCAndRejectsUnsafeRedirect(t *testing.T) {
+	tests := map[string]struct {
+		redirects []string
+		allowAny  bool
+		wantErr   string
+	}{
+		"missing draft": {},
+		"explicit any":  {allowAny: true},
+		"relative":      {redirects: []string{"/callback"}, wantErr: "absolute HTTP(S) URL"},
+		"custom scheme": {redirects: []string{"greendale://callback"}, wantErr: "absolute HTTP(S) URL"},
+		"fragment":      {redirects: []string{"https://greendale.test/callback#fragment"}, wantErr: "absolute HTTP(S) URL"},
+		"valid":         {redirects: []string{"http://localhost:3000/callback"}},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			err := ValidateApp(App{
+				ID:                   "app-1",
+				Name:                 "Greendale",
+				Slug:                 "greendale",
+				Protocol:             "oidc",
+				OIDCClientID:         "greendale-client",
+				OIDCRedirectURIs:     tc.redirects,
+				AllowAnyOIDCRedirect: tc.allowAny,
+			}, nil)
+			if tc.wantErr == "" {
+				r.NoError(err)
+				return
+			}
+			r.ErrorContains(err, tc.wantErr)
+		})
+	}
+}
+
+func TestProtocolSetupStatus(t *testing.T) {
+	tests := map[string]struct {
+		app      App
+		status   func(App) string
+		want     string
+		protocol string
+	}{
+		"OIDC not set up": {
+			app:      App{Protocol: "none"},
+			status:   OIDCSetupStatus,
+			want:     SetupStatusNotSetUp,
+			protocol: "none",
+		},
+		"OIDC incomplete": {
+			app:      App{Protocol: "none", OIDCClientID: "greendale"},
+			status:   OIDCSetupStatus,
+			want:     SetupStatusIncomplete,
+			protocol: "oidc",
+		},
+		"OIDC configured": {
+			app: App{
+				Protocol:         "none",
+				OIDCClientID:     "greendale",
+				OIDCClientSecret: "chang-secret",
+				OIDCRedirectURIs: []string{"https://greendale.test/callback"},
+			},
+			status:   OIDCSetupStatus,
+			want:     SetupStatusConfigured,
+			protocol: "oidc",
+		},
+		"SAML incomplete": {
+			app:      App{Protocol: "none", SAMLEntityID: "urn:greendale:sp"},
+			status:   SAMLSetupStatus,
+			want:     SetupStatusIncomplete,
+			protocol: "saml",
+		},
+		"SAML configured": {
+			app:      App{Protocol: "none", SAMLACSURL: "https://greendale.test/saml/acs"},
+			status:   SAMLSetupStatus,
+			want:     SetupStatusConfigured,
+			protocol: "saml",
+		},
+		"SAML encryption incomplete": {
+			app: App{
+				Protocol:              "none",
+				SAMLACSURL:            "https://greendale.test/saml/acs",
+				SAMLEncryptionCertPEM: "not-a-cert",
+			},
+			status:   SAMLSetupStatus,
+			want:     SetupStatusIncomplete,
+			protocol: "saml",
+		},
+		"SCIM incomplete": {
+			app:      App{Protocol: "none", SCIMBaseURL: "https://greendale.test/scim/v2"},
+			status:   SCIMSetupStatus,
+			want:     SetupStatusIncomplete,
+			protocol: "scim",
+		},
+		"SCIM configured": {
+			app:      App{Protocol: "none", SCIMBaseURL: "https://greendale.test/scim/v2", SCIMBearerToken: "chang-token"},
+			status:   SCIMSetupStatus,
+			want:     SetupStatusConfigured,
+			protocol: "scim",
+		},
+		"OIDC and SAML": {
+			app: App{
+				Protocol:         "none",
+				OIDCClientID:     "greendale",
+				OIDCClientSecret: "chang-secret",
+				OIDCRedirectURIs: []string{"https://greendale.test/callback"},
+				SAMLACSURL:       "https://greendale.test/saml/acs",
+			},
+			status:   OIDCSetupStatus,
+			want:     SetupStatusConfigured,
+			protocol: "both",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			r.Equal(tc.want, tc.status(tc.app))
+			r.Equal(tc.protocol, InferAppProtocol(tc.app))
+		})
+	}
+}
+
+func TestNormalizeStateDerivesSCIMEnabled(t *testing.T) {
+	r := require.New(t)
+	state := AppState{Apps: []App{{
+		ID:              "app-1",
+		Name:            "Greendale",
+		Slug:            "greendale",
+		Protocol:        "none",
+		SCIMBaseURL:     "https://greendale.test/scim/v2/",
+		SCIMBearerToken: "chang-token",
+	}}}
+
+	NormalizeState(&state)
+
+	r.True(state.Apps[0].SCIMEnabled)
+	r.Equal("scim", state.Apps[0].Protocol)
+	r.Equal("https://greendale.test/scim/v2", state.Apps[0].SCIMBaseURL)
+}
+
+func TestValidateAppRejectsUnsafeClaimMappings(t *testing.T) {
+	tests := map[string]struct {
+		mutate  func(*OIDCClaimMappings)
+		wantErr string
+	}{
+		"reserved": {
+			mutate:  func(mappings *OIDCClaimMappings) { mappings.Email = "sub" },
+			wantErr: `OIDC claim name "sub" is reserved`,
+		},
+		"duplicate": {
+			mutate:  func(mappings *OIDCClaimMappings) { mappings.Email = mappings.Username },
+			wantErr: `OIDC claim name "preferred_username" is configured more than once`,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			mappings := DefaultOIDCClaimMappings()
+			tc.mutate(&mappings)
+			err := ValidateApp(App{
+				ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "oidc",
+				OIDCClientID: "greendale-client", AllowAnyOIDCRedirect: true, OIDCClaimMappings: mappings,
+			}, nil)
+			require.EqualError(t, err, tc.wantErr)
+		})
+	}
+}
+
+func TestOpenStateDBAtSetsConcurrencyPragmas(t *testing.T) {
+	r := require.New(t)
+
+	db, err := openStateDBAt(filepath.Join(t.TempDir(), "state.db"))
+	r.NoError(err)
+	defer func() {
+		r.NoError(db.Close())
+	}()
+
+	var mode string
+	r.NoError(db.QueryRow("PRAGMA journal_mode").Scan(&mode))
+	r.Equal("wal", mode)
+
+	var timeout int
+	r.NoError(db.QueryRow("PRAGMA busy_timeout").Scan(&timeout))
+	r.Equal(5000, timeout)
+}
+
+func TestOpenStateDBAtPreservesSpecialFilenameCharacters(t *testing.T) {
+	tests := map[string]struct {
+		filename string
+		relative bool
+	}{
+		"fragment marker":       {filename: "greendale#prod.db"},
+		"percent sign":          {filename: "greendale%prod.db"},
+		"query marker":          {filename: "greendale?prod.db"},
+		"relative query marker": {filename: "greendale?relative.db", relative: true},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			dir := t.TempDir()
+			path := filepath.Join(dir, tc.filename)
+			if tc.relative {
+				t.Chdir(dir)
+				path = tc.filename
+			}
+			db, err := openStateDBAt(path)
+			r.NoError(err)
+			r.NoError(db.Close())
+
+			data, err := os.ReadFile(path)
+			r.NoError(err)
+			r.GreaterOrEqual(len(data), 16)
+			r.Equal("SQLite format 3\x00", string(data[:16]))
+		})
+	}
+}
+
+func TestSchemaVersionStampAndGuards(t *testing.T) {
+	r := require.New(t)
+	path := filepath.Join(t.TempDir(), "state.db")
+	t.Setenv("SCIMTEST_STATE_FILE", path)
+
+	// A fresh database is stamped with the current version and needs no
+	// pre-migration copy.
+	r.NoError(SaveState(AppState{}))
+	db, err := openStateDB()
+	r.NoError(err)
+	version, err := schemaVersion(db)
+	r.NoError(err)
+	r.Equal(currentSchemaVersion, version)
+	_, err = os.Stat(filepath.Join(filepath.Dir(path), "backups"))
+	r.True(os.IsNotExist(err), "fresh databases must not write pre-migration copies")
+
+	// A database stamped by a newer scimtest is refused with a clear error.
+	_, err = db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, currentSchemaVersion+5))
+	r.NoError(err)
+	r.NoError(resetStateDBCache())
+	_, err = LoadState()
+	r.ErrorContains(err, "written by a newer scimtest")
+	r.ErrorContains(err, "upgrade scimtest")
+}
+
+func TestSchemaMigrationWritesPreMigrationCopy(t *testing.T) {
+	r := require.New(t)
+	path := filepath.Join(t.TempDir(), "state.db")
+	t.Setenv("SCIMTEST_STATE_FILE", path)
+
+	// Simulate a pre-versioning database: populated tables, user_version 0.
+	r.NoError(SaveState(AppState{Users: []User{{ID: "u1", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true}}}))
+	db, err := openStateDB()
+	r.NoError(err)
+	_, err = db.Exec(`PRAGMA user_version = 0`)
+	r.NoError(err)
+	r.NoError(resetStateDBCache())
+
+	state, err := LoadState()
+	r.NoError(err)
+	r.Len(state.Users, 1)
+
+	entries, err := os.ReadDir(filepath.Join(filepath.Dir(path), "backups"))
+	r.NoError(err)
+	r.Len(entries, 1)
+	r.Contains(entries[0].Name(), "pre-migrate-v000-")
+}
+
+func TestSchemaMigrationAddsBackchannelLogoutSettings(t *testing.T) {
+	r := require.New(t)
+	path := filepath.Join(t.TempDir(), "state.db")
+	t.Setenv("SCIMTEST_STATE_FILE", path)
+	r.NoError(SaveState(AppState{Apps: []App{{
+		ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "oidc",
+		OIDCClientID: "greendale", OIDCClientSecret: "secret", OIDCRedirectURIs: []string{"https://greendale.test/callback"},
+	}}}))
+
+	db, err := openStateDB()
+	r.NoError(err)
+	for _, column := range []string{"oidc_backchannel_logout_uri", "oidc_backchannel_logout_session_required"} {
+		_, err = db.Exec(`ALTER TABLE apps DROP COLUMN ` + column)
+		r.NoError(err)
+	}
+	_, err = db.Exec(`PRAGMA user_version = 2`)
+	r.NoError(err)
+	r.NoError(resetStateDBCache())
+
+	state, err := LoadState()
+	r.NoError(err)
+	r.Len(state.Apps, 1)
+	r.Empty(state.Apps[0].OIDCBackchannelLogoutURI)
+	r.False(state.Apps[0].OIDCBackchannelLogoutSessionRequired)
+
+	state.Apps[0].OIDCBackchannelLogoutURI = "https://greendale.test/backchannel-logout"
+	state.Apps[0].OIDCBackchannelLogoutSessionRequired = true
+	r.NoError(SaveState(state))
+	r.NoError(resetStateDBCache())
+	state, err = LoadState()
+	r.NoError(err)
+	r.Equal("https://greendale.test/backchannel-logout", state.Apps[0].OIDCBackchannelLogoutURI)
+	r.True(state.Apps[0].OIDCBackchannelLogoutSessionRequired)
+}
+
+func TestValidateAppBackchannelLogoutURI(t *testing.T) {
+	tests := map[string]struct {
+		uri     string
+		wantErr string
+	}{
+		"empty":         {},
+		"https":         {uri: "https://greendale.test/backchannel-logout"},
+		"with a query":  {uri: "http://localhost:3000/logout?tenant=greendale"},
+		"relative":      {uri: "/backchannel-logout", wantErr: "must be an absolute HTTP(S) URL"},
+		"other scheme":  {uri: "ftp://greendale.test/logout", wantErr: "must be an absolute HTTP(S) URL"},
+		"with fragment": {uri: "https://greendale.test/logout#study-group", wantErr: "without a fragment"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			app := App{
+				ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "oidc",
+				OIDCClientID: "greendale", OIDCClientSecret: "secret", OIDCRedirectURIs: []string{"https://greendale.test/callback"},
+				OIDCBackchannelLogoutURI: tc.uri,
+			}
+			err := ValidateApp(app, nil)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				require.Equal(t, SetupStatusConfigured, OIDCSetupStatus(app))
+				return
+			}
+			require.ErrorContains(t, err, tc.wantErr)
+			require.Equal(t, SetupStatusIncomplete, OIDCSetupStatus(app))
+		})
+	}
+}
+
+func TestSchemaMigrationAddsSAMLSLOURL(t *testing.T) {
+	r := require.New(t)
+	path := filepath.Join(t.TempDir(), "state.db")
+	t.Setenv("SCIMTEST_STATE_FILE", path)
+	r.NoError(SaveState(AppState{Apps: []App{{
+		ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "saml",
+		SAMLACSURL: "https://greendale.test/saml/acs",
+	}}}))
+
+	db, err := openStateDB()
+	r.NoError(err)
+	_, err = db.Exec(`ALTER TABLE apps DROP COLUMN saml_slo_url`)
+	r.NoError(err)
+	_, err = db.Exec(`PRAGMA user_version = 3`)
+	r.NoError(err)
+	r.NoError(resetStateDBCache())
+
+	state, err := LoadState()
+	r.NoError(err)
+	r.Len(state.Apps, 1)
+	r.Empty(state.Apps[0].SAMLSLOURL)
+
+	state.Apps[0].SAMLSLOURL = "https://greendale.test/saml/slo"
+	r.NoError(SaveState(state))
+	r.NoError(resetStateDBCache())
+	state, err = LoadState()
+	r.NoError(err)
+	r.Equal("https://greendale.test/saml/slo", state.Apps[0].SAMLSLOURL)
+}
+
+func TestValidateAppSAMLSLOURL(t *testing.T) {
+	tests := map[string]struct {
+		url     string
+		wantErr string
+	}{
+		"empty":         {},
+		"https":         {url: "https://greendale.test/saml/slo"},
+		"with a query":  {url: "http://localhost:3000/slo?tenant=greendale"},
+		"relative":      {url: "/saml/slo", wantErr: "must be an absolute HTTP(S) URL"},
+		"other scheme":  {url: "ftp://greendale.test/slo", wantErr: "must be an absolute HTTP(S) URL"},
+		"with fragment": {url: "https://greendale.test/slo#study-group", wantErr: "without a fragment"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			app := App{
+				ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "saml",
+				SAMLACSURL: "https://greendale.test/saml/acs", SAMLSLOURL: tc.url,
+			}
+			err := ValidateApp(app, nil)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				require.Equal(t, SetupStatusConfigured, SAMLSetupStatus(app))
+				return
+			}
+			require.ErrorContains(t, err, tc.wantErr)
+			require.Equal(t, SetupStatusIncomplete, SAMLSetupStatus(app))
+		})
+	}
+}
+
+func TestSchemaMigrationDefaultsSAMLEncryptionAlgorithm(t *testing.T) {
+	r := require.New(t)
+	path := filepath.Join(t.TempDir(), "state.db")
+	t.Setenv("SCIMTEST_STATE_FILE", path)
+	r.NoError(SaveState(AppState{Apps: []App{{
+		ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "saml",
+		SAMLACSURL: "https://greendale.test/saml/acs",
+	}}}))
+
+	db, err := openStateDB()
+	r.NoError(err)
+	_, err = db.Exec(`ALTER TABLE apps DROP COLUMN saml_encryption_algorithm`)
+	r.NoError(err)
+	_, err = db.Exec(`PRAGMA user_version = 1`)
+	r.NoError(err)
+	r.NoError(resetStateDBCache())
+
+	state, err := LoadState()
+	r.NoError(err)
+	r.Len(state.Apps, 1)
+	r.Equal(DefaultSAMLEncryptionAlgorithm, state.Apps[0].SAMLEncryptionAlgorithm)
+
+	db, err = openStateDB()
+	r.NoError(err)
+	version, err := schemaVersion(db)
+	r.NoError(err)
+	r.Equal(currentSchemaVersion, version)
+}
+
+func TestSchemaMigrationDefaultsSAMLSigningMode(t *testing.T) {
+	r := require.New(t)
+	path := filepath.Join(t.TempDir(), "state.db")
+	t.Setenv("SCIMTEST_STATE_FILE", path)
+	r.NoError(SaveState(AppState{Apps: []App{{
+		ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "saml",
+		SAMLACSURL: "https://greendale.test/saml/acs",
+	}}}))
+
+	db, err := openStateDB()
+	r.NoError(err)
+	_, err = db.Exec(`ALTER TABLE apps DROP COLUMN saml_signing_mode`)
+	r.NoError(err)
+	_, err = db.Exec(`PRAGMA user_version = 2`)
+	r.NoError(err)
+	r.NoError(resetStateDBCache())
+
+	state, err := LoadState()
+	r.NoError(err)
+	r.Len(state.Apps, 1)
+	r.Equal(SAMLSigningModeAssertion, state.Apps[0].SAMLSigningMode)
+
+	db, err = openStateDB()
+	r.NoError(err)
+	version, err := schemaVersion(db)
+	r.NoError(err)
+	r.Equal(currentSchemaVersion, version)
+	entries, err := os.ReadDir(filepath.Join(filepath.Dir(path), "backups"))
+	r.NoError(err)
+	r.Len(entries, 1)
+	r.Contains(entries[0].Name(), "pre-migrate-v002-")
+}
+
+func TestPlanSync(t *testing.T) {
+	state := AppState{
+		Users: []User{
+			{ID: "u1", GivenName: "Troy", FamilyName: "Barnes", Dirty: true},
+			{ID: "u2", GivenName: "Abed", FamilyName: "Nadir", Dirty: true, RemoteID: "r2"},
+			{ID: "u3", GivenName: "Annie", FamilyName: "Edison", Dirty: true, RemoteID: "r3", Deleted: true},
+			{ID: "u4", GivenName: "Jeff", FamilyName: "Winger", Dirty: true, Deleted: true},
+			{ID: "u5", GivenName: "Britta", FamilyName: "Perry"},
+		},
+		Groups: []Group{
+			{ID: "g1", DisplayName: "Study Group", Dirty: true},
+			{ID: "g2", DisplayName: "Faculty"},
+		},
+	}
+
+	plan := PlanSync(state)
+
+	want := []SyncPlanEntry{
+		{ResourceType: "user", ResourceID: "u1", Label: "Troy Barnes", Operation: "create"},
+		{ResourceType: "user", ResourceID: "u2", Label: "Abed Nadir", Operation: "update"},
+		{ResourceType: "user", ResourceID: "u3", Label: "Annie Edison", Operation: "delete"},
+		{ResourceType: "user", ResourceID: "u4", Label: "Jeff Winger", Operation: "forget"},
+		{ResourceType: "group", ResourceID: "g1", Label: "Study Group", Operation: "create"},
+	}
+	require.Equal(t, want, plan)
+}
+
+func TestParseSAMLEncryptionCertificate(t *testing.T) {
+	now := currentTime()
+	validPEM := testRSAPEMCertificate(t, now.Add(-time.Hour), now.AddDate(1, 0, 0))
+	expiredPEM := testRSAPEMCertificate(t, now.Add(-48*time.Hour), now.Add(-time.Hour))
+
+	tests := map[string]struct {
+		value   string
+		wantErr string
+		wantNil bool
+	}{
+		"empty":      {value: "", wantNil: true},
+		"whitespace": {value: " \n\t", wantNil: true},
+		"valid":      {value: validPEM},
+		"garbage":    {value: "not-a-cert", wantErr: "SAML encryption certificate is invalid"},
+		"expired":    {value: expiredPEM, wantErr: "SAML encryption certificate is invalid"},
+		"extra block": {
+			value:   validPEM + validPEM,
+			wantErr: "SAML encryption certificate is invalid",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			cert, err := ParseSAMLEncryptionCertificate(tc.value)
+			if tc.wantErr != "" {
+				r.ErrorContains(err, tc.wantErr)
+				r.Nil(cert)
+				return
+			}
+			r.NoError(err)
+			if tc.wantNil {
+				r.Nil(cert)
+				return
+			}
+			r.NotNil(cert)
+			_, ok := cert.PublicKey.(*rsa.PublicKey)
+			r.True(ok)
+		})
+	}
+}
+
+func TestParseSAMLRequestCertificate(t *testing.T) {
+	now := currentTime()
+	validPEM := testRSAPEMCertificate(t, now.Add(-time.Hour), now.AddDate(1, 0, 0))
+	expiredPEM := testRSAPEMCertificate(t, now.Add(-48*time.Hour), now.Add(-time.Hour))
+
+	tests := map[string]struct {
+		value   string
+		wantErr string
+		wantNil bool
+	}{
+		"empty":      {value: "", wantNil: true},
+		"whitespace": {value: " \n\t", wantNil: true},
+		"valid":      {value: validPEM},
+		"garbage":    {value: "not-a-cert", wantErr: "SAML request-signing certificate is invalid"},
+		"expired":    {value: expiredPEM, wantErr: "SAML request-signing certificate is invalid"},
+		"extra block": {
+			value:   validPEM + validPEM,
+			wantErr: "SAML request-signing certificate is invalid",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			cert, err := ParseSAMLRequestCertificate(tc.value)
+			if tc.wantErr != "" {
+				r.ErrorContains(err, tc.wantErr)
+				r.Nil(cert)
+				return
+			}
+			r.NoError(err)
+			if tc.wantNil {
+				r.Nil(cert)
+				return
+			}
+			r.NotNil(cert)
+			_, ok := cert.PublicKey.(*rsa.PublicKey)
+			r.True(ok)
+		})
+	}
+}
+
+func TestValidateSAMLEncryptionAlgorithm(t *testing.T) {
+	tests := map[string]struct {
+		value   string
+		wantErr string
+	}{
+		"empty defaults": {},
+		"AES-128-GCM":    {value: SAMLEncryptionAlgorithmAES128GCM},
+		"AES-192-GCM":    {value: SAMLEncryptionAlgorithmAES192GCM},
+		"AES-256-GCM":    {value: SAMLEncryptionAlgorithmAES256GCM},
+		"trimmed":        {value: "  aes128-gcm  "},
+		"unknown": {
+			value:   "aes512-gcm",
+			wantErr: "SAML encryption algorithm must be AES-128-GCM, AES-192-GCM, or AES-256-GCM",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			err := ValidateSAMLEncryptionAlgorithm(tc.value)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.EqualError(t, err, tc.wantErr)
+		})
+	}
+}
+
+func TestNormalizeStateDefaultsSAMLEncryptionAlgorithm(t *testing.T) {
+	tests := map[string]struct {
+		app           App
+		wantAlgorithm string
+		wantProtocol  string
+	}{
+		"legacy SAML protocol": {
+			app: App{
+				ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "saml",
+				SAMLACSURL: "https://greendale.test/saml/acs",
+			},
+			wantAlgorithm: DefaultSAMLEncryptionAlgorithm,
+			wantProtocol:  "saml",
+		},
+		"legacy SAML fields": {
+			app: App{
+				ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "none",
+				SAMLACSURL: "https://greendale.test/saml/acs",
+			},
+			wantAlgorithm: DefaultSAMLEncryptionAlgorithm,
+			wantProtocol:  "saml",
+		},
+		"certificate alone": {
+			app: App{
+				ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "none",
+				SAMLEncryptionCertPEM: testRSAPEMCertificate(t, currentTime().Add(-time.Hour), currentTime().AddDate(1, 0, 0)),
+			},
+			wantAlgorithm: DefaultSAMLEncryptionAlgorithm,
+			wantProtocol:  "none",
+		},
+		"no SAML setup": {
+			app:          App{ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "none"},
+			wantProtocol: "none",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			state := AppState{Apps: []App{tc.app}}
+
+			NormalizeState(&state)
+
+			require.Equal(t, tc.wantAlgorithm, state.Apps[0].SAMLEncryptionAlgorithm)
+			require.Equal(t, tc.wantProtocol, state.Apps[0].Protocol)
+		})
+	}
+}
+
+func TestSAMLEncryptionCertificateDoesNotInferProtocol(t *testing.T) {
+	r := require.New(t)
+	app := App{SAMLEncryptionCertPEM: testRSAPEMCertificate(t, currentTime().Add(-time.Hour), currentTime().AddDate(1, 0, 0))}
+	r.Equal(SetupStatusNotSetUp, SAMLSetupStatus(app))
+	r.Equal("none", InferAppProtocol(app))
+}
+
+func TestSAMLRequestCertificateDoesNotInferProtocol(t *testing.T) {
+	r := require.New(t)
+	app := App{SAMLRequestCertPEM: testRSAPEMCertificate(t, currentTime().Add(-time.Hour), currentTime().AddDate(1, 0, 0))}
+	r.Equal(SetupStatusNotSetUp, SAMLSetupStatus(app))
+	r.Equal("none", InferAppProtocol(app))
+}
+
+func TestSAMLSetupStatusConfiguredWithValidEncryptionCertificate(t *testing.T) {
+	r := require.New(t)
+	app := App{
+		SAMLACSURL:            "https://greendale.test/saml/acs",
+		SAMLEncryptionCertPEM: testRSAPEMCertificate(t, currentTime().Add(-time.Hour), currentTime().AddDate(1, 0, 0)),
+	}
+	r.Equal(SetupStatusConfigured, SAMLSetupStatus(app))
+}
+
+func TestValidateAppRejectsInvalidSAMLEncryptionCertificate(t *testing.T) {
+	r := require.New(t)
+	err := ValidateApp(App{
+		ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "saml",
+		SAMLACSURL:            "https://sp.greendale.test/acs",
+		SAMLEncryptionCertPEM: "not-a-cert",
+	}, nil)
+	r.ErrorContains(err, "SAML encryption certificate is invalid")
+}
+
+func TestValidateAppRejectsInvalidSAMLRequestCertificate(t *testing.T) {
+	r := require.New(t)
+	app := App{
+		ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "saml",
+		SAMLRequestCertPEM: "not-a-cert",
+	}
+
+	err := ValidateApp(app, nil)
+
+	r.Equal(SetupStatusIncomplete, SAMLSetupStatus(app))
+	r.ErrorContains(err, "SAML request-signing certificate is invalid")
+}
+
+func TestValidateAppRejectsInvalidSAMLEncryptionAlgorithm(t *testing.T) {
+	r := require.New(t)
+	app := App{
+		ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "none",
+		SAMLEncryptionAlgorithm: "aes512-gcm",
+	}
+
+	err := ValidateApp(app, nil)
+
+	r.Equal(SetupStatusNotSetUp, SAMLSetupStatus(app))
+	r.Equal("none", InferAppProtocol(app))
+	r.ErrorContains(err, "SAML encryption algorithm must be AES-128-GCM, AES-192-GCM, or AES-256-GCM")
+}
+
+func TestValidateAppAcceptsValidSAMLEncryptionCertificate(t *testing.T) {
+	r := require.New(t)
+	err := ValidateApp(App{
+		ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "saml",
+		SAMLACSURL:            "https://sp.greendale.test/acs",
+		SAMLEncryptionCertPEM: testRSAPEMCertificate(t, currentTime().Add(-time.Hour), currentTime().AddDate(1, 0, 0)),
+	}, nil)
+	r.NoError(err)
+}
+
+func testRSAPEMCertificate(t *testing.T, notBefore, notAfter time.Time) string {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: "greendale-sp"},
+		NotBefore:    notBefore,
+		NotAfter:     notAfter,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}
+
+func TestSchemaMigrationDefaultsJWTAccessTokens(t *testing.T) {
+	r := require.New(t)
+	path := filepath.Join(t.TempDir(), "state.db")
+	t.Setenv("SCIMTEST_STATE_FILE", path)
+	r.NoError(SaveState(AppState{Apps: []App{{ID: "greendale", Name: "Greendale", Slug: "greendale", Protocol: "oidc"}}}))
+	db, err := openStateDB()
+	r.NoError(err)
+	_, err = db.Exec(`ALTER TABLE apps DROP COLUMN oidc_jwt_access_tokens`)
+	r.NoError(err)
+	_, err = db.Exec(`ALTER TABLE apps DROP COLUMN oidc_access_token_audience`)
+	r.NoError(err)
+	_, err = db.Exec(`PRAGMA user_version = 3`)
+	r.NoError(err)
+	r.NoError(resetStateDBCache())
+	state, err := LoadState()
+	r.NoError(err)
+	r.Len(state.Apps, 1)
+	r.False(state.Apps[0].OIDCJWTAccessTokens)
+	r.Empty(state.Apps[0].OIDCAccessTokenAudience)
+	state.Apps[0].OIDCJWTAccessTokens = true
+	state.Apps[0].OIDCAccessTokenAudience = "https://api.greendale.edu"
+	r.NoError(SaveState(state))
+	loaded, err := LoadState()
+	r.NoError(err)
+	r.True(loaded.Apps[0].OIDCJWTAccessTokens)
+	r.Equal("https://api.greendale.edu", loaded.Apps[0].OIDCAccessTokenAudience)
+	entries, err := os.ReadDir(filepath.Join(filepath.Dir(path), "backups"))
+	r.NoError(err)
+	r.Len(entries, 1)
+	r.Contains(entries[0].Name(), "pre-migrate-v003-")
+}

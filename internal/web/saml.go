@@ -1,0 +1,811 @@
+package web
+
+import (
+	"bytes"
+	"compress/flate"
+	"encoding/base64"
+	"encoding/xml"
+	"errors"
+	"fmt"
+	"html/template"
+	"io"
+	"log"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/beevik/etree"
+	dsig "github.com/russellhaering/goxmldsig"
+)
+
+// samlPostedResponse is what successful SSO posts, plus the plaintext
+// Assertion when encryption ran. Status-only builders do not use this type.
+type samlPostedResponse struct {
+	XML                string
+	PlaintextAssertion string
+}
+
+const (
+	samlHTTPPostBinding = "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
+	samlProtocolXMLNS   = "urn:oasis:names:tc:SAML:2.0:protocol"
+	maxSAMLRequestBytes = 1 << 20
+)
+
+var errSAMLRequestTooLarge = fmt.Errorf("inflated SAMLRequest exceeds %d bytes", maxSAMLRequestBytes)
+
+type samlAuthnRequest struct {
+	ID              string
+	Issuer          string
+	Destination     string
+	ACSURL          string
+	ProtocolBinding string
+	Authn           authnRequest
+}
+
+type samlResponseContext struct {
+	ACSURL       string
+	InResponseTo string
+	AssertionID  string // generated when empty
+	SessionIndex string // the IdP session's SessionIndex; omitted when empty
+	Requested    authnRequest
+	Authn        authnStatement
+}
+
+func (a *webApp) handleSAMLMetadata(w http.ResponseWriter, r *http.Request) {
+	state, app, ok := appForProtocol(w, r, supportsSAML)
+	if !ok {
+		return
+	}
+	baseURL := a.effectiveIDPBaseURL(r, state)
+	entityID := baseURL + "/saml/" + app.Slug + "/metadata"
+	nameIDFormat := app.SAMLNameIDFormat
+	if nameIDFormat == "" {
+		nameIDFormat = samlNameIDFormatForField(app.SAMLNameIDField)
+	}
+	// During a rollover the metadata lists the retired certificate after the
+	// active one, so an SP that refreshes metadata trusts both.
+	keys, err := a.publishedSigningKeys(state, time.Now())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var keyDescriptors strings.Builder
+	for _, key := range keys {
+		fmt.Fprintf(&keyDescriptors, `
+    <KeyDescriptor use="signing"><KeyInfo xmlns="http://www.w3.org/2000/09/xmldsig#"><X509Data><X509Certificate>%s</X509Certificate></X509Data></KeyInfo></KeyDescriptor>`, base64.StdEncoding.EncodeToString(key.CertDER))
+	}
+	metadata := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<EntityDescriptor xmlns="urn:oasis:names:tc:SAML:2.0:metadata" entityID="%s">
+  <IDPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">%s
+    <SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="%s/saml/%s/slo"/>
+    <SingleLogoutService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="%s/saml/%s/slo"/>
+    <NameIDFormat>%s</NameIDFormat>
+    <SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect" Location="%s/saml/%s/sso"/>
+    <SingleSignOnService Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Location="%s/saml/%s/sso"/>
+  </IDPSSODescriptor>
+</EntityDescriptor>`, xmlEscape(entityID), keyDescriptors.String(), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(nameIDFormat), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(baseURL), xmlEscape(app.Slug))
+	if r.URL.Query().Get("download") == "1" {
+		w.Header().Set("Content-Disposition", `attachment; filename="scimtest-`+app.Slug+`-idp-metadata.xml"`)
+	}
+	w.Header().Set("Content-Type", "application/samlmetadata+xml; charset=utf-8")
+	if _, err := w.Write([]byte(metadata)); err != nil {
+		log.Printf("write SAML metadata response: %v", err)
+	}
+}
+
+func (a *webApp) handleSAMLSSO(w http.ResponseWriter, r *http.Request) {
+	a.serveSAMLSSO(w, r, false)
+}
+
+func (a *webApp) handleSAMLSSOPost(w http.ResponseWriter, r *http.Request) {
+	a.serveSAMLSSO(w, r, true)
+}
+
+// serveSAMLSSO handles both SSO bindings. The GET without a selection always
+// offers the chooser, so a user_id URL can iterate hands-free. The POST only
+// offers it for SP-initiated posts (SAMLRequest, login_hint, or RelayState
+// present): the chooser's own submission must never bounce back to it.
+func (a *webApp) serveSAMLSSO(w http.ResponseWriter, r *http.Request, post bool) {
+	if !a.allowTunneledChooser(w, r) {
+		return
+	}
+	state, app, ok := appForProtocol(w, r, supportsSAML)
+	if !ok {
+		return
+	}
+	values := r.URL.Query()
+	if post {
+		if err := r.ParseForm(); err != nil {
+			a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
+			return
+		}
+		values = cloneURLValues(r.Form)
+		// A chooser POST retains the original Redirect-binding query. Do not
+		// allow hidden or attacker-supplied body fields to replace signed input.
+		query := r.URL.Query()
+		if query.Get("SAMLRequest") != "" {
+			values.Set("SAMLRequest", query.Get("SAMLRequest"))
+			values.Del("RelayState")
+			if query.Has("RelayState") {
+				values.Set("RelayState", query.Get("RelayState"))
+			}
+		}
+	}
+	baseURL := a.effectiveIDPBaseURL(r, state)
+	responseContext, err := resolveSAMLResponseContext(r, values, app, baseURL)
+	if err != nil {
+		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
+		return
+	}
+	if isTruthy(values.Get("deny")) {
+		a.denySAML(w, r, app, baseURL, responseContext, values)
+		return
+	}
+	now := time.Now()
+	needsChooser := !chooserSelectionProvided(app, values) &&
+		(!post || values.Get("SAMLRequest") != "" || values.Get("login_hint") != "" || values.Get("RelayState") != "")
+	if needsChooser {
+		data := newChooserData("SAML sign-in", app, publicRequestURI(r), state.Users, loginHintFromValues(values), hiddenValues(values), "Create an active user before starting a SAML flow.")
+		a.applySignIn(&data, r, state.Users, app.Slug, values, responseContext.Requested, now)
+		renderChooser(w, data)
+		return
+	}
+	found, session, err := a.chooserSignIn(r, state.Users, app, values, responseContext.Requested, now)
+	if err != nil {
+		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
+		return
+	}
+	a.completeSAMLSSO(w, r, state, app, baseURL, responseContext, values, found, session)
+}
+
+// completeSAMLSSO signs and posts back a SAML response for a sign-in. It is
+// shared by the chooser POST and the user_id GET shortcut.
+func (a *webApp) completeSAMLSSO(w http.ResponseWriter, r *http.Request, state appState, app app, baseURL string, responseContext samlResponseContext, values url.Values, user user, session signIn) {
+	responseContext.Authn = session.statement(responseContext.Requested.Contexts)
+	encryption, err := samlAssertionEncryptionForApp(app)
+	if err != nil {
+		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
+		return
+	}
+	faults := a.flowFaults(app.Slug, values)
+	responseContext.AssertionID, err = a.samlAssertionID(app.Slug, faults)
+	if err != nil {
+		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
+		return
+	}
+	sessionID, err := a.joinIdPSession(w, r, app.Slug, user, session, "saml")
+	if err != nil {
+		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
+		return
+	}
+	responseContext.SessionIndex, err = a.noteSAMLSignIn(sessionID, samlNameIDValue(app, user), samlNameIDFormatForApp(app))
+	if err != nil {
+		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
+		return
+	}
+	posted, err := a.buildSignedSAMLResponse(state, baseURL, app, user, responseContext, encryption, faults)
+	if err != nil {
+		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
+		return
+	}
+	encodedResponse := base64.StdEncoding.EncodeToString([]byte(posted.XML))
+	a.rememberSAMLInspection(app, user, responseContext, posted, encodedResponse, faults, time.Now())
+	if groups, carried, issued := samlAssertionGroups(posted, samlAttributeMappingsForApp(app).Groups); issued {
+		a.noteIssuedGroups(app, user.ID, "saml", "SAML assertion", responseContext.ACSURL, lifecycleGroupClaims{Groups: groups, Carried: carried})
+	}
+	ssoDetail := "Signed response posted to " + responseContext.ACSURL
+	if faults.active() {
+		ssoDetail = "Response posted to " + responseContext.ACSURL + " (faults injected)"
+	}
+	a.recordFlowEvent(app.Slug, "saml", "sso", "ok", userLabel(user), ssoDetail)
+	if wantsAPIProtocolResponse(r) {
+		writeJSON(w, map[string]string{"acs_url": responseContext.ACSURL, "saml_response": encodedResponse, "relay_state": values.Get("RelayState")})
+		return
+	}
+	renderPostBack(w, responseContext.ACSURL, map[string]string{
+		"SAMLResponse": encodedResponse,
+		"RelayState":   values.Get("RelayState"),
+	})
+}
+
+// samlAssertionID returns a fresh assertion ID, or the newest one this app
+// already received when the flow replays an assertion.
+func (a *webApp) samlAssertionID(slug string, faults faultOptions) (string, error) {
+	if !faults.tampers(tamperReplayedAssertion) {
+		return newID("saml-assertion")
+	}
+	a.samlInspectorMu.Lock()
+	defer a.samlInspectorMu.Unlock()
+	for _, inspection := range a.samlInspections[slug] {
+		if inspection.AssertionID != "" {
+			return inspection.AssertionID, nil
+		}
+	}
+	return "", errors.New("no earlier SAML assertion to replay; complete a SAML sign-in first")
+}
+
+// denySAML posts an AuthnFailed status response so an SP's failure handling can
+// be tested from the chooser's Deny button.
+func (a *webApp) denySAML(w http.ResponseWriter, r *http.Request, app app, baseURL string, responseContext samlResponseContext, values url.Values) {
+	response, err := buildSAMLStatusResponse(baseURL, app, responseContext, faultOptions{SAMLStatus: "urn:oasis:names:tc:SAML:2.0:status:AuthnFailed"})
+	if err != nil {
+		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
+		return
+	}
+	a.recordFlowEvent(app.Slug, "saml", "sso", "failed", "", "user denied the request (AuthnFailed)")
+	renderPostBack(w, responseContext.ACSURL, map[string]string{
+		"SAMLResponse": base64.StdEncoding.EncodeToString([]byte(response)),
+		"RelayState":   values.Get("RelayState"),
+	})
+}
+
+func resolveSAMLResponseContext(r *http.Request, values url.Values, app app, baseURL string) (samlResponseContext, error) {
+	// Every response ends up posted to the configured ACS URL, so its
+	// absence fails here - before the user is shown a chooser - rather
+	// than after account selection.
+	configuredACS := strings.TrimSpace(app.SAMLACSURL)
+	if configuredACS == "" {
+		return samlResponseContext{}, fmt.Errorf("SAML ACS URL must be configured on the app")
+	}
+	requestedACS := strings.TrimSpace(values.Get("acs_url"))
+	if requestedACS != "" && requestedACS != configuredACS {
+		return samlResponseContext{}, fmt.Errorf("SAML ACS URL does not match the configured app")
+	}
+
+	context := samlResponseContext{ACSURL: configuredACS}
+	encodedRequest := strings.TrimSpace(values.Get("SAMLRequest"))
+	if encodedRequest != "" {
+		requestCertificate, err := parseSAMLRequestCertificate(app.SAMLRequestCertPEM)
+		if err != nil {
+			return samlResponseContext{}, err
+		}
+		if requestCertificate != nil {
+			if err := validateSAMLAuthnRequestSignature(r, encodedRequest, requestCertificate); err != nil {
+				return samlResponseContext{}, err
+			}
+		}
+		request, err := parseSAMLAuthnRequest(encodedRequest)
+		if err != nil {
+			return samlResponseContext{}, err
+		}
+		if request.ID == "" {
+			return samlResponseContext{}, fmt.Errorf("SAML AuthnRequest ID is required")
+		}
+		if expectedIssuer := strings.TrimSpace(app.SAMLEntityID); expectedIssuer != "" && request.Issuer != expectedIssuer {
+			return samlResponseContext{}, fmt.Errorf("SAML AuthnRequest issuer does not match the configured app")
+		}
+		expectedDestination := strings.TrimRight(baseURL, "/") + "/saml/" + app.Slug + "/sso"
+		if request.Destination != "" && request.Destination != expectedDestination {
+			return samlResponseContext{}, fmt.Errorf("SAML AuthnRequest destination does not match this IDP")
+		}
+		if request.ACSURL != "" && request.ACSURL != configuredACS {
+			return samlResponseContext{}, fmt.Errorf("SAML AuthnRequest ACS URL does not match the configured app")
+		}
+		if request.ProtocolBinding != "" && request.ProtocolBinding != samlHTTPPostBinding {
+			return samlResponseContext{}, fmt.Errorf("SAML AuthnRequest must request the HTTP-POST response binding")
+		}
+		context.InResponseTo = request.ID
+		context.Requested = request.Authn
+	}
+	return context, nil
+}
+
+func parseSAMLAuthnRequest(encodedRequest string) (samlAuthnRequest, error) {
+	doc, err := parseSAMLRequestDocument(encodedRequest)
+	if err != nil {
+		return samlAuthnRequest{}, err
+	}
+	root := doc.Root()
+	if elementLocalName(root) != "AuthnRequest" || root.NamespaceURI() != samlProtocolXMLNS {
+		return samlAuthnRequest{}, fmt.Errorf("SAMLRequest must contain an AuthnRequest")
+	}
+	authn := authnRequest{}
+	if isTruthy(root.SelectAttrValue("ForceAuthn", "")) {
+		authn.FreshReason = "ForceAuthn"
+	}
+	// The Comparison attribute is ignored: the first recognized class
+	// preselects its strength.
+	if requested := childElementByLocalName(root, "RequestedAuthnContext"); requested != nil {
+		for _, child := range requested.ChildElements() {
+			text := strings.TrimSpace(child.Text())
+			if elementLocalName(child) == "AuthnContextClassRef" && text != "" {
+				authn.Contexts = append(authn.Contexts, text)
+			}
+		}
+	}
+	return samlAuthnRequest{
+		ID:              strings.TrimSpace(root.SelectAttrValue("ID", "")),
+		Issuer:          childElementTextByLocalName(root, "Issuer"),
+		Destination:     strings.TrimSpace(root.SelectAttrValue("Destination", "")),
+		ACSURL:          strings.TrimSpace(root.SelectAttrValue("AssertionConsumerServiceURL", "")),
+		ProtocolBinding: strings.TrimSpace(root.SelectAttrValue("ProtocolBinding", "")),
+		Authn:           authn,
+	}, nil
+}
+
+func childElementTextByLocalName(parent *etree.Element, localName string) string {
+	for _, child := range parent.ChildElements() {
+		if elementLocalName(child) == localName {
+			return strings.TrimSpace(child.Text())
+		}
+	}
+	return ""
+}
+
+func parseSAMLRequestDocument(encodedRequest string) (*etree.Document, error) {
+	encodedRequest = strings.TrimSpace(encodedRequest)
+	if encodedRequest == "" {
+		return nil, fmt.Errorf("SAMLRequest is required")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(encodedRequest)
+	if err != nil {
+		decoded, err = base64.StdEncoding.DecodeString(strings.ReplaceAll(encodedRequest, " ", "+"))
+		if err != nil {
+			return nil, fmt.Errorf("decode SAMLRequest: %w", err)
+		}
+	}
+	requestXML, inflateErr := inflateRawDeflate(decoded)
+	if errors.Is(inflateErr, errSAMLRequestTooLarge) {
+		return nil, inflateErr
+	}
+	if inflateErr != nil || len(requestXML) == 0 {
+		requestXML = decoded
+	}
+	if len(requestXML) > maxSAMLRequestBytes {
+		return nil, errSAMLRequestTooLarge
+	}
+
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(string(requestXML)); err != nil {
+		return nil, fmt.Errorf("parse SAMLRequest XML: %w", err)
+	}
+	if doc.Root() == nil {
+		return nil, fmt.Errorf("parse SAMLRequest XML: root element is required")
+	}
+	return doc, nil
+}
+
+func cloneURLValues(values url.Values) url.Values {
+	cloned := make(url.Values, len(values))
+	for key, entries := range values {
+		cloned[key] = append([]string(nil), entries...)
+	}
+	return cloned
+}
+
+func inflateRawDeflate(data []byte) ([]byte, error) {
+	reader := flate.NewReader(bytes.NewReader(data))
+	out, readErr := io.ReadAll(io.LimitReader(reader, maxSAMLRequestBytes+1))
+	closeErr := reader.Close()
+	if readErr != nil {
+		if closeErr != nil {
+			return nil, fmt.Errorf("read raw deflate: %w (close: %v)", readErr, closeErr)
+		}
+		return nil, fmt.Errorf("read raw deflate: %w", readErr)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close raw deflate reader: %w", closeErr)
+	}
+	if len(out) > maxSAMLRequestBytes {
+		return nil, errSAMLRequestTooLarge
+	}
+	return out, nil
+}
+
+func firstElementTextByLocalName(el *etree.Element, localName string) string {
+	if el == nil {
+		return ""
+	}
+	if elementLocalName(el) == localName {
+		if text := strings.TrimSpace(el.Text()); text != "" {
+			return text
+		}
+	}
+	for _, child := range el.ChildElements() {
+		if text := firstElementTextByLocalName(child, localName); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func (a *webApp) buildSignedSAMLResponse(state appState, baseURL string, app app, user user, responseContext samlResponseContext, encryption *samlAssertionEncryption, faults faultOptions) (samlPostedResponse, error) {
+	if faults.SAMLStatus != "" {
+		responseXML, err := buildSAMLStatusResponse(baseURL, app, responseContext, faults)
+		return samlPostedResponse{XML: responseXML}, err
+	}
+	response, err := buildSAMLResponse(state, baseURL, app, user, responseContext, faults)
+	if err != nil {
+		return samlPostedResponse{}, err
+	}
+	doc := etree.NewDocument()
+	if err := doc.ReadFromString(response); err != nil {
+		return samlPostedResponse{}, fmt.Errorf("parse SAML response for signing: %w", err)
+	}
+	assertion := findElementByLocalName(doc.Root(), "Assertion")
+	if assertion == nil {
+		return samlPostedResponse{}, fmt.Errorf("SAML assertion not found")
+	}
+	wantsWrapping := faults.tampers(tamperSignatureWrappingAssertion) || faults.tampers(tamperSignatureWrappingResponse)
+	if wantsWrapping && encryption != nil {
+		return samlPostedResponse{}, errors.New("signature wrapping faults cannot combine with assertion encryption")
+	}
+	if faults.tampers(tamperNameIDComment) && encryption != nil {
+		return samlPostedResponse{}, errors.New("nameid_comment fault cannot combine with assertion encryption")
+	}
+	// the signature covers the whole forged NameID value; the comment that
+	// hides half of it from a naive reader is injected after signing
+	if faults.tampers(tamperNameIDComment) {
+		if err := forgeNameIDFullValue(doc, state, app, user); err != nil {
+			return samlPostedResponse{}, err
+		}
+	}
+	key, err := a.activeSigningKey(state)
+	if err != nil {
+		return samlPostedResponse{}, err
+	}
+	ctx, err := dsig.NewSigningContext(key.PrivateKey, [][]byte{key.CertDER})
+	if err != nil {
+		return samlPostedResponse{}, fmt.Errorf("create SAML signing context: %w", err)
+	}
+	ctx.Canonicalizer = dsig.MakeC14N10ExclusiveCanonicalizerWithPrefixList("")
+	var signAssertion, signResponse bool
+	switch normalizeSAMLSigningMode(app.SAMLSigningMode) {
+	case samlSigningModeAssertion:
+		signAssertion = true
+	case samlSigningModeResponse:
+		signResponse = true
+	case samlSigningModeBoth:
+		signAssertion, signResponse = true, true
+	default:
+		return samlPostedResponse{}, fmt.Errorf("unknown SAML signing mode %q", app.SAMLSigningMode)
+	}
+
+	if signAssertion {
+		assertion, err = signSAMLElement(ctx, assertion)
+		if err != nil {
+			return samlPostedResponse{}, fmt.Errorf("sign SAML assertion: %w", err)
+		}
+		if faults.BreakSignature {
+			corruptSAMLSignatureValue(assertion)
+		}
+	}
+
+	var plaintextXML string
+	if encryption != nil {
+		plaintextXML, err = serializeElement(assertion)
+		if err != nil {
+			return samlPostedResponse{}, err
+		}
+		encrypted, err := encryptSAMLAssertion(assertion, *encryption)
+		if err != nil {
+			return samlPostedResponse{}, fmt.Errorf("encrypt SAML assertion: %w", err)
+		}
+		replaceSAMLElement(assertion, encrypted)
+	}
+
+	// the Response signature covers the assertion as posted, so it comes after
+	// encryption
+	if signResponse {
+		root, err := signSAMLElement(ctx, doc.Root())
+		if err != nil {
+			return samlPostedResponse{}, fmt.Errorf("sign SAML response: %w", err)
+		}
+		if faults.BreakSignature {
+			corruptSAMLSignatureValue(root)
+		}
+	}
+
+	// the comment is invisible to canonicalization, so it is safe to inject
+	// after signing. Split the signed NameID before wrapping inserts a forgery.
+	if faults.tampers(tamperNameIDComment) {
+		if err := splitNameIDComment(doc); err != nil {
+			return samlPostedResponse{}, err
+		}
+	}
+
+	// wrapping runs last, on the signed document, so the genuine signature
+	// stays valid while a forged element is presented alongside it
+	if wantsWrapping {
+		if err := a.applySAMLSignatureWrapping(doc, state, app, user, faults); err != nil {
+			return samlPostedResponse{}, err
+		}
+	}
+
+	responseXML, err := doc.WriteToString()
+	if err != nil {
+		return samlPostedResponse{}, fmt.Errorf("serialize signed SAML response: %w", err)
+	}
+	return samlPostedResponse{XML: responseXML, PlaintextAssertion: plaintextXML}, nil
+}
+
+// signSAMLElement replaces el with a copy that carries an enveloped signature
+// after its Issuer, as the SAML schema requires, and returns the copy.
+func signSAMLElement(ctx *dsig.SigningContext, el *etree.Element) (*etree.Element, error) {
+	signature, err := ctx.ConstructSignature(el, true)
+	if err != nil {
+		return nil, err
+	}
+	signed := el.Copy()
+	if err := placeSAMLSignature(signed, signature); err != nil {
+		return nil, err
+	}
+	replaceSAMLElement(el, signed)
+	return signed, nil
+}
+
+// replaceSAMLElement puts replacement where el sits in its parent, which for
+// a document root is the document itself.
+func replaceSAMLElement(el *etree.Element, replacement *etree.Element) {
+	parent := el.Parent()
+	index := el.Index()
+	parent.RemoveChildAt(index)
+	parent.InsertChildAt(index, replacement)
+}
+
+// buildSAMLStatusResponse produces an unsigned non-success SAML Response so an
+// SP's failure handling can be tested.
+func buildSAMLStatusResponse(baseURL string, app app, responseContext samlResponseContext, faults faultOptions) (string, error) {
+	responseID, err := newID("saml-response")
+	if err != nil {
+		return "", fmt.Errorf("generate SAML response ID: %w", err)
+	}
+	now := time.Now().UTC().Add(faults.ClockSkew)
+	issuer := baseURL + "/saml/" + app.Slug + "/metadata"
+	inResponseTo := ""
+	if responseContext.InResponseTo != "" {
+		inResponseTo = ` InResponseTo="` + xmlEscape(responseContext.InResponseTo) + `"`
+	}
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="%s" Version="2.0" IssueInstant="%s" Destination="%s"%s>
+  <saml:Issuer>%s</saml:Issuer>
+  <samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Requester"><samlp:StatusCode Value="%s"/></samlp:StatusCode></samlp:Status>
+</samlp:Response>`,
+		xmlEscape(responseID), now.Format(time.RFC3339), xmlEscape(responseContext.ACSURL), inResponseTo,
+		xmlEscape(issuer), xmlEscape(faults.SAMLStatus)), nil
+}
+
+// corruptSAMLSignatureValue breaks the signature that signed carries itself,
+// leaving any signature on a nested element alone.
+func corruptSAMLSignatureValue(signed *etree.Element) {
+	value := childElementByLocalName(childElementByLocalName(signed, "Signature"), "SignatureValue")
+	if value == nil || value.Text() == "" {
+		return
+	}
+	text := value.Text()
+	replacement := "A"
+	if text[0] == 'A' {
+		replacement = "B"
+	}
+	value.SetText(replacement + text[1:])
+}
+
+func childElementByLocalName(parent *etree.Element, localName string) *etree.Element {
+	if parent == nil {
+		return nil
+	}
+	for _, child := range parent.ChildElements() {
+		if elementLocalName(child) == localName {
+			return child
+		}
+	}
+	return nil
+}
+
+func placeSAMLSignature(signed *etree.Element, signature *etree.Element) error {
+	issuerIndex := -1
+	for index, child := range signed.Child {
+		element, ok := child.(*etree.Element)
+		if !ok {
+			continue
+		}
+		if elementLocalName(element) == "Issuer" {
+			issuerIndex = index
+		}
+	}
+	if issuerIndex < 0 {
+		return fmt.Errorf("signed SAML %s issuer not found", elementLocalName(signed))
+	}
+	signed.InsertChildAt(issuerIndex+1, signature)
+	return nil
+}
+
+func findElementByLocalName(el *etree.Element, localName string) *etree.Element {
+	if el == nil {
+		return nil
+	}
+	if elementLocalName(el) == localName {
+		return el
+	}
+	for _, child := range el.ChildElements() {
+		if found := findElementByLocalName(child, localName); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+func elementLocalName(el *etree.Element) string {
+	if el == nil {
+		return ""
+	}
+	if index := strings.LastIndex(el.Tag, ":"); index >= 0 {
+		return el.Tag[index+1:]
+	}
+	return el.Tag
+}
+
+func buildSAMLResponse(state appState, baseURL string, app app, user user, responseContext samlResponseContext, faults faultOptions) (string, error) {
+	now := time.Now().UTC().Add(faults.ClockSkew)
+	responseID, err := newID("saml-response")
+	if err != nil {
+		return "", fmt.Errorf("generate SAML response ID: %w", err)
+	}
+	assertionID := responseContext.AssertionID
+	if assertionID == "" {
+		assertionID, err = newID("saml-assertion")
+		if err != nil {
+			return "", fmt.Errorf("generate SAML assertion ID: %w", err)
+		}
+	}
+	issuer := baseURL + "/saml/" + app.Slug + "/metadata"
+	audience := app.SAMLAudience
+	if audience == "" {
+		audience = app.SAMLEntityID
+	}
+	if audience == "" {
+		audience = responseContext.ACSURL
+	}
+	destination := responseContext.ACSURL
+	recipient := responseContext.ACSURL
+	inResponseTo := responseContext.InResponseTo
+	if faults.tampers(tamperWrongIssuer) {
+		issuer = nearMiss(issuer)
+	}
+	if faults.tampers(tamperWrongAudience) {
+		audience = nearMiss(audience)
+	}
+	if faults.tampers(tamperWrongDestination) {
+		destination = nearMiss(destination)
+	}
+	if faults.tampers(tamperWrongRecipient) {
+		recipient = nearMiss(recipient)
+	}
+	if faults.tampers(tamperInResponseToMismatch) {
+		inResponseTo = nearMiss(inResponseTo)
+	}
+	notOnOrAfter := now.Add(5 * time.Minute)
+	if faults.AssertionTTLSet {
+		notOnOrAfter = now.Add(faults.AssertionTTL)
+	}
+	notBefore := now.Add(-time.Minute)
+	// keep the validity window ordered so expiry is the only broken rule
+	if notOnOrAfter.Before(now) {
+		notBefore = notOnOrAfter.Add(-time.Minute)
+	}
+	attributeStatement := samlAttributeStatement(state, app, user)
+	nameIDValue := samlNameIDValue(app, user)
+	nameIDFormat := app.SAMLNameIDFormat
+	if nameIDFormat == "" {
+		nameIDFormat = samlNameIDFormatForField(app.SAMLNameIDField)
+	}
+	sessionIndex := ""
+	if responseContext.SessionIndex != "" {
+		sessionIndex = ` SessionIndex="` + xmlEscape(responseContext.SessionIndex) + `"`
+	}
+	responseInResponseTo := ""
+	subjectInResponseTo := ""
+	if inResponseTo != "" {
+		responseInResponseTo = ` InResponseTo="` + xmlEscape(inResponseTo) + `"`
+		subjectInResponseTo = ` InResponseTo="` + xmlEscape(inResponseTo) + `"`
+	}
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="%s" Version="2.0" IssueInstant="%s" Destination="%s"%s>
+  <saml:Issuer>%s</saml:Issuer>
+  <samlp:Status><samlp:StatusCode Value="urn:oasis:names:tc:SAML:2.0:status:Success"/></samlp:Status>
+  <saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="%s" Version="2.0" IssueInstant="%s">
+    <saml:Issuer>%s</saml:Issuer>
+    <saml:Subject>
+      <saml:NameID Format="%s">%s</saml:NameID>
+      <saml:SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer">
+        <saml:SubjectConfirmationData%s NotOnOrAfter="%s" Recipient="%s"/>
+      </saml:SubjectConfirmation>
+    </saml:Subject>
+    <saml:Conditions NotBefore="%s" NotOnOrAfter="%s"><saml:AudienceRestriction><saml:Audience>%s</saml:Audience></saml:AudienceRestriction></saml:Conditions>
+    <saml:AuthnStatement AuthnInstant="%s"%s><saml:AuthnContext><saml:AuthnContextClassRef>%s</saml:AuthnContextClassRef></saml:AuthnContext></saml:AuthnStatement>
+    <saml:AttributeStatement>
+      %s
+    </saml:AttributeStatement>
+  </saml:Assertion>
+</samlp:Response>`,
+		xmlEscape(responseID), now.Format(time.RFC3339), xmlEscape(destination), responseInResponseTo, xmlEscape(issuer),
+		xmlEscape(assertionID), now.Format(time.RFC3339), xmlEscape(issuer),
+		xmlEscape(nameIDFormat), xmlEscape(nameIDValue), subjectInResponseTo, notOnOrAfter.Format(time.RFC3339), xmlEscape(recipient),
+		notBefore.Format(time.RFC3339), notOnOrAfter.Format(time.RFC3339), xmlEscape(audience),
+		responseContext.Authn.Time.UTC().Add(faults.ClockSkew).Format(time.RFC3339), sessionIndex, xmlEscape(responseContext.Authn.Context), attributeStatement), nil
+}
+
+func samlAttributeStatement(state appState, app app, user user) string {
+	mappings := samlAttributeMappingsForApp(app)
+	var attributes strings.Builder
+	writeSAMLAttribute(&attributes, mappings.Email, []string{user.Email})
+	writeSAMLAttribute(&attributes, mappings.Username, []string{user.Username})
+	writeSAMLAttribute(&attributes, mappings.GivenName, []string{user.GivenName})
+	writeSAMLAttribute(&attributes, mappings.FamilyName, []string{user.FamilyName})
+	written := map[string]bool{mappings.Email: true, mappings.Username: true, mappings.GivenName: true, mappings.FamilyName: true}
+	if app.IncludeGroupsClaim {
+		writeSAMLAttribute(&attributes, mappings.Groups, userGroups(state, user.ID))
+		written[mappings.Groups] = true
+	}
+	writeSAMLUserAttributes(&attributes, written, state, app, user)
+	return attributes.String()
+}
+
+// writeSAMLUserAttributes writes non-empty enterprise values, the manager's
+// NameID value, and custom attributes, skipping names already written.
+func writeSAMLUserAttributes(attributes *strings.Builder, written map[string]bool, state appState, app app, user user) {
+	write := func(name string, value string) {
+		if written[name] {
+			return
+		}
+		written[name] = true
+		writeSAMLAttribute(attributes, name, []string{value})
+	}
+	for _, value := range enterpriseValues(user) {
+		if value.Value != "" {
+			write(value.Name, value.Value)
+		}
+	}
+	if manager, ok := userManager(state.Users, user); ok {
+		write(enterpriseManager, samlNameIDValue(app, manager))
+	}
+	for _, name := range customAttributeNames(user.Attributes) {
+		if !isReservedAttributeName(name) {
+			write(name, user.Attributes[name])
+		}
+	}
+}
+
+func writeSAMLAttribute(attributes *strings.Builder, name string, values []string) {
+	attributes.WriteString(`<saml:Attribute Name="`)
+	attributes.WriteString(xmlEscape(name))
+	attributes.WriteString(`">`)
+	for _, value := range values {
+		attributes.WriteString("<saml:AttributeValue>")
+		attributes.WriteString(xmlEscape(value))
+		attributes.WriteString("</saml:AttributeValue>")
+	}
+	attributes.WriteString("</saml:Attribute>")
+}
+
+func renderPostBack(w http.ResponseWriter, target string, values map[string]string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := postBackTemplate.Execute(w, struct {
+		Target string
+		Values map[string]string
+	}{Target: target, Values: values}); err != nil {
+		log.Printf("render SAML postback: %v", err)
+	}
+}
+
+var postBackTemplate = template.Must(template.New("postback").Parse(`<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Continue</title></head>
+<body>
+  <form method="post" action="{{.Target}}">
+    {{range $key, $value := .Values}}{{if $value}}<input type="hidden" name="{{$key}}" value="{{$value}}">{{end}}{{end}}
+    <noscript><button type="submit">Continue</button></noscript>
+  </form>
+  <script>document.forms[0].submit()</script>
+</body>
+</html>`))
+
+func xmlEscape(value string) string {
+	var b strings.Builder
+	if err := xml.EscapeText(&b, []byte(value)); err != nil {
+		log.Printf("escape XML text: %v", err)
+		return ""
+	}
+	return b.String()
+}
