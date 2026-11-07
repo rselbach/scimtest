@@ -1,3 +1,5 @@
+mod account;
+
 use std::{sync::mpsc, time::Duration};
 
 use rune::{Env, Key, KeyEvent, Mods, Runtime};
