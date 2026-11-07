@@ -7,6 +7,9 @@ use crate::{
     theme::{BOLD, Palette, SEMIBOLD, Ui},
 };
 
+/// The toolbar doubles as the window's titlebar, so its height places the macOS window buttons.
+pub(crate) const TOOLBAR_HEIGHT: f32 = 52.0;
+
 /// One choice in a dropdown menu.
 pub(crate) struct Choice {
     label: String,
@@ -377,7 +380,8 @@ impl Workspace {
             .child(self.navigation_item(Tab::Traffic, "Traffic", &icons::PULSE, None, ui))
     }
 
-    fn toolbar(&self, ui: &Ui, layer: &mut Vec<El>) -> El {
+    /// The window's titlebar: `inset` clears the macOS window buttons at its leading edge.
+    fn toolbar(&self, ui: &Ui, inset: f32, layer: &mut Vec<El>) -> El {
         let k = &ui.k;
         let selected_name = self
             .directory()
@@ -408,9 +412,11 @@ impl Workspace {
         let mut toolbar = row()
             .key("toolbar")
             .w_full()
-            .h(52.0)
-            .px(16.0)
+            .h(TOOLBAR_HEIGHT)
+            .pl(if inset > 0.0 { inset + 12.0 } else { 16.0 })
+            .pr(16.0)
             .gap(8.0)
+            .window_drag()
             .center_y()
             .fill(ui.p.toolbar)
             .child(logo)
@@ -736,7 +742,7 @@ pub fn view(s: &Workspace, cx: &mut Cx<Workspace>) -> El {
             .w_full()
             .h_full()
             .fill(p.canvas)
-            .child(s.toolbar(&ui, &mut layer))
+            .child(s.toolbar(&ui, cx.titlebar_inset(), &mut layer))
             .child(rule(p))
             .child(
                 row()

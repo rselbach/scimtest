@@ -92,7 +92,15 @@ fn app(
     services: impl FnOnce(Lander, Shell) -> Services + 'static,
     argv: Option<Vec<String>>,
 ) -> (App<Workspace>, AppHandle<Workspace>) {
-    let mut app = App::new(spec()).standard_menus().on_close(|_, _| finish());
+    let buttons = (workspace::view::TOOLBAR_HEIGHT - rune::Chrome::TRAFFIC_LIGHT) / 2.0;
+    let mut app = App::new(spec())
+        .chrome(rune::Chrome {
+            full_size_content: true,
+            traffic_lights: Some((buttons + 4.0, buttons)),
+            drag_regions: true,
+        })
+        .standard_menus()
+        .on_close(|_, _| finish());
     if let Some(argv) = argv {
         app = app.args(argv);
     }
@@ -111,6 +119,10 @@ fn app(
                 )
             },
         )
+        .chrome(rune::Chrome {
+            full_size_content: false,
+            ..rune::Chrome::DEFAULT
+        })
         .options(WindowOptions {
             visible: false,
             ..Default::default()
