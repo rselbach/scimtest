@@ -1,3 +1,6 @@
+mod environment;
+mod tools;
+
 use std::{sync::mpsc, time::Duration};
 
 use rune::{Env, Key, KeyEvent, Mods, Runtime};

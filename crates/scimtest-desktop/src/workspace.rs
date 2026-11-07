@@ -934,6 +934,24 @@ pub const SCENES: &[(&str, fn(&mut Workspace))] = &[
         let environment = s.directory().map(|directory| directory.environment.clone());
         s.edit_environment(environment.as_ref());
     }),
+    ("new-environment", |s| s.edit_environment(None)),
+    ("environment-oidc", |s| {
+        let environment = s.directory().map(|directory| directory.environment.clone());
+        s.edit_environment(environment.as_ref());
+        s.disclosures.insert("oidc-claims");
+        s.set_environment_step(1);
+    }),
+    ("environment-saml", |s| {
+        let environment = s.directory().map(|directory| directory.environment.clone());
+        s.edit_environment(environment.as_ref());
+        s.disclosures.extend(["saml-signing", "saml-mappings"]);
+        s.set_environment_step(2);
+    }),
+    ("environment-review", |s| {
+        let environment = s.directory().map(|directory| directory.environment.clone());
+        s.edit_environment(environment.as_ref());
+        s.set_environment_step(4);
+    }),
     ("tools", |s| s.open_tools()),
     ("idp", |s| s.open_idp()),
 ];
