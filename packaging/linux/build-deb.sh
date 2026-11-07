@@ -30,7 +30,8 @@ main() {
   local dependencies
   dependencies="ca-certificates, libfontconfig1, libfreetype6, libxcb1, "
   dependencies+="libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, "
-  dependencies+="libwayland-cursor0, libvulkan1, xdg-utils"
+  dependencies+="libwayland-cursor0, libvulkan1, libx11-6, libx11-xcb1, "
+  dependencies+="libxcursor1, libxi6, xdg-utils"
 
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   project_root="$(cd "${script_dir}/../.." && pwd)"

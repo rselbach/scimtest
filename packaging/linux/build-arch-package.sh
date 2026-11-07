@@ -36,7 +36,8 @@ main() {
   local version="$3"
   local dependencies
   dependencies="'fontconfig' 'freetype2' 'libxcb' 'libxkbcommon' "
-  dependencies+="'libxkbcommon-x11' 'wayland' 'vulkan-icd-loader'"
+  dependencies+="'libxkbcommon-x11' 'wayland' 'vulkan-icd-loader' "
+  dependencies+="'libx11' 'libxcursor' 'libxi'"
   local -a package_paths=()
 
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

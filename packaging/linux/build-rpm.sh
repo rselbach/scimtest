@@ -36,6 +36,10 @@ main() {
   dependencies+=$'\nRequires: libwayland-client.so.0()(64bit)'
   dependencies+=$'\nRequires: libwayland-cursor.so.0()(64bit)'
   dependencies+=$'\nRequires: vulkan-loader'
+  dependencies+=$'\nRequires: libX11.so.6()(64bit)'
+  dependencies+=$'\nRequires: libX11-xcb.so.1()(64bit)'
+  dependencies+=$'\nRequires: libXcursor.so.1()(64bit)'
+  dependencies+=$'\nRequires: libXi.so.6()(64bit)'
   local -a rpm_paths=()
 
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
