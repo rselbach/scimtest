@@ -1,320 +1,260 @@
 use std::collections::BTreeSet;
 
-use super::{
-    DeleteTarget, Editor, Workspace,
-    view::{cell, icon, status_pill},
-};
-use crate::theme::Palette;
-use gpui::{Context, IntoElement, SharedString, div, prelude::*, px};
-use gpui_component::{
-    Disableable, Selectable, StyledExt,
-    button::{Button, ButtonVariants},
-    checkbox::Checkbox,
-};
+use rune::{El, Icon, el, row};
+use rune_kit::{Checkbox, IconButton, IconButtonVariant};
 use scimtest_core::model::*;
 
+use super::{
+    DeleteTarget, Editor, Workspace,
+    table::cell,
+    view::{font_text, status_pill},
+};
+use crate::{
+    icons,
+    theme::{SEMIBOLD, Ui},
+};
+
+fn row_frame(key: String, name: &str, height: f32, ui: &Ui) -> El {
+    row()
+        .key(key)
+        .role("row")
+        .label(name.to_owned())
+        .w_full()
+        .h(height)
+        .px(16.0)
+        .gap(16.0)
+        .center_y()
+        .hover(ui.p.accent.alpha(0.04))
+}
+
+fn action(
+    key: String,
+    glyph: &'static Icon,
+    label: String,
+    help: &'static str,
+    disabled: bool,
+    press: impl Fn(&mut Workspace) + 'static,
+    ui: &Ui,
+) -> El {
+    IconButton::new(glyph)
+        .variant(IconButtonVariant::Ghost)
+        .label(label)
+        .help(help)
+        .disabled(disabled)
+        .on_press(press)
+        .build(&ui.k)
+        .key(key)
+}
+
+fn actions(width: f32) -> El {
+    row().w(width).gap(4.0).justify_end().center_y()
+}
+
 impl Workspace {
-    pub(super) fn user_row(&self, user: &User, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let palette = Palette::get(cx);
-        let edit_user = user.clone();
-        let id = user.id.clone();
-        let row_id = user.id.clone();
+    pub(super) fn user_row(&self, user: &User, ui: &Ui) -> El {
+        let p = ui.p;
         let name = format!("{} {}", user.fields.given_name, user.fields.family_name);
-        let body = div()
-            .id(SharedString::from(user.id.clone()))
-            .role(gpui::Role::Row)
-            .aria_label(name.clone())
-            .h_flex()
-            .h(px(51.))
-            .flex_shrink_0()
-            .px_4()
-            .gap_4()
-            .border_b_1()
-            .border_color(palette.line.opacity(0.7))
-            .hover(|row| row.bg(palette.accent.opacity(0.04)))
-            .child(self.selection_checkbox(&id, &name, user.deleted, cx))
-            .child(cell("name", name.clone()).font_weight(gpui::FontWeight::SEMIBOLD))
-            .child(cell("username", user.fields.username.clone()))
-            .child(cell("email", user.fields.email.clone()))
+        let edited = user.clone();
+        let open = user.clone();
+        let mut body = row_frame(user.id.clone(), &name, 51.0, ui)
+            .child(self.selection_checkbox(&user.id, &name, user.deleted, ui))
+            .child(cell("name", name.clone(), ui).font(ui.font(13.0, SEMIBOLD)))
+            .child(cell("username", user.fields.username.clone(), ui))
+            .child(cell("email", user.fields.email.clone(), ui))
             .child(
-                div()
-                    .id("active")
-                    .role(gpui::Role::Cell)
-                    .aria_label(if user.fields.active {
+                el().key("active")
+                    .role("cell")
+                    .label(if user.fields.active {
                         "Active"
                     } else {
                         "Inactive"
                     })
-                    .w(px(110.))
+                    .w(110.0)
                     .child(if user.fields.active {
-                        status_pill("active", palette.success)
+                        status_pill("active", p.success, ui)
                     } else {
-                        status_pill("inactive", palette.muted)
+                        status_pill("inactive", p.muted, ui)
                     }),
             )
             .child(
-                div()
-                    .h_flex()
-                    .justify_end()
-                    .gap_1()
-                    .w(px(110.))
-                    .child(self.history_button(DeleteTarget::User, &id, &name, cx))
-                    .child(
-                        Button::new(SharedString::from(format!("edit-{id}")))
-                            .accessibility_label(format!("Edit {name}"))
-                            .icon(icon("icons/edit.svg"))
-                            .tooltip("Edit user")
-                            .ghost()
-                            .h(px(29.))
-                            .disabled(self.busy || user.deleted)
-                            .on_click(cx.listener(move |view, _, window, cx| {
-                                view.edit_user(Some(&edit_user), window, cx)
-                            })),
-                    )
-                    .child(self.remove_button(DeleteTarget::User, &id, &name, user.deleted, cx)),
+                actions(110.0)
+                    .child(self.history_button(DeleteTarget::User, &user.id, &name, ui))
+                    .child(action(
+                        format!("edit-{}", user.id),
+                        &icons::EDIT,
+                        format!("Edit {name}"),
+                        "Edit user",
+                        self.busy || user.deleted,
+                        move |s: &mut Workspace| s.edit_user(Some(&edited)),
+                        ui,
+                    ))
+                    .child(self.remove_button(
+                        DeleteTarget::User,
+                        &user.id,
+                        &name,
+                        user.deleted,
+                        ui,
+                    )),
             );
-        super::row_focus::Row {
-            id: row_id,
-            body,
-            scroll: self.table_scroll.clone(),
+        if !self.busy && !user.deleted {
+            body = body.on_double_press(move |s: &mut Workspace| s.edit_user(Some(&open)));
         }
+        body
     }
 
-    pub(super) fn group_row(
-        &self,
-        group: &Group,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let palette = Palette::get(cx);
-        let group = group.clone();
+    pub(super) fn group_row(&self, group: &Group, ui: &Ui) -> El {
+        let name = group.fields.display_name.clone();
         let edited = group.clone();
-        let row_id = group.id.clone();
-        let body = div()
-            .id(SharedString::from(group.id.clone()))
-            .role(gpui::Role::Row)
-            .aria_label(group.fields.display_name.clone())
-            .h_flex()
-            .h(px(51.))
-            .flex_shrink_0()
-            .px_4()
-            .gap_4()
-            .border_b_1()
-            .border_color(palette.line.opacity(0.7))
-            .hover(|row| row.bg(palette.accent.opacity(0.04)))
-            .child(self.selection_checkbox(
-                &group.id,
-                &group.fields.display_name,
-                group.deleted,
-                cx,
-            ))
+        let open = group.clone();
+        let members = group.fields.member_ids.len().to_string();
+        let mut body = row_frame(group.id.clone(), &name, 51.0, ui)
+            .child(self.selection_checkbox(&group.id, &name, group.deleted, ui))
+            .child(cell("name", name.clone(), ui).font(ui.font(13.0, SEMIBOLD)))
             .child(
-                cell("name", group.fields.display_name.clone())
-                    .font_weight(gpui::FontWeight::SEMIBOLD),
+                font_text(members.clone(), 13.0, 400.0, ui.p.text, ui)
+                    .key("members")
+                    .role("cell")
+                    .label(members)
+                    .w(160.0),
             )
             .child(
-                div()
-                    .id("members")
-                    .role(gpui::Role::Cell)
-                    .aria_label(group.fields.member_ids.len().to_string())
-                    .w(px(160.))
-                    .child(group.fields.member_ids.len().to_string()),
-            )
-            .child(
-                div()
-                    .h_flex()
-                    .justify_end()
-                    .gap_1()
-                    .w(px(110.))
-                    .child(self.history_button(
-                        DeleteTarget::Group,
-                        &group.id,
-                        &group.fields.display_name,
-                        cx,
+                actions(110.0)
+                    .child(self.history_button(DeleteTarget::Group, &group.id, &name, ui))
+                    .child(action(
+                        format!("edit-{}", group.id),
+                        &icons::EDIT,
+                        format!("Edit {name}"),
+                        "Edit group",
+                        self.busy || group.deleted,
+                        move |s: &mut Workspace| s.edit_group(Some(&edited)),
+                        ui,
                     ))
-                    .child(
-                        Button::new(SharedString::from(format!("edit-{}", group.id)))
-                            .accessibility_label(format!("Edit {}", group.fields.display_name))
-                            .icon(icon("icons/edit.svg"))
-                            .tooltip("Edit group")
-                            .ghost()
-                            .h(px(29.))
-                            .disabled(self.busy || group.deleted)
-                            .on_click(cx.listener(move |view, _, window, cx| {
-                                view.edit_group(Some(&edited), window, cx)
-                            })),
-                    )
                     .child(self.remove_button(
                         DeleteTarget::Group,
                         &group.id,
-                        &group.fields.display_name,
+                        &name,
                         group.deleted,
-                        cx,
+                        ui,
                     )),
             );
-        super::row_focus::Row {
-            id: row_id,
-            body,
-            scroll: self.table_scroll.clone(),
+        if !self.busy && !group.deleted {
+            body = body.on_double_press(move |s: &mut Workspace| s.edit_group(Some(&open)));
         }
+        body
     }
 
-    pub(super) fn environment_row(
-        &self,
-        directory: &Directory,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let palette = Palette::get(cx);
-        let environment = directory.environment.clone();
-        let row_id = environment.id.clone();
+    pub(super) fn environment_row(&self, directory: &Directory, ui: &Ui) -> El {
+        let p = ui.p;
+        let environment = &directory.environment;
         let active = self.selected.as_deref() == Some(environment.id.as_str());
         let settings = &environment.settings;
-        let mut protocols = div().h_flex().gap_2();
+        let mut protocols = row().gap(8.0).center_y();
         if settings.supports_oidc() {
-            protocols = protocols.child(status_pill("OIDC ✓", palette.success));
+            protocols = protocols.child(status_pill("OIDC ✓", p.success, ui));
         }
         if settings.supports_saml() {
-            protocols = protocols.child(status_pill("SAML ✓", palette.success));
+            protocols = protocols.child(status_pill("SAML ✓", p.success, ui));
         }
         if !settings.supports_oidc() && !settings.supports_saml() {
-            protocols = protocols.child(status_pill("Not set up", palette.muted));
+            protocols = protocols.child(status_pill("Not set up", p.muted, ui));
         }
-        let mut name = div()
-            .h_flex()
-            .flex_1()
-            .min_w_0()
-            .gap_3()
-            .items_center()
+        let mut name = row()
+            .key("name")
+            .role("cell")
+            .label(environment.name.clone())
+            .grow(1.0)
+            .min_w(0.0)
+            .gap(12.0)
+            .center_y()
             .child(
-                div()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .whitespace_nowrap()
-                    .child(environment.name.clone()),
+                font_text(environment.name.clone(), 13.0, SEMIBOLD, p.text, ui)
+                    .truncate()
+                    .shrink(),
             );
         if active {
-            name = name.child(status_pill("Active", palette.success));
+            name = name.child(status_pill("Active", p.success, ui));
         }
-        let body = div()
-            .id(SharedString::from(environment.id.clone()))
-            .role(gpui::Role::Row)
-            .aria_label(environment.name.clone())
-            .h_flex()
-            .h(px(59.))
-            .flex_shrink_0()
-            .px_4()
-            .gap_4()
-            .border_b_1()
-            .border_color(palette.line.opacity(0.7))
-            .hover(|row| row.bg(palette.accent.opacity(0.04)))
+        let id = environment.id.clone();
+        let edited = environment.clone();
+        let deleted = (environment.id.clone(), environment.name.clone());
+        row_frame(environment.id.clone(), &environment.name, 59.0, ui)
             .child(name)
-            .child(div().flex_1().child(protocols))
             .child(
-                div()
-                    .h_flex()
-                    .justify_end()
-                    .gap_1()
-                    .w(px(150.))
-                    .child(
-                        Button::new(SharedString::from(format!("activate-{}", environment.id)))
-                            .accessibility_label(format!("Use {} as active", environment.name))
-                            .icon(icon("icons/circle-check.svg"))
-                            .tooltip("Use as active environment")
-                            .ghost()
-                            .selected(active)
-                            .h(px(29.))
-                            .disabled(self.busy || active)
-                            .on_click(cx.listener({
-                                let id = environment.id.clone();
-                                move |view, _, _, cx| view.select_environment(id.clone(), cx)
-                            })),
-                    )
-                    .child(
-                        Button::new(SharedString::from(format!("edit-{}", environment.id)))
-                            .accessibility_label(format!("Edit {}", environment.name))
-                            .icon(icon("icons/edit.svg"))
-                            .tooltip("Set up environment")
-                            .ghost()
-                            .h(px(29.))
-                            .disabled(self.busy)
-                            .on_click(cx.listener({
-                                let environment = environment.clone();
-                                move |view, _, window, cx| {
-                                    view.edit_environment(Some(&environment), window, cx)
-                                }
-                            })),
-                    )
-                    .child(
-                        Button::new(SharedString::from(format!("delete-{}", environment.id)))
-                            .accessibility_label(format!("Delete {}", environment.name))
-                            .icon(icon("icons/trash.svg"))
-                            .tooltip("Delete environment")
-                            .ghost()
-                            .h(px(29.))
-                            .disabled(self.busy)
-                            .on_click(cx.listener({
-                                let id = environment.id.clone();
-                                let name = environment.name.clone();
-                                move |view, _, _, cx| {
-                                    view.editor = Some(Editor::Delete {
-                                        target: DeleteTarget::Environment,
-                                        id: id.clone(),
-                                        name: name.clone(),
-                                    });
-                                    cx.notify();
-                                }
-                            })),
-                    ),
-            );
-        super::row_focus::Row {
-            id: row_id,
-            body,
-            scroll: self.table_scroll.clone(),
-        }
+                el().key("protocol")
+                    .role("cell")
+                    .grow(1.0)
+                    .min_w(0.0)
+                    .child(protocols),
+            )
+            .child(
+                actions(150.0)
+                    .child(action(
+                        format!("activate-{}", environment.id),
+                        &icons::CIRCLE_CHECK,
+                        format!("Use {} as active", environment.name),
+                        "Use as active environment",
+                        self.busy || active,
+                        move |s: &mut Workspace| s.select_environment(id.clone()),
+                        ui,
+                    ))
+                    .child(action(
+                        format!("edit-{}", environment.id),
+                        &icons::EDIT,
+                        format!("Edit {}", environment.name),
+                        "Set up environment",
+                        self.busy,
+                        move |s: &mut Workspace| s.edit_environment(Some(&edited)),
+                        ui,
+                    ))
+                    .child(action(
+                        format!("delete-{}", environment.id),
+                        &icons::TRASH,
+                        format!("Delete {}", environment.name),
+                        "Delete environment",
+                        self.busy,
+                        move |s: &mut Workspace| {
+                            s.open_editor(Editor::Delete {
+                                target: DeleteTarget::Environment,
+                                id: deleted.0.clone(),
+                                name: deleted.1.clone(),
+                            })
+                        },
+                        ui,
+                    )),
+            )
     }
 
-    pub(super) fn selection_checkbox(
-        &self,
-        id: &str,
-        name: &str,
-        deleted: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
+    fn selection_checkbox(&self, id: &str, name: &str, deleted: bool, ui: &Ui) -> El {
+        let checked = self.selected_rows.contains(id);
+        let key = format!("select-{id}");
         let id = id.to_owned();
-        div().w(px(20.)).flex_shrink_0().child(
-            Checkbox::new(SharedString::from(format!("select-{id}")))
-                .accessibility_label(format!("Select {name}"))
-                .checked(self.selected_rows.contains(&id))
+        el().w(20.0).child(
+            Checkbox::new(checked)
+                .label(format!("Select {name}"))
+                .hide_label()
                 .disabled(self.busy || deleted)
-                .on_click(cx.listener(move |view, checked: &bool, _, cx| {
-                    if *checked {
-                        view.selected_rows.insert(id.clone());
-                    } else {
-                        view.selected_rows.remove(&id);
+                .on_toggle(move |s: &mut Workspace| {
+                    if !s.selected_rows.remove(&id) {
+                        s.selected_rows.insert(id.clone());
                     }
-                    cx.notify();
-                })),
+                })
+                .build(&ui.k)
+                .key(key),
         )
     }
 
-    fn history_button(
-        &self,
-        target: DeleteTarget,
-        id: &str,
-        name: &str,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
+    fn history_button(&self, target: DeleteTarget, id: &str, name: &str, ui: &Ui) -> El {
+        let key = format!("history-{id}");
         let id = id.to_owned();
-        let name = name.to_owned();
-        Button::new(SharedString::from(format!("history-{id}")))
-            .accessibility_label(format!("History for {name}"))
-            .icon(icon("icons/history.svg"))
-            .tooltip("History")
-            .ghost()
-            .h(px(29.))
-            .disabled(self.busy)
-            .on_click(cx.listener(move |view, _, _, cx| {
-                let entries = view
+        let shown = name.to_owned();
+        action(
+            key,
+            &icons::HISTORY,
+            format!("History for {name}"),
+            "History",
+            self.busy,
+            move |s: &mut Workspace| {
+                let entries = s
                     .directory()
                     .and_then(|directory| match target {
                         DeleteTarget::User => directory.user_operations.get(&id),
@@ -322,17 +262,18 @@ impl Workspace {
                     })
                     .cloned()
                     .unwrap_or_default();
-                view.editor = Some(Editor::History {
+                s.open_editor(Editor::History {
                     noun: match target {
                         DeleteTarget::User => "User",
                         _ => "Group",
                     },
-                    name: name.clone(),
+                    name: shown.clone(),
                     entries,
                     expanded: BTreeSet::new(),
                 });
-                cx.notify();
-            }))
+            },
+            ui,
+        )
     }
 
     /// Deletes a live entry, or restores it when it is already deleted.
@@ -342,52 +283,53 @@ impl Workspace {
         id: &str,
         name: &str,
         deleted: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
+        ui: &Ui,
+    ) -> El {
+        let key = format!("remove-{id}");
         let id = id.to_owned();
-        let name = name.to_owned();
-        let button = Button::new(SharedString::from(format!("remove-{id}")))
-            .ghost()
-            .h(px(29.))
-            .disabled(self.busy);
+        let shown = name.to_owned();
         if deleted {
-            return button
-                .accessibility_label(format!("Restore {name}"))
-                .icon(icon("icons/restore.svg"))
-                .tooltip("Restore")
-                .on_click(cx.listener(move |view, _, _, cx| {
-                    let environment = view.selected.clone().unwrap_or_default();
+            return action(
+                key,
+                &icons::RESTORE,
+                format!("Restore {name}"),
+                "Restore",
+                self.busy,
+                move |s: &mut Workspace| {
+                    let environment = s.selected.clone().unwrap_or_default();
                     let id = id.clone();
-                    view.command(
-                        move |store| {
-                            match target {
-                                DeleteTarget::User => {
-                                    store.restore_user(&environment, &id)?;
-                                }
-                                _ => {
-                                    store.restore_group(&environment, &id)?;
-                                }
+                    s.command(move |store| {
+                        match target {
+                            DeleteTarget::User => {
+                                store.restore_user(&environment, &id)?;
                             }
-                            Ok(("Restored".into(), None))
-                        },
-                        cx,
-                    );
-                }));
+                            _ => {
+                                store.restore_group(&environment, &id)?;
+                            }
+                        }
+                        Ok(("Restored".into(), None))
+                    });
+                },
+                ui,
+            );
         }
-        button
-            .accessibility_label(format!("Delete {name}"))
-            .icon(icon("icons/trash.svg"))
-            .tooltip(match target {
+        action(
+            key,
+            &icons::TRASH,
+            format!("Delete {name}"),
+            match target {
                 DeleteTarget::User => "Delete user",
                 _ => "Delete group",
-            })
-            .on_click(cx.listener(move |view, _, _, cx| {
-                view.editor = Some(Editor::Delete {
+            },
+            self.busy,
+            move |s: &mut Workspace| {
+                s.open_editor(Editor::Delete {
                     target,
                     id: id.clone(),
-                    name: name.clone(),
-                });
-                cx.notify();
-            }))
+                    name: shown.clone(),
+                })
+            },
+            ui,
+        )
     }
 }

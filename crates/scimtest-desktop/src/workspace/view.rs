@@ -1,759 +1,770 @@
-use crate::dropdown::DropdownMenu;
-use gpui::{
-    Context, Div, IntoElement, Render, SharedString, Window, div, img, prelude::*, px, rgb, svg,
-};
-use gpui_component::{
-    Disableable, Icon, Selectable, StyledExt,
-    button::{Button, ButtonVariants},
-};
+use rune::{Color, Cx, El, Icon, LiveRegion, Tx, col, el, icon, row, text};
+use rune_kit::{Button, ButtonVariant, Menu, MenuItem};
 
 use super::{Tab, Workspace};
-use crate::theme::Palette;
+use crate::{
+    icons,
+    theme::{BOLD, Palette, SEMIBOLD, Ui},
+};
 
-pub(super) fn icon(path: &'static str) -> Icon {
-    Icon::default().path(path)
+/// One choice in a dropdown menu.
+pub(crate) struct Choice {
+    label: String,
+    checked: bool,
+    action: Box<dyn Fn(&mut Workspace)>,
 }
 
-pub(super) fn cell(id: &'static str, text: impl Into<SharedString>) -> gpui::Stateful<Div> {
-    let text = text.into();
-    div()
-        .id(id)
-        .role(gpui::Role::Cell)
-        .aria_label(text.clone())
-        .flex_1()
-        .min_w_0()
-        .overflow_hidden()
-        .text_ellipsis()
-        .whitespace_nowrap()
-        .child(text)
+impl Choice {
+    pub(crate) fn new(label: impl Into<String>, action: impl Fn(&mut Workspace) + 'static) -> Self {
+        Self {
+            label: label.into(),
+            checked: false,
+            action: Box::new(action),
+        }
+    }
+
+    pub(crate) fn checked(mut self, checked: bool) -> Self {
+        self.checked = checked;
+        self
+    }
 }
 
-pub(super) fn accessible_text(
-    id: impl Into<gpui::ElementId>,
-    text: impl Into<SharedString>,
-) -> gpui::Text {
-    gpui::Text::new(id.into(), text.into())
-}
-
-pub(super) fn accessible_status(
-    id: impl Into<gpui::ElementId>,
-    text: String,
-    failed: bool,
-) -> gpui::Stateful<Div> {
-    div()
-        .id(id)
-        .role(if failed {
-            gpui::Role::Alert
-        } else {
-            gpui::Role::Status
+/// A button that opens a menu of `choices`; picking one closes the menu and runs it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn dropdown(
+    s: &Workspace,
+    key: &str,
+    label: impl Into<String>,
+    width: Option<f32>,
+    disabled: bool,
+    choices: Vec<Choice>,
+    ui: &Ui,
+    layer: &mut Vec<El>,
+) -> El {
+    let label = label.into();
+    let toggle = key.to_owned();
+    let open = s.open_menu.as_deref() == Some(key);
+    let trigger = Button::new(label.clone())
+        .label_with({
+            let label = label.clone();
+            move |font, ink| {
+                row()
+                    .w_full()
+                    .gap(6.0)
+                    .center_y()
+                    .child(
+                        text(label)
+                            .font(font)
+                            .color(ink)
+                            .truncate()
+                            .grow(1.0)
+                            .min_w(0.0),
+                    )
+                    .child(icon(&icons::CHEVRON_DOWN, 12.0).color(ink))
+            }
         })
-        .aria_label(text.clone())
-        .a11y_synthetic_children(move |builder| {
-            let node = builder.parent_node();
-            node.set_value(text.clone());
-            node.set_read_only();
-            node.set_live(if text.is_empty() {
-                gpui::accesskit::Live::Off
-            } else if failed {
-                gpui::accesskit::Live::Assertive
+        .disabled(disabled)
+        .expanded(open)
+        .on_press(move |s: &mut Workspace| {
+            s.open_menu = if s.open_menu.as_deref() == Some(toggle.as_str()) {
+                None
             } else {
-                gpui::accesskit::Live::Polite
-            });
+                Some(toggle.clone())
+            };
         })
+        .build(&ui.k)
+        .key(key.to_owned());
+    let trigger = match width {
+        Some(width) => trigger.w(width),
+        None => trigger,
+    };
+    let mut menu = Menu::new(format!("{key}-menu"))
+        .trigger(trigger)
+        .open(open && !disabled)
+        .on_close(|s: &mut Workspace| s.open_menu = None);
+    for choice in choices {
+        let action = choice.action;
+        let mut item = MenuItem::new(choice.label).on_select(move |s: &mut Workspace| {
+            s.open_menu = None;
+            action(s);
+        });
+        if choice.checked {
+            item = item.checked(true);
+        }
+        menu = menu.item(item);
+    }
+    menu.build(&ui.k, layer)
+}
+
+pub(crate) fn font_text(
+    value: impl Into<String>,
+    size: f32,
+    weight: f32,
+    color: Color,
+    ui: &Ui,
+) -> El {
+    text(value.into()).font(ui.font(size, weight)).color(color)
+}
+
+/// Muted 11 pt text, the app's captions.
+pub(crate) fn caption(value: impl Into<String>, ui: &Ui) -> El {
+    font_text(value, 11.0, 400.0, ui.p.muted, ui)
+}
+
+/// A one-pixel rule across its parent.
+pub(crate) fn rule(p: Palette) -> El {
+    el().w_full().h(1.0).fill(p.line).a11y_hidden()
+}
+
+/// A one-pixel rule down its parent.
+pub(crate) fn vertical_rule(p: Palette) -> El {
+    el().w(1.0).h_full().fill(p.line).a11y_hidden()
+}
+
+/// A page that has not been built yet.
+pub(crate) fn placeholder(title: &str, ui: &Ui) -> El {
+    col()
+        .key("placeholder")
+        .w_full()
+        .padding(40.0)
+        .center()
+        .child(font_text(
+            format!("{title} is not available yet."),
+            13.0,
+            400.0,
+            ui.p.muted,
+            ui,
+        ))
 }
 
 /// Small pill for a status such as "Recording" or "Healthy".
-pub(super) fn status_pill(label: impl Into<SharedString>, color: gpui::Hsla) -> Div {
-    div()
-        .h_flex()
-        .gap_1p5()
-        .px_2p5()
-        .py_1()
-        .rounded_full()
-        .bg(color.opacity(0.14))
-        .text_size(px(11.))
-        .text_color(color)
-        .child(div().size(px(6.)).rounded_full().bg(color))
-        .child(label.into())
+pub(crate) fn status_pill(label: impl Into<String>, color: Color, ui: &Ui) -> El {
+    let label = label.into();
+    row()
+        .label(label.clone())
+        .gap(6.0)
+        .px(10.0)
+        .py(4.0)
+        .center_y()
+        .radius(999.0)
+        .fill(color.alpha(0.14))
+        .child(el().size(6.0, 6.0).radius(3.0).fill(color).a11y_hidden())
+        .child(font_text(label, 11.0, 400.0, color, ui).a11y_hidden())
+}
+
+/// A button that copies `value` and says so in the status bar.
+pub(crate) fn copy_button(key: impl Into<String>, label: &str, value: String, ui: &Ui) -> El {
+    Button::new(label.to_owned())
+        .variant(ButtonVariant::Ghost)
+        .on_press_tx(move |s: &mut Workspace, tx: &mut Tx| {
+            tx.copy(value.clone());
+            s.message = "Copied".into();
+            s.failed = false;
+        })
+        .build(&ui.k)
+        .key(key.into())
+}
+
+/// The status line: announced politely, or assertively when it reports a failure.
+pub(crate) fn status_text(key: &str, message: &str, failed: bool, ui: &Ui) -> El {
+    text(message.to_owned())
+        .key(key.to_owned())
+        .role(if failed { "alert" } else { "status" })
+        .live_region(if message.is_empty() {
+            LiveRegion::Off
+        } else if failed {
+            LiveRegion::Assertive
+        } else {
+            LiveRegion::Polite
+        })
+        .font(ui.font(11.0, 400.0))
+        .color(if failed { ui.p.danger } else { ui.p.muted })
+        .truncate()
+}
+
+fn badge(count: usize, selected: bool, ui: &Ui) -> El {
+    let color = if selected { ui.p.accent } else { ui.p.muted };
+    font_text(count.to_string(), 11.0, 400.0, color, ui)
+        .px(8.0)
+        .radius(999.0)
+        .fill(color.alpha(0.12))
+}
+
+fn section_heading(label: impl Into<String>, ui: &Ui) -> El {
+    font_text(label, 11.0, SEMIBOLD, ui.p.muted, ui)
+        .px(8.0)
+        .py(8.0)
+        .truncate()
 }
 
 /// A sidebar button that is not a page tab, laid out like a navigation item.
 fn sidebar_action(
-    id: &'static str,
+    key: &'static str,
     label: &'static str,
-    path: &'static str,
-    palette: Palette,
-) -> Button {
-    Button::new(id)
-        .accessibility_label(label)
-        .ghost()
+    glyph: &'static Icon,
+    disabled: bool,
+    action: impl Fn(&mut Workspace) + 'static,
+    ui: &Ui,
+) -> El {
+    let mut item = row()
+        .key(key)
+        .role("button")
+        .label(label)
+        .focusable(!disabled)
+        .disabled(disabled)
         .w_full()
-        .h(px(30.))
-        .px_2()
-        .gap_2()
-        .rounded_md()
-        .child(svg().path(path).size(px(15.)).text_color(palette.muted))
-        .child(div().flex_1().text_left().child(label))
-}
-
-fn badge(count: usize, selected: bool, palette: Palette) -> Div {
-    div()
-        .px_2()
-        .rounded_full()
-        .text_size(px(11.))
-        .text_color(if selected {
-            palette.accent
-        } else {
-            palette.muted
-        })
-        .bg(if selected {
-            palette.accent.opacity(0.12)
-        } else {
-            palette.muted.opacity(0.12)
-        })
-        .child(count.to_string())
+        .h(30.0)
+        .px(8.0)
+        .gap(8.0)
+        .center_y()
+        .radius(6.0)
+        .hover(ui.k.c.hover)
+        .child(icon(glyph, 15.0).color(ui.p.muted))
+        .child(
+            font_text(label, 13.0, 400.0, ui.p.text, ui)
+                .grow(1.0)
+                .truncate(),
+        );
+    if disabled {
+        item = item.dim(0.5);
+    } else {
+        item = item.on_press(action);
+    }
+    item
 }
 
 impl Workspace {
-    fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = Palette::get(cx);
+    fn navigation_item(
+        &self,
+        tab: Tab,
+        label: &'static str,
+        glyph: &'static Icon,
+        count: Option<usize>,
+        ui: &Ui,
+    ) -> El {
+        let p = ui.p;
+        let selected = self.tab == tab;
+        let mut item = row()
+            .key(format!("nav-{label}"))
+            .role("tab")
+            .label(label)
+            .checked(selected)
+            .focusable(!self.busy)
+            .disabled(self.busy)
+            .w_full()
+            .h(30.0)
+            .px(8.0)
+            .gap(8.0)
+            .center_y()
+            .radius(6.0)
+            .fill(if selected {
+                p.selected
+            } else {
+                Color::TRANSPARENT
+            })
+            .child(icon(glyph, 15.0).color(if selected { p.accent } else { p.muted }))
+            .child(
+                font_text(label, 13.0, 400.0, p.text, ui)
+                    .grow(1.0)
+                    .truncate(),
+            );
+        if !selected {
+            item = item.hover(ui.k.c.hover);
+        }
+        if let Some(count) = count {
+            item = item.child(badge(count, selected, ui));
+        }
+        item.on_press(move |s: &mut Workspace| s.show_tab(tab))
+    }
+
+    fn sidebar(&self, ui: &Ui) -> El {
+        let mut sidebar = col()
+            .key("sidebar")
+            .role("tablist")
+            .label("Pages")
+            .w(226.0)
+            .h_full()
+            .px(8.0)
+            .py(16.0)
+            .fill(ui.p.sidebar);
+        if let Some(directory) = self.directory() {
+            let settings = &directory.environment.settings;
+            sidebar = sidebar
+                .child(section_heading(directory.environment.name.clone(), ui))
+                .child(self.navigation_item(
+                    Tab::Users,
+                    "Users",
+                    &icons::USER,
+                    Some(directory.users.len()),
+                    ui,
+                ))
+                .child(self.navigation_item(
+                    Tab::Groups,
+                    "Groups",
+                    &icons::USERS,
+                    Some(directory.groups.len()),
+                    ui,
+                ));
+            if settings.supports_oidc() {
+                sidebar = sidebar.child(self.navigation_item(
+                    Tab::Oidc,
+                    "OIDC Inspector",
+                    &icons::ID_CARD,
+                    None,
+                    ui,
+                ));
+            }
+            if settings.supports_saml() {
+                sidebar = sidebar.child(self.navigation_item(
+                    Tab::Saml,
+                    "SAML Inspector",
+                    &icons::ID_CARD,
+                    None,
+                    ui,
+                ));
+            }
+            if settings.scim_enabled {
+                sidebar = sidebar.child(self.navigation_item(
+                    Tab::Scim,
+                    "SCIM provisioning",
+                    &icons::ENVIRONMENTS,
+                    None,
+                    ui,
+                ));
+            }
+            if settings.supports_oidc() || settings.supports_saml() {
+                sidebar = sidebar.child(self.navigation_item(
+                    Tab::Resilience,
+                    "Fault Injection",
+                    &icons::SHIELD,
+                    None,
+                    ui,
+                ));
+            }
+            sidebar = sidebar
+                .child(self.navigation_item(
+                    Tab::Lifecycle,
+                    "Lifecycle",
+                    &icons::LIFECYCLE,
+                    None,
+                    ui,
+                ))
+                .child(sidebar_action(
+                    "environment-settings",
+                    "Set up this environment",
+                    &icons::ENVIRONMENTS,
+                    self.busy,
+                    |s: &mut Workspace| {
+                        let environment =
+                            s.directory().map(|directory| directory.environment.clone());
+                        s.edit_environment(environment.as_ref());
+                    },
+                    ui,
+                ))
+                .child(sidebar_action(
+                    "bulk-tools",
+                    "Bulk tools",
+                    &icons::TOOLS,
+                    self.busy,
+                    |s: &mut Workspace| s.open_tools(),
+                    ui,
+                ));
+        }
+        sidebar
+            .child(section_heading("Global", ui).mt(20.0))
+            .child(self.navigation_item(
+                Tab::Environments,
+                "Environments",
+                &icons::ENVIRONMENTS,
+                Some(self.directories.len()),
+                ui,
+            ))
+            .child(sidebar_action(
+                "idp-tunnel",
+                "IDP & tunnel",
+                &icons::GLOBE,
+                self.busy,
+                |s: &mut Workspace| s.open_idp(),
+                ui,
+            ))
+            .child(self.navigation_item(Tab::Traffic, "Traffic", &icons::PULSE, None, ui))
+    }
+
+    fn toolbar(&self, ui: &Ui, layer: &mut Vec<El>) -> El {
+        let k = &ui.k;
         let selected_name = self
             .directory()
-            .map(|directory| directory.environment.name.as_str())
-            .unwrap_or("No environments");
-        let directories = self.directories.clone();
-        let view = cx.weak_entity();
+            .map(|directory| directory.environment.name.clone())
+            .unwrap_or_else(|| "No environments".into());
         let signed_in =
             self.tunnel_snapshot.connected && !self.tunnel_snapshot.github_login.is_empty();
-        let mut toolbar = div()
-            .h_flex()
-            .h(px(52.))
-            .flex_shrink_0()
-            .px_4()
-            .gap_2()
-            .border_b_1()
-            .border_color(palette.line)
-            .bg(palette.toolbar)
-            .child(
-                img(gpui::ImageSource::Resource(gpui::Resource::Embedded(
-                    "app-icon.png".into(),
-                )))
-                .size(px(24.))
-                .rounded_md(),
-            )
-            .child(
-                div()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .child("scimtest"),
-            )
-            .child(div().flex_1());
-        if self.updates.read(cx).available() {
-            toolbar = toolbar.child(crate::updates::button(&self.updates, cx));
+        let choices = self
+            .directories
+            .iter()
+            .map(|directory| {
+                let id = directory.environment.id.clone();
+                Choice::new(
+                    directory.environment.name.clone(),
+                    move |s: &mut Workspace| s.select_environment(id.clone()),
+                )
+                .checked(self.selected.as_deref() == Some(directory.environment.id.as_str()))
+            })
+            .collect();
+        let mut logo = el()
+            .key("app-icon")
+            .size(24.0, 24.0)
+            .radius(6.0)
+            .a11y_hidden();
+        if let Some(image) = &self.app_icon {
+            logo = logo.pixels(image.pixels());
+        }
+        let mut toolbar = row()
+            .key("toolbar")
+            .w_full()
+            .h(52.0)
+            .px(16.0)
+            .gap(8.0)
+            .center_y()
+            .fill(ui.p.toolbar)
+            .child(logo)
+            .child(font_text("scimtest", 13.0, SEMIBOLD, ui.p.text, ui))
+            .child(el().grow(1.0));
+        if self.updates.available() {
+            toolbar = toolbar.child(self.updates.button(ui));
         }
         toolbar = toolbar
+            .child(caption("Active environment", ui))
             .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(palette.muted)
-                    .child("Active environment"),
+                dropdown(
+                    self,
+                    "environment-picker",
+                    selected_name.clone(),
+                    Some(190.0),
+                    self.busy || self.directories.is_empty(),
+                    choices,
+                    ui,
+                    layer,
+                )
+                .label(format!("Active environment: {selected_name}")),
             )
             .child(
-                Button::new("environment-picker")
-                    .label(selected_name.to_owned())
-                    .icon(icon("icons/chevron-down.svg"))
-                    .h(px(29.))
-                    .w(px(190.))
-                    .disabled(self.busy || directories.is_empty())
-                    .dropdown_menu(move |mut menu, _, _| {
-                        for directory in &directories {
-                            let id = directory.environment.id.clone();
-                            let view = view.clone();
-                            menu = menu.item(
-                                gpui_component::menu::PopupMenuItem::new(
-                                    directory.environment.name.clone(),
-                                )
-                                .on_click(move |_, _, cx| {
-                                    let _ = view.update(cx, |view, cx| {
-                                        view.select_environment(id.clone(), cx);
-                                    });
-                                }),
-                            );
-                        }
-                        menu
-                    }),
-            )
-            .child(
-                Button::new("manage-environments")
-                    .label("Manage")
-                    .link()
-                    .h(px(29.))
+                Button::new("Manage")
+                    .variant(ButtonVariant::Ghost)
                     .disabled(self.busy)
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        view.tab = Tab::Environments;
-                        view.table_scroll.set_offset(Default::default());
-                        view.message.clear();
-                        cx.notify();
-                    })),
+                    .on_press(|s: &mut Workspace| {
+                        s.tab = Tab::Environments;
+                        s.message.clear();
+                    })
+                    .build(k)
+                    .key("manage-environments"),
             )
-            .child(div().flex_1());
+            .child(el().grow(1.0));
         let account_label = if signed_in {
             format!("Signed in as @{}", self.tunnel_snapshot.github_login)
         } else {
             "Account & connection".to_owned()
         };
         toolbar = toolbar.child(
-            Button::new("account-settings")
-                .track_focus(&self.account_button_focus)
-                .label(account_label)
-                .ghost()
-                .h(px(29.))
-                .on_click(cx.listener(|view, _, _, cx| {
-                    view.account_open = true;
-                    view.message.clear();
-                    view.failed = false;
-                    cx.notify();
-                })),
+            Button::new(account_label)
+                .variant(ButtonVariant::Ghost)
+                .on_press(|s: &mut Workspace| {
+                    s.account_open = true;
+                    s.message.clear();
+                    s.failed = false;
+                })
+                .build(k)
+                .key("account-settings"),
         );
         if signed_in {
             toolbar = toolbar.child(
-                Button::new("sign-out")
-                    .label("Log out")
-                    .outline()
-                    .h(px(29.))
+                Button::new("Log out")
+                    .variant(ButtonVariant::Outline)
                     .disabled(self.busy || self.account_busy)
-                    .on_click(cx.listener(|view, _, _, cx| view.sign_out_account(cx))),
+                    .on_press(|s: &mut Workspace| s.sign_out_account())
+                    .build(k)
+                    .key("sign-out"),
             );
         }
         toolbar
     }
 
-    fn navigation_item(
-        &self,
-        tab: Tab,
-        label: &'static str,
-        path: &'static str,
-        count: Option<usize>,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let palette = Palette::get(cx);
-        let selected = self.tab == tab;
-        Button::new(label)
-            .accessibility_label(label)
-            .ghost()
-            .w_full()
-            .selected(selected)
-            .toggled(selected)
-            .disabled(self.busy)
-            .h(px(30.))
-            .px_2()
-            .gap_2()
-            .rounded_md()
-            .when(selected, |row| row.bg(palette.selected))
-            .child(svg().path(path).size(px(15.)).text_color(if selected {
-                palette.accent
-            } else {
-                palette.muted
-            }))
-            .child(div().flex_1().text_left().child(label))
-            .when_some(count, |row, count| {
-                row.child(badge(count, selected, palette))
-            })
-            .on_click(cx.listener(move |view, _, _, cx| {
-                if view.busy {
-                    return;
-                }
-                view.tab = tab;
-                view.selected_rows.clear();
-                view.page = 0;
-                view.status_filter = "All";
-                view.table_scroll.set_offset(Default::default());
-                view.editor = None;
-                view.message.clear();
-                if tab == Tab::Scim {
-                    view.refresh_scim(cx);
-                }
-                if matches!(
-                    tab,
-                    Tab::Oidc | Tab::Saml | Tab::Resilience | Tab::Lifecycle
-                ) {
-                    view.refresh_identity(cx);
-                }
-                if tab == Tab::Traffic {
-                    view.refresh_traffic(cx);
-                }
-                cx.notify();
-            }))
-    }
-
-    fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = Palette::get(cx);
-        let directory = self.directory();
-        let mut sidebar = div()
-            .v_flex()
-            .w(px(226.))
-            .flex_shrink_0()
-            .px_2()
-            .py_4()
-            .border_r_1()
-            .border_color(palette.line)
-            .bg(palette.sidebar);
-        if let Some(directory) = directory {
-            sidebar = sidebar
-                .child(
-                    div()
-                        .px_2()
-                        .py_2()
-                        .text_size(px(11.))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(palette.muted)
-                        .child(directory.environment.name.clone()),
-                )
-                .child(self.navigation_item(
-                    Tab::Users,
-                    "Users",
-                    "icons/user.svg",
-                    Some(directory.users.len()),
-                    cx,
-                ))
-                .child(self.navigation_item(
-                    Tab::Groups,
-                    "Groups",
-                    "icons/users.svg",
-                    Some(directory.groups.len()),
-                    cx,
-                ))
-                .when(directory.environment.settings.supports_oidc(), |sidebar| {
-                    sidebar.child(self.navigation_item(
-                        Tab::Oidc,
-                        "OIDC Inspector",
-                        "icons/id-card.svg",
-                        None,
-                        cx,
-                    ))
-                })
-                .when(directory.environment.settings.supports_saml(), |sidebar| {
-                    sidebar.child(self.navigation_item(
-                        Tab::Saml,
-                        "SAML Inspector",
-                        "icons/id-card.svg",
-                        None,
-                        cx,
-                    ))
-                })
-                .when(directory.environment.settings.scim_enabled, |sidebar| {
-                    sidebar.child(self.navigation_item(
-                        Tab::Scim,
-                        "SCIM provisioning",
-                        "icons/environments.svg",
-                        None,
-                        cx,
-                    ))
-                })
-                .when(
-                    directory.environment.settings.supports_oidc()
-                        || directory.environment.settings.supports_saml(),
-                    |sidebar| {
-                        sidebar.child(self.navigation_item(
-                            Tab::Resilience,
-                            "Fault Injection",
-                            "icons/shield.svg",
-                            None,
-                            cx,
-                        ))
-                    },
-                )
-                .child(self.navigation_item(
-                    Tab::Lifecycle,
-                    "Lifecycle",
-                    "icons/lifecycle.svg",
-                    None,
-                    cx,
-                ))
-                .child(
-                    sidebar_action(
-                        "environment-settings",
-                        "Set up this environment",
-                        "icons/environments.svg",
-                        palette,
-                    )
-                    .disabled(self.busy)
-                    .on_click(cx.listener(|view, _, window, cx| {
-                        let environment = view
-                            .directory()
-                            .map(|directory| directory.environment.clone());
-                        view.edit_environment(environment.as_ref(), window, cx);
-                    })),
-                )
-                .child(
-                    sidebar_action("bulk-tools", "Bulk tools", "icons/tools.svg", palette)
-                        .disabled(self.busy)
-                        .on_click(cx.listener(|view, _, window, cx| {
-                            view.open_tools(window, cx);
-                        })),
-                );
-        }
-        sidebar
-            .child(
-                div()
-                    .mt_5()
-                    .px_2()
-                    .py_2()
-                    .text_size(px(11.))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(palette.muted)
-                    .child("Global"),
-            )
-            .child(self.navigation_item(
-                Tab::Environments,
-                "Environments",
-                "icons/environments.svg",
-                Some(self.directories.len()),
-                cx,
-            ))
-            .child(
-                sidebar_action("idp-tunnel", "IDP & tunnel", "icons/globe.svg", palette)
-                    .disabled(self.busy)
-                    .on_click(cx.listener(|view, _, window, cx| {
-                        view.open_idp(window, cx);
-                    })),
-            )
-            .child(self.navigation_item(Tab::Traffic, "Traffic", "icons/pulse.svg", None, cx))
-            .child(div().flex_1())
-    }
-
-    fn page_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = Palette::get(cx);
+    fn page_header(&self, ui: &Ui, layer: &mut Vec<El>) -> El {
+        let p = ui.p;
         let environment = self
             .directory()
             .map(|directory| directory.environment.name.clone())
             .unwrap_or_default();
-        let (title, path, subtitle): (&str, &'static str, String) = match self.tab {
+        let (title, glyph, subtitle): (&str, &'static Icon, String) = match self.tab {
             Tab::Lifecycle => (
                 "Lifecycle",
-                "icons/lifecycle.svg",
+                &icons::LIFECYCLE,
                 format!(
                     "Run joiner, mover, and leaver scenarios against {environment} and see what it did with each message."
                 ),
             ),
             Tab::Users => (
                 "Users",
-                "icons/user.svg",
+                &icons::USER,
                 self.directory()
                     .map(|directory| format!("Users in {}.", directory.environment.name))
                     .unwrap_or_else(|| "Create an environment before adding users.".into()),
             ),
             Tab::Groups => (
                 "Groups",
-                "icons/users.svg",
+                &icons::USERS,
                 self.directory()
                     .map(|directory| format!("Groups in {}.", directory.environment.name))
                     .unwrap_or_else(|| "Create an environment before adding groups.".into()),
             ),
             Tab::Scim => (
                 "SCIM provisioning",
-                "icons/environments.svg",
+                &icons::ENVIRONMENTS,
                 "Provision directory changes, reconcile remote state, and inspect requests.".into(),
             ),
             Tab::Oidc => (
                 "OIDC Inspector",
-                "icons/id-card.svg",
+                &icons::ID_CARD,
                 format!("Authorization, token, and userinfo activity for {environment}."),
             ),
             Tab::Saml => (
                 "SAML Inspector",
-                "icons/id-card.svg",
+                &icons::ID_CARD,
                 "Inspect assertions, exercise validation, and test single logout.".into(),
             ),
             Tab::Environments => (
                 "Environments",
-                "icons/environments.svg",
+                &icons::ENVIRONMENTS,
                 "Each environment is one app you are testing. Use Test sign-in to run a flow, Inspect flow to debug it, or Set up to find connection values.".into(),
             ),
             Tab::Resilience => (
                 "Fault Injection",
-                "icons/shield.svg",
+                &icons::SHIELD,
                 format!("Test how {environment} handles identity infrastructure failures."),
             ),
             Tab::Traffic => (
                 "Traffic",
-                "icons/pulse.svg",
+                &icons::PULSE,
                 "Live OIDC and SAML request and response transcripts for debugging sign-in flows."
                     .into(),
             ),
         };
-        div()
-            .h_flex()
-            .gap_4()
-            .mb_6()
+        row()
+            .key("page-header")
+            .w_full()
+            .gap(16.0)
+            .mb(24.0)
+            .center_y()
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .size(px(44.))
-                    .rounded_lg()
-                    .bg(palette.accent)
-                    .shadow_md()
-                    .child(svg().path(path).size(px(22.)).text_color(rgb(0xffffff))),
+                el().size(44.0, 44.0)
+                    .center()
+                    .radius(11.0)
+                    .fill(p.accent)
+                    .shadow(2.0, 6.0, Color::BLACK.alpha(0.18))
+                    .a11y_hidden()
+                    .child(icon(glyph, 22.0).color(Color::WHITE)),
             )
             .child(
-                div()
-                    .v_flex()
-                    .flex_1()
-                    .gap_1()
+                col()
+                    .grow(1.0)
+                    .min_w(0.0)
+                    .gap(4.0)
                     .child(
-                        div()
-                            .id("page-title")
-                            .role(gpui::Role::Heading)
-                            .aria_label(title)
-                            .text_size(px(25.))
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .text_color(palette.strong)
-                            .child(title),
+                        font_text(title, 25.0, BOLD, p.strong, ui)
+                            .key("page-title")
+                            .role("heading")
+                            .level(1),
                     )
-                    .child(div().text_color(palette.muted).child(subtitle)),
+                    .child(font_text(subtitle, 13.0, 400.0, p.muted, ui).wrap()),
             )
-            .child(self.header_actions(cx))
+            .child(self.header_actions(ui, layer))
     }
 
-    fn header_actions(&self, cx: &mut Context<Self>) -> Div {
-        let palette = Palette::get(cx);
+    fn header_actions(&self, ui: &Ui, _layer: &mut Vec<El>) -> El {
+        let k = &ui.k;
+        let p = ui.p;
         let no_environment = self.selected.is_none();
+        let primary = |label: &'static str, disabled: bool, action: fn(&mut Workspace)| {
+            Button::new(label)
+                .variant(ButtonVariant::Contrast)
+                .disabled(disabled)
+                .on_press(action)
+                .build(k)
+                .key("add-entry")
+        };
         match self.tab {
-            Tab::Users => div().child(
-                Button::new("add-entry")
-                    .label("+ Add user")
-                    .h(px(29.))
-                    .primary()
-                    .disabled(self.busy || no_environment)
-                    .on_click(cx.listener(|view, _, window, cx| view.edit_user(None, window, cx))),
-            ),
-            Tab::Groups => div().child(
-                Button::new("add-entry")
-                    .label("+ Add group")
-                    .h(px(29.))
-                    .primary()
-                    .disabled(self.busy || no_environment)
-                    .on_click(cx.listener(|view, _, window, cx| view.edit_group(None, window, cx))),
-            ),
-            Tab::Environments => div().child(
-                Button::new("add-entry")
-                    .label("+ Add environment")
-                    .h(px(29.))
-                    .primary()
-                    .disabled(self.busy)
-                    .on_click(
-                        cx.listener(|view, _, window, cx| view.edit_environment(None, window, cx)),
-                    ),
-            ),
-            Tab::Oidc => div()
-                .h_flex()
-                .gap_2()
+            Tab::Users => primary("+ Add user", self.busy || no_environment, |s| {
+                s.edit_user(None)
+            }),
+            Tab::Groups => primary("+ Add group", self.busy || no_environment, |s| {
+                s.edit_group(None)
+            }),
+            Tab::Environments => {
+                primary("+ Add environment", self.busy, |s| s.edit_environment(None))
+            }
+            Tab::Oidc => row()
+                .gap(8.0)
                 .child(
-                    Button::new("run-oidc")
-                        .label("Test with built-in RP")
-                        .h(px(29.))
-                        .primary()
+                    Button::new("Test with built-in RP")
+                        .variant(ButtonVariant::Contrast)
                         .disabled(self.busy || no_environment)
-                        .on_click(cx.listener(|view, _, _, cx| view.run_oidc(cx))),
+                        .on_press(|s: &mut Workspace| s.run_oidc())
+                        .build(k)
+                        .key("run-oidc"),
                 )
                 .child(
-                    Button::new("open-faults")
-                        .label("Fault Injection")
-                        .h(px(29.))
-                        .outline()
+                    Button::new("Fault Injection")
+                        .variant(ButtonVariant::Outline)
                         .disabled(self.busy || no_environment)
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            view.tab = Tab::Resilience;
-                            view.refresh_identity(cx);
-                            cx.notify();
-                        })),
+                        .on_press(|s: &mut Workspace| {
+                            s.tab = Tab::Resilience;
+                            s.refresh_identity();
+                        })
+                        .build(k)
+                        .key("open-faults"),
                 ),
-            Tab::Saml => div().child(
-                Button::new("add-entry")
-                    .label("Run sign-in")
-                    .h(px(29.))
-                    .primary()
-                    .disabled(self.busy || no_environment)
-                    .on_click(cx.listener(|view, _, _, cx| view.run_saml(cx))),
-            ),
-            Tab::Scim => div().child(
-                Button::new("add-entry")
-                    .label("Sync changes")
-                    .h(px(29.))
-                    .primary()
-                    .disabled(self.busy || self.scim_running() || no_environment)
-                    .on_click(cx.listener(|view, _, _, cx| view.scim_action("sync", None, cx))),
+            Tab::Saml => primary("Run sign-in", self.busy || no_environment, |s| s.run_saml()),
+            Tab::Scim => primary(
+                "Sync changes",
+                self.busy || self.scim_running() || no_environment,
+                |s| s.scim_action("sync", None),
             ),
             Tab::Resilience => {
                 let active = self.resilience_active();
-                div()
-                    .h_flex()
-                    .gap_2()
-                    .when(active, |row| {
-                        row.child(
-                            Button::new("add-entry")
-                                .label("Disarm scenario")
-                                .h(px(29.))
-                                .outline()
-                                .disabled(self.busy)
-                                .on_click(cx.listener(|view, _, _, cx| view.disarm_resilience(cx))),
-                        )
-                    })
-                    .child(if active {
-                        status_pill("Scenario armed", palette.accent)
-                    } else {
-                        status_pill("Healthy", palette.success)
-                    })
+                let mut actions = row().gap(8.0).center_y();
+                if active {
+                    actions = actions.child(
+                        Button::new("Disarm scenario")
+                            .variant(ButtonVariant::Outline)
+                            .disabled(self.busy)
+                            .on_press(|s: &mut Workspace| s.disarm_resilience())
+                            .build(k)
+                            .key("add-entry"),
+                    );
+                }
+                actions.child(if active {
+                    status_pill("Scenario armed", p.accent, ui)
+                } else {
+                    status_pill("Healthy", p.success, ui)
+                })
             }
             Tab::Traffic => {
                 if self.traffic.snapshot.record {
-                    div().child(status_pill("Recording", palette.success))
+                    status_pill("Recording", p.success, ui)
                 } else {
-                    div().child(status_pill("Not recording", palette.muted))
+                    status_pill("Not recording", p.muted, ui)
                 }
             }
-            Tab::Lifecycle => div(),
+            Tab::Lifecycle => el(),
         }
     }
-}
 
-impl Workspace {
-    fn content(&mut self, cx: &mut Context<Self>) -> Div {
-        if self.account_locked() || self.account_open {
-            return div().size_full().child(self.account_screen(cx));
+    fn page(&self, ui: &Ui, layer: &mut Vec<El>) -> El {
+        match self.tab {
+            Tab::Lifecycle => self.lifecycle_inspector(ui, layer),
+            Tab::Resilience => self.resilience_inspector(ui, layer),
+            Tab::Traffic => self.traffic_inspector(ui, layer),
+            Tab::Scim => self.scim_inspector(ui, layer),
+            Tab::Oidc => self.oidc_inspector(ui, layer),
+            Tab::Saml => self.saml_inspector(ui, layer),
+            Tab::Users | Tab::Groups | Tab::Environments => self.table(ui, layer),
         }
-        let palette = Palette::get(cx);
+    }
+
+    fn status_bar(&self, ui: &Ui) -> El {
+        let p = ui.p;
         let idp_base = self
             .tunnel_snapshot
             .public_url
             .clone()
             .unwrap_or_else(|| self.api_url.clone());
-        let status = self.directory().map(|directory| {
-            format!(
-                "{} SCIM: {}",
-                directory.environment.name,
-                if directory.environment.settings.scim_enabled {
-                    "enabled"
-                } else {
-                    "disabled"
-                }
-            )
-        });
-        let background = div()
-            .id("workspace-background")
-            .role(gpui::Role::Group)
-            .a11y_synthetic_children({
-                let modal = self.editor.is_some();
-                move |builder| {
-                    if modal {
-                        builder.parent_node().set_hidden();
-                    }
-                }
-            })
-            .v_flex()
-            .size_full()
-            .bg(palette.canvas)
-            .child(self.toolbar(cx))
+        let mut bar = row()
+            .key("status-bar")
+            .w_full()
+            .h(34.0)
+            .px(20.0)
+            .gap(20.0)
+            .center_y()
+            .fill(p.toolbar)
             .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_1()
-                    .min_h_0()
-                    .child(self.sidebar(cx))
+                row()
+                    .gap(6.0)
+                    .center_y()
                     .child(
-                        div()
-                            .v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .min_h_0()
-                            .px(px(50.))
-                            .pt(px(30.))
-                            .pb_6()
-                            .child(self.page_header(cx))
-                            .child(self.table(cx)),
-                    ),
+                        el().size(6.0, 6.0)
+                            .radius(3.0)
+                            .fill(p.success)
+                            .a11y_hidden(),
+                    )
+                    .child(caption("scimtest", ui)),
             )
             .child(
-                div()
-                    .h_flex()
-                    .h(px(34.))
-                    .flex_shrink_0()
-                    .px_5()
-                    .gap_5()
-                    .border_t_1()
-                    .border_color(palette.line)
-                    .bg(palette.toolbar)
-                    .child(
-                        div()
-                            .h_flex()
-                            .gap_1p5()
-                            .text_size(px(11.))
-                            .text_color(palette.muted)
-                            .child(div().size(px(6.)).rounded_full().bg(palette.success))
-                            .child("scimtest"),
-                    )
-                    .child(
-                        accessible_status(
-                            ("workspace-status", self.status_revision),
-                            self.message.clone(),
-                            self.failed && !self.message.is_empty(),
-                        )
-                        .text_size(px(11.))
-                        .flex_1()
-                        .text_color(if self.failed {
-                            palette.danger
-                        } else {
-                            palette.muted
-                        })
-                        .child(self.message.clone()),
-                    )
-                    .when_some(status, |bar, status| {
-                        bar.child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(palette.muted)
-                                .child(status),
-                        )
-                    })
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(palette.muted)
-                            .child(format!("IDP base: {idp_base}")),
-                    ),
+                status_text(
+                    "workspace-status",
+                    &self.message,
+                    self.failed && !self.message.is_empty(),
+                    ui,
+                )
+                .grow(1.0)
+                .min_w(0.0),
             );
-        div()
-            .relative()
-            .size_full()
-            .text_size(px(13.))
-            .text_color(palette.text)
-            .on_key_down(cx.listener(|view, event: &gpui::KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" && view.editor.is_some() {
-                    view.request_editor_dismiss(window, cx);
-                    cx.stop_propagation();
-                }
-            }))
-            .child(background)
-            .when(self.editor.is_some(), |root| root.child(self.editor(cx)))
+        if let Some(directory) = self.directory() {
+            bar = bar.child(caption(
+                format!(
+                    "{} SCIM: {}",
+                    directory.environment.name,
+                    if directory.environment.settings.scim_enabled {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                ),
+                ui,
+            ));
+        }
+        bar.child(caption(format!("IDP base: {idp_base}"), ui))
     }
 }
 
-impl Render for Workspace {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.update_focus(window, cx);
-        if window.focused(cx).is_none() {
-            window.focus(&self.focus, cx);
-        }
-        let content = self.content(cx);
-        div()
-            .id("workspace")
-            .role(gpui::Role::Group)
-            .aria_label("scimtest workspace")
-            .size_full()
-            .key_context("Workspace")
-            .track_focus(&self.focus)
-            .child(content)
-    }
+pub fn view(s: &Workspace, cx: &mut Cx<Workspace>) -> El {
+    let ui = Ui::new(cx.system_dark());
+    let p = ui.p;
+    let mut layer = Vec::new();
+    let body = if s.account_locked() || s.account_open {
+        s.account_screen(&ui, &mut layer)
+    } else {
+        let page = col()
+            .key("page")
+            .grow(1.0)
+            .min_w(0.0)
+            .h_full()
+            .min_h(0.0)
+            .pl(50.0)
+            .pr(50.0)
+            .pt(30.0)
+            .pb(24.0)
+            .child(s.page_header(&ui, &mut layer))
+            .child(s.page(&ui, &mut layer).grow(1.0).min_h(0.0));
+        col()
+            .key("workspace")
+            .w_full()
+            .h_full()
+            .fill(p.canvas)
+            .child(s.toolbar(&ui, &mut layer))
+            .child(rule(p))
+            .child(
+                row()
+                    .key("main")
+                    .w_full()
+                    .grow(1.0)
+                    .min_h(0.0)
+                    .child(s.sidebar(&ui))
+                    .child(vertical_rule(p))
+                    .child(page),
+            )
+            .child(rule(p))
+            .child(s.status_bar(&ui))
+    };
+    s.editor(&ui, &mut layer);
+    s.discard_confirmation(&ui, &mut layer);
+    rune_kit::root(body.font(ui.k.ty.ui).color(p.text), layer)
 }

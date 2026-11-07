@@ -1,109 +1,68 @@
+use rune::{El, row};
+use rune_kit::{Button, ButtonVariant, Dialog};
+
 use super::Workspace;
-use crate::theme::Palette;
-use gpui::{Context, IntoElement, MouseButton, Window, div, prelude::*, px, rgba};
-use gpui_component::{
-    FocusTrapElement, StyledExt,
-    button::{Button, ButtonVariants},
-};
+use crate::theme::Ui;
 
 impl Workspace {
-    pub(super) fn close_editor(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn close_editor(&mut self) {
         self.editor = None;
-        self.discard_return_focus = None;
+        self.editor_dirty = false;
+        self.discarding = false;
+        self.open_menu = None;
         self.message.clear();
-        cx.notify();
     }
 
-    pub(super) fn cancel_discard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(focus) = self.discard_return_focus.take() {
-            window.focus(&focus, cx);
-            cx.notify();
-        }
+    pub(super) fn cancel_discard(&mut self) {
+        self.discarding = false;
     }
 
-    pub(super) fn request_editor_dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Closes the editor, first asking before it drops unsaved changes.
+    pub(super) fn request_editor_dismiss(&mut self) {
         if self.busy || self.editor.is_none() {
             return;
         }
-        if self.discard_return_focus.is_some() {
-            self.cancel_discard(window, cx);
+        if self.discarding {
+            self.cancel_discard();
             return;
         }
         if self.editor_dirty {
-            self.discard_return_focus = Some(
-                window
-                    .focused(cx)
-                    .unwrap_or_else(|| self.editor_focus.clone()),
-            );
-            window.focus(&self.discard_accept_focus, cx);
-            cx.notify();
+            self.discarding = true;
             return;
         }
-        self.close_editor(cx);
+        self.close_editor();
     }
 
-    pub(super) fn discard_confirmation(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let palette = Palette::get(cx);
-        div()
-            .id("discard-backdrop")
-            .absolute()
-            .inset_0()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(rgba(0x00000040))
-            .occlude()
-            .on_click(cx.listener(|view, _, window, cx| {
-                view.cancel_discard(window, cx);
-                cx.stop_propagation();
-            }))
+    pub(super) fn discard_confirmation(&self, ui: &Ui, layer: &mut Vec<El>) {
+        let k = &ui.k;
+        Dialog::new("discard", "Discard unsaved changes?")
+            .open(self.discarding)
+            .width(420.0)
+            .fit()
+            .on_close(|s: &mut Workspace| s.cancel_discard())
             .child(
-                div()
-                    .id("discard-dialog")
-                    .role(gpui::Role::AlertDialog)
-                    .aria_label("Discard unsaved changes?")
-                    .a11y_synthetic_children(|builder| builder.parent_node().set_modal())
-                    .v_flex()
-                    .w(px(420.))
-                    .m_6()
-                    .rounded_xl()
-                    .border_1()
-                    .border_color(palette.line)
-                    .bg(palette.card)
-                    .shadow_xl()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                row()
+                    .key("discard-actions")
+                    .w_full()
+                    .padding(16.0)
+                    .gap(8.0)
+                    .justify_end()
                     .child(
-                        div()
-                            .p_5()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child("Discard unsaved changes?"),
+                        Button::new("Cancel")
+                            .variant(ButtonVariant::Ghost)
+                            .on_press(|s: &mut Workspace| s.cancel_discard())
+                            .build(k)
+                            .key("cancel-discard"),
                     )
                     .child(
-                        div()
-                            .h_flex()
-                            .justify_end()
-                            .gap_2()
-                            .p_4()
-                            .border_t_1()
-                            .border_color(palette.line)
-                            .child(
-                                Button::new("cancel-discard")
-                                    .label("Cancel")
-                                    .ghost()
-                                    .on_click(cx.listener(|view, _, window, cx| {
-                                        view.cancel_discard(window, cx)
-                                    })),
-                            )
-                            .child(
-                                Button::new("confirm-discard")
-                                    .label("Continue")
-                                    .danger()
-                                    .track_focus(&self.discard_accept_focus)
-                                    .on_click(cx.listener(|view, _, _, cx| view.close_editor(cx))),
-                            ),
-                    )
-                    .focus_trap("discard-focus", &self.discard_focus),
+                        Button::new("Continue")
+                            .variant(ButtonVariant::Danger)
+                            .on_press(|s: &mut Workspace| s.close_editor())
+                            .build(k)
+                            .key("confirm-discard")
+                            .default_button(),
+                    ),
             )
+            .build(k, layer);
     }
 }

@@ -1,90 +1,95 @@
-use gpui::{App, Hsla, px, rgb};
-use gpui_component::{ActiveTheme, Theme};
+use rune::{Color, TextStyle};
+use rune_kit::{Kit, PaletteSeed};
 
 #[derive(Clone, Copy)]
 pub struct Palette {
-    pub canvas: Hsla,
-    pub sidebar: Hsla,
-    pub card: Hsla,
-    pub toolbar: Hsla,
-    pub text: Hsla,
-    pub strong: Hsla,
-    pub muted: Hsla,
-    pub line: Hsla,
-    pub soft: Hsla,
-    pub accent: Hsla,
-    pub selected: Hsla,
-    pub success: Hsla,
-    pub danger: Hsla,
+    pub canvas: Color,
+    pub sidebar: Color,
+    pub card: Color,
+    pub toolbar: Color,
+    pub text: Color,
+    pub strong: Color,
+    pub muted: Color,
+    pub line: Color,
+    pub soft: Color,
+    pub accent: Color,
+    pub selected: Color,
+    pub success: Color,
+    pub danger: Color,
+}
+
+fn hex(value: u32) -> Color {
+    rune::color::hex(&format!("#{value:06x}")).unwrap_or(Color::BLACK)
 }
 
 impl Palette {
-    pub fn get(cx: &App) -> Self {
-        if cx.theme().is_dark() {
+    pub fn get(dark: bool) -> Self {
+        if dark {
             return Self {
-                canvas: rgb(0x1c1c1e).into(),
-                sidebar: rgb(0x262629).into(),
-                card: rgb(0x2c2c2e).into(),
-                toolbar: rgb(0x232325).into(),
-                text: rgb(0xe5e5e7).into(),
-                strong: rgb(0xf5f5f7).into(),
-                muted: rgb(0xa1a1a6).into(),
-                line: rgb(0x454547).into(),
-                soft: rgb(0x333335).into(),
-                accent: rgb(0x0a84ff).into(),
-                selected: rgb(0x233e5d).into(),
-                success: rgb(0x30d158).into(),
-                danger: rgb(0xff453a).into(),
+                canvas: hex(0x1c1c1e),
+                sidebar: hex(0x262629),
+                card: hex(0x2c2c2e),
+                toolbar: hex(0x232325),
+                text: hex(0xe5e5e7),
+                strong: hex(0xf5f5f7),
+                muted: hex(0xa1a1a6),
+                line: hex(0x454547),
+                soft: hex(0x333335),
+                accent: hex(0x0a84ff),
+                selected: hex(0x233e5d),
+                success: hex(0x30d158),
+                danger: hex(0xff453a),
             };
         }
         Self {
-            canvas: rgb(0xf5f5f7).into(),
-            sidebar: rgb(0xeaeaed).into(),
-            card: rgb(0xffffff).into(),
-            toolbar: rgb(0xf6f6f8).into(),
-            text: rgb(0x2c2c2e).into(),
-            strong: rgb(0x111113).into(),
-            muted: rgb(0x6e6e73).into(),
-            line: rgb(0xd8d8dc).into(),
-            soft: rgb(0xf0f0f2).into(),
-            accent: rgb(0x007aff).into(),
-            selected: rgb(0xd5e2f5).into(),
-            success: rgb(0x248a3d).into(),
-            danger: rgb(0xd70015).into(),
+            canvas: hex(0xf5f5f7),
+            sidebar: hex(0xeaeaed),
+            card: hex(0xffffff),
+            toolbar: hex(0xf6f6f8),
+            text: hex(0x2c2c2e),
+            strong: hex(0x111113),
+            muted: hex(0x6e6e73),
+            line: hex(0xd8d8dc),
+            soft: hex(0xf0f0f2),
+            accent: hex(0x007aff),
+            selected: hex(0xd5e2f5),
+            success: hex(0x248a3d),
+            danger: hex(0xd70015),
         }
     }
 }
 
-pub fn apply(cx: &mut App) {
-    let palette = Palette::get(cx);
-    Theme::update(cx, |theme| {
-        theme.font_size = px(13.);
-        theme.radius = px(6.);
-        theme.radius_lg = px(11.);
-        theme.background = palette.card;
-        theme.foreground = palette.text;
-        theme.border = palette.line;
-        theme.input = palette.line;
-        theme.muted = palette.soft;
-        theme.muted_foreground = palette.muted;
-        theme.primary = palette.accent;
-        theme.primary_hover = palette.accent.opacity(0.88);
-        theme.primary_active = palette.accent.opacity(0.78);
-        theme.primary_foreground = rgb(0xffffff).into();
-        theme.button_primary = palette.accent;
-        theme.button_primary_hover = palette.accent.opacity(0.88);
-        theme.button_primary_active = palette.accent.opacity(0.78);
-        theme.button_primary_foreground = rgb(0xffffff).into();
-        theme.secondary = palette.card;
-        theme.secondary_hover = palette.soft;
-        theme.secondary_foreground = palette.text;
-        theme.accent = palette.selected;
-        theme.accent_foreground = palette.text;
-        theme.ring = palette.accent;
-        theme.caret = palette.accent;
-        theme.link = palette.accent;
-        theme.selection = palette.selected;
-        theme.popover = palette.card;
-        theme.popover_foreground = palette.text;
-    });
+/// The palette and the component kit built from it, for one view pass.
+pub struct Ui {
+    pub p: Palette,
+    pub k: Kit,
 }
+
+impl Ui {
+    pub fn new(dark: bool) -> Self {
+        let p = Palette::get(dark);
+        let mut k = Kit::from_palette(PaletteSeed {
+            bg: p.card,
+            fg: p.text,
+            accent: p.accent,
+        });
+        k.radius.md = 6.0;
+        k.radius.lg = 11.0;
+        Self { p, k }
+    }
+
+    /// Text at `size` points and `weight`, in the kit's UI face.
+    pub fn font(&self, size: f32, weight: f32) -> TextStyle {
+        TextStyle {
+            size,
+            weight,
+            line_height: 0.0,
+            ..self.k.ty.ui
+        }
+    }
+}
+
+pub const REGULAR: f32 = 400.0;
+pub const MEDIUM: f32 = 500.0;
+pub const SEMIBOLD: f32 = 600.0;
+pub const BOLD: f32 = 700.0;

@@ -1,183 +1,105 @@
-use gpui::{App, KeyBinding, Menu, MenuItem, OsAction, SystemMenuType, actions};
-use gpui_component::input;
+use rune::{Chord, KeyEvent, MenuItem, Shortcut, Tx};
 
-actions!(
-    scimtest,
-    [
-        Quit,
-        About,
-        Help,
-        ReleaseNotes,
-        Hide,
-        HideOthers,
-        ShowAll,
-        CloseWindow,
-        Minimize,
-        Zoom,
-        FullScreen,
-        BringToFront,
-        Refresh,
-        SearchDirectory,
-        Save,
-        Update,
-    ]
-);
+use crate::workspace::Workspace;
 
-pub fn install(updates: gpui::Entity<crate::updates::Controller>, cx: &mut App) {
-    if updates.read(cx).available() {
-        cx.on_action(move |_: &Update, cx| updates.update(cx, |updates, cx| updates.action(cx)));
+const HELP_URL: &str = "https://github.com/rselbach/scimtest#readme";
+
+fn key(spec: &str) -> Option<Shortcut> {
+    match spec.parse() {
+        Ok(shortcut) => Some(shortcut),
+        Err(error) => {
+            eprintln!("Menu shortcut {spec}: {error}");
+            None
+        }
     }
-    cx.on_action(|_: &Quit, cx| cx.quit());
-    cx.on_action(|_: &Hide, cx| cx.hide());
-    cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
-    cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
-    cx.on_action(|_: &Help, cx| cx.open_url("https://github.com/rselbach/scimtest#readme"));
-    cx.on_action(|_: &About, cx| crate::information::show_about(cx));
-    cx.on_action(|_: &ReleaseNotes, cx| crate::information::show_release_notes(cx));
-    cx.on_action(|_: &CloseWindow, cx| {
-        if let Some(window) = cx.active_window() {
-            cx.defer(move |cx| {
-                let _ = window.update(cx, |_, window, _| window.remove_window());
-            });
-        }
-    });
-    cx.on_action(|_: &Minimize, cx| {
-        if let Some(window) = cx.active_window() {
-            cx.defer(move |cx| {
-                let _ = window.update(cx, |_, window, _| window.minimize_window());
-            });
-        }
-    });
-    cx.on_action(|_: &Zoom, cx| {
-        if let Some(window) = cx.active_window() {
-            cx.defer(move |cx| {
-                let _ = window.update(cx, |_, window, _| window.zoom_window());
-            });
-        }
-    });
-    cx.on_action(|_: &FullScreen, cx| {
-        if let Some(window) = cx.active_window() {
-            cx.defer(move |cx| {
-                let _ = window.update(cx, |_, window, _| window.toggle_fullscreen());
-            });
-        }
-    });
-    cx.on_action(|_: &BringToFront, cx| {
-        for window in cx.windows() {
-            cx.defer(move |cx| {
-                let _ = window.update(cx, |_, window, _| window.activate_window());
-            });
-        }
-        cx.activate(true);
-    });
-    let [
-        quit_key,
-        close_key,
-        refresh_key,
-        find_key,
-        save_key,
-        help_key,
-    ] = if cfg!(target_os = "macos") {
-        ["cmd-q", "cmd-w", "cmd-r", "cmd-f", "cmd-s", "cmd-shift-/"]
-    } else {
-        [
-            "ctrl-q",
-            "ctrl-w",
-            "ctrl-r",
-            "ctrl-f",
-            "ctrl-s",
-            "ctrl-shift-/",
-        ]
-    };
-    cx.bind_keys([
-        KeyBinding::new(quit_key, Quit, None),
-        KeyBinding::new(close_key, CloseWindow, None),
-        KeyBinding::new(refresh_key, Refresh, None),
-        KeyBinding::new(find_key, SearchDirectory, None),
-        KeyBinding::new(save_key, Save, None),
-        KeyBinding::new(help_key, Help, None),
-    ]);
-    if cfg!(target_os = "macos") {
-        cx.bind_keys([
-            KeyBinding::new("cmd-h", Hide, None),
-            KeyBinding::new("cmd-alt-h", HideOthers, None),
-            KeyBinding::new("cmd-m", Minimize, None),
-            KeyBinding::new("ctrl-cmd-f", FullScreen, None),
-        ]);
-    }
-    refresh(cx, "Check for Updates…");
 }
 
-pub fn refresh(cx: &mut App, update_label: &str) {
-    cx.set_menus(vec![
-        Menu {
-            name: "scimtest".into(),
-            disabled: false,
-            items: vec![
-                MenuItem::action("About scimtest", About),
-                MenuItem::action(update_label.to_owned(), Update),
-                MenuItem::separator(),
-                MenuItem::os_submenu("Services", SystemMenuType::Services),
-                MenuItem::separator(),
-                MenuItem::action("Hide scimtest", Hide),
-                MenuItem::action("Hide Others", HideOthers),
-                MenuItem::action("Show All", ShowAll),
-                MenuItem::separator(),
-                MenuItem::action("Quit scimtest", Quit),
-            ],
-        },
-        Menu {
-            name: "File".into(),
-            disabled: false,
-            items: vec![
-                MenuItem::action("Save", Save),
-                MenuItem::action("Close Window", CloseWindow),
-            ],
-        },
-        Menu {
-            name: "Edit".into(),
-            disabled: false,
-            items: vec![
-                MenuItem::os_action("Undo", input::Undo, OsAction::Undo),
-                MenuItem::os_action("Redo", input::Redo, OsAction::Redo),
-                MenuItem::separator(),
-                MenuItem::os_action("Cut", input::Cut, OsAction::Cut),
-                MenuItem::os_action("Copy", input::Copy, OsAction::Copy),
-                MenuItem::os_action("Paste", input::Paste, OsAction::Paste),
-                MenuItem::action("Delete", input::Delete),
-                MenuItem::os_action("Select All", input::SelectAll, OsAction::SelectAll),
-                MenuItem::separator(),
-                MenuItem::action("Emoji & Symbols", input::ShowCharacterPalette),
-            ],
-        },
-        Menu {
-            name: "View".into(),
-            disabled: false,
-            items: vec![
-                MenuItem::action("Refresh", Refresh),
-                MenuItem::action("Search Directory", SearchDirectory),
-                MenuItem::separator(),
-                MenuItem::action("Toggle Full Screen", FullScreen),
-            ],
-        },
-        Menu {
-            name: "Window".into(),
-            disabled: false,
-            items: vec![
-                MenuItem::action("Minimize", Minimize),
-                MenuItem::action("Zoom", Zoom),
-                MenuItem::separator(),
-                MenuItem::action("Bring All to Front", BringToFront),
-            ],
-        },
-        Menu {
-            name: "Help".into(),
-            disabled: false,
-            items: vec![
-                MenuItem::action("What's New in scimtest", ReleaseNotes),
-                MenuItem::separator(),
-                MenuItem::action("scimtest Help", Help),
-            ],
-        },
+fn item(
+    title: impl Into<String>,
+    action: fn(&mut Workspace, &mut Tx),
+    shortcut: &str,
+) -> MenuItem<Workspace> {
+    let item = MenuItem::new(title, action);
+    match key(shortcut) {
+        Some(shortcut) => item.key_equivalent(shortcut),
+        None => item,
+    }
+}
+
+fn help(_: &mut Workspace, tx: &mut Tx) {
+    if let Err(error) = tx.open_url(HELP_URL) {
+        eprintln!("Open help: {error}");
+    }
+}
+
+fn release_notes(s: &mut Workspace, _: &mut Tx) {
+    let (title, body) = crate::information::release_notes();
+    crate::information::show_message(s.shell.as_ref(), title, body);
+}
+
+/// The menu bar's custom items; `update_label` names the updater's next step.
+pub fn items(update_label: Option<String>) -> Vec<MenuItem<Workspace>> {
+    let mut items = vec![
+        item("Save", |s, _| s.save_shortcut(), "super+s").menu("File"),
+        item("Refresh", |s, _| s.refresh(), "super+r").menu("View"),
+        item("Search Directory", |s, _| s.focus_search(), "super+f").menu("View"),
+        MenuItem::separator().menu("View"),
+        item(
+            "Toggle Full Screen",
+            |_, tx| tx.toggle_full_screen(),
+            "ctrl+super+f",
+        )
+        .menu("View"),
+        MenuItem::new("Zoom", |_, tx| tx.toggle_maximized()).menu("Window"),
+        MenuItem::new("What's New in scimtest", release_notes).menu("Help"),
+    ];
+    if let Some(label) = update_label {
+        items.push(
+            MenuItem::new(label, |s: &mut Workspace, _| s.update_action())
+                .id("update")
+                .menu("Help"),
+        );
+    }
+    items.extend([
+        MenuItem::separator().menu("Help"),
+        item("scimtest Help", help, "super+shift+slash").menu("Help"),
     ]);
+    items
+}
+
+impl Workspace {
+    /// Rebuilds the menu bar, whose updater item names the updater's state.
+    pub(crate) fn refresh_menus(&self) {
+        let Some(shell) = &self.shell else {
+            return;
+        };
+        let label = self.updates.available().then(|| self.updates.menu_label());
+        if let Err(error) = shell.app.set_menu(items(label)) {
+            eprintln!("Update menus: {error}");
+        }
+    }
+}
+
+/// Window shortcuts for platforms without a native menu bar to carry them.
+pub fn on_key(s: &mut Workspace, event: &KeyEvent, tx: &mut Tx) -> bool {
+    if cfg!(target_os = "macos") {
+        return false;
+    }
+    let matches = |spec: &str| Chord::parse(spec).is_ok_and(|chord| chord.matches_tx(event, tx));
+    if matches("mod+q") {
+        tx.quit();
+    } else if matches("mod+w") {
+        tx.close_window();
+    } else if matches("mod+s") {
+        s.save_shortcut();
+    } else if matches("mod+r") {
+        s.refresh();
+    } else if matches("mod+f") {
+        s.focus_search();
+    } else if matches("mod+shift+/") {
+        help(s, tx);
+    } else {
+        return false;
+    }
+    true
 }

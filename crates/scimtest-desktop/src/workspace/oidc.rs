@@ -1,6 +1,5 @@
 use super::Workspace;
 pub(super) mod view;
-use gpui::Context;
 use scimtest_core::oidc::{Faults, Identity, PlaygroundInput, ProtocolError};
 use serde_json::Value;
 
@@ -17,7 +16,7 @@ pub(super) struct Inspector {
     flows: Vec<Value>,
 }
 impl Workspace {
-    pub(super) fn refresh_identity(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn refresh_identity(&mut self) {
         let Some(id) = self.selected.clone() else {
             return;
         };
@@ -30,41 +29,38 @@ impl Workspace {
         let identity = self.identity.clone();
         let store = self.store.clone();
         let requested_id = id.clone();
-        cx.spawn(async move |view, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    let id = requested_id;
-                    let settings = store.directory(&id)?.environment.settings;
-                    let saml = settings.supports_saml();
-                    Ok::<_, ProtocolError>(Snapshot {
-                        inspections: identity.inspections(&id)?,
-                        sessions: identity.sessions(&id)?,
-                        holders: identity.token_holders(&id)?,
-                        flows: identity.flows(&id)?,
-                        keys: if saml || settings.supports_oidc() {
-                            store.signing_key_views(&id)?
-                        } else {
-                            Vec::new()
-                        },
-                        saml_inspections: if saml {
-                            identity.saml_inspections(&id)?
-                        } else {
-                            Vec::new()
-                        },
-                        saml_logouts: if saml {
-                            identity.saml_logouts(&id)?
-                        } else {
-                            Vec::new()
-                        },
-                        presets: identity.resilience_presets(&id)?,
-                        run: identity.resilience_run(&id)?,
-                        manual: identity.faults(&id)?,
-                        lifecycle: identity.lifecycle_runs(&id)?,
-                    })
+        self.background(
+            move || {
+                let id = requested_id;
+                let settings = store.directory(&id)?.environment.settings;
+                let saml = settings.supports_saml();
+                Ok::<_, ProtocolError>(Snapshot {
+                    inspections: identity.inspections(&id)?,
+                    sessions: identity.sessions(&id)?,
+                    holders: identity.token_holders(&id)?,
+                    flows: identity.flows(&id)?,
+                    keys: if saml || settings.supports_oidc() {
+                        store.signing_key_views(&id)?
+                    } else {
+                        Vec::new()
+                    },
+                    saml_inspections: if saml {
+                        identity.saml_inspections(&id)?
+                    } else {
+                        Vec::new()
+                    },
+                    saml_logouts: if saml {
+                        identity.saml_logouts(&id)?
+                    } else {
+                        Vec::new()
+                    },
+                    presets: identity.resilience_presets(&id)?,
+                    run: identity.resilience_run(&id)?,
+                    manual: identity.faults(&id)?,
+                    lifecycle: identity.lifecycle_runs(&id)?,
                 })
-                .await;
-            let _ = view.update(cx, |view, cx| {
+            },
+            move |view, result| {
                 view.identity_refreshing = false;
                 if view.selected.as_ref() == Some(&id) {
                     match result {
@@ -81,26 +77,20 @@ impl Workspace {
                             view.resilience.manual = snapshot.manual;
                             view.lifecycle.runs = snapshot.lifecycle;
                         }
-                        Err(error) => {
-                            view.message = error.description;
-                            view.failed = true;
-                        }
+                        Err(error) => view.fail(error.description),
                     }
                 } else {
                     view.identity_refresh_pending = true;
                 }
                 if view.identity_refresh_pending {
-                    view.refresh_identity(cx);
+                    view.refresh_identity();
                 }
-                cx.notify();
-            });
-        })
-        .detach();
+            },
+        );
     }
     pub(super) fn identity_command(
         &mut self,
         action: impl FnOnce(Identity, String) -> Result<String, ProtocolError> + Send + 'static,
-        cx: &mut Context<Self>,
     ) {
         let Some(id) = self.selected.clone() else {
             return;
@@ -112,47 +102,33 @@ impl Workspace {
         self.identity_refresh_pending = false;
         let identity = self.identity.clone();
         let requested_id = id.clone();
-        cx.spawn(async move |view, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    let id = requested_id;
-                    action(identity, id)
-                })
-                .await;
-            let _ = view.update(cx, |view, cx| {
+        self.background(
+            move || action(identity, requested_id),
+            move |view, result| {
                 view.busy = false;
                 if view.selected.as_ref() != Some(&id) {
-                    cx.notify();
                     return;
                 }
-                view.status_revision = view.status_revision.wrapping_add(1);
                 match result {
                     Ok(message) => {
                         if matches!(
                             view.editor,
                             Some(super::Editor::Faults(_) | super::Editor::Lifecycle(_))
                         ) {
-                            view.editor = None;
+                            view.close_editor();
                         }
                         if !message.is_empty() {
                             view.message = message;
                             view.failed = false;
                         }
                     }
-                    Err(error) => {
-                        view.message = error.description;
-                        view.failed = true;
-                    }
+                    Err(error) => view.fail(error.description),
                 }
-                view.refresh_identity(cx);
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
+                view.refresh_identity();
+            },
+        );
     }
-    pub(super) fn run_oidc(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn run_oidc(&mut self) {
         if self.busy {
             return;
         }
@@ -165,9 +141,7 @@ impl Workspace {
             .filter(|user| user.fields.active && !user.deleted)
             .min_by_key(|user| user.id != self.oidc.user);
         let Some(user) = user else {
-            self.message = "Select an active user to run sign-in".into();
-            self.failed = true;
-            cx.notify();
+            self.fail("Select an active user to run sign-in".into());
             return;
         };
         let id = directory.environment.id.clone();
@@ -179,24 +153,17 @@ impl Workspace {
         };
         let store = self.store.clone();
         let base = self.api_url.clone();
-        let handle = self.executor.clone();
         let request_id = id.clone();
         self.busy = true;
-        cx.spawn(async move |view, cx| {
-            let result = handle
-                .spawn(scimtest_core::oidc::playground(
-                    store, request_id, base, input,
-                ))
-                .await;
-            let _ = view.update(cx, |view, cx| {
+        self.task(
+            scimtest_core::oidc::playground(store, request_id, base, input),
+            move |view, result, _| {
                 view.busy = false;
                 if view.selected.as_ref() != Some(&id) {
-                    cx.notify();
                     return;
                 }
-                view.status_revision = view.status_revision.wrapping_add(1);
                 match result {
-                    Ok(Ok(result)) => {
+                    Ok(result) => {
                         view.failed = result.get("error").is_some();
                         view.message = result["error"]
                             .as_str()
@@ -204,21 +171,11 @@ impl Workspace {
                             .into();
                         view.oidc.result = Some(result);
                     }
-                    Ok(Err(error)) => {
-                        view.failed = true;
-                        view.message = error.description;
-                    }
-                    Err(error) => {
-                        view.failed = true;
-                        view.message = error.to_string();
-                    }
+                    Err(error) => view.fail(error.description),
                 }
-                view.refresh_identity(cx);
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
+                view.refresh_identity();
+            },
+        );
     }
 }
 
