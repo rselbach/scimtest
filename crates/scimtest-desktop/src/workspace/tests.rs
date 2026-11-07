@@ -1,14 +1,15 @@
 mod environment;
+mod oidc;
+mod saml;
+mod scim;
 mod tools;
+mod traffic;
 
 use std::{sync::mpsc, time::Duration};
 
 use rune::{Env, Key, KeyEvent, Mods, Runtime};
 
 use super::*;
-
-mod oidc;
-mod saml;
 
 /// A workspace on a seeded Greendale store, driven through Rune's headless runtime.
 pub(crate) struct Fixture {
