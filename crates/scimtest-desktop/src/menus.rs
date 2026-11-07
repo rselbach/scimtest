@@ -43,13 +43,6 @@ pub fn items(update_label: Option<String>) -> Vec<MenuItem<Workspace>> {
         item("Save", |s, _| s.save_shortcut(), "super+s").menu("File"),
         item("Refresh", |s, _| s.refresh(), "super+r").menu("View"),
         item("Search Directory", |s, _| s.focus_search(), "super+f").menu("View"),
-        MenuItem::separator().menu("View"),
-        item(
-            "Toggle Full Screen",
-            |_, tx| tx.toggle_full_screen(),
-            "ctrl+super+f",
-        )
-        .menu("View"),
         MenuItem::new("Zoom", |_, tx| tx.toggle_maximized()).menu("Window"),
         MenuItem::new("What's New in scimtest", release_notes).menu("Help"),
     ];
