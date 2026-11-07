@@ -37,11 +37,6 @@ pub static CHEVRON_DOWN: Icon = Icon {
     view: 16.0,
     body: r#"<path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="m4 6 4 4 4-4"/>"#,
 };
-pub static CHECK: Icon = Icon {
-    name: "scimtest-check",
-    view: 16.0,
-    body: r#"<path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="m3 8 3 3 7-7"/>"#,
-};
 pub static HISTORY: Icon = Icon {
     name: "scimtest-history",
     view: 16.0,
@@ -91,9 +86,4 @@ pub static ID_CARD: Icon = Icon {
     name: "scimtest-id-card",
     view: 16.0,
     body: r#"<rect fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" x="1.8" y="3.2" width="12.4" height="9.6" rx="2"/><circle fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" cx="5.6" cy="7.2" r="1.4"/><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M9 6.8h3M9 9.2h3M4 11.2h3"/>"#,
-};
-pub static CLOSE: Icon = Icon {
-    name: "scimtest-close",
-    view: 16.0,
-    body: r#"<path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="m4 4 8 8M4 12l8-8"/>"#,
 };

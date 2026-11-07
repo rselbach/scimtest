@@ -121,22 +121,6 @@ pub(crate) fn vertical_rule(p: Palette) -> El {
     el().w(1.0).h_full().fill(p.line).a11y_hidden()
 }
 
-/// A page that has not been built yet.
-pub(crate) fn placeholder(title: &str, ui: &Ui) -> El {
-    col()
-        .key("placeholder")
-        .w_full()
-        .padding(40.0)
-        .center()
-        .child(font_text(
-            format!("{title} is not available yet."),
-            13.0,
-            400.0,
-            ui.p.muted,
-            ui,
-        ))
-}
-
 /// Small pill for a status such as "Recording" or "Healthy".
 pub(crate) fn status_pill(label: impl Into<String>, color: Color, ui: &Ui) -> El {
     let label = label.into();

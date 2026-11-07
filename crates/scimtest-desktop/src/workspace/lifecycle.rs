@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use rune::{Color, El, ScrollSpec, col, row};
 use rune_kit::{Button, ButtonVariant};
-use scimtest_core::oidc::{JoinerInput, LifecycleRun, MoverInput, ProtocolError};
+use scimtest_core::oidc::{JoinerInput, LifecycleRun, MoverInput};
 
 use super::{
     Editor, Workspace,
@@ -52,7 +52,7 @@ impl Workspace {
             .min_by_key(|user| !user.fields.active)
             .map(|user| user.id)
             .unwrap_or_default();
-        self.open_editor(Editor::Lifecycle(Form::new(kind, user)));
+        self.open_editor(Editor::Lifecycle(Box::new(Form::new(kind, user))));
         self.failed = false;
     }
 
@@ -100,48 +100,6 @@ impl Workspace {
     }
 
     /// Stages a lifecycle step's SAML LogoutRequest and opens it in the browser.
-    fn send_lifecycle_logout(&mut self, run: String, step: String, binding: &'static str) {
-        if self.busy {
-            return;
-        }
-        let Some(directory) = self.directory() else {
-            return;
-        };
-        let id = directory.environment.id.clone();
-        let slug = directory.environment.slug.clone();
-        let identity = self.identity.clone();
-        let tunnel = self.tunnel_service.clone();
-        let local_base = self.api_url.clone();
-        let request_id = id.clone();
-        self.busy = true;
-        self.task(
-            tokio::task::spawn_blocking(move || {
-                let base = tunnel.effective_base(&local_base)?;
-                let message =
-                    identity.lifecycle_saml_logout(&request_id, &run, &step, binding, &base)?;
-                let ticket = identity.stage_saml_delivery(&request_id, message)?;
-                Ok::<_, ProtocolError>(format!("{local_base}/saml/{slug}/continue/{ticket}"))
-            }),
-            move |view, result, tx| {
-                view.busy = false;
-                match result {
-                    Ok(Ok(url)) => match tx.open_url(&url) {
-                        Ok(()) => {
-                            view.message = "Logout request opened in your browser".into();
-                            view.failed = false;
-                        }
-                        Err(error) => view.fail(error.to_string()),
-                    },
-                    Ok(Err(error)) => view.fail(error.description),
-                    Err(error) => view.fail(error.to_string()),
-                }
-                if view.selected.as_ref() == Some(&id) {
-                    view.refresh_identity();
-                }
-            },
-        );
-    }
-
     pub(super) fn lifecycle_inspector(&self, ui: &Ui, _layer: &mut Vec<El>) -> El {
         let p = ui.p;
         let k = &ui.k;
@@ -328,7 +286,10 @@ impl Workspace {
                         Button::new(label)
                             .disabled(self.busy)
                             .on_press(move |s: &mut Workspace| {
-                                s.send_lifecycle_logout(run_id.clone(), step_id.clone(), binding)
+                                let (run, step) = (run_id.clone(), step_id.clone());
+                                s.saml_browser_request(move |identity, id, base| {
+                                    identity.lifecycle_saml_logout(id, &run, &step, binding, base)
+                                })
                             })
                             .build(k)
                             .key(format!("{}-{}-{binding}", run.id, step.id)),

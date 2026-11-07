@@ -89,7 +89,6 @@ impl Ui {
     }
 }
 
-pub const REGULAR: f32 = 400.0;
 pub const MEDIUM: f32 = 500.0;
 pub const SEMIBOLD: f32 = 600.0;
 pub const BOLD: f32 = 700.0;

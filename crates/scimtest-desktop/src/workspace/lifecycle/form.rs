@@ -12,7 +12,7 @@ use crate::{
     },
 };
 
-pub(in crate::workspace) struct Form {
+pub(crate) struct Form {
     pub kind: &'static str,
     fields: [TextEdit; 4],
     pub user: String,

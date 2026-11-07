@@ -39,8 +39,8 @@ pub enum Tab {
 }
 
 pub enum Editor {
-    Lifecycle(lifecycle::Form),
-    Faults(faults::Form),
+    Lifecycle(Box<lifecycle::Form>),
+    Faults(Box<faults::Form>),
     Environment {
         id: Option<String>,
         name: TextEdit,

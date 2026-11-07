@@ -18,7 +18,7 @@ use crate::{
 };
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub(super) enum Section {
+pub(crate) enum Section {
     General,
     Oidc,
     Saml,
@@ -291,7 +291,7 @@ fn toggle_hint(key: &str) -> &'static str {
     }
 }
 
-pub(super) struct EnvironmentForm {
+pub(crate) struct EnvironmentForm {
     pub(super) section: Section,
     text: BTreeMap<&'static str, TextEdit>,
     pub(super) toggles: BTreeMap<&'static str, bool>,
@@ -448,7 +448,7 @@ impl EnvironmentForm {
             Section::Oidc => body.child(self.oidc(workspace, ui, layer)),
             Section::Saml => body.child(self.saml(workspace, ui, layer)),
             Section::Scim => body.child(self.scim(workspace, id.is_some(), ui, layer)),
-            Section::Review => body.child(self.review(name, slug, ui)),
+            Section::Review => body.child(self.review(workspace, name, slug, id, ui)),
         }
     }
 
@@ -739,7 +739,14 @@ impl EnvironmentForm {
             ))
     }
 
-    fn review(&self, name: &TextEdit, slug: &TextEdit, ui: &Ui) -> El {
+    fn review(
+        &self,
+        workspace: &Workspace,
+        name: &TextEdit,
+        slug: &TextEdit,
+        id: Option<&str>,
+        ui: &Ui,
+    ) -> El {
         let p = ui.p;
         let mut tiles = row().key("review-integrations").w_full().gap(12.0);
         for (label, key) in [
@@ -782,7 +789,7 @@ impl EnvironmentForm {
                     )),
             );
         }
-        col()
+        let mut content = col()
             .key("environment-review")
             .w_full()
             .gap(16.0)
@@ -819,7 +826,29 @@ impl EnvironmentForm {
                 )
                 .w_full()
                 .wrap(),
-            )
+            );
+        let Some(id) = id else {
+            return content;
+        };
+        let export = |key: &'static str, label: &'static str, save: bool| {
+            let id = id.to_owned();
+            Button::new(label)
+                .variant(ButtonVariant::Outline)
+                .disabled(workspace.busy)
+                .on_press_tx(move |s: &mut Workspace, tx: &mut Tx| {
+                    s.export_connection(id.clone(), save, tx)
+                })
+                .build(&ui.k)
+                .key(key)
+        };
+        content = content.child(
+            row()
+                .key("connection-export")
+                .gap(8.0)
+                .child(export("copy-connection", "Copy config JSON", false))
+                .child(export("save-connection", "Save config JSON…", true)),
+        );
+        content
     }
 
     fn section_header(

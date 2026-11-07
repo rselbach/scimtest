@@ -40,6 +40,7 @@ pub(crate) fn field(
             TextInput::new(edit)
                 .label(label)
                 .placeholder(placeholder)
+                .width(None)
                 .on_edit(access)
                 .on_change(|s: &mut Workspace, _: &mut Tx| s.editor_dirty = true)
                 .build(&ui.k)
@@ -566,6 +567,7 @@ impl Workspace {
                     .child(caption("One name=value per line.", ui))
                     .child(
                         TextArea::new(attributes)
+                            .width(None)
                             .label("Custom attributes (one name=value per line)")
                             .placeholder("role=student")
                             .auto_grow(3, 6)
@@ -705,6 +707,7 @@ impl Workspace {
                                 TextInput::new(search)
                                     .label("Search users")
                                     .placeholder("Search users")
+                                    .width(None)
                                     .on_edit(group_search)
                                     .build(&ui.k)
                                     .key("member-search")

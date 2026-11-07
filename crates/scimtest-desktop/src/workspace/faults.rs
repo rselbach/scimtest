@@ -50,7 +50,7 @@ const TAMPER: &[(&str, &str, &str)] = &[
     ("logout_repeated_jti", "Logout token: repeated jti", "oidc"),
 ];
 
-pub(super) struct Form {
+pub(crate) struct Form {
     fields: [TextEdit; 5],
     break_signature: bool,
     status: &'static str,
@@ -244,7 +244,7 @@ impl Workspace {
             },
             tamper: faults.tamper.iter().cloned().collect(),
         };
-        self.open_editor(Editor::Faults(form));
+        self.open_editor(Editor::Faults(Box::new(form)));
         self.failed = false;
     }
 }
