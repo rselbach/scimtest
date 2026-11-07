@@ -909,8 +909,10 @@ impl Tab {
     }
 }
 
-/// Named states for Rune's headless `--snap --scene` runs.
-pub const SCENES: &[(&str, fn(&mut Workspace))] = &[
+/// A named state for Rune's headless `--snap --scene` runs.
+type Scene = (&'static str, fn(&mut Workspace));
+
+pub const SCENES: &[Scene] = &[
     ("groups", |s| s.show_tab(Tab::Groups)),
     ("environments", |s| s.show_tab(Tab::Environments)),
     ("oidc", |s| s.show_tab(Tab::Oidc)),
