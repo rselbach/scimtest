@@ -11,6 +11,9 @@ use rune::{Env, Key, KeyEvent, Mods, Runtime};
 
 use super::*;
 
+mod lifecycle;
+mod resilience;
+
 /// A workspace on a seeded Greendale store, driven through Rune's headless runtime.
 pub(crate) struct Fixture {
     pub rt: Runtime<Workspace>,
