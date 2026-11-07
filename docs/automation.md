@@ -9,7 +9,7 @@ standard library. It needs no client package.
 Run the source application with a separate state file:
 
 ```sh
-go run ./cmd/scimtest --no-open --state-file /tmp/greendale-agent/state.db
+cargo run --locked -p scimtest-core --bin scimtest -- --no-open --state-file /tmp/greendale-agent/state.db
 ```
 
 Keep that process running. In another terminal, run the example below. The

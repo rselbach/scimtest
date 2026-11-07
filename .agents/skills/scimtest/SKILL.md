@@ -12,8 +12,8 @@ even when the identity-provider endpoints use a public tunnel.
 ## Connect to the intended instance
 
 Use the state file named by the user or the process you started. Default paths
-are `~/Library/Application Support/scimtest/state.db` on macOS and
-`${XDG_CONFIG_HOME:-$HOME/.config}/scimtest/state.db` on Linux.
+are `~/Library/Application Support/scimtest-rust/state.db` on macOS and
+`${XDG_CONFIG_HOME:-$HOME/.config}/scimtest-rust/state.db` on Linux.
 
 Read `<state-file>.lock` for the running instance's `url` and `token`. Preserve
 the exact origin, including the hostname and port. Send the token in
@@ -39,7 +39,7 @@ If an instance is needed, start the installed desktop app or run this from a
 scimtest source checkout with a task-specific state path:
 
 ```sh
-go run ./cmd/scimtest --no-open --state-file "${SCIMTEST_STATE}"
+cargo run --locked -p scimtest-core --bin scimtest-rust -- --no-open --state-file "${SCIMTEST_STATE}"
 ```
 
 Keep a server you start in the host's supported persistent process runner.

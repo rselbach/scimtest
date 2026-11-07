@@ -7,30 +7,33 @@ default:
   just --list
 
 build:
-  go build ./...
+  cargo build --locked --workspace
 
 build-desktop-linux application_profile_id:
-  mkdir -p ./bin
-  PKG_CONFIG="${PWD}/packaging/linux/pkg-config-webkit2gtk-4.1.sh" \
-    go build -tags desktop \
-    -ldflags="-X=github.com/rselbach/scimtest/internal/web.tunnelApplicationProfileID={{application_profile_id}} -X=github.com/rselbach/scimtest/internal/web.tunnelReleaseProfileRequired=true" \
-    -o ./bin/scimtest-desktop ./cmd/scimtest-desktop
+  SCIMTEST_APPLICATION_PROFILE_ID="{{application_profile_id}}" \
+    ./packaging/rust/build-desktop.sh bin/scimtest-desktop 0.0.0 deb
 
 test:
-  go test ./...
+  cargo fmt --all -- --check
+  cargo clippy --workspace --all-targets --locked -- -D warnings
+  cargo test --workspace --locked
 
 test-desktop-linux:
-  PKG_CONFIG="${PWD}/packaging/linux/pkg-config-webkit2gtk-4.1.sh" \
-    go test -tags desktop ./cmd/scimtest-desktop
+  cargo test --locked -p scimtest-desktop
 
 run:
-  go run ./cmd/scimtest
+  cargo run --locked -p scimtest-desktop
+
+run-api:
+  cargo run --locked -p scimtest-core --bin scimtest
 
 run-server:
-  go run ./cmd/scimtest-server
+  cargo run --locked -p scimtest-server
 
 build-server:
-  go build -o ./bin/{{SERVER_BINARY}} ./cmd/scimtest-server
+  cargo build --locked --release -p scimtest-server
+  mkdir -p ./bin
+  install -m 0755 "${CARGO_TARGET_DIR:-target}/release/scimtest-server" ./bin/{{SERVER_BINARY}}
 
 deploy-server: test
   ./deploy/deploy.sh

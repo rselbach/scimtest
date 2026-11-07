@@ -141,7 +141,8 @@ REMOTE_SCRIPT
 }
 
 main() {
-  require_command go
+  require_command cargo
+  require_command zig
   require_command scp
   require_command ssh
 
@@ -149,10 +150,11 @@ main() {
   trap cleanup EXIT
 
   echo "Building scimtest-server for linux/amd64"
-  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -trimpath \
-      -o "${local_tmp_dir}/scimtest-server" \
-      ./cmd/scimtest-server
+  cargo zigbuild --release --locked \
+    --target x86_64-unknown-linux-musl -p scimtest-server
+  install -m 0755 \
+    "${CARGO_TARGET_DIR:-target}/x86_64-unknown-linux-musl/release/scimtest-server" \
+    "${local_tmp_dir}/scimtest-server"
 
   echo "Deploying to ${DEPLOY_HOST}"
   deploy
