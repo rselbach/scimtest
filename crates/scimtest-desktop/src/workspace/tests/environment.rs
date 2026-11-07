@@ -1,7 +1,7 @@
 use rune::Key;
 
-use super::Fixture;
-use crate::workspace::{Editor, environment::Section};
+use super::{Fixture, oidc::reveal};
+use crate::workspace::{Editor, connection::Export, environment::Section};
 
 fn wizard(fixture: &Fixture) -> (Section, String, bool) {
     let state = fixture.state();
@@ -191,4 +191,154 @@ fn choices_and_toggles_save_with_the_environment() {
     assert!(settings.include_groups_claim);
     assert!(settings.scim_enabled);
     assert_eq!(settings.scim_bearer_token, "human-beings");
+}
+
+#[test]
+fn oidc_and_saml_steps_list_the_values_to_copy_into_the_app() {
+    let mut fixture = Fixture::new();
+    let clipboard = rune::clipboard::memory();
+    fixture.rt.use_clipboard(&clipboard);
+    let environment = fixture.state().selected.clone().unwrap();
+    let certificate = fixture
+        .store
+        .active_signing_key(&environment)
+        .unwrap()
+        .stored
+        .certificate_pem;
+    fixture.rt.update(|state, _| {
+        let environment = state
+            .directory()
+            .map(|directory| directory.environment.clone());
+        state.edit_environment(environment.as_ref());
+        if let Some(Editor::Environment { settings, .. }) = &mut state.editor {
+            settings.section = Section::Oidc;
+        }
+    });
+    fixture.settle();
+    let issuer = "http://127.0.0.1:1/oidc/greendale-portal";
+    for (row, want) in [
+        ("oidc-issuer", issuer.to_owned()),
+        (
+            "oidc-discovery",
+            format!("{issuer}/.well-known/openid-configuration"),
+        ),
+        ("oidc-authorize", format!("{issuer}/authorize")),
+        ("oidc-token", format!("{issuer}/token")),
+        ("oidc-jwks", format!("{issuer}/jwks")),
+    ] {
+        assert_eq!(fixture.text(&format!("{row}-value")), Some(want.clone()));
+        reveal(&mut fixture, "editor-content", &format!("{row}-copy"));
+        fixture.click(&format!("{row}-copy"));
+        assert_eq!(
+            clipboard.text().as_deref().map(String::as_str),
+            Some(want.as_str()),
+            "{row}"
+        );
+    }
+    assert!(fixture.has("save-oidc-config"));
+
+    fixture.rt.update(|state, _| {
+        if let Some(Editor::Environment { settings, .. }) = &mut state.editor {
+            settings.section = Section::Saml;
+        }
+    });
+    fixture.settle();
+    let prefix = "http://127.0.0.1:1/saml/greendale-portal";
+    for (row, want) in [
+        ("saml-sso", format!("{prefix}/sso")),
+        ("saml-slo", format!("{prefix}/slo")),
+        ("saml-idp-entity", format!("{prefix}/metadata")),
+        ("saml-certificate", certificate),
+    ] {
+        reveal(&mut fixture, "editor-content", &format!("{row}-copy"));
+        fixture.click(&format!("{row}-copy"));
+        assert_eq!(
+            clipboard.text().as_deref().map(String::as_str),
+            Some(want.as_str()),
+            "{row}"
+        );
+    }
+    assert!(fixture.has("save-saml-metadata"));
+    assert!(fixture.has("save-saml-certificate"));
+}
+
+#[test]
+fn a_new_environment_waits_for_an_endpoint_name_and_a_save() {
+    let mut fixture = Fixture::new();
+    fixture.rt.update(|state, _| {
+        state.edit_environment(None);
+        if let Some(Editor::Environment { settings, .. }) = &mut state.editor {
+            settings.section = Section::Saml;
+        }
+    });
+    fixture.settle();
+    assert!(fixture.has("saml-sso-value"));
+    assert_eq!(
+        fixture.text("saml-sso-value").as_deref(),
+        Some("Enter an endpoint name to generate this URL")
+    );
+    assert!(!fixture.has("save-saml-metadata"));
+    assert_eq!(
+        fixture.text("saml-certificate-value"),
+        Some("Save the environment to show its signing certificate.".into())
+    );
+
+    fixture.rt.update(|state, _| {
+        if let Some(Editor::Environment { name, .. }) = &mut state.editor {
+            name.text = "Troy and Abed's Dreamatorium".into();
+        }
+    });
+    fixture.settle();
+    assert_eq!(
+        fixture.text("saml-sso-value").as_deref(),
+        Some("http://127.0.0.1:1/saml/troy-and-abed-s-dreamatorium/sso")
+    );
+}
+
+#[test]
+fn saml_metadata_and_certificate_save_to_the_chosen_files() {
+    let mut fixture = Fixture::new();
+    let environment = fixture.state().selected.clone().unwrap();
+    let certificate = fixture
+        .store
+        .active_signing_key(&environment)
+        .unwrap()
+        .stored
+        .certificate_pem;
+    let directory = tempfile::tempdir().unwrap();
+    for (export, file_name, saved) in [
+        (
+            Export::Metadata,
+            "greendale-portal-idp-metadata.xml",
+            "SAML metadata",
+        ),
+        (
+            Export::Certificate,
+            "greendale-portal-idp-certificate.pem",
+            "Certificate",
+        ),
+    ] {
+        let id = environment.clone();
+        fixture
+            .rt
+            .update(move |state, tx| state.export_connection(id, export, true, tx));
+        fixture.frame();
+        let (_, options) = fixture.rt.file_dialog().expect("a save dialog");
+        assert_eq!(options.file_name.as_deref(), Some(file_name));
+        let path = directory.path().join(file_name);
+        fixture.rt.resolve_file_dialog(Some(path.clone())).unwrap();
+        fixture.wait("the save", |state| !state.busy);
+        assert_eq!(
+            fixture.state().message,
+            format!("{saved} saved to {}", path.display())
+        );
+        let contents = std::fs::read_to_string(&path).unwrap();
+        match export {
+            Export::Metadata => assert!(
+                contents
+                    .contains(r#"entityID="http://127.0.0.1:1/saml/greendale-portal/metadata""#)
+            ),
+            _ => assert_eq!(contents, certificate),
+        }
+    }
 }

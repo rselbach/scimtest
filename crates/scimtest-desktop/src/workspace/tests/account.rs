@@ -3,7 +3,7 @@ use rune::Key;
 use tokio_tungstenite::tungstenite::{Message, protocol::CloseFrame};
 
 use super::Fixture;
-use crate::workspace::Editor;
+use crate::workspace::{Editor, connection::Export};
 
 /// A fake scimtest account server that registers Troy Barnes's tunnel on every connection
 /// and drops the current one on request.
@@ -302,7 +302,7 @@ fn exporting_a_connection_copies_or_saves_the_config() {
     let id = environment.clone();
     fixture
         .rt
-        .update(move |state, tx| state.export_connection(id, false, tx));
+        .update(move |state, tx| state.export_connection(id, Export::Config, false, tx));
     fixture.wait("the copy", |state| !state.busy);
     assert_eq!(fixture.state().message, "Config JSON copied");
     let copied: serde_json::Value =
@@ -312,7 +312,7 @@ fn exporting_a_connection_copies_or_saves_the_config() {
     let id = environment.clone();
     fixture
         .rt
-        .update(move |state, tx| state.export_connection(id, true, tx));
+        .update(move |state, tx| state.export_connection(id, Export::Config, true, tx));
     fixture.frame();
     let (_, options) = fixture.rt.file_dialog().expect("a save dialog");
     assert_eq!(
@@ -328,7 +328,7 @@ fn exporting_a_connection_copies_or_saves_the_config() {
     let path = directory.path().join("greendale.json");
     fixture
         .rt
-        .update(move |state, tx| state.export_connection(environment, true, tx));
+        .update(move |state, tx| state.export_connection(environment, Export::Config, true, tx));
     fixture.frame();
     fixture.rt.resolve_file_dialog(Some(path.clone())).unwrap();
     fixture.wait("the save", |state| !state.busy);

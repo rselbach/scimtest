@@ -22,4 +22,4 @@ pub mod tunnel;
 pub mod update;
 
 pub use directory::{format_custom_attributes, parse_custom_attributes};
-pub use store::{Error, Store};
+pub use store::{Error, Store, slugify};

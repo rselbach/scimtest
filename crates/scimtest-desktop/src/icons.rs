@@ -87,3 +87,8 @@ pub static ID_CARD: Icon = Icon {
     view: 16.0,
     body: r#"<rect fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" x="1.8" y="3.2" width="12.4" height="9.6" rx="2"/><circle fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" cx="5.6" cy="7.2" r="1.4"/><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" d="M9 6.8h3M9 9.2h3M4 11.2h3"/>"#,
 };
+pub static COPY: Icon = Icon {
+    name: "scimtest-copy",
+    view: 16.0,
+    body: r#"<rect fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" x="6" y="5" width="7" height="8" rx="1.2"/><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M3 10.5V4a1 1 0 0 1 1-1h6.5"/>"#,
+};

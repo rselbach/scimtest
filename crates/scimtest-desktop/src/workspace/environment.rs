@@ -1,14 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use rune::{El, TextEdit, Tx, col, el, row};
+use rune::{El, ScrollSpec, TextEdit, TextStyle, Tx, col, el, row};
 use rune_kit::{
     Button, ButtonVariant, Checkbox, IconButton, IconButtonVariant, Switch, TextArea, TextInput,
 };
-use scimtest_core::{Error, configuration::SettingsPatch, model::Environment};
+use scimtest_core::{Error, configuration::SettingsPatch, model::Environment, slugify};
 use serde_json::{Value, json};
 
 use super::{
     Editor, Workspace,
+    connection::Export,
     editor::two_columns,
     view::{Choice, caption, dropdown, font_text},
 };
@@ -297,6 +298,10 @@ pub(crate) struct EnvironmentForm {
     pub(super) toggles: BTreeMap<&'static str, bool>,
     /// Secret fields showing their value.
     revealed: BTreeSet<&'static str>,
+    /// The base URL the app under test reaches scimtest's identity provider at.
+    base: String,
+    /// The saved environment's active SAML signing certificate.
+    certificate: Option<String>,
 }
 
 /// The open environment editor's settings form.
@@ -340,7 +345,11 @@ fn flip(s: &mut Workspace, key: &'static str) {
 }
 
 impl EnvironmentForm {
-    pub fn new(environment: Option<&Environment>) -> Result<Self, Error> {
+    pub fn new(
+        environment: Option<&Environment>,
+        base: String,
+        certificate: Option<String>,
+    ) -> Result<Self, Error> {
         let settings = environment
             .map(|environment| environment.settings.clone())
             .unwrap_or_default();
@@ -394,6 +403,8 @@ impl EnvironmentForm {
             text,
             toggles,
             revealed: BTreeSet::new(),
+            base: base.trim_end_matches('/').to_owned(),
+            certificate,
         })
     }
 
@@ -445,8 +456,12 @@ impl EnvironmentForm {
             .child(self.steps(ui));
         match self.section {
             Section::General => body.child(self.general(workspace, name, slug, ui, layer)),
-            Section::Oidc => body.child(self.oidc(workspace, ui, layer)),
-            Section::Saml => body.child(self.saml(workspace, ui, layer)),
+            Section::Oidc => body
+                .child(self.oidc(workspace, ui, layer))
+                .child(self.oidc_setup(workspace, &endpoint(name, slug), id, ui)),
+            Section::Saml => body
+                .child(self.saml(workspace, ui, layer))
+                .child(self.saml_setup(workspace, &endpoint(name, slug), id, ui)),
             Section::Scim => body.child(self.scim(workspace, id.is_some(), ui, layer)),
             Section::Review => body.child(self.review(workspace, name, slug, id, ui)),
         }
@@ -836,7 +851,7 @@ impl EnvironmentForm {
                 .variant(ButtonVariant::Outline)
                 .disabled(workspace.busy)
                 .on_press_tx(move |s: &mut Workspace, tx: &mut Tx| {
-                    s.export_connection(id.clone(), save, tx)
+                    s.export_connection(id.clone(), Export::Config, save, tx)
                 })
                 .build(&ui.k)
                 .key(key)
@@ -849,6 +864,133 @@ impl EnvironmentForm {
                 .child(export("save-connection", "Save config JSON…", true)),
         );
         content
+    }
+
+    /// The OIDC endpoints and credentials to enter in the app under test.
+    fn oidc_setup(&self, workspace: &Workspace, slug: &str, id: Option<&str>, ui: &Ui) -> El {
+        let issuer = (!slug.is_empty()).then(|| format!("{}/oidc/{slug}", self.base));
+        let url = |path: &str| issuer.as_ref().map(|issuer| format!("{issuer}{path}"));
+        let mut rows = vec![
+            setup_url("oidc-issuer", "Issuer", issuer.clone(), ui),
+            setup_url(
+                "oidc-discovery",
+                "Discovery",
+                url("/.well-known/openid-configuration"),
+                ui,
+            ),
+            setup_url("oidc-authorize", "Authorize URL", url("/authorize"), ui),
+            setup_url("oidc-token", "Token URL", url("/token"), ui),
+            setup_url("oidc-jwks", "JWKS URL", url("/jwks"), ui),
+        ];
+        let client_id = self.value("oidc_client_id").trim();
+        if !client_id.is_empty() {
+            rows.push(setup_row(
+                "oidc-client-id",
+                "Client ID",
+                setup_text(client_id, ui),
+                Some(client_id.to_owned()),
+                ui,
+            ));
+        }
+        let secret = self.value("oidc_client_secret");
+        if !self.toggle("oidc_public_client") && !secret.is_empty() {
+            let shown = if self.revealed.contains("oidc_client_secret") {
+                secret.to_owned()
+            } else {
+                "•".repeat(secret.chars().count().min(24))
+            };
+            rows.push(setup_row(
+                "oidc-client-secret",
+                "Client secret",
+                setup_text(shown, ui).label("Client secret, hidden"),
+                Some(secret.to_owned()),
+                ui,
+            ));
+        }
+        let mut actions = Vec::new();
+        if let Some(id) = id {
+            actions.push(export_button(
+                workspace,
+                id,
+                Export::Config,
+                "save-oidc-config",
+                "Save config JSON…",
+                ui,
+            ));
+        }
+        setup_panel("oidc-setup", rows, actions, ui)
+    }
+
+    /// The SAML endpoints and signing certificate to enter in the app under test.
+    fn saml_setup(&self, workspace: &Workspace, slug: &str, id: Option<&str>, ui: &Ui) -> El {
+        let prefix = (!slug.is_empty()).then(|| format!("{}/saml/{slug}", self.base));
+        let url = |path: &str| prefix.as_ref().map(|prefix| format!("{prefix}{path}"));
+        let p = ui.p;
+        let certificate = match &self.certificate {
+            Some(pem) => setup_row(
+                "saml-certificate",
+                "Certificate",
+                col()
+                    .w_full()
+                    .max_h(120.0)
+                    .radius(6.0)
+                    .border(1.0, p.line)
+                    .fill(p.card)
+                    .clip_rounded(6.0)
+                    .scroll(ScrollSpec {
+                        stick_bottom: false,
+                    })
+                    .child(
+                        rune::text(pem.trim_end().to_owned())
+                            .font(TextStyle {
+                                size: 11.0,
+                                ..ui.k.ty.mono
+                            })
+                            .color(p.text)
+                            .w_full()
+                            .wrap_anywhere()
+                            .selectable(true)
+                            .padding(12.0),
+                    ),
+                Some(pem.clone()),
+                ui,
+            ),
+            None => setup_row(
+                "saml-certificate",
+                "Certificate",
+                caption("Save the environment to show its signing certificate.", ui)
+                    .w_full()
+                    .wrap(),
+                None,
+                ui,
+            ),
+        };
+        let rows = vec![
+            setup_url("saml-sso", "Sign-on URL", url("/sso"), ui),
+            setup_url("saml-slo", "Single Logout URL", url("/slo"), ui),
+            setup_url("saml-idp-entity", "IDP entity ID", url("/metadata"), ui),
+            certificate,
+        ];
+        let mut actions = Vec::new();
+        if let Some(id) = id {
+            actions.push(export_button(
+                workspace,
+                id,
+                Export::Metadata,
+                "save-saml-metadata",
+                "Save metadata XML…",
+                ui,
+            ));
+            actions.push(export_button(
+                workspace,
+                id,
+                Export::Certificate,
+                "save-saml-certificate",
+                "Save certificate…",
+                ui,
+            ));
+        }
+        setup_panel("saml-setup", rows, actions, ui)
     }
 
     fn section_header(
@@ -1136,6 +1278,132 @@ fn plain_input(
                 .key("input"),
         )
         .child(caption(help, ui).w_full().wrap())
+}
+
+/// The endpoint name the environment's URLs use once it is saved.
+fn endpoint(name: &TextEdit, slug: &TextEdit) -> String {
+    match slug.text.trim() {
+        "" => slugify(&name.text),
+        slug => slugify(slug),
+    }
+}
+
+/// A bordered panel of values to copy into the app under test, with optional save buttons.
+fn setup_panel(key: &'static str, rows: Vec<El>, actions: Vec<El>, ui: &Ui) -> El {
+    let mut panel = col()
+        .key(key)
+        .role("group")
+        .label("Copy these values into your app")
+        .w_full()
+        .gap(12.0)
+        .padding(16.0)
+        .radius(6.0)
+        .border(1.0, ui.p.line)
+        .fill(ui.p.soft)
+        .child(
+            font_text(
+                "COPY THESE VALUES INTO YOUR APP",
+                11.0,
+                SEMIBOLD,
+                ui.p.muted,
+                ui,
+            )
+            .a11y_hidden(),
+        );
+    for row in rows {
+        panel = panel.child(row);
+    }
+    if !actions.is_empty() {
+        panel = panel.child(row().key("actions").gap(8.0).children(actions));
+    }
+    panel
+}
+
+/// A labeled value with a button that copies `copy`; without one the button is disabled.
+fn setup_row(
+    key: &'static str,
+    label: &'static str,
+    value: El,
+    copy: Option<String>,
+    ui: &Ui,
+) -> El {
+    let button = IconButton::new(&icons::COPY)
+        .label(format!("Copy {label}"))
+        .help(format!("Copy {label}"))
+        .disabled(copy.is_none());
+    let button = match copy {
+        Some(copy) => button.on_press_tx(move |s: &mut Workspace, tx: &mut Tx| {
+            tx.copy(copy.clone());
+            s.message = format!("{label} copied");
+            s.failed = false;
+        }),
+        None => button,
+    };
+    row()
+        .key(key)
+        .w_full()
+        .gap(12.0)
+        .items_start()
+        .child(
+            font_text(label, 12.0, SEMIBOLD, ui.p.muted, ui)
+                .w(140.0)
+                .wrap()
+                .a11y_hidden(),
+        )
+        .child(
+            el().grow(1.0)
+                .min_w(0.0)
+                .child(value.key(format!("{key}-value"))),
+        )
+        .child(button.build(&ui.k).key(format!("{key}-copy")))
+}
+
+/// A setup row for a URL, which needs an endpoint name to exist.
+fn setup_url(key: &'static str, label: &'static str, url: Option<String>, ui: &Ui) -> El {
+    match url {
+        Some(url) => setup_row(key, label, setup_text(url.clone(), ui), Some(url), ui),
+        None => setup_row(
+            key,
+            label,
+            caption("Enter an endpoint name to generate this URL", ui)
+                .w_full()
+                .wrap(),
+            None,
+            ui,
+        ),
+    }
+}
+
+fn setup_text(value: impl Into<String>, ui: &Ui) -> El {
+    rune::text(value.into())
+        .font(TextStyle {
+            size: 12.0,
+            ..ui.k.ty.mono
+        })
+        .color(ui.p.text)
+        .w_full()
+        .wrap_anywhere()
+        .selectable(true)
+}
+
+/// A button that saves the environment's `export` to a file the user picks.
+fn export_button(
+    workspace: &Workspace,
+    id: &str,
+    export: Export,
+    key: &'static str,
+    label: &'static str,
+    ui: &Ui,
+) -> El {
+    let id = id.to_owned();
+    Button::new(label)
+        .variant(ButtonVariant::Outline)
+        .disabled(workspace.busy)
+        .on_press_tx(move |s: &mut Workspace, tx: &mut Tx| {
+            s.export_connection(id.clone(), export, true, tx)
+        })
+        .build(&ui.k)
+        .key(key)
 }
 
 fn review_value(key: &'static str, label: &'static str, value: &str, ui: &Ui) -> El {

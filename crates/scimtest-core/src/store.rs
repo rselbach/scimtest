@@ -313,7 +313,9 @@ pub(crate) fn new_id(prefix: &str) -> String {
     format!("{prefix}_{}", Uuid::new_v4().simple())
 }
 
-fn slugify(name: &str) -> String {
+/// The endpoint name scimtest derives from `name`: its ASCII letters and digits, lowercased,
+/// with every other run of characters replaced by one hyphen.
+pub fn slugify(name: &str) -> String {
     name.to_ascii_lowercase()
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|part| !part.is_empty())

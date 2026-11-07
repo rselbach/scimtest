@@ -506,7 +506,15 @@ impl Workspace {
     }
 
     fn edit_environment(&mut self, environment: Option<&Environment>) {
-        let settings = match environment::EnvironmentForm::new(environment) {
+        let settings = (|| {
+            let base = self.tunnel_service.effective_base(&self.api_url)?;
+            let certificate = environment
+                .map(|environment| self.store.active_signing_key(&environment.id))
+                .transpose()?
+                .map(|key| key.stored.certificate_pem);
+            environment::EnvironmentForm::new(environment, base, certificate)
+        })();
+        let settings = match settings {
             Ok(settings) => settings,
             Err(error) => {
                 self.fail(error.to_string());
