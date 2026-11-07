@@ -77,7 +77,8 @@ impl Workspace {
                     Editor::Group { name, .. } | Editor::Environment { name, .. } => {
                         name.focus_handle(cx)
                     }
-                    Editor::CreateUsers { count, .. } => count.focus_handle(cx),
+                    Editor::Tools { count, .. } => count.focus_handle(cx),
+                    Editor::Idp { base_url, .. } => base_url.focus_handle(cx),
                     _ => self.editor_focus.clone(),
                 };
                 window.focus(&focus, cx);
@@ -119,11 +120,12 @@ impl Editor {
                 .map(AnyInputState::Input)
                 .chain(settings.inputs())
                 .collect(),
-            Self::CreateUsers { count, domain } => [count, domain]
+            Self::Tools { count, domain } => [count, domain]
                 .into_iter()
                 .cloned()
                 .map(AnyInputState::Input)
                 .collect(),
+            Self::Idp { base_url, .. } => vec![AnyInputState::Input(base_url.clone())],
             Self::Faults(form) => form.inputs(),
             Self::Lifecycle(form) => form.inputs(),
             _ => Vec::new(),

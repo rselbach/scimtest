@@ -210,7 +210,7 @@ fn account_connection_changes_keep_keyboard_focus_in_the_account_screen(cx: &mut
         let focus = view.read(cx).focus.clone();
         window.focus(&focus, cx);
     });
-    cx.simulate_keystrokes("tab tab");
+    cx.simulate_keystrokes("tab tab tab");
     press_space(cx);
     cx.simulate_keystrokes("tab");
     cx.update(|window, cx| {

@@ -1,12 +1,10 @@
-use super::{
-    Workspace,
-    oidc::view::{copy_button, empty},
-};
+use super::{Workspace, oidc::view::copy_button};
 use crate::theme::Palette;
 use gpui::{Context, Div, div, prelude::*, px};
 use gpui_component::{
     Disableable, StyledExt,
     button::{Button, ButtonVariants},
+    checkbox::Checkbox,
     scroll::ScrollableElement,
 };
 use scimtest_core::{Error, diagnostics::Snapshot};
@@ -96,54 +94,159 @@ impl Workspace {
     }
     pub(super) fn traffic_inspector(&self, cx: &mut Context<Self>) -> Div {
         let palette = Palette::get(cx);
-        let mut controls = div().h_flex().flex_shrink_0().gap_2().pb_4();
-        for (id, label) in [
+        let mut settings = div().grid().grid_cols(3);
+        for (index, (id, label, help, checked)) in [
             (
                 "record",
-                format!(
-                    "Recording: {}",
-                    if self.traffic.snapshot.record {
-                        "on"
-                    } else {
-                        "off"
-                    }
-                ),
+                "Record traffic",
+                "Capture OIDC and SAML exchanges as they happen.",
+                self.traffic.snapshot.record,
             ),
             (
                 "secrets",
-                format!(
-                    "Include secrets: {}",
-                    if self.traffic.snapshot.record_secrets {
-                        "on"
-                    } else {
-                        "off"
-                    }
-                ),
+                "Include raw secrets",
+                "Credentials, tokens, and assertions may contain sensitive data.",
+                self.traffic.snapshot.record_secrets,
             ),
             (
                 "debug",
-                format!(
-                    "Debug to stdout: {}",
-                    if self.traffic.debug { "on" } else { "off" }
-                ),
+                "Debug to stdout",
+                "Print OIDC and SAML traffic to the terminal running scimtest.",
+                self.traffic.debug,
             ),
-        ] {
-            controls = controls.child(
-                Button::new(id)
-                    .label(label)
-                    .disabled(self.busy || id == "secrets" && !self.traffic.snapshot.record)
-                    .on_click(cx.listener(move |view, _, _, cx| view.traffic_action(id, cx))),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            settings = settings.child(
+                div()
+                    .v_flex()
+                    .gap_1()
+                    .p_4()
+                    .when(index > 0, |cell| {
+                        cell.border_l_1().border_color(palette.line)
+                    })
+                    .child(
+                        Checkbox::new(id)
+                            .label(label)
+                            .checked(checked)
+                            .disabled(self.busy || id == "secrets" && !self.traffic.snapshot.record)
+                            .on_click(
+                                cx.listener(move |view, _, _, cx| view.traffic_action(id, cx)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .pl_6()
+                            .text_size(px(11.))
+                            .text_color(palette.muted)
+                            .child(help),
+                    ),
             );
         }
-        controls = controls.child(
-            Button::new("refresh-traffic")
-                .label("Refresh")
-                .ghost()
-                .on_click(cx.listener(|view, _, _, cx| view.refresh_traffic(cx))),
-        );
+        let controls = div()
+            .v_flex()
+            .flex_shrink_0()
+            .gap_5()
+            .pb_5()
+            .child(
+                div()
+                    .v_flex()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(palette.line)
+                    .bg(palette.card)
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .v_flex()
+                            .gap_1()
+                            .px_4()
+                            .py_3()
+                            .border_b_1()
+                            .border_color(palette.line)
+                            .bg(palette.soft)
+                            .child(
+                                div()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child("Capture settings"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(palette.muted)
+                                    .child("Choose what is retained in this process. Captured entries are cleared when scimtest restarts."),
+                            ),
+                    )
+                    .child(settings),
+            )
+            .child(
+                div()
+                    .h_flex()
+                    .justify_between()
+                    .items_end()
+                    .child(
+                        div()
+                            .v_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_size(px(16.))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child("Recent exchanges"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(palette.muted)
+                                    .child("Newest first · refreshes every 5 seconds"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new("refresh-traffic")
+                                    .label("Refresh")
+                                    .h(px(29.))
+                                    .outline()
+                                    .on_click(cx.listener(|view, _, _, cx| view.refresh_traffic(cx))),
+                            )
+                            .child(
+                                Button::new("clear-traffic")
+                                    .label("Clear traffic")
+                                    .h(px(29.))
+                                    .outline()
+                                    .disabled(self.busy || self.traffic.snapshot.entries.is_empty())
+                                    .on_click(cx.listener(|view, _, _, cx| view.traffic_action("clear", cx))),
+                            ),
+                    ),
+            );
         let mut body = div().flex().flex_row().flex_1().min_h_0().gap_4();
         if self.traffic.snapshot.entries.is_empty() {
-            return div().v_flex().flex_1().min_h_0().child(controls).child(empty("No exchanges recorded. Run a sign-in or send an identity request to capture traffic.",cx));
+            return div().v_flex().flex_1().min_h_0().child(controls).child(
+                div()
+                    .v_flex()
+                    .items_center()
+                    .justify_center()
+                    .gap_2()
+                    .p_10()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(palette.line)
+                    .bg(palette.card)
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("No traffic recorded yet"),
+                    )
+                    .child(
+                        div()
+                            .text_color(palette.muted)
+                            .child("Run a sign-in flow and the exchange will appear here."),
+                    ),
+            );
         }
         let mut entries = div().v_flex().gap_2();
         for (index, entry) in self.traffic.snapshot.entries.iter().enumerate() {

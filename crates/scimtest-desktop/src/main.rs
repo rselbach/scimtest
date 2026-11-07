@@ -96,7 +96,7 @@ fn main() -> Result<()> {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(960.), px(640.))),
                 titlebar: Some(gpui::TitlebarOptions {
-                    title: Some("scimtest · Rust preview".into()),
+                    title: Some("scimtest".into()),
                     ..Default::default()
                 }),
                 ..Default::default()

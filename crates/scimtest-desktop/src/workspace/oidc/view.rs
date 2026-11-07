@@ -4,7 +4,7 @@ use crate::theme::Palette;
 use crate::workspace::view::accessible_text;
 use gpui::{ClipboardItem, Context, Div, div, prelude::*, px};
 use gpui_component::{
-    Disableable, Selectable, StyledExt,
+    Disableable, StyledExt,
     button::{Button, ButtonVariants},
     menu::PopupMenuItem,
     scroll::ScrollableElement,
@@ -14,46 +14,40 @@ use serde_json::Value;
 impl Workspace {
     pub(crate) fn oidc_inspector(&self, cx: &mut Context<Self>) -> Div {
         let palette = Palette::get(cx);
-        let selected = if self.oidc.section.is_empty() {
-            "Playground"
-        } else {
-            self.oidc.section
-        };
-        let mut tabs = div().h_flex().gap_2().pb_4();
-        for section in [
-            "Playground",
-            "Tokens & sessions",
-            "Inspections",
-            "Flow activity",
-            "Signing keys",
+        let mut body = div()
+            .v_flex()
+            .gap_5()
+            .child(inspector_card(
+                "Latest flow",
+                "Run an OIDC sign-in for this environment, then return here to inspect the latest flow.",
+                self.playground_controls(cx),
+                palette,
+            ))
+            .child(inspector_card(
+                "Signing keys",
+                "The JWKS and SAML metadata publish these keys. Rotating signs new tokens and assertions with a new key and keeps the old key published for the grace period.",
+                self.signing_controls(cx),
+                palette,
+            ));
+        for (key, label) in [
+            ("oidc-sessions", "Tokens & sessions"),
+            ("oidc-inspections", "Inspections"),
+            ("oidc-flows", "Flow activity"),
         ] {
-            tabs = tabs.child(
-                Button::new(section)
-                    .label(section)
-                    .selected(selected == section)
-                    .toggled(selected == section)
-                    .ghost()
-                    .when(selected == section, |button| {
-                        button.bg(palette.selected).text_color(palette.accent)
-                    })
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.oidc.section = section;
-                        cx.notify();
-                    })),
-            );
+            body = body.child(self.disclosure(key, label, cx));
+            if self.disclosures.contains(key) {
+                let content = match key {
+                    "oidc-sessions" => self.session_controls(cx),
+                    "oidc-inspections" => self.inspection_history(cx),
+                    _ => self.flow_activity(cx),
+                };
+                body = body.child(content);
+            }
         }
-        let body = match selected {
-            "Tokens & sessions" => self.session_controls(cx),
-            "Inspections" => self.inspection_history(cx),
-            "Flow activity" => self.flow_activity(cx),
-            "Signing keys" => self.signing_controls(cx),
-            _ => self.playground_controls(cx),
-        };
-        div().v_flex().flex_1().min_h_0().child(tabs).child(
+        div().flex_1().min_h_0().child(
             div()
                 .id("oidc-scroll")
-                .flex_1()
-                .min_h_0()
+                .size_full()
                 .overflow_y_scrollbar()
                 .child(body),
         )
@@ -648,4 +642,34 @@ fn json_panel(title: &str, value: &Value, cx: &Context<Workspace>) -> gpui::Stat
                     serde_json::to_string_pretty(value).unwrap_or_default(),
                 )),
         )
+}
+
+/// A bordered section card with a title, a one-line description, and content.
+fn inspector_card(
+    title: &'static str,
+    description: &'static str,
+    content: Div,
+    palette: Palette,
+) -> Div {
+    div()
+        .v_flex()
+        .gap_4()
+        .p_5()
+        .rounded_lg()
+        .border_1()
+        .border_color(palette.line)
+        .bg(palette.card)
+        .child(
+            div()
+                .v_flex()
+                .gap_1()
+                .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child(title))
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(palette.muted)
+                        .child(description),
+                ),
+        )
+        .child(content)
 }

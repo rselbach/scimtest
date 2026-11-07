@@ -27,7 +27,7 @@ use gpui_component::{
     Theme,
     input::{InputEvent, InputState, TextareaState},
 };
-use scimtest_core::{Error, Store, model::*};
+use scimtest_core::{Error, Store, configuration::GlobalConfigPatch, model::*};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
@@ -62,6 +62,7 @@ enum Editor {
     Group {
         id: Option<String>,
         name: Entity<InputState>,
+        search: Entity<InputState>,
         members: Vec<String>,
     },
     Delete {
@@ -69,16 +70,22 @@ enum Editor {
         id: String,
         name: String,
     },
-    CreateUsers {
+    Tools {
         count: Entity<InputState>,
         domain: Entity<InputState>,
+    },
+    Idp {
+        base_url: Entity<InputState>,
+        trust_proxy: bool,
     },
     ConfirmTool {
         action: &'static str,
     },
     History {
+        noun: &'static str,
         name: String,
         entries: Vec<OperationLog>,
+        expanded: BTreeSet<usize>,
     },
     BulkDelete {
         target: DeleteTarget,
@@ -149,6 +156,8 @@ pub struct Workspace {
     selected_rows: BTreeSet<String>,
     page: usize,
     page_size: usize,
+    sort_descending: bool,
+    disclosures: BTreeSet<&'static str>,
 }
 
 fn input(
@@ -408,7 +417,7 @@ impl Workspace {
             }
         })
         .detach();
-        let search = input("", "Search directory", window, cx);
+        let search = input("", "name, username, email", window, cx);
         cx.subscribe(&search, |view, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 view.page = 0;
@@ -466,7 +475,9 @@ impl Workspace {
             status_filter: "All",
             selected_rows: BTreeSet::new(),
             page: 0,
-            page_size: 25,
+            page_size: 15,
+            sort_descending: false,
+            disclosures: BTreeSet::new(),
         };
         if view.selected.is_none() {
             view.edit_environment(None, window, cx);
@@ -687,6 +698,7 @@ impl Workspace {
                 window,
                 cx,
             ),
+            search: input("", "Search users", window, cx),
             members: group
                 .map(|group| group.fields.member_ids.clone())
                 .unwrap_or_default(),
@@ -698,11 +710,57 @@ impl Workspace {
         cx.notify();
     }
 
+    fn select_environment(&mut self, id: String, cx: &mut Context<Self>) {
+        self.selected = Some(id);
+        let enabled = self.directory().is_some_and(|directory| match self.tab {
+            Tab::Scim => directory.environment.settings.scim_enabled,
+            Tab::Oidc => directory.environment.settings.supports_oidc(),
+            Tab::Saml => directory.environment.settings.supports_saml(),
+            Tab::Resilience => {
+                directory.environment.settings.supports_oidc()
+                    || directory.environment.settings.supports_saml()
+            }
+            _ => true,
+        });
+        if !enabled {
+            self.tab = Tab::Users;
+        }
+        self.oidc = Default::default();
+        self.saml = Default::default();
+        self.scim_view = Default::default();
+        self.resilience = Default::default();
+        self.lifecycle = Default::default();
+        if self.tab == Tab::Scim {
+            self.refresh_scim(cx);
+        }
+        if matches!(
+            self.tab,
+            Tab::Oidc | Tab::Saml | Tab::Resilience | Tab::Lifecycle
+        ) {
+            self.refresh_identity(cx);
+        }
+        self.selected_rows.clear();
+        self.page = 0;
+        self.status_filter = "All";
+        self.table_scroll.set_offset(Default::default());
+        self.editor = None;
+        self.message.clear();
+        cx.notify();
+    }
+
     fn save(&mut self, cx: &mut Context<Self>) {
         if self.discard_return_focus.is_some() {
             return;
         }
         self.status_revision = self.status_revision.wrapping_add(1);
+        let blocked = match &self.editor {
+            Some(Editor::Environment { name, settings, .. }) => settings.first_error(name, cx),
+            _ => None,
+        };
+        if let Some((section, message)) = blocked {
+            self.show_environment_error(section, message, cx);
+            return;
+        }
         let environment = self.selected.clone().unwrap_or_default();
         match &self.editor {
             Some(Editor::Lifecycle(_)) => self.save_lifecycle(cx),
@@ -839,7 +897,9 @@ impl Workspace {
                     cx,
                 );
             }
-            Some(Editor::Group { id, name, members }) => {
+            Some(Editor::Group {
+                id, name, members, ..
+            }) => {
                 let id = id.clone();
                 let display_name = name.read(cx).value().to_string();
                 let member_ids = members.clone();
@@ -919,16 +979,20 @@ impl Workspace {
                     cx,
                 );
             }
-            Some(Editor::CreateUsers { count, domain }) => {
-                let count = count.read(cx).value().to_string();
-                let domain = domain.read(cx).value().to_string();
+            Some(Editor::Idp {
+                base_url,
+                trust_proxy,
+            }) => {
+                let base_url = base_url.read(cx).value().to_string();
+                let trust_proxy = *trust_proxy;
                 self.command(
                     move |store| {
-                        let count = count.trim().parse().map_err(|_| {
-                            Error::Validation("Number of users must be between 1 and 10000".into())
+                        store.update_global_config(&GlobalConfigPatch {
+                            idp_base_url: Some(base_url),
+                            trust_forwarded_headers: Some(trust_proxy),
+                            ..Default::default()
                         })?;
-                        let result = store.create_users(&environment, count, &domain)?;
-                        Ok((format!("Created {} users", result.users_changed), None))
+                        Ok(("IDP and tunnel settings saved".into(), None))
                     },
                     cx,
                 );
@@ -953,7 +1017,7 @@ impl Workspace {
                     cx,
                 );
             }
-            Some(Editor::History { .. }) | None => {}
+            Some(Editor::History { .. } | Editor::Tools { .. }) | None => {}
         }
     }
 }

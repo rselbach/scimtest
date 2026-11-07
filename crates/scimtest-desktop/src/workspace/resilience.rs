@@ -1,14 +1,12 @@
-use super::{
-    Workspace,
-    oidc::view::{copy_button, empty},
-};
+use std::collections::BTreeMap;
+
+use super::{Workspace, oidc::view::copy_button};
 use crate::dropdown::DropdownMenu;
 use crate::theme::Palette;
-use gpui::{Context, Div, div, prelude::*};
+use gpui::{Context, Div, IntoElement, div, prelude::*, px};
 use gpui_component::{
     Disableable, StyledExt,
     button::{Button, ButtonVariants},
-    menu::PopupMenuItem,
     scroll::ScrollableElement,
 };
 use scimtest_core::oidc::{Faults, ResiliencePreset, ResilienceRun};
@@ -18,6 +16,8 @@ pub(super) struct Inspector {
     pub presets: Vec<ResiliencePreset>,
     pub run: Option<ResilienceRun>,
     pub manual: Faults,
+    /// Failed-request counts chosen per preset, keyed by preset id.
+    pub counts: BTreeMap<&'static str, i32>,
 }
 impl Workspace {
     pub(super) fn resilience_active(&self) -> bool {
@@ -51,17 +51,30 @@ impl Workspace {
             div()
                 .h_flex()
                 .gap_3()
+                .items_start()
                 .child(
                     div()
+                        .v_flex()
                         .flex_1()
                         .min_w_0()
-                        .whitespace_normal()
-                        .text_color(palette.muted)
-                        .child("Test how your app handles identity-provider failures."),
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_size(px(16.))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child("Choose a failure"),
+                        )
+                        .child(
+                            div()
+                                .text_color(palette.muted)
+                                .child("Each scenario applies only to the next matching flow or endpoint requests. Scenarios expire after 15 minutes."),
+                        ),
                 )
                 .child(
                     Button::new("custom-faults")
                         .label("Custom faults…")
+                        .h(px(29.))
+                        .outline()
                         .disabled(self.busy)
                         .on_click(cx.listener(|view, _, window, cx| view.edit_faults(window, cx))),
                 ),
@@ -186,99 +199,140 @@ impl Workspace {
                 );
             }
             body = body.child(panel);
-        } else {
-            body = body.child(empty(
-                "Choose a scenario below. Scenarios expire after 15 minutes.",
-                cx,
-            ));
         }
+        let mut grid = div().grid().grid_cols(3).gap_4();
         for preset in &self.resilience.presets {
-            let id = preset.id;
-            let arm = Button::new(id)
-                .accessibility_label(format!("Arm {}", preset.name))
-                .label(if preset.allow_count {
-                    format!(
-                        "Arm {} {}",
-                        preset.count,
-                        if preset.count == 1 {
-                            "injection"
-                        } else {
-                            "injections"
-                        }
-                    )
-                } else {
-                    "Arm scenario".into()
-                })
-                .primary()
-                .disabled(self.busy || self.resilience_active());
-            let arm = if preset.allow_count {
-                let view = cx.weak_entity();
-                arm.dropdown_menu(move |mut menu, _, _| {
-                    for count in 1..=20 {
-                        let view = view.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(format!(
-                                "Arm {count} {}",
-                                if count == 1 {
-                                    "injection"
-                                } else {
-                                    "injections"
-                                }
-                            ))
-                            .on_click(move |_, _, cx| {
-                                let _ =
-                                    view.update(cx, |view, cx| view.arm_resilience(id, count, cx));
-                            }),
-                        );
-                    }
-                    menu
-                })
-                .into_any_element()
-            } else {
-                arm.on_click(cx.listener(move |view, _, _, cx| view.arm_resilience(id, 0, cx)))
-                    .into_any_element()
-            };
-            body = body.child(
-                div()
-                    .id(gpui::SharedString::from(format!("preset-{id}")))
-                    .role(gpui::Role::Group)
-                    .aria_label(format!(
-                        "{}: {}. {}. {}",
-                        preset.name, preset.summary, preset.protocol, preset.behavior
-                    ))
-                    .h_flex()
-                    .gap_4()
-                    .p_4()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(palette.line)
-                    .bg(palette.card)
-                    .child(
-                        div()
-                            .v_flex()
-                            .flex_1()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .child(preset.name.to_owned()),
-                            )
-                            .child(preset.summary.to_owned())
-                            .child(div().text_color(palette.muted).child(format!(
-                                "{} · {}",
-                                preset.protocol.to_uppercase(),
-                                preset.behavior
-                            ))),
-                    )
-                    .child(arm),
-            );
+            grid = grid.child(self.preset_card(preset, cx));
         }
+        body = body.child(grid);
         div().flex_1().min_h_0().child(
             div()
                 .id("resilience-scroll")
                 .size_full()
                 .overflow_y_scrollbar()
                 .child(body),
+        )
+    }
+
+    fn preset_card(
+        &self,
+        preset: &ResiliencePreset,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let palette = Palette::get(cx);
+        let id = preset.id;
+        let count = self
+            .resilience
+            .counts
+            .get(id)
+            .copied()
+            .unwrap_or(preset.count);
+        let arm_count = if preset.allow_count { count } else { 0 };
+        let view = cx.weak_entity();
+        let mut card = div()
+            .id(gpui::SharedString::from(format!("preset-{id}")))
+            .role(gpui::Role::Group)
+            .aria_label(format!(
+                "{}: {}. {}. {}",
+                preset.name, preset.summary, preset.protocol, preset.behavior
+            ))
+            .v_flex()
+            .gap_3()
+            .p_4()
+            .rounded_lg()
+            .border_1()
+            .border_color(palette.line)
+            .bg(palette.card)
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(palette.accent)
+                    .child(preset.protocol.to_uppercase()),
+            )
+            .child(
+                div()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(preset.name.to_owned()),
+            )
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(palette.muted)
+                    .child(preset.summary.to_owned()),
+            )
+            .child(
+                div()
+                    .h_flex()
+                    .gap_3()
+                    .pt_3()
+                    .border_t_1()
+                    .border_color(palette.line)
+                    .text_size(px(12.))
+                    .child(div().text_color(palette.muted).child("Inject"))
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(preset.behavior.to_owned()),
+                    ),
+            );
+        if preset.allow_count {
+            let choices = (1..=20).collect::<Vec<i32>>();
+            card = card.child(
+                div()
+                    .v_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .child("Failed requests before recovery"),
+                    )
+                    .child(
+                        Button::new(gpui::SharedString::from(format!("count-{id}")))
+                            .accessibility_label(format!(
+                                "Failed requests for {}: {count}",
+                                preset.name
+                            ))
+                            .label(count.to_string())
+                            .h(px(29.))
+                            .justify_between()
+                            .border_1()
+                            .border_color(palette.line)
+                            .rounded_md()
+                            .disabled(self.busy || self.resilience_active())
+                            .dropdown_menu(move |mut menu, _, _| {
+                                for choice in &choices {
+                                    let choice = *choice;
+                                    let view = view.clone();
+                                    menu = menu.item(
+                                        gpui_component::menu::PopupMenuItem::new(
+                                            choice.to_string(),
+                                        )
+                                        .on_click(
+                                            move |_, _, cx| {
+                                                let _ = view.update(cx, |view, cx| {
+                                                    view.resilience.counts.insert(id, choice);
+                                                    cx.notify();
+                                                });
+                                            },
+                                        ),
+                                    );
+                                }
+                                menu
+                            }),
+                    ),
+            );
+        }
+        card.child(
+            Button::new(gpui::SharedString::from(format!("arm-{id}")))
+                .accessibility_label(format!("Arm {}", preset.name))
+                .label("Arm scenario")
+                .primary()
+                .w_full()
+                .disabled(self.busy || self.resilience_active())
+                .on_click(cx.listener(move |view, _, _, cx| {
+                    view.arm_resilience(id, arm_count, cx);
+                })),
         )
     }
 }

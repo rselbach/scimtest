@@ -7,7 +7,6 @@ use serde_json::Value;
 #[derive(Default)]
 pub(super) struct Inspector {
     user: String,
-    section: &'static str,
     keys: Vec<scimtest_core::signing::SigningKeyView>,
     fault: &'static str,
     refresh: bool,

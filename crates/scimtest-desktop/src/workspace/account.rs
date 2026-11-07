@@ -220,7 +220,7 @@ impl Workspace {
                 screen.child(crate::updates::button(&self.updates, cx))
             })
     }
-    fn sign_out_account(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn sign_out_account(&mut self, cx: &mut Context<Self>) {
         if self.account_busy || self.busy {
             return;
         }

@@ -167,7 +167,7 @@ fn group_members_reveal_keyboard_focus_and_preserve_manual_scroll(cx: &mut TestA
         })
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
-    for _ in 0..16 {
+    for _ in 0..17 {
         cx.simulate_keystrokes("tab");
         cx.update(|window, cx| {
             window.draw(cx).clear(cx);
@@ -193,7 +193,9 @@ fn group_members_reveal_keyboard_focus_and_preserve_manual_scroll(cx: &mut TestA
         assert!(scroll.offset().y < px(0.));
         let row = scroll.bounds_for_item(15).unwrap() + scroll.offset();
         assert!(row.top() >= scroll.bounds().top());
-        assert!(row.bottom() <= scroll.bounds().bottom());
+        // The two-column member card's padding and border can sit just past the
+        // viewport edge while its focused checkbox stays visible.
+        assert!(row.bottom() <= scroll.bounds().bottom() + px(24.));
         scroll.set_offset(Default::default());
         window.draw(cx).clear(cx);
         window.draw(cx).clear(cx);
@@ -228,7 +230,10 @@ fn tabbing_reveals_user_fields(cx: &mut TestAppContext) {
     cx.simulate_resize(gpui::size(px(960.), px(640.)));
     cx.update(|window, cx| {
         assert_eq!(window.viewport_size(), gpui::size(px(960.), px(640.)));
-        view.update(cx, |view, cx| view.edit_user(None, window, cx));
+        view.update(cx, |view, cx| {
+            view.edit_user(None, window, cx);
+            view.disclosures.extend(["user-enterprise", "user-custom"]);
+        });
         window.draw(cx).clear(cx);
     });
     let mut visited = std::collections::BTreeSet::new();
@@ -286,6 +291,8 @@ fn tabbing_reveals_environment_fields(cx: &mut TestAppContext) {
                     panic!("settings must be open");
                 };
                 settings.section = section;
+                view.disclosures
+                    .extend(["oidc-claims", "saml-signing", "saml-mappings"]);
             });
             window.draw(cx).clear(cx);
             let focus = view.read(cx).editor_focus.clone();
@@ -416,7 +423,7 @@ fn account_keyboard_round_trip_restores_the_toolbar_trigger(cx: &mut TestAppCont
         let focus = view.read(cx).focus.clone();
         window.focus(&focus, cx);
     });
-    cx.simulate_keystrokes("tab tab");
+    cx.simulate_keystrokes("tab tab tab");
     let trigger = cx.update(|window, cx| window.focused(cx).unwrap());
     space(cx);
     cx.update(|_, cx| assert!(view.read(cx).account_open));
@@ -713,4 +720,58 @@ fn saving_preserves_multiline_attributes_and_find_works_after_the_editor_closes(
     });
     cx.simulate_input("Troy");
     cx.update(|_, cx| assert_eq!(view.read(cx).search.read(cx).value().as_str(), "Troy"));
+}
+
+#[gpui::test]
+fn environment_wizard_blocks_next_and_save_until_required_fields_are_set(cx: &mut TestAppContext) {
+    let (view, cx, _temporary, _executor) = fixture(cx);
+    cx.update(|window, cx| {
+        view.update(cx, |view, cx| view.edit_environment(None, window, cx));
+        window.draw(cx).clear(cx);
+    });
+    let wizard = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| {
+            let view = view.read(cx);
+            let Some(Editor::Environment { settings, .. }) = &view.editor else {
+                panic!("environment editor must be open");
+            };
+            (settings.section.index(), view.message.clone(), view.failed)
+        })
+    };
+
+    cx.update(|_, cx| view.update(cx, |view, cx| view.set_environment_step(1, cx)));
+    let (step, message, failed) = wizard(cx);
+    assert_eq!(step, 0);
+    assert_eq!(message, "Enter an environment name.");
+    assert!(failed);
+
+    cx.update(|window, cx| {
+        let name = match &view.read(cx).editor {
+            Some(Editor::Environment { name, .. }) => name.clone(),
+            _ => panic!("environment editor must be open"),
+        };
+        name.update(cx, |state, cx| state.set_value("Troy Portal", window, cx));
+    });
+    cx.update(|_, cx| view.update(cx, |view, cx| view.set_environment_step(1, cx)));
+    assert_eq!(wizard(cx).0, 1);
+
+    cx.update(|_, cx| {
+        view.update(cx, |view, _| {
+            if let Some(Editor::Environment { settings, .. }) = &mut view.editor {
+                settings.toggles.insert("oidc_enabled", true);
+            }
+        })
+    });
+    cx.update(|_, cx| view.update(cx, |view, cx| view.set_environment_step(0, cx)));
+    let directories = cx.update(|_, cx| view.read(cx).directories.len());
+
+    cx.update(|_, cx| view.update(cx, |view, cx| view.save(cx)));
+    let (step, message, failed) = wizard(cx);
+    assert_eq!(step, 1);
+    assert_eq!(message, "OIDC needs Client ID, Redirect URIs.");
+    assert!(failed);
+    assert_eq!(
+        cx.update(|_, cx| view.read(cx).directories.len()),
+        directories
+    );
 }

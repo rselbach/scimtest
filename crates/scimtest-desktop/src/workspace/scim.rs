@@ -203,8 +203,10 @@ impl Workspace {
             })
             .collect();
         self.editor = Some(Editor::History {
+            noun: "",
             name: "SCIM trace".into(),
             entries,
+            expanded: Default::default(),
         });
         cx.notify();
     }

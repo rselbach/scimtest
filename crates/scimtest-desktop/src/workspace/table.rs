@@ -15,6 +15,9 @@ use gpui_component::{
 };
 use scimtest_core::model::Directory;
 
+const SORT_OPTIONS: [&str; 2] = ["Name A–Z", "Name Z–A"];
+const PAGE_SIZES: [usize; 4] = [15, 25, 50, 100];
+
 impl Workspace {
     pub(super) fn table(&self, cx: &mut Context<Self>) -> gpui::Div {
         if self.tab == Tab::Lifecycle {
@@ -68,6 +71,9 @@ impl Workspace {
         users.sort_by_key(|user| {
             format!("{} {}", user.fields.given_name, user.fields.family_name).to_lowercase()
         });
+        if self.sort_descending {
+            users.reverse();
+        }
         let mut groups = self
             .directory()
             .map(Directory::projected_groups)
@@ -83,6 +89,9 @@ impl Workspace {
                 )
         });
         groups.sort_by_key(|group| group.fields.display_name.to_lowercase());
+        if self.sort_descending {
+            groups.reverse();
+        }
         let count = match self.tab {
             Tab::Users => users.len(),
             Tab::Groups => groups.len(),
@@ -144,7 +153,7 @@ impl Workspace {
             .flex_shrink_0()
             .px_4()
             .gap_4()
-            .border_y_1()
+            .border_b_1()
             .border_color(palette.line)
             .bg(palette.soft)
             .text_size(px(11.))
@@ -180,43 +189,34 @@ impl Workspace {
                         .id("active")
                         .role(gpui::Role::ColumnHeader)
                         .aria_label("Active")
-                        .w(px(98.))
+                        .w(px(110.))
                         .child("Active"),
-                )
-                .child(
-                    div()
-                        .id("sync")
-                        .role(gpui::Role::ColumnHeader)
-                        .aria_label("Sync")
-                        .w(px(78.))
-                        .child("Sync"),
                 )
                 .child(
                     div()
                         .id("actions")
                         .role(gpui::Role::ColumnHeader)
                         .aria_label("Actions")
-                        .w(px(96.))
+                        .w(px(110.))
                         .text_right()
                         .child("Actions"),
                 ),
             Tab::Groups => heading
                 .child(cell("name", "Group").role(gpui::Role::ColumnHeader))
-                .child(cell("members", "Members").role(gpui::Role::ColumnHeader))
                 .child(
                     div()
-                        .id("sync")
+                        .id("members")
                         .role(gpui::Role::ColumnHeader)
-                        .aria_label("Sync")
-                        .w(px(78.))
-                        .child("Sync"),
+                        .aria_label("Members")
+                        .w(px(160.))
+                        .child("Members"),
                 )
                 .child(
                     div()
                         .id("actions")
                         .role(gpui::Role::ColumnHeader)
                         .aria_label("Actions")
-                        .w(px(96.))
+                        .w(px(110.))
                         .text_right()
                         .child("Actions"),
                 ),
@@ -227,42 +227,19 @@ impl Workspace {
             | Tab::Traffic
             | Tab::Resilience
             | Tab::Lifecycle => heading
-                .child(cell("name", "Name").role(gpui::Role::ColumnHeader))
-                .child(cell("endpoint", "Endpoint name").role(gpui::Role::ColumnHeader))
-                .child(
-                    div()
-                        .id("users")
-                        .role(gpui::Role::ColumnHeader)
-                        .aria_label("Users")
-                        .w(px(65.))
-                        .child("Users"),
-                )
-                .child(
-                    div()
-                        .id("groups")
-                        .role(gpui::Role::ColumnHeader)
-                        .aria_label("Groups")
-                        .w(px(65.))
-                        .child("Groups"),
-                )
+                .child(cell("name", "Environment").role(gpui::Role::ColumnHeader))
+                .child(cell("protocol", "Protocol").role(gpui::Role::ColumnHeader))
                 .child(
                     div()
                         .id("actions")
                         .role(gpui::Role::ColumnHeader)
                         .aria_label("Actions")
-                        .w(px(62.))
+                        .w(px(150.))
+                        .text_right()
                         .child("Actions"),
                 ),
         };
-        let height = if self.tab == Tab::Environments {
-            59.
-        } else {
-            51.
-        };
-        let mut rows = div()
-            .v_flex()
-            .flex_shrink_0()
-            .when(count > 0, |rows| rows.h(px((end - start) as f32 * height)));
+        let mut rows = div().v_flex().flex_shrink_0();
         rows = match self.tab {
             Tab::Users => {
                 rows.children(users[start..end].iter().map(|user| self.user_row(user, cx)))
@@ -304,183 +281,12 @@ impl Workspace {
                         } else if !query.is_empty() || self.status_filter != "All" {
                             "Try a different search or status."
                         } else {
-                            "Add your own entries or load the Greendale sample."
+                            "Add your own entries or load the Greendale sample from Bulk tools."
                         },
                     ))),
             );
         }
-        let mut controls = div()
-            .h_flex()
-            .min_h(px(46.))
-            .flex_shrink_0()
-            .px_4()
-            .py_2()
-            .gap_2();
-        if self.tab != Tab::Environments {
-            let view = cx.weak_entity();
-            let filters = if self.tab == Tab::Users {
-                vec![
-                    "All", "Active", "Inactive", "Pending", "Synced", "Error", "Deleted",
-                ]
-            } else {
-                vec!["All", "Pending", "Synced", "Error", "Deleted"]
-            };
-            controls = controls
-                .child(
-                    div().w(px(200.)).child(
-                        Input::new(&self.search)
-                            .aria_label("Search directory")
-                            .accessibility_id("directory-search"),
-                    ),
-                )
-                .child(
-                    Button::new("status-filter")
-                        .accessibility_label(format!("Status filter: {}", self.status_filter))
-                        .label(self.status_filter)
-                        .h(px(29.))
-                        .dropdown_menu(move |mut menu, _, _| {
-                            for filter in &filters {
-                                let filter = *filter;
-                                let view = view.clone();
-                                menu = menu.item(PopupMenuItem::new(filter).on_click(
-                                    move |_, _, cx| {
-                                        let _ = view.update(cx, |view, cx| {
-                                            view.status_filter = filter;
-                                            view.page = 0;
-                                            view.table_scroll.set_offset(Default::default());
-                                            cx.notify();
-                                        });
-                                    },
-                                ));
-                            }
-                            menu
-                        }),
-                );
-            if !self.selected_rows.is_empty() {
-                controls = controls.child(
-                    Button::new("delete-selected")
-                        .label(format!("Delete ({})", self.selected_rows.len()))
-                        .h(px(29.))
-                        .ghost()
-                        .disabled(self.busy)
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            view.editor = Some(Editor::BulkDelete {
-                                target: if view.tab == Tab::Users {
-                                    DeleteTarget::User
-                                } else {
-                                    DeleteTarget::Group
-                                },
-                                ids: view.selected_rows.iter().cloned().collect(),
-                            });
-                            cx.notify();
-                        })),
-                );
-            }
-        }
-        controls = controls.child(div().flex_1());
-        if self.tab != Tab::Environments {
-            controls = controls.child(self.tools_menu(cx));
-        }
-        if self.tab != Tab::Environments
-            && let Some(environment) = self.selected.clone()
-        {
-            controls = controls.child(
-                Button::new("seed")
-                    .label("Load Greendale sample")
-                    .h(px(29.))
-                    .disabled(self.busy)
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        let environment = environment.clone();
-                        view.command(
-                            move |store| {
-                                let result = store.seed_sample(&environment)?;
-                                Ok((
-                                    format!(
-                                        "Added {} users and {} groups",
-                                        result.users_added, result.groups_added
-                                    ),
-                                    None,
-                                ))
-                            },
-                            cx,
-                        );
-                    })),
-            );
-        }
-        let mut footer = div()
-            .h_flex()
-            .h(px(42.))
-            .flex_shrink_0()
-            .px_4()
-            .gap_2()
-            .border_t_1()
-            .border_color(palette.line)
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(palette.muted)
-                    .child(format!(
-                        "{count} {noun}{}",
-                        if count == 1 { "" } else { "s" }
-                    )),
-            )
-            .child(div().flex_1());
-        if self.tab != Tab::Environments {
-            let view = cx.weak_entity();
-            footer = footer
-                .child(
-                    Button::new("page-size")
-                        .label(format!("{} per page", self.page_size))
-                        .h(px(26.))
-                        .ghost()
-                        .dropdown_menu(move |mut menu, _, _| {
-                            for size in [15, 25, 50, 100] {
-                                let view = view.clone();
-                                menu = menu.item(PopupMenuItem::new(size.to_string()).on_click(
-                                    move |_, _, cx| {
-                                        let _ = view.update(cx, |view, cx| {
-                                            view.page_size = size;
-                                            view.page = 0;
-                                            view.table_scroll.set_offset(Default::default());
-                                            cx.notify();
-                                        });
-                                    },
-                                ));
-                            }
-                            menu
-                        }),
-                )
-                .child(
-                    Button::new("previous-page")
-                        .label("Previous")
-                        .h(px(26.))
-                        .ghost()
-                        .disabled(page == 0)
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            view.page = page.saturating_sub(1);
-                            view.table_scroll.set_offset(Default::default());
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .child(format!("{} / {}", page + 1, last_page + 1)),
-                )
-                .child(
-                    Button::new("next-page")
-                        .label("Next")
-                        .h(px(26.))
-                        .ghost()
-                        .disabled(page >= last_page)
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            view.page = page + 1;
-                            view.table_scroll.set_offset(Default::default());
-                            cx.notify();
-                        })),
-                );
-        }
-        div()
+        let mut table = div()
             .v_flex()
             .min_h_0()
             .max_h_full()
@@ -489,29 +295,254 @@ impl Workspace {
             .border_color(palette.line)
             .bg(palette.card)
             .overflow_hidden()
-            .shadow_sm()
-            .child(controls)
+            .shadow_sm();
+        if self.tab != Tab::Environments {
+            table = table.child(self.selection_bar(noun, cx));
+        }
+        table = table.child(
+            div()
+                .id("directory-table")
+                .role(gpui::Role::Table)
+                .aria_label(format!("{noun}s"))
+                .v_flex()
+                .min_h_0()
+                .child(heading)
+                .child(
+                    div()
+                        .id("directory-scroll")
+                        .relative()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .track_scroll(&self.table_scroll)
+                        .child(rows)
+                        .vertical_scrollbar(&self.table_scroll),
+                ),
+        );
+        if self.tab != Tab::Environments {
+            table = table.child(self.table_footer(count, start, end, page, last_page, cx));
+        }
+        table
+    }
+
+    fn selection_bar(&self, noun: &'static str, cx: &mut Context<Self>) -> gpui::Div {
+        let palette = Palette::get(cx);
+        let selected = self.selected_rows.len();
+        div()
+            .h_flex()
+            .h(px(46.))
+            .flex_shrink_0()
+            .px_4()
+            .gap_3()
+            .justify_end()
+            .items_center()
+            .border_b_1()
+            .border_color(palette.line)
             .child(
                 div()
-                    .id("directory-table")
-                    .role(gpui::Role::Table)
-                    .aria_label(format!("{noun}s"))
-                    .v_flex()
-                    .min_h_0()
-                    .child(heading)
+                    .text_size(px(12.))
+                    .text_color(palette.muted)
+                    .child(format!(
+                        "{selected} {noun}{} selected",
+                        if selected == 1 { "" } else { "s" }
+                    )),
+            )
+            .child(
+                Button::new("delete-selected")
+                    .label("Delete selected")
+                    .h(px(29.))
+                    .outline()
+                    .danger()
+                    .disabled(self.busy || self.selected_rows.is_empty())
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.editor = Some(Editor::BulkDelete {
+                            target: if view.tab == Tab::Users {
+                                DeleteTarget::User
+                            } else {
+                                DeleteTarget::Group
+                            },
+                            ids: view.selected_rows.iter().cloned().collect(),
+                        });
+                        cx.notify();
+                    })),
+            )
+    }
+
+    fn table_footer(
+        &self,
+        count: usize,
+        start: usize,
+        end: usize,
+        page: usize,
+        last_page: usize,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let palette = Palette::get(cx);
+        let view = cx.weak_entity();
+        let range = if count == 0 {
+            "Showing 0 of 0".to_owned()
+        } else {
+            format!("Showing {}–{} of {count}", start + 1, end)
+        };
+        let status_label = if self.status_filter == "All" {
+            "All statuses"
+        } else {
+            self.status_filter
+        };
+        let filters = if self.tab == Tab::Users {
+            vec![
+                "All", "Active", "Inactive", "Pending", "Synced", "Error", "Deleted",
+            ]
+        } else {
+            vec!["All", "Pending", "Synced", "Error", "Deleted"]
+        };
+        let filter_view = view.clone();
+        let sort_view = view.clone();
+        let size_view = view.clone();
+        div()
+            .h_flex()
+            .h(px(46.))
+            .flex_shrink_0()
+            .px_4()
+            .gap_4()
+            .justify_between()
+            .items_center()
+            .border_t_1()
+            .border_color(palette.line)
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(palette.muted)
+                    .child(range),
+            )
+            .child(
+                div()
+                    .h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(footer_label("Search", palette))
                     .child(
-                        div()
-                            .id("directory-scroll")
-                            .relative()
-                            .min_h_0()
-                            .overflow_y_scroll()
-                            .track_scroll(&self.table_scroll)
-                            .child(rows)
-                            .vertical_scrollbar(&self.table_scroll),
+                        div().w(px(181.)).child(
+                            Input::new(&self.search)
+                                .aria_label("Search directory")
+                                .accessibility_id("directory-search"),
+                        ),
+                    )
+                    .child(footer_label("Status", palette))
+                    .child(
+                        Button::new("status-filter")
+                            .accessibility_label(format!("Status filter: {status_label}"))
+                            .label(status_label)
+                            .h(px(29.))
+                            .dropdown_menu(move |mut menu, _, _| {
+                                for filter in &filters {
+                                    let filter = *filter;
+                                    let view = filter_view.clone();
+                                    let label = if filter == "All" {
+                                        "All statuses"
+                                    } else {
+                                        filter
+                                    };
+                                    menu = menu.item(PopupMenuItem::new(label).on_click(
+                                        move |_, _, cx| {
+                                            let _ = view.update(cx, |view, cx| {
+                                                view.status_filter = filter;
+                                                view.page = 0;
+                                                view.table_scroll.set_offset(Default::default());
+                                                cx.notify();
+                                            });
+                                        },
+                                    ));
+                                }
+                                menu
+                            }),
+                    )
+                    .child(footer_label("Sort", palette))
+                    .child(
+                        Button::new("sort-order")
+                            .accessibility_label(format!(
+                                "Sort: {}",
+                                sort_label(self.sort_descending)
+                            ))
+                            .label(sort_label(self.sort_descending))
+                            .h(px(29.))
+                            .dropdown_menu(move |mut menu, _, _| {
+                                for (index, option) in SORT_OPTIONS.iter().enumerate() {
+                                    let view = sort_view.clone();
+                                    menu = menu.item(PopupMenuItem::new(*option).on_click(
+                                        move |_, _, cx| {
+                                            let _ = view.update(cx, |view, cx| {
+                                                view.sort_descending = index == 1;
+                                                view.page = 0;
+                                                view.table_scroll.set_offset(Default::default());
+                                                cx.notify();
+                                            });
+                                        },
+                                    ));
+                                }
+                                menu
+                            }),
+                    )
+                    .child(footer_label("Rows", palette))
+                    .child(
+                        Button::new("page-size")
+                            .label(self.page_size.to_string())
+                            .h(px(29.))
+                            .dropdown_menu(move |mut menu, _, _| {
+                                for size in PAGE_SIZES {
+                                    let view = size_view.clone();
+                                    menu =
+                                        menu.item(PopupMenuItem::new(size.to_string()).on_click(
+                                            move |_, _, cx| {
+                                                let _ = view.update(cx, |view, cx| {
+                                                    view.page_size = size;
+                                                    view.page = 0;
+                                                    view.table_scroll
+                                                        .set_offset(Default::default());
+                                                    cx.notify();
+                                                });
+                                            },
+                                        ));
+                                }
+                                menu
+                            }),
+                    )
+                    .child(
+                        Button::new("previous-page")
+                            .label("Previous")
+                            .h(px(29.))
+                            .ghost()
+                            .disabled(page == 0)
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.page = page.saturating_sub(1);
+                                view.table_scroll.set_offset(Default::default());
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("next-page")
+                            .label("Next")
+                            .h(px(29.))
+                            .ghost()
+                            .disabled(page >= last_page)
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.page = page + 1;
+                                view.table_scroll.set_offset(Default::default());
+                                cx.notify();
+                            })),
                     ),
             )
-            .child(footer)
     }
+}
+
+fn footer_label(label: &'static str, palette: Palette) -> gpui::Div {
+    div()
+        .text_size(px(12.))
+        .text_color(palette.muted)
+        .child(label)
+}
+
+fn sort_label(descending: bool) -> &'static str {
+    SORT_OPTIONS[usize::from(descending)]
 }
 
 fn matches_filter(filter: &str, deleted: bool, dirty: bool, error: &str, remote: &str) -> bool {
