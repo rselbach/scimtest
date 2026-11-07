@@ -57,7 +57,7 @@ jobs:
           fi
 
   rust-desktop:
-    name: Rust GPUI desktop
+    name: Rust desktop
     runs-on: macos-latest
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
@@ -68,15 +68,4 @@ jobs:
           components: clippy
       - run: cargo clippy -p scimtest-desktop --all-targets --locked -- -D warnings
       - run: cargo test -p scimtest-desktop --locked
-      - name: Test the patched macOS GPUI platform
-        run: >-
-          cargo test --locked -p scimtest-desktop -p gpui-pre-macos
-          --features gpui_platform/test-support --lib
-      - name: Test the GPUI accessibility and focus patches
-        run: cargo test --manifest-path vendor/gpui-base/Cargo.toml --locked --features test-support --lib
-      - name: Test the AccessKit text editing patches
-        run: |
-          cargo test --manifest-path vendor/accesskit/Cargo.toml --locked --features serde,schemars
-          cargo test --manifest-path vendor/accesskit_atspi_common/Cargo.toml --locked
-          cargo test --manifest-path vendor/accesskit_unix/Cargo.toml --locked --lib
       - run: cargo build -p scimtest-desktop --locked

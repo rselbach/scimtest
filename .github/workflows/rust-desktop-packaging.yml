@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build GPUI executable
+      - name: Build desktop executable
         run: ./packaging/rust/build-desktop.sh build/scimtest-desktop 0.0.0 macos
       - name: Assemble and check application and DMG
         run: |
@@ -58,10 +58,10 @@ jobs:
             container: archlinux:base-devel
     steps:
       - uses: actions/checkout@v7
-      - name: Install GPUI and package dependencies
+      - name: Install desktop and package dependencies
         run: ./packaging/rust/install-linux-deps.sh
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build GPUI executable
+      - name: Build desktop executable
         env:
           PACKAGE_KIND: ${{ matrix.kind }}
         run: ./packaging/rust/build-desktop.sh build/scimtest-desktop 0.0.0 "${PACKAGE_KIND}"
@@ -88,7 +88,7 @@ jobs:
           runuser -u package-builder -- ./packaging/linux/build-arch-package.sh build/scimtest-desktop release/scimtest-rust.pkg.tar.zst 0.0.0 amd64
           pacman -Qip release/scimtest-rust.pkg.tar.zst
           pacman -U --noconfirm release/scimtest-rust.pkg.tar.zst
-      - name: Verify installed GPUI window and runtime
+      - name: Verify installed desktop window and runtime
         run: dbus-run-session -- xvfb-run -a python3 packaging/rust/smoke-test.py /usr/bin/scimtest-desktop --expect-account
       - uses: actions/upload-artifact@v7
         with:

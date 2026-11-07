@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check an installed GPUI executable using a disposable state directory."""
+"""Check an installed desktop executable using a disposable state directory."""
 
 import argparse
 import json
@@ -27,7 +27,7 @@ def main():
             command.insert(0, "/usr/bin/env")
         subprocess.run(command, check=True, capture_output=True, timeout=30)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with tempfile.TemporaryDirectory(prefix="scimtest-gpui-smoke-") as directory:
+    with tempfile.TemporaryDirectory(prefix="scimtest-desktop-smoke-") as directory:
         directory = Path(directory)
         state = directory / "state.db"
         lock = directory / "state.db.lock"
@@ -81,7 +81,7 @@ def main():
                                 raise RuntimeError("desktop exited before opening its window")
                             time.sleep(0.1)
                         else:
-                            raise RuntimeError("native GPUI window did not appear")
+                            raise RuntimeError("native desktop window did not appear")
                     with socket.create_connection(("127.0.0.1", port), timeout=5) as pending:
                         # Keep an unfinished request open during bounded shutdown.
                         pending.sendall(b"GET /-/ready HTTP/1.1\r\nHost: localhost\r\n")
@@ -103,7 +103,7 @@ def main():
                         except subprocess.TimeoutExpired:
                             process.kill()
                             process.wait()
-    print("GPUI startup, readiness, saved-port restart, and shutdown passed")
+    print("Desktop startup, readiness, saved-port restart, and shutdown passed")
 
 
 if __name__ == "__main__":

@@ -81,7 +81,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build GPUI executable
+      - name: Build desktop executable
         run: ./packaging/rust/build-desktop.sh build/scimtest-desktop "${RELEASE_VERSION#v}" macos
       - uses: actions/upload-artifact@v7
         with:
@@ -113,10 +113,10 @@ jobs:
       PACKAGE_KIND: ${{ matrix.kind }}
     steps:
       - uses: actions/checkout@v7
-      - name: Install GPUI and packaging dependencies
+      - name: Install desktop and packaging dependencies
         run: ./packaging/rust/install-linux-deps.sh
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build GPUI executable
+      - name: Build desktop executable
         run: ./packaging/rust/build-desktop.sh build/scimtest-desktop "${RELEASE_VERSION#v}" "${PACKAGE_KIND}"
       - name: Package and install Debian app
         if: matrix.kind == 'deb'
@@ -145,7 +145,7 @@ jobs:
         run: |
           (cd release && sha256sum ./*) > checksums.txt
           mv checksums.txt "release/scimtest-desktop_${RELEASE_VERSION#v}_${PACKAGE_KIND}_checksums.txt"
-      - name: Smoke-test installed GPUI app
+      - name: Smoke-test installed desktop app
         run: dbus-run-session -- xvfb-run -a python3 packaging/rust/smoke-test.py /usr/bin/scimtest-desktop --expect-account
       - uses: actions/upload-artifact@v7
         with:

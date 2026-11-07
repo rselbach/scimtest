@@ -1,13 +1,14 @@
 # Desktop app
 
-The desktop app uses GPUI and runs the Rust identity engine in the same process.
+The desktop app uses [Rune](https://github.com/anomalyco/rune) and its rune-kit
+components, and runs the Rust identity engine in the same process.
 The local JSON API, OIDC/SAML endpoints, directory and SCIM client share its
 saved state. The window renders without a WebView.
 
 ## Run from source
 
 Use stable Rust. macOS builds require an Apple silicon Mac, macOS 26 and Xcode.
-Linux builds require GPUI's font, window-system and Vulkan libraries:
+Linux builds require the XKB, Wayland and Vulkan development libraries:
 
 ```sh
 ./packaging/rust/install-linux-deps.sh
@@ -24,6 +25,23 @@ Source builds work locally without GitHub enrollment. Their default state is
 separate from the installed application's state. Use `--state-file` to select
 a specific database. See [the preview guide](rust-preview.md) for the state
 paths, API authentication and supported workflows.
+
+## Check the UI headlessly
+
+With `SCIMTEST_PREVIEW_STATE` set, the desktop opens that database without
+starting the server and accepts Rune's headless flags. An empty database gets
+the Greendale sample directory. Render a page, dump its element and
+accessibility tree, or drive it with a script:
+
+```sh
+SCIMTEST_PREVIEW_STATE=/tmp/greendale.db cargo run -p scimtest-desktop -- \
+  --snap users.png --theme dark
+SCIMTEST_PREVIEW_STATE=/tmp/greendale.db cargo run -p scimtest-desktop -- \
+  --snap editor.png --scene user-editor --tree editor.json
+```
+
+The scenes are listed in `SCENES` in `crates/scimtest-desktop/src/workspace.rs`.
+Rune's README describes `--script` and the other flags.
 
 ## Beta downloads
 
@@ -50,7 +68,7 @@ SCIMTEST_APPLICATION_PROFILE_ID='<32-character-profile-id>' \
 
 Use `deb`, `rpm` or `pkg.tar.zst` instead of `macos` for Linux. Each Linux
 packaging script takes four arguments: binary, output package, version and
-architecture (`amd64` or `arm64`). Packages include GPUI runtime dependencies.
+architecture (`amd64` or `arm64`). Packages declare the window-system and Vulkan runtime dependencies.
 
 The release workflow builds Rust, signs and notarizes the macOS app and DMG,
 and checks installed Linux packages under Xvfb. Version-tag pushes publish the

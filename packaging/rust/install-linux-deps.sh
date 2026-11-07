@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the GPUI build and smoke-test dependencies on supported CI images.
+# Install the desktop build and smoke-test dependencies on supported CI images.
 
 set -euo pipefail
 

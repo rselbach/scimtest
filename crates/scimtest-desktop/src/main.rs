@@ -132,6 +132,7 @@ fn app(
 }
 
 fn main() -> Result<()> {
+    rune::set_app_id("scimtest-desktop");
     let executor = tokio::runtime::Runtime::new()?;
     if let Some(state) = std::env::var_os("SCIMTEST_PREVIEW_STATE") {
         return preview(executor, PathBuf::from(state));

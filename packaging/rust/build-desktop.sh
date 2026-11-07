@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the GPUI executable with release identity and package metadata.
+# Build the desktop executable with release identity and package metadata.
 
 set -euo pipefail
 

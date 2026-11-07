@@ -1,6 +1,7 @@
 # scimtest
 
-The Rust/GPUI app includes the native desktop UI, local identity service
+The Rust app includes the native desktop UI (built with
+[Rune](https://github.com/anomalyco/rune)), local identity service
 and API, and hosted tunnel server. Run `cargo run --locked -p scimtest-desktop`
 to try it with separate preview state. Beta builds are available through manual
 GitHub Actions downloads. See
@@ -73,7 +74,7 @@ cargo run --locked -p scimtest-core --bin scimtest --
 
 ### Desktop app
 
-The native GPUI app runs the Rust identity engine in the same process. It requires a GitHub account linked in the app
+The native desktop app runs the Rust identity engine in the same process. It requires a GitHub account linked in the app
 before the workspace or local test endpoints unlock in a release build. See
 [the desktop documentation](docs/desktop.md) for preview artifacts, local build
 steps, the authentication design, and release packaging details.
