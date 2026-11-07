@@ -25,6 +25,16 @@ fn bundled_notes() -> Option<String> {
     (!text.trim().is_empty()).then_some(text)
 }
 
+pub fn about() -> (String, String) {
+    (
+        "About scimtest".into(),
+        format!(
+            "# scimtest {}\n\nA local identity test environment for OIDC, SAML, and SCIM.\n\n[Documentation](https://github.com/rselbach/scimtest#readme) · [Source and license](https://github.com/rselbach/scimtest)\n\nCopyright Rafael Selbach. Licensed under Apache 2.0.",
+            scimtest_core::runtime::version()
+        ),
+    )
+}
+
 pub fn release_notes() -> (String, String) {
     let notes = bundled_notes().unwrap_or_else(|| {
         "# Rust desktop preview\n\nNative tools for OIDC, SAML, SCIM, directory management, traffic inspection, fault injection, and lifecycle scenarios.\n\n[Published release notes](https://github.com/rselbach/scimtest/releases)".into()

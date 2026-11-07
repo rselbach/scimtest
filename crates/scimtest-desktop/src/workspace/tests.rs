@@ -1,5 +1,8 @@
+mod account;
 mod environment;
+mod lifecycle;
 mod oidc;
+mod resilience;
 mod saml;
 mod scim;
 mod tools;
@@ -10,9 +13,6 @@ use std::{sync::mpsc, time::Duration};
 use rune::{Env, Key, KeyEvent, Mods, Runtime};
 
 use super::*;
-
-mod lifecycle;
-mod resilience;
 
 /// A workspace on a seeded Greendale store, driven through Rune's headless runtime.
 pub(crate) struct Fixture {

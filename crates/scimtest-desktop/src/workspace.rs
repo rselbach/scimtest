@@ -923,6 +923,34 @@ pub const SCENES: &[Scene] = &[
     ("resilience", |s| s.show_tab(Tab::Resilience)),
     ("lifecycle", |s| s.show_tab(Tab::Lifecycle)),
     ("account", |s| s.account_open = true),
+    ("account-authorizing", |s| {
+        s.account_open = true;
+        s.tunnel_snapshot = scimtest_core::tunnel::Snapshot {
+            supported: true,
+            enrollment_url: "https://github.com/login/device".into(),
+            enrollment_code: "GRND-7DAL".into(),
+            ..Default::default()
+        };
+    }),
+    ("account-interrupted", |s| {
+        s.account_open = true;
+        s.tunnel_snapshot = scimtest_core::tunnel::Snapshot {
+            supported: true,
+            retry_available: true,
+            error: "tunnel connection closed: Greendale recovery check".into(),
+            ..Default::default()
+        };
+    }),
+    ("account-connected", |s| {
+        s.account_open = true;
+        s.tunnel_snapshot = scimtest_core::tunnel::Snapshot {
+            supported: true,
+            connected: true,
+            public_url: Some("https://scimtest.example/greendale".into()),
+            github_login: "troy-barnes".into(),
+            ..Default::default()
+        };
+    }),
     ("user-editor", |s| {
         let user = s.visible_users().into_iter().next();
         s.edit_user(user.as_ref());
