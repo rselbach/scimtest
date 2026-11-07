@@ -917,6 +917,7 @@ pub const SCENES: &[(&str, fn(&mut Workspace))] = &[
     ("saml", |s| s.show_tab(Tab::Saml)),
     ("scim", |s| s.show_tab(Tab::Scim)),
     ("traffic", |s| s.show_tab(Tab::Traffic)),
+    ("traffic-sample", |s| s.show_traffic_sample()),
     ("resilience", |s| s.show_tab(Tab::Resilience)),
     ("lifecycle", |s| s.show_tab(Tab::Lifecycle)),
     ("account", |s| s.account_open = true),

@@ -1,3 +1,6 @@
+mod scim;
+mod traffic;
+
 use std::{sync::mpsc, time::Duration};
 
 use rune::{Env, Key, KeyEvent, Mods, Runtime};
