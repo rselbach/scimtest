@@ -1,3 +1,4 @@
+mod fills;
 mod icons;
 mod information;
 mod menus;
@@ -99,6 +100,7 @@ fn app(
             traffic_lights: Some((buttons + 4.0, buttons)),
             drag_regions: true,
         })
+        .compositor(fills::Fills::default())
         .standard_menus()
         .on_close(|_, _| finish());
     if let Some(argv) = argv {

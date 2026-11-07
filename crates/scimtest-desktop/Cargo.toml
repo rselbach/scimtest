@@ -12,6 +12,8 @@ dirs.workspace = true
 libc.workspace = true
 rune.workspace = true
 rune-kit.workspace = true
+rune-fx.workspace = true
+wgpu = { version = "30", default-features = false }
 scimtest-core = { path = "../scimtest-core" }
 serde_json.workspace = true
 tokio.workspace = true

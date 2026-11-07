@@ -328,3 +328,38 @@ fn shortcuts_focus_search_and_save_the_open_editor() {
     fixture.wait("the save", |state| !state.busy && state.editor.is_none());
     assert_eq!(fixture.state().message, "User saved");
 }
+
+#[test]
+fn the_toolbar_sidebar_and_selected_page_have_fill_slots() {
+    use crate::fills::Fill;
+
+    let slots = |fixture: &Fixture| -> Vec<(u32, [f32; 4])> {
+        let rt = &fixture.rt;
+        rt.instances
+            .iter()
+            .zip(&rt.marks)
+            .filter(|(slot, _)| slot.params[1] == rune::render::KIND_EFFECT)
+            .map(|(slot, mark)| (*mark, slot.rect))
+            .collect()
+    };
+    let inside = |fixture: &Fixture, key: &str, [x, y, w, h]: [f32; 4]| {
+        let (px, py) = fixture.rt.find(key).expect("element is drawn");
+        (x..x + w).contains(&px) && (y..y + h).contains(&py)
+    };
+    let mut fixture = Fixture::new();
+    // The app's compositor turns this on; the test runtime has none.
+    fixture.rt.track_marks = true;
+    fixture.frame();
+    let marks: Vec<u32> = slots(&fixture).iter().map(|(mark, _)| *mark).collect();
+    assert_eq!(
+        marks,
+        [Fill::Toolbar, Fill::Sidebar, Fill::Selected].map(|fill| fill as u32)
+    );
+    fixture.click("nav-Groups");
+    let selected: Vec<_> = slots(&fixture)
+        .into_iter()
+        .filter(|(mark, _)| *mark == Fill::Selected as u32)
+        .collect();
+    assert_eq!(selected.len(), 1);
+    assert!(inside(&fixture, "nav-Groups", selected[0].1));
+}

@@ -10,6 +10,10 @@ implementation and verification evidence below are retained for a future pass.
   walkthroughs before relying on it. Upstream `accesskit_unix` 0.24 and later
   expose AT-SPI EditableText, which the old patches backported.
 
+- [ ] Measure text contrast over the grain-gradient fills (toolbar, sidebar and
+  selected page) in both themes, and turn the fills off under Increase Contrast
+  or Reduce Transparency once Rune reports those settings.
+
 - [ ] Keyboard navigation and native accessibility for custom GPUI controls.
   Earlier native macOS checks covered named controls, tables, dialogs,
   inspector payloads, dropdown activation, password privacy, and Save/Find.

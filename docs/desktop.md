@@ -43,6 +43,13 @@ SCIMTEST_PREVIEW_STATE=/tmp/greendale.db cargo run -p scimtest-desktop -- \
 The scenes are listed in `SCENES` in `crates/scimtest-desktop/src/workspace.rs`.
 Rune's README describes `--script` and the other flags.
 
+## Background fills
+
+The toolbar, the sidebar and the selected page have grain-gradient backgrounds
+painted by Rune's `rune-fx` crate. `crates/scimtest-desktop/src/fills.rs` sets
+their colours for the dark and light themes. The fills are still, so the
+window draws nothing while it is idle.
+
 ## Beta downloads
 
 Manually run **Release** on the rewrite branch with version `0.0.0`. Download

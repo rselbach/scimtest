@@ -63,6 +63,7 @@ impl Palette {
 pub struct Ui {
     pub p: Palette,
     pub k: Kit,
+    pub dark: bool,
 }
 
 impl Ui {
@@ -75,7 +76,7 @@ impl Ui {
         });
         k.radius.md = 6.0;
         k.radius.lg = 11.0;
-        Self { p, k }
+        Self { p, k, dark }
     }
 
     /// Text at `size` points and `weight`, in the kit's UI face.

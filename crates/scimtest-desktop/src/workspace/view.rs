@@ -3,6 +3,7 @@ use rune_kit::{Button, ButtonVariant, Menu, MenuItem};
 
 use super::{Tab, Workspace};
 use crate::{
+    fills::{self, Fill},
     icons,
     theme::{BOLD, Palette, SEMIBOLD, Ui},
 };
@@ -252,6 +253,7 @@ impl Workspace {
             } else {
                 Color::TRANSPARENT
             })
+            .children(selected.then(|| fills::under(Fill::Selected, 6.0, ui)))
             .child(icon(glyph, 15.0).color(if selected { p.accent } else { p.muted }))
             .child(
                 font_text(label, 13.0, 400.0, p.text, ui)
@@ -276,7 +278,8 @@ impl Workspace {
             .h_full()
             .px(8.0)
             .py(16.0)
-            .fill(ui.p.sidebar);
+            .fill(ui.p.sidebar)
+            .child(fills::under(Fill::Sidebar, 0.0, ui));
         if let Some(directory) = self.directory() {
             let settings = &directory.environment.settings;
             sidebar = sidebar
@@ -419,6 +422,7 @@ impl Workspace {
             .window_drag()
             .center_y()
             .fill(ui.p.toolbar)
+            .child(fills::under(Fill::Toolbar, 0.0, ui))
             .child(logo)
             .child(font_text("scimtest", 13.0, SEMIBOLD, ui.p.text, ui))
             .child(el().grow(1.0));
