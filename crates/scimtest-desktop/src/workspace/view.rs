@@ -152,15 +152,18 @@ pub(crate) fn status_pill(label: impl Into<String>, color: Color, ui: &Ui) -> El
         .child(font_text(label, 11.0, 400.0, color, ui).a11y_hidden())
 }
 
-/// A button that copies `value` and says so in the status bar.
+/// A muted line saying a list has nothing in it yet.
+pub(crate) fn empty(message: &str, ui: &Ui) -> El {
+    font_text(message, 13.0, 400.0, ui.p.muted, ui)
+        .py(12.0)
+        .wrap()
+}
+
+/// A button that copies `value`.
 pub(crate) fn copy_button(key: impl Into<String>, label: &str, value: String, ui: &Ui) -> El {
     Button::new(label.to_owned())
         .variant(ButtonVariant::Ghost)
-        .on_press_tx(move |s: &mut Workspace, tx: &mut Tx| {
-            tx.copy(value.clone());
-            s.message = "Copied".into();
-            s.failed = false;
-        })
+        .on_press_tx(move |_: &mut Workspace, tx: &mut Tx| tx.copy(value.clone()))
         .build(&ui.k)
         .key(key.into())
 }
