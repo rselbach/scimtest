@@ -5115,6 +5115,7 @@ name = "scimtest-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
  "clap",
  "dirs",
  "futures-util",

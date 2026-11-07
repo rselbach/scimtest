@@ -5,14 +5,14 @@ use serde_json::Value;
 
 #[derive(Default)]
 pub(super) struct Inspector {
-    user: String,
-    keys: Vec<scimtest_core::signing::SigningKeyView>,
-    fault: &'static str,
+    pub user: String,
+    pub keys: Vec<scimtest_core::signing::SigningKeyView>,
+    pub fault: &'static str,
     refresh: bool,
-    result: Option<Value>,
+    pub result: Option<Value>,
     pub inspections: Vec<Value>,
     pub sessions: Vec<Value>,
-    holders: Vec<Value>,
+    pub holders: Vec<Value>,
     flows: Vec<Value>,
 }
 impl Workspace {
