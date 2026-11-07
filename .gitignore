@@ -28,3 +28,6 @@ scimtest-server.json.tmp
 # verify-scimtest run state and captured proof
 .cursor/skills/verify-scimtest/runs/
 .cursor/skills/verify-scimtest/artifacts/
+
+# Local notarized macOS build; embeds Apple credentials, never commit it
+/packaging/macos/build-notarized-local.sh
