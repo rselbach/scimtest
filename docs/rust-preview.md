@@ -1,6 +1,6 @@
 # Rust desktop preview
 
-The rewrite runs a native GPUI window and a Rust directory service in one
+The rewrite runs a native Rune window and a Rust directory service in one
 process. The window follows the original app's gray canvas and sidebar, blue
 accents, compact tables, sheets, and system light/dark appearance.
 
@@ -119,116 +119,21 @@ Linux offers the matching package for download. Source builds and version
 `0.0.0` do not update.
 
 The desktop exposes named inputs, buttons, menus, directory tables, dialogs,
-status messages, and inspector payloads through GPUI's AccessKit integration.
-Sidebar buttons support keyboard activation. Editor sheets set initial focus,
-keep Tab and Shift-Tab inside the sheet, and restore focus on dismissal.
-Open sheets hide the workspace from accessibility navigation and expose modal
-semantics. Account screens move focus into their controls and restore it on
-return, including keyboard reopening from the toolbar. Real tunnel policy-close
-and Retry tests cover the production watcher: an account lock closes the editor,
-and recovery restores live controls or falls back to the workspace when a
-control was recreated. Connection changes within an open Account screen also
-validate focus after rendering. Named accessibility groups expose the workspace
-and Account focus scopes. Native checks cover policy-close recovery, search
-after an interrupted editor, and an account switch with installation identity
-rotation using a local test peer.
-Password fields keep their values out of the accessibility tree, including
-when their visible mask is disabled. Multiline settings use native text-area
-semantics. Dropdown triggers expose a press action as well as keyboard opening,
-selection, and dismissal.
+status messages, and inspector payloads through Rune's AccessKit integration
+(UI Automation, NSAccessibility and AT-SPI). Editor dialogs are Rune modals:
+they trap Tab, close on Escape or a backdrop click, hide the workspace from
+accessibility navigation, and return focus to the control that opened them.
+Edited forms ask before Escape or a backdrop click discards their drafts.
+Status messages are polite live regions and failures assertive ones.
+Password fields keep their values out of the accessibility tree.
 
-Native macOS checks cover environment and user editing, Unicode selection and
-replacement, Undo, multiline persistence, secret-value privacy, Save and Find
-shortcuts, directory rows, dropdown actions, and the local account screen.
-Protocol walkthroughs cover OIDC/SAML payloads, token and session controls,
-custom faults and injection results, SCIM progress and request traces, remote
-import preview/apply, and lifecycle step results and messages. Release notes
-expose their text, and lifecycle forms identify group additions and removals.
-Automated GPUI tests cover sheet focus, Save/Find, dropdown keyboard behavior,
-and revealing focused directory rows while preserving manual scrolling.
-Scrollable forms reveal focused inputs; tests traverse all 27 settings fields
-with Tab and Shift-Tab at the minimum window size and check multiline caret
-visibility. Group member checkboxes also scroll into view. Native macOS checks
-cover both fixes, reverse traversal, manual scrolling, and saved membership.
-Shared buttons and checkboxes also request visibility when focused, including
-fault options, lifecycle group choices, and inspector actions. Native macOS
-and Wayland checks verify long forms and their saved effects; Wayland checks
-also traverse 16 sessions and end the focused last session. The joiner checks
-in this pass cover directory changes, with SCIM disabled in the fixtures.
-Long dropdowns constrain their height and reveal their selected entry during
-keyboard navigation. Native macOS checks select from 39 active accounts and
-41 manager options, verify the resulting sign-in and saved manager, and check
-keyboard reopening and Escape without closing the user editor.
-Native macOS checks also verify user/group dialog isolation and restoration,
-search focus after returning from Account, the Account toolbar keyboard round
-trip, and About dismissal with Done or Escape followed by keyboard reopening
-from Help. Wayland checks repeat user-dialog isolation, discard confirmation,
-saved user recovery, checkbox and choice edits, backdrop clicks, the Account
-keyboard round trip, and About dismissal/reopening after parent-window
-activation settles. Edited forms ask before Escape or backdrop clicks discard
-their drafts; canceling the warning restores the draft and focus. Explicit
-Cancel and Close dismiss directly. Text, multiline, checkbox, membership and dropdown changes
-keep the warning active even after values are reverted. The twenty app tests
-pass on macOS and Linux, including nested confirmation focus, Save suppression,
-backdrop gestures and lifecycle form replacement. Native macOS checks cover
-all editable form types, invalid drafts, recovered saves and discarded data.
-Information windows keep long notes in a selectable scrolling reader above
-Done. Wheel, arrow, page and document keys navigate the text. Regressions use
-real test-platform resize events and assert the actual 400×280 viewport,
-last-block visibility, selection preservation and keyboard Done. Native macOS
-and Wayland checks read the final paragraph of 60-chapter notes, reverse
-direction and close with Done or Escape. macOS also checks a reduced window;
-Wayland checks returning to Help.
-Workspace and dropdown regressions also deliver resize events and assert their
-actual 960×640 viewport, or 1000×600 for directory rows, before checking geometry
-and keyboard behavior.
-Linux AT-SPI checks cover text reading, all six EditableText methods, clipboard
-copy/cut/paste, Unicode ranges, undo, directory forms, modal focus, shortcuts,
-all 27 settings fields, and password privacy. Orca announces the tested fields,
-values, selections, and forms. Native Orca walkthroughs also cover OIDC/SAML
-sign-in and inspectors, token/session controls, custom and timed faults,
-SCIM reconciliation/trace/import, and joiner/mover/leaver forms and results.
-The leaver fixture verifies deactivation, session termination, revocation, and
-SCIM; its logout delivery steps are skipped without configured endpoints.
-Selected sections expose their pressed state. Success and error messages are
-announced, including repeated identical identity and SCIM results. The Linux
-adapter preserves focus during Orca keyboard grabs, supplies window bounds for
-flat review, and reports disabled controls correctly. X11 move/resize and real
-focus changes pass. Wayland checks under nested Weston cover environment setup,
-Unicode clipboard/undo, protocol inspectors, faults, SCIM, lifecycle runs,
-native backup file dialogs, traffic, release notes, and the local account screen
-with Orca speech. Directory rows reveal keyboard focus, traffic entries expose
-selection, and information windows supply accessible text values. Sign-in uses
-the displayed active account after the previous selection is deactivated.
-The macOS adapter connects AccessKit to the native keyboard responder. VoiceOver
-checks verify workspace/search focus, Account entry/return and reopening, form
-focus, discard cancellation, a saved user, repeated command results and repeated
-fault-validation errors. Live status text is announced after focus changes from
-the same update. Static status/error text advertises as read-only, while
-editable fields retain replacement and text selection. Information readers expose
-rendered text as read-only text areas, with native selection ranges and glyph
-bounds in physical pixels. Native macOS checks select and copy About text and
-reveal a selection in chapter 60 of release notes. VoiceOver reads selected text
-and current lines, and keyboard Done closes each reader. Clipboard contents and
-VoiceOver state are restored. All 1,560 GPUI base tests and twenty desktop tests
-pass on macOS; Linux passes twenty desktop tests and four reader regressions
-covering selection, Copy, Unicode, stale requests, reflow, reveal and scaling.
-The preceding macOS platform fixes also pass eleven platform tests.
-Editable inputs now use physical glyph coordinates, including character metrics,
-and textareas expose their full accessible value. Native Retina checks verify
-Unicode selections and visible highlights through vertical and horizontal
-scrolling, plus persistence of 25 custom attributes. Both password fields remain
-private before and after mask reveal. VoiceOver reads selected words in the
-environment name and a scrolled textarea, and reads the textarea's current line.
-VoiceOver is restored to off. These checks use native AX selection requests;
-complete screen-reader selection gestures and real display transitions remain
-unverified. A regression simulates scale changes from 1 to 2 and back with an
-asserted viewport. The current macOS suite passes all 1,561 GPUI base tests,
-twenty desktop tests, Clippy and formatting. Linux passes twenty desktop tests
-and five input accessibility tests with matching source hashes.
-Broader VoiceOver workflows for protocols, provisioning, lifecycle results,
-reader links and other controls, native AT-SPI reader selection, and remaining
-keyboard coverage are deferred to that future accessibility pass.
+Desktop tests run on Rune's headless runtime and drive the real views with
+pointer and key input against a seeded Greendale store. The UI can also be
+checked headlessly through Rune's snapshot, element-tree and script tools; see
+[the desktop documentation](desktop.md#check-the-ui-headlessly).
+The native VoiceOver and Orca walkthroughs recorded for the earlier GPUI build
+have not been repeated on Rune; they are listed in
+[the accessibility backlog](rust-accessibility.md).
 
 Earlier Go/Rust comparison runs covered tunnel enrollment, account switching,
 recovery, identity forwarding, local route isolation, and reconnect/restart
@@ -248,10 +153,9 @@ The remaining work is tracked in [the parity checklist](rust-parity.md).
 
 ## Run
 
-Use stable Rust. On macOS, install Xcode and its command-line tools. GPUI uses
-runtime shader compilation, so the separate offline Metal compiler is not
-required. GPUI and its platform adapter use the published `gpui-pre` packages
-pinned to `0.3.11`; GPUI components and base controls are pinned to `0.9.0`.
+Use stable Rust. On macOS, install Xcode and its command-line tools. The UI
+uses [Rune](https://github.com/anomalyco/rune) and rune-kit, pinned to a
+revision of Rune's `dev` branch in the workspace manifest.
 
 ```sh
 cargo run --locked -p scimtest-desktop
@@ -313,8 +217,8 @@ while enrollment is pending. Installation UUIDs and Ed25519 keys are compatible
 with Go, preserving existing tunnel reservations across restarts.
 
 The native window has been exercised on macOS and Linux through X11 and
-Wayland. Linux desktop builds need GPUI's development libraries and a working
-GPU/display. Package and remaining release checks are recorded in
+Wayland. Linux desktop builds need the XKB, Wayland and Vulkan development libraries
+and a working GPU/display. Package and remaining release checks are recorded in
 [the parity checklist](rust-parity.md); accessibility has a separate future backlog.
 
 ## Local API
@@ -356,7 +260,7 @@ cargo test --workspace --locked
 cargo build --workspace --locked
 ```
 
-CI tests the services and release tools on Linux and the GPUI desktop on macOS.
+CI tests the services and release tools on Linux and the desktop on macOS.
 The **Desktop packaging** workflow builds an ad-hoc macOS app/DMG and Debian,
 RPM, and Arch packages with disposable state. The **Release** workflow uses
 Rust for the desktop, tunnel server archives, signed update feed and legacy
@@ -403,4 +307,4 @@ SCIMTEST_APPLICATION_PROFILE_ID='<32-character-profile-id>' \
 
 Use `deb`, `rpm`, or `pkg.tar.zst` instead of `macos` on Linux. The Linux
 packaging scripts take the binary, output package, version and architecture;
-they declare GPUI's font, window-system, and Vulkan dependencies.
+they declare the window-system and Vulkan dependencies.

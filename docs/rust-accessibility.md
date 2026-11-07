@@ -3,6 +3,13 @@
 Further accessibility work is deferred at the user’s request. The existing
 implementation and verification evidence below are retained for a future pass.
 
+- [ ] Repeat the native checks on Rune. The desktop moved from GPUI to Rune,
+  which builds its accessibility tree on upstream AccessKit 0.25. Everything
+  recorded below was verified on the GPUI build with local GPUI and AccessKit
+  patches that no longer exist; repeat the VoiceOver and Orca (X11 and Wayland)
+  walkthroughs before relying on it. Upstream `accesskit_unix` 0.24 and later
+  expose AT-SPI EditableText, which the old patches backported.
+
 - [ ] Keyboard navigation and native accessibility for custom GPUI controls.
   Earlier native macOS checks covered named controls, tables, dialogs,
   inspector payloads, dropdown activation, password privacy, and Save/Find.
