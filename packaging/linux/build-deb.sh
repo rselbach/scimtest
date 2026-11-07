@@ -27,6 +27,10 @@ main() {
   local project_root
   local script_dir
   local version="$3"
+  local dependencies
+  dependencies="ca-certificates, libfontconfig1, libfreetype6, libxcb1, "
+  dependencies+="libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, "
+  dependencies+="libwayland-cursor0, libvulkan1, xdg-utils"
 
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   project_root="$(cd "${script_dir}/../.." && pwd)"
@@ -77,7 +81,7 @@ Section: devel
 Priority: optional
 Architecture: ${architecture}
 Maintainer: scimtest maintainers <rselbach@users.noreply.github.com>
-Depends: ca-certificates, libgtk-3-0t64, libwebkit2gtk-4.1-0, xdg-utils
+Depends: ${dependencies}
 Description: Local SCIM, OIDC, and SAML integration testing
  scimtest provides a desktop interface for testing identity provider and SCIM
  integrations without connecting the application under test to a production
