@@ -1,5 +1,13 @@
 # scimtest
 
+The Rust app includes the native desktop UI (built with
+[Rune](https://github.com/anomalyco/rune)), local identity service
+and API, and hosted tunnel server. Run `cargo run --locked -p scimtest-desktop`
+to try it with separate preview state. Beta builds are available through manual
+GitHub Actions downloads. See
+[the Rust preview guide](docs/rust-preview.md) for features and development
+commands, and [the parity checklist](docs/rust-parity.md) for remaining gates.
+
 `scimtest` is a local auth testing service: it plays the identity provider
 (and SCIM client) so you can test your app's SAML, OIDC, and SCIM
 implementations without touching a real IDP. It combines:
@@ -8,7 +16,7 @@ implementations without touching a real IDP. It combines:
 - a SAML HTTP-POST test IDP
 - a SCIM sync control surface for local users and groups
 
-Everything runs in a local web UI or through the [local JSON API](docs/api.md).
+Everything runs in the native desktop app or through the [local JSON API](docs/api.md).
 Agents can configure environments, manage directories, run protocol flows,
 sync SCIM resources, and inspect results without a browser. See
 [Automate a local instance](docs/automation.md) for a complete example.
@@ -61,14 +69,13 @@ identity, so the public tunnel is unavailable and OIDC/SAML are served on
 this machine only:
 
 ```sh
-go run ./cmd/scimtest
+cargo run --locked -p scimtest-core --bin scimtest --
 ```
 
 ### Desktop app
 
-The native WebView app reuses the same Go server and embedded UI without an
-Electron or JavaScript rewrite. It requires a GitHub account linked in the app
-before the admin UI or local test endpoints unlock. See
+The native desktop app runs the Rust identity engine in the same process. It requires a GitHub account linked in the app
+before the workspace or local test endpoints unlock in a release build. See
 [the desktop documentation](docs/desktop.md) for preview artifacts, local build
 steps, the authentication design, and release packaging details.
 
@@ -440,7 +447,7 @@ one, since only one process runs per state file; launching `scimtest`
 again just opens the existing admin UI. Before schema migrations, a copy
 of the database is written to a `backups/` directory next to it.
 
-**Source-only browser runner.** `go run ./cmd/scimtest --help` lists the
+**Headless API runner.** `cargo run --locked -p scimtest-core --bin scimtest -- --help` lists the
 development CLI flags. Use `--no-open` to start without opening a browser and
 `--debug` to print redacted OIDC and SAML interactions to stdout
 (`--debug-secrets` includes raw credentials; its output is sensitive). This

@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Make room for this scimtest installation</title>
+
+<style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f5f7;
+      --card: #ffffff;
+      --line: #e5e7eb;
+      --line-strong: #d1d5db;
+      --text: #1f2328;
+      --text-strong: #0c0c0d;
+      --muted: #6b7280;
+      --accent: #1563ff;
+      --accent-strong: #1051d8;
+      --accent-soft: #e7eeff;
+      --success: #00853e;
+      --success-soft: #dcefe2;
+      --topbar: #0c0c0d;
+      --radius: 6px;
+      --radius-lg: 8px;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Helvetica, Arial, sans-serif;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { min-height: 100%; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 13.5px;
+      line-height: 1.5;
+    }
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      height: 52px;
+      padding: 0 16px;
+      border-bottom: 1px solid #16171b;
+      background: var(--topbar);
+      color: #fff;
+    }
+    .brand { display: inline-flex; align-items: center; gap: 9px; font-size: 14px; font-weight: 600; letter-spacing: -.01em; }
+    .brand-glyph { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; }
+    .topbar-context { margin-left: auto; color: #aeb4bf; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+    .shell { display: grid; min-height: calc(100vh - 52px); padding: 48px 20px 64px; place-items: center; }
+    .card {
+      width: min(100%, 600px);
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: var(--card);
+      box-shadow: 0 1px 3px rgba(15, 23, 42, .06), 0 1px 2px rgba(15, 23, 42, .03);
+    }
+    .card-body { padding: 32px; }
+    .heading { display: flex; align-items: flex-start; gap: 14px; }
+    .page-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      width: 40px;
+      height: 40px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      color: var(--text-strong);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+    }
+    .page-icon.success { border-color: #b9ddc7; background: var(--success-soft); color: var(--success); }
+    .eyebrow { margin-bottom: 2px; color: var(--accent); font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .eyebrow.success { color: var(--success); }
+    h1 { margin: 0; color: var(--text-strong); font-size: 24px; line-height: 1.2; letter-spacing: -.015em; }
+    h2 { margin: 0; color: var(--text-strong); font-size: 13px; }
+    p { margin: 0; }
+    .lede { margin: 14px 0 24px; color: var(--muted); font-size: 14px; }
+    .verification {
+      padding: 16px;
+      border: 1px solid #cbd9ff;
+      border-radius: var(--radius);
+      background: linear-gradient(135deg, #f3f7ff, #fff 72%);
+    }
+    .verification-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .required { color: var(--accent); font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+    .verification p { margin-top: 4px; color: var(--muted); font-size: 12.5px; }
+    .verification-code {
+      display: block;
+      margin-top: 14px;
+      padding: 12px 14px;
+      overflow-wrap: anywhere;
+      border: 1px solid #c7d5ff;
+      border-radius: var(--radius);
+      background: var(--card);
+      color: var(--text-strong);
+      font: 700 18px/1.35 var(--mono);
+      letter-spacing: .06em;
+      text-align: center;
+    }
+    .details { display: grid; margin: 24px 0 0; border-top: 1px solid var(--line); }
+    .details div { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+    .details dt { color: var(--muted); font-weight: 600; }
+    .details dd { min-width: 0; margin: 0; color: var(--text-strong); font-weight: 500; overflow-wrap: anywhere; }
+    .details code { font: 12px/1.5 var(--mono); }
+    .caution { display: flex; gap: 9px; margin: 20px 0; color: var(--muted); font-size: 12.5px; }
+    .caution svg { flex: 0 0 auto; margin-top: 1px; color: var(--accent); }
+    form { margin: 0; }
+    .primary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 40px;
+      padding: 0 16px;
+      border: 1px solid var(--accent);
+      border-radius: var(--radius);
+      background: var(--accent);
+      color: #fff;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1;
+      cursor: pointer;
+      transition: background-color 80ms, border-color 80ms;
+    }
+    .primary:hover { border-color: var(--accent-strong); background: var(--accent-strong); }
+    .primary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .card-footer { padding: 13px 32px; border-top: 1px solid var(--line); background: #f9fafb; color: var(--muted); font-size: 12px; }
+    .complete-card .lede { margin-bottom: 20px; }
+    .next-step { display: flex; align-items: center; gap: 9px; padding: 12px 14px; border: 1px solid #b9ddc7; border-radius: var(--radius); background: var(--success-soft); color: #0e5b32; font-weight: 600; }
+    .status-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--success); }
+    @media (max-width: 520px) {
+      .topbar-context { display: none; }
+      .shell { align-items: start; padding: 24px 12px 40px; }
+      .card-body { padding: 24px 20px; }
+      .details div { grid-template-columns: 1fr; gap: 3px; }
+      .primary { width: 100%; }
+      .card-footer { padding: 13px 20px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .primary { transition: none; }
+    }
+  </style><style>
+    .replacement-card { width: min(100%, 720px); }
+    .replacement-summary {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      margin: 0 0 24px;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+    .replacement-summary div { min-width: 0; padding: 12px 14px 12px 0; }
+    .replacement-summary div + div { padding-left: 14px; border-left: 1px solid var(--line); }
+    .replacement-summary dt { color: var(--muted); font-size: 11px; font-weight: 600; }
+    .replacement-summary dd { margin: 3px 0 0; overflow-wrap: anywhere; color: var(--text-strong); font-weight: 600; }
+    .replacement-summary code { font: 11px/1.45 var(--mono); }
+    .notice { margin: 0 0 16px; padding: 10px 12px; border: 1px solid #e8c66f; border-radius: var(--radius); background: #fff9e9; color: #684d08; }
+    .installation-list { display: grid; gap: 10px; margin-top: 10px; }
+    .installation-option {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 18px;
+      align-items: center;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+    }
+    .installation-option.recommended { border-color: #b8caff; box-shadow: inset 3px 0 0 var(--accent); }
+    .installation-title { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+    .installation-title code { color: var(--text-strong); font: 700 13px/1.4 var(--mono); }
+    .badge { display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+    .badge.connected { background: #fff0e8; color: #9a3412; }
+    .installation-meta { display: flex; flex-wrap: wrap; gap: 5px 14px; margin-top: 6px; color: var(--muted); font-size: 11.5px; }
+    .installation-note { margin-top: 7px; color: #9a3412; font-size: 11.5px; }
+    .secondary, .danger {
+      min-height: 38px;
+      padding: 0 13px;
+      border-radius: var(--radius);
+      background: #fff;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .secondary { border: 1px solid var(--line-strong); color: var(--text-strong); }
+    .secondary:hover { border-color: #9ca3af; background: #f9fafb; }
+    .danger { border: 1px solid #e7a48c; color: #9a3412; }
+    .danger:hover { border-color: #c65d37; background: #fff7f3; }
+    .secondary:focus-visible, .danger:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    @media (max-width: 640px) {
+      .replacement-summary { grid-template-columns: 1fr; }
+      .replacement-summary div { padding: 10px 0; }
+      .replacement-summary div + div { padding-left: 0; border-top: 1px solid var(--line); border-left: 0; }
+      .installation-option { grid-template-columns: 1fr; }
+      .installation-option button { width: 100%; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .secondary, .danger { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-glyph" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3.5 10a8 8 0 0 1 13.6-5.5L19 7"/><polyline points="19 3 19 7 15 7"/>
+          <path d="M20.5 14a8 8 0 0 1-13.6 5.5L5 17"/><polyline points="5 21 5 17 9 17"/>
+        </svg>
+      </span>
+      scimtest
+    </div>
+    <span class="topbar-context">installation limit</span>
+  </header>
+  <div class="shell">
+    <main class="card replacement-card">
+      <div class="card-body">
+        <div class="heading">
+          <span class="page-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10 2.5l6 2.4v4.4c0 3.8-2.4 6.6-6 8.2-3.6-1.6-6-4.4-6-8.2V4.9z"/><path d="M6.8 10h6.4M10 6.8v6.4"/>
+            </svg>
+          </span>
+          <div>
+            <div class="eyebrow">Installation limit reached</div>
+            <h1>Make room for this installation</h1>
+          </div>
+        </div>
+        <p class="lede">@{{ GitHubLogin }} already has {{ Limit }} authorized installations for this application. Choose one to deactivate, then scimtest will finish authorizing this computer.</p>
+
+        <dl class="replacement-summary">
+          <div><dt>Application</dt><dd>{{ ApplicationName }}</dd></div>
+          <div><dt>GitHub account</dt><dd>@{{ GitHubLogin }}</dd></div>
+          <div><dt>New fingerprint</dt><dd><code>{{ InstanceFingerprint }}</code></dd></div>
+        </dl>
+
+        {% if Notice %}<p class="notice" role="status">{{ Notice }}</p>{% endif %}
+
+        <section aria-labelledby="installation-list-heading">
+          <h2 id="installation-list-heading">Choose an installation to deactivate</h2>
+          <div class="installation-list">
+            {% for item0 in Options %}
+            <article class="installation-option{% if item0.Recommended %} recommended{% endif %}">
+              <div>
+                <div class="installation-title">
+                  <code>{{ item0.DisplayName }}</code>
+                  {% if item0.Recommended %}<span class="badge">Recommended</span>{% endif %}
+                  {% if item0.Connected %}<span class="badge connected">Connected now</span>{% endif %}
+                  {% if item0.Pending %}<span class="badge">Setup pending</span>{% endif %}
+                </div>
+                <div class="installation-meta">
+                  <span>{{ item0.Activity }}</span>
+                  <span>Created {{ item0.Created }}</span>
+                </div>
+                {% if item0.Connected %}<p class="installation-note">Continuing will disconnect this installation immediately.</p>{% endif %}
+              </div>
+              <form method="post" action="/enroll/replace">
+                <input type="hidden" name="csrf_token" value="{{ CSRFToken }}">
+                <input type="hidden" name="instance_id" value="{{ item0.InstanceID }}">
+                <button class="{% if item0.Connected %}danger{% elif item0.Recommended %}primary{% else %}secondary{% endif %}" type="submit">
+                  {% if item0.Connected %}Disconnect and continue{% else %}Deactivate and continue{% endif %}
+                </button>
+              </form>
+            </article>
+            {% endfor %}
+          </div>
+        </section>
+      </div>
+      <div class="card-footer">Nothing changes until you choose an installation. Close this tab to cancel.</div>
+    </main>
+  </div>
+</body>
+</html>

@@ -2,14 +2,12 @@ name: Release
 
 on:
   push:
-    branches:
-      - spike/desktop-app
-    tags:
-      - v*
+    branches: [spike/desktop-app]
+    tags: [v*]
   workflow_dispatch:
     inputs:
       version:
-        description: Version to embed in preview desktop artifacts
+        description: Numeric beta version (0.0.0 disables the beta's updater)
         required: true
         default: "0.0.0"
         type: string
@@ -18,20 +16,30 @@ permissions:
   contents: read
 
 env:
-  RELEASE_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.version || '0.0.0' }}
+  RELEASE_VERSION: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.version || '0.0.0' }}
 
 jobs:
   test:
-    name: Test
+    name: Rust tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          go-version-file: go.mod
-          cache: true
-      - run: go test ./...
-
+          components: clippy, rustfmt
+      - name: Validate desktop version
+        shell: bash
+        run: |
+          version="${RELEASE_VERSION#v}"
+          if [[ ! "${version}" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+            echo "::error::Use one to three numeric version components, such as 0.0.0"
+            exit 1
+          fi
+      - name: Check Rust services and release tooling
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy -p scimtest-core -p scimtest-server -p scimtest-protocol -p scimtest-update-tool --all-targets --locked -- -D warnings
+          cargo test -p scimtest-core -p scimtest-server -p scimtest-protocol -p scimtest-update-tool --locked
   release-notes:
     name: Generate release notes
     needs:
@@ -42,7 +50,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Generate tagged release notes
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: rselbach/actions/pi-release-notes@pi-release-notes-v1
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -51,51 +59,30 @@ jobs:
           project-description: Local identity provider and SCIM client for testing OIDC, SAML, and SCIM integrations.
           output-file: build/release-notes.md
       - name: Write preview release notes
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           mkdir -p build
-          printf '# scimtest %s\n\nDevelopment preview build.\n' \
-            "${RELEASE_VERSION}" > build/release-notes.md
+          printf '# scimtest %s\n\nDevelopment Rust beta.\n\nCommit: %s\nBuild: %s\n' \
+            "${RELEASE_VERSION}" \
+            "${GITHUB_SHA}" "${GITHUB_RUN_NUMBER}" > build/release-notes.md
       - uses: actions/upload-artifact@v7
         with:
           name: scimtest-release-notes
           path: build/release-notes.md
           if-no-files-found: error
           retention-days: 7
-
   build-desktop:
     name: Desktop arm64
     runs-on: macos-26
     env:
-      CGO_ENABLED: 1
-      GOARCH: arm64
       MACOSX_DEPLOYMENT_TARGET: "26.0"
       SCIMTEST_APPLICATION_PROFILE_ID: ${{ vars.SCIMTEST_APPLICATION_PROFILE_ID }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Check desktop application profile
-        shell: bash
-        run: |
-          if [[ ! "${SCIMTEST_APPLICATION_PROFILE_ID}" =~ ^[a-f0-9]{32}$ ]]; then
-            echo "::error::Set SCIMTEST_APPLICATION_PROFILE_ID to the application profile ID"
-            exit 1
-          fi
-      - name: Test desktop shell
-        run: go test -tags desktop ./cmd/scimtest-desktop
+      - uses: dtolnay/rust-toolchain@stable
       - name: Build desktop executable
-        shell: bash
-        run: |
-          mkdir -p build
-          go build -tags desktop -trimpath \
-            -ldflags="-s -w -X=github.com/rselbach/scimtest/internal/web.tunnelApplicationProfileID=${SCIMTEST_APPLICATION_PROFILE_ID} -X=github.com/rselbach/scimtest/internal/web.tunnelReleaseProfileRequired=true" \
-            -o build/scimtest-desktop ./cmd/scimtest-desktop
-          file build/scimtest-desktop
-          vtool -show-build build/scimtest-desktop
+        run: ./packaging/rust/build-desktop.sh build/scimtest-desktop "${RELEASE_VERSION#v}" macos
       - uses: actions/upload-artifact@v7
         with:
           name: scimtest-desktop-arm64
@@ -104,212 +91,142 @@ jobs:
           retention-days: 7
 
   package-desktop-linux:
-    name: Package Linux desktop app
-    needs:
-      - test
-    runs-on: ubuntu-24.04
-    env:
-      CGO_ENABLED: 1
-      PKG_CONFIG: ${{ github.workspace }}/packaging/linux/pkg-config-webkit2gtk-4.1.sh
-      SCIMTEST_APPLICATION_PROFILE_ID: ${{ vars.SCIMTEST_APPLICATION_PROFILE_ID }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Install desktop dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            g++ \
-            libgtk-3-dev \
-            libwebkit2gtk-4.1-dev \
-            pkg-config \
-            xdotool \
-            xvfb
-      - name: Check desktop application profile
-        shell: bash
-        run: |
-          if [[ ! "${SCIMTEST_APPLICATION_PROFILE_ID}" =~ ^[a-f0-9]{32}$ ]]; then
-            echo "::error::Set SCIMTEST_APPLICATION_PROFILE_ID to the application profile ID"
-            exit 1
-          fi
-      - name: Test desktop shell
-        run: go test -tags desktop ./cmd/scimtest-desktop
-      - name: Build desktop executable
-        shell: bash
-        run: |
-          mkdir -p build release
-          go build -tags desktop -trimpath \
-            -ldflags="-s -w -X=github.com/rselbach/scimtest/internal/web.tunnelApplicationProfileID=${SCIMTEST_APPLICATION_PROFILE_ID} -X=github.com/rselbach/scimtest/internal/web.tunnelReleaseProfileRequired=true -X=main.desktopVersion=${RELEASE_VERSION#v} -X=main.desktopPackageKind=deb" \
-            -o build/scimtest-desktop ./cmd/scimtest-desktop
-      - name: Package Linux desktop app
-        shell: bash
-        run: |
-          version="${RELEASE_VERSION#v}"
-          package_path="release/scimtest-desktop_${version}_linux_amd64.deb"
-          ./packaging/linux/build-deb.sh \
-            build/scimtest-desktop \
-            "${package_path}" \
-            "${version}" \
-            amd64
-          dpkg-deb --info "${package_path}"
-          dpkg-deb --contents "${package_path}"
-          sha256sum "${package_path}" \
-            >"release/scimtest-desktop_${version}_linux_amd64_checksums.txt"
-      - name: Install Linux desktop app
-        run: sudo apt-get install -y ./release/*.deb
-      - name: Smoke-test installed desktop app
-        run: xvfb-run -a ./packaging/linux/smoke-test.sh /usr/bin/scimtest-desktop
-      - uses: actions/upload-artifact@v7
-        with:
-          name: scimtest-desktop-linux-release
-          path: release/*
-          if-no-files-found: error
-          retention-days: 7
-
-  package-desktop-linux-native:
-    name: Package Linux desktop app (${{ matrix.package }})
-    needs:
-      - test
+    name: Linux desktop (${{ matrix.kind }})
+    needs: [test]
     runs-on: ubuntu-24.04
     container: ${{ matrix.container }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - package: rpm
-            kind: rpm
+          - kind: deb
+            container: ubuntu:24.04
+            artifact: scimtest-desktop-linux-release
+          - kind: rpm
             container: fedora:44
-          - package: arch
-            kind: pkg.tar.zst
+            artifact: scimtest-desktop-linux-rpm-release
+          - kind: pkg.tar.zst
             container: archlinux:base-devel
+            artifact: scimtest-desktop-linux-arch-release
     env:
-      CGO_ENABLED: 1
-      PKG_CONFIG: ${{ github.workspace }}/packaging/linux/pkg-config-webkit2gtk-4.1.sh
       SCIMTEST_APPLICATION_PROFILE_ID: ${{ vars.SCIMTEST_APPLICATION_PROFILE_ID }}
+      PACKAGE_KIND: ${{ matrix.kind }}
     steps:
-      - name: Install Fedora build dependencies
-        if: matrix.package == 'rpm'
-        run: |
-          dnf install -y \
-            gcc-c++ \
-            git \
-            gtk3-devel \
-            pkgconf-pkg-config \
-            rpm-build \
-            webkit2gtk4.1-devel \
-            xdotool \
-            xorg-x11-server-Xvfb
-      - name: Install Arch build dependencies
-        if: matrix.package == 'arch'
-        run: |
-          pacman -Syu --noconfirm \
-            base-devel \
-            git \
-            gtk3 \
-            webkit2gtk-4.1 \
-            xdotool \
-            xorg-server-xvfb \
-            xorg-xauth
       - uses: actions/checkout@v7
-      - name: Trust container checkout
-        run: git config --global --add safe.directory "$(pwd)"
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Check desktop application profile
-        shell: bash
-        run: |
-          if [[ ! "${SCIMTEST_APPLICATION_PROFILE_ID}" =~ ^[a-f0-9]{32}$ ]]; then
-            echo "::error::Set SCIMTEST_APPLICATION_PROFILE_ID to the application profile ID"
-            exit 1
-          fi
-      - name: Test desktop shell
-        run: go test -tags desktop ./cmd/scimtest-desktop
+      - name: Install desktop and packaging dependencies
+        run: ./packaging/rust/install-linux-deps.sh
+      - uses: dtolnay/rust-toolchain@stable
       - name: Build desktop executable
-        shell: bash
+        run: ./packaging/rust/build-desktop.sh build/scimtest-desktop "${RELEASE_VERSION#v}" "${PACKAGE_KIND}"
+      - name: Package and install Debian app
+        if: matrix.kind == 'deb'
         run: |
-          mkdir -p build release
-          go build -tags desktop -trimpath \
-            -ldflags="-s -w -X=github.com/rselbach/scimtest/internal/web.tunnelApplicationProfileID=${SCIMTEST_APPLICATION_PROFILE_ID} -X=github.com/rselbach/scimtest/internal/web.tunnelReleaseProfileRequired=true -X=main.desktopVersion=${RELEASE_VERSION#v} -X=main.desktopPackageKind=${{ matrix.kind }}" \
-            -o build/scimtest-desktop ./cmd/scimtest-desktop
-      - name: Package RPM
-        if: matrix.package == 'rpm'
-        shell: bash
+          mkdir -p release
+          package="release/scimtest-desktop_${RELEASE_VERSION#v}_linux_amd64.deb"
+          ./packaging/linux/build-deb.sh build/scimtest-desktop "${package}" "${RELEASE_VERSION#v}" amd64
+          apt-get install -y "./${package}"
+      - name: Package and install Fedora app
+        if: matrix.kind == 'rpm'
         run: |
-          version="${RELEASE_VERSION#v}"
-          package_path="release/scimtest-desktop_${version}_linux_x86_64.rpm"
-          ./packaging/linux/build-rpm.sh \
-            build/scimtest-desktop \
-            "${package_path}" \
-            "${version}" \
-            amd64
-          rpm -qip "${package_path}"
-          rpm -qlp "${package_path}"
-          sha256sum "${package_path}" \
-            >"release/scimtest-desktop_${version}_linux_x86_64_rpm_checksums.txt"
-          dnf install -y "${package_path}"
-      - name: Package Arch Linux
-        if: matrix.package == 'arch'
-        shell: bash
+          mkdir -p release
+          package="release/scimtest-desktop_${RELEASE_VERSION#v}_linux_x86_64.rpm"
+          ./packaging/linux/build-rpm.sh build/scimtest-desktop "${package}" "${RELEASE_VERSION#v}" amd64
+          dnf install -y "${package}"
+      - name: Package and install Arch app
+        if: matrix.kind == 'pkg.tar.zst'
         run: |
-          version="${RELEASE_VERSION#v}"
-          package_path="release/scimtest-desktop_${version}_linux_x86_64.pkg.tar.zst"
+          mkdir -p release
           useradd --create-home package-builder
           chown -R package-builder:package-builder build release
-          runuser -u package-builder -- \
-            ./packaging/linux/build-arch-package.sh \
-              build/scimtest-desktop \
-              "${package_path}" \
-              "${version}" \
-              amd64
-          pacman -Qip "${package_path}"
-          pacman -Qlp "${package_path}"
-          sha256sum "${package_path}" \
-            >"release/scimtest-desktop_${version}_linux_x86_64_arch_checksums.txt"
-          pacman -U --noconfirm "${package_path}"
+          package="release/scimtest-desktop_${RELEASE_VERSION#v}_linux_x86_64.pkg.tar.zst"
+          runuser -u package-builder -- ./packaging/linux/build-arch-package.sh build/scimtest-desktop "${package}" "${RELEASE_VERSION#v}" amd64
+          pacman -U --noconfirm "${package}"
+      - name: Write package checksums
+        run: |
+          (cd release && sha256sum ./*) > checksums.txt
+          mv checksums.txt "release/scimtest-desktop_${RELEASE_VERSION#v}_${PACKAGE_KIND}_checksums.txt"
       - name: Smoke-test installed desktop app
-        run: xvfb-run -a ./packaging/linux/smoke-test.sh /usr/bin/scimtest-desktop
+        run: dbus-run-session -- xvfb-run -a python3 packaging/rust/smoke-test.py /usr/bin/scimtest-desktop --expect-account
       - uses: actions/upload-artifact@v7
         with:
-          name: scimtest-desktop-linux-${{ matrix.package }}-release
+          name: ${{ matrix.artifact }}
           path: release/*
           if-no-files-found: error
           retention-days: 7
 
-  package-server-preview:
-    name: Package server release preview
-    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/v')
-    needs:
-      - test
-    runs-on: ubuntu-latest
+  build-server:
+    name: Server (${{ matrix.platform }}/${{ matrix.arch }})
+    needs: [test]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux
+            arch: amd64
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            target: aarch64-unknown-linux-musl
+          - runner: macos-26
+            platform: darwin
+            arch: arm64
+            target: aarch64-apple-darwin
+          - runner: macos-26
+            platform: darwin
+            arch: amd64
+            target: x86_64-apple-darwin
+    env:
+      SERVER_TARGET: ${{ matrix.target }}
+      SERVER_PLATFORM: ${{ matrix.platform }}
+      SERVER_ARCH: ${{ matrix.arch }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          fetch-depth: 0
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
-      - name: Package server artifacts
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: release --snapshot --clean --skip=publish
+          targets: ${{ matrix.target }}
+      - name: Install musl compiler
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          target_key="$(printf '%s' "${SERVER_TARGET}" | tr '[:lower:]-' '[:upper:]_')"
+          cc_target="${SERVER_TARGET//-/_}"
+          echo "CARGO_TARGET_${target_key}_LINKER=musl-gcc" >>"${GITHUB_ENV}"
+          echo "CC_${cc_target}=musl-gcc" >>"${GITHUB_ENV}"
+      - name: Build and package Rust server
+        run: |
+          cargo build --locked --release --target "${SERVER_TARGET}" -p scimtest-server
+          ./packaging/rust/package-server.sh "target/${SERVER_TARGET}/release/scimtest-server" dist "${RELEASE_VERSION#v}" "${SERVER_PLATFORM}" "${SERVER_ARCH}"
       - uses: actions/upload-artifact@v7
         with:
-          name: scimtest-server-release
-          path: |
-            dist/*.tar.gz
-            dist/checksums.txt
+          name: scimtest-server-${{ matrix.platform }}-${{ matrix.arch }}-release
+          path: dist/*.tar.gz
           if-no-files-found: error
           retention-days: 7
 
+  package-server:
+    name: Collect server archives
+    needs: [build-server]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: scimtest-server-*-release
+          path: dist
+          merge-multiple: true
+      - name: Write server checksums
+        run: |
+          cd dist
+          sha256sum ./*.tar.gz > checksums.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: scimtest-server-release
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
   package-desktop:
     name: Sign and notarize desktop app
     needs:
@@ -411,6 +328,8 @@ jobs:
             "${MACOS_SIGNING_IDENTITY}" \
             --timestamp
           codesign --verify --deep --strict --verbose=2 package/scimtest.app
+      - name: Smoke-test signed Rust application
+        run: python3 packaging/rust/smoke-test.py package/scimtest.app/Contents/MacOS/scimtest --expect-account
       - name: Notarize application
         shell: bash
         run: |
@@ -425,7 +344,7 @@ jobs:
           spctl --assess --type execute --verbose=4 package/scimtest.app
           # the updater installs only apps that satisfy this requirement
           codesign --verify --deep --strict \
-            -R="$(cat internal/update/requirement.txt)" \
+            -R="$(cat packaging/macos/update-requirement.txt)" \
             package/scimtest.app
       - name: Create and notarize release artifacts
         shell: bash
@@ -478,44 +397,57 @@ jobs:
             security delete-keychain "${MACOS_KEYCHAIN_PATH}"
           fi
           rm -f "${RUNNER_TEMP}/developer-id.p12"
-
+  beta-summary:
+    name: Manual beta downloads
+    if: github.event_name == 'workflow_dispatch'
+    needs:
+      - package-desktop
+      - package-desktop-linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Describe beta artifacts
+        shell: bash
+        run: |
+          {
+            printf '## Manual Rust beta\n\n'
+            printf 'Version: **%s** · build: **%s**\n\n' \
+              "${RELEASE_VERSION}" "${GITHUB_RUN_NUMBER}"
+            printf 'Source: [%s](%s/%s/commit/%s)\n\n' \
+              "${GITHUB_SHA}" "${GITHUB_SERVER_URL}" \
+              "${GITHUB_REPOSITORY}" "${GITHUB_SHA}"
+            printf 'Download artifacts from this run within seven days:\n\n'
+            printf -- '- **scimtest-desktop-release**: signed, notarized macOS ZIP, DMG and checksums.\n'
+            printf -- '- **scimtest-desktop-linux-release**: Debian package and checksums.\n'
+            printf -- '- **scimtest-desktop-linux-rpm-release**: Fedora RPM and checksums.\n'
+            printf -- '- **scimtest-desktop-linux-arch-release**: Arch package and checksums.\n\n'
+            printf 'This beta is available by manual download only. It is not offered as an automatic update.\n'
+          } >>"${GITHUB_STEP_SUMMARY}"
   release-server:
     name: Publish server release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs:
-      - release-notes
+    needs: [release-notes, package-server]
     permissions:
       contents: write
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
       - uses: actions/download-artifact@v7
         with:
           name: scimtest-release-notes
           path: build
-      - name: Publish server release
-        uses: goreleaser/goreleaser-action@v6
+      - uses: actions/download-artifact@v7
         with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: release --clean --release-notes build/release-notes.md
+          name: scimtest-server-release
+          path: dist
+      - name: Publish Rust server archives
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --title "${GITHUB_REF_NAME}" --notes-file build/release-notes.md
   release-desktop:
     name: Publish desktop release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs:
       - package-desktop
       - package-desktop-linux
-      - package-desktop-linux-native
       - release-server
     permissions:
       contents: write
@@ -552,22 +484,17 @@ jobs:
           ./packaging/macos/update-homebrew-cask.sh \
             "${version}" \
             "${dmg_sha256}"
-
   update-feed:
     name: Sign update feed
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs:
       - release-notes
       - package-desktop
       - package-desktop-linux
-      - package-desktop-linux-native
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/download-artifact@v7
         with:
           name: scimtest-release-notes
@@ -603,9 +530,9 @@ jobs:
           deb="scimtest-desktop_${version}_linux_amd64.deb"
           rpm="scimtest-desktop_${version}_linux_x86_64.rpm"
           arch="scimtest-desktop_${version}_linux_x86_64.pkg.tar.zst"
-          tool=build/scimtest-update-tool
+          tool=target/release/scimtest-update-tool
 
-          go build -o "${tool}" ./cmd/scimtest-update-tool
+          cargo build --release --locked -p scimtest-update-tool
           mkdir -p site
           "${tool}" sign-feed \
             --version "${version}" \
@@ -632,10 +559,9 @@ jobs:
         uses: actions/upload-pages-artifact@v5
         with:
           path: site
-
   deploy-appcast:
     name: Publish update feeds
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs:
       - release-desktop
       - update-feed

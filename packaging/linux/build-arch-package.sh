@@ -34,6 +34,10 @@ main() {
   local project_root
   local script_dir
   local version="$3"
+  local dependencies
+  dependencies="'fontconfig' 'freetype2' 'libxcb' 'libxkbcommon' "
+  dependencies+="'libxkbcommon-x11' 'wayland' 'vulkan-icd-loader' "
+  dependencies+="'libx11' 'libxcursor' 'libxi'"
   local -a package_paths=()
 
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -99,7 +103,7 @@ pkgdesc='Local SCIM, OIDC, and SAML integration testing'
 arch=('${arch_package}')
 url='https://github.com/rselbach/scimtest'
 license=('Apache-2.0')
-depends=('ca-certificates' 'gtk3' 'webkit2gtk-4.1' 'xdg-utils')
+depends=('ca-certificates' ${dependencies} 'xdg-utils')
 options=('!debug')
 source=('scimtest-desktop' 'com.rselbach.scimtest.desktop' 'scimtest.png' 'LICENSE')
 sha256sums=('${binary_sha256}' '${desktop_sha256}' '${icon_sha256}' '${license_sha256}')
