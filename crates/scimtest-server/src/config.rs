@@ -48,6 +48,9 @@ impl Default for Config {
 
 pub(crate) const MANAGEMENT_PATHS: &[&str] = &[
     "/",
+    "/site.js",
+    "/screenshot.webp",
+    "/icon.png",
     "/healthz",
     "/ready",
     "/api/metrics",

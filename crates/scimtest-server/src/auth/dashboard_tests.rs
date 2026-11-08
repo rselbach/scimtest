@@ -1,6 +1,49 @@
 use super::*;
 
 #[tokio::test]
+async fn public_host_serves_the_product_page() {
+    let app = Running::new(false, 5).await;
+    for (path, content_type) in [
+        ("/", "text/html; charset=utf-8"),
+        ("/site.js", "text/javascript; charset=utf-8"),
+        ("/screenshot.webp", "image/webp"),
+        ("/icon.png", "image/png"),
+    ] {
+        let response = app
+            .client
+            .get(format!("{}{path}", app.base))
+            .header("host", "public.greendale.test")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        assert_eq!(response.headers()["content-type"], content_type, "{path}");
+        assert_eq!(response.headers()["x-frame-options"], "DENY", "{path}");
+    }
+    let page = app
+        .client
+        .get(format!("{}/", app.base))
+        .header("host", "public.greendale.test")
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        page.headers()["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .contains("connect-src https://rselbach.github.io")
+    );
+    assert!(
+        page.text()
+            .await
+            .unwrap()
+            .contains("<script src=\"/site.js\">")
+    );
+    let dashboard = app.request(Method::GET, "/site.js").send().await.unwrap();
+    assert_eq!(dashboard.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn dashboard_controls_profiles_reservations_revocation_disconnect_and_logout() {
     let mut app = Running::new(false, 5).await;
     let session = app.server.store().create_session("rselbach", true).unwrap();

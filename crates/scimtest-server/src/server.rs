@@ -202,16 +202,30 @@ async fn dispatch(
             response
         }
         "/" if state.public_host(&host) => {
-            let mut response = Response::new(Body::empty());
-            *response.status_mut() = StatusCode::FOUND;
-            if let Ok(location) = HeaderValue::from_str(&format!(
-                "{}://{}/",
-                state.config.public_scheme, state.config.dashboard_domain
-            )) {
-                response.headers_mut().insert("location", location);
-            }
+            let mut response = site_asset(
+                "text/html; charset=utf-8",
+                include_str!("../templates/site.html"),
+            );
+            response.headers_mut().insert(
+                "content-security-policy",
+                HeaderValue::from_static(
+                    "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; img-src 'self'; connect-src https://rselbach.github.io; base-uri 'none'; frame-ancestors 'none'",
+                ),
+            );
             response
         }
+        "/site.js" if state.public_host(&host) => site_asset(
+            "text/javascript; charset=utf-8",
+            include_str!("../templates/site.js"),
+        ),
+        "/screenshot.webp" if state.public_host(&host) => site_asset(
+            "image/webp",
+            include_bytes!("../templates/screenshot.webp").as_slice(),
+        ),
+        "/icon.png" if state.public_host(&host) => site_asset(
+            "image/png",
+            include_bytes!("../../scimtest-desktop/assets/app-icon.png").as_slice(),
+        ),
         _ => {
             if let Some(tunnel) = tunnel {
                 crate::forwarding::forward(state.clone(), tunnel, request, peer, &host).await
@@ -263,6 +277,16 @@ pub(crate) fn text_response(
     response
         .headers_mut()
         .insert("content-type", HeaderValue::from_static(content_type));
+    response
+}
+
+// site_asset serves a public product page file that changes only on deploy.
+fn site_asset(content_type: &'static str, body: impl Into<Body>) -> Response {
+    let mut response = text_response(StatusCode::OK, content_type, body);
+    response.headers_mut().insert(
+        "cache-control",
+        HeaderValue::from_static("public, max-age=300"),
+    );
     response
 }
 
