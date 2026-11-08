@@ -1,46 +1,30 @@
 use super::*;
 
 #[tokio::test]
-async fn public_host_serves_the_product_page() {
+async fn public_host_root_redirects_to_the_download_page() {
     let app = Running::new(false, 5).await;
-    for (path, content_type) in [
-        ("/", "text/html; charset=utf-8"),
-        ("/site.js", "text/javascript; charset=utf-8"),
-        ("/screenshot.webp", "image/webp"),
-        ("/icon.png", "image/png"),
-    ] {
-        let response = app
-            .client
+    let public = |path: &str| {
+        app.client
             .get(format!("{}{path}", app.base))
             .header("host", "public.greendale.test")
             .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK, "{path}");
-        assert_eq!(response.headers()["content-type"], content_type, "{path}");
-        assert_eq!(response.headers()["x-frame-options"], "DENY", "{path}");
-    }
-    let page = app
-        .client
-        .get(format!("{}/", app.base))
-        .header("host", "public.greendale.test")
-        .send()
-        .await
-        .unwrap();
-    assert!(
-        page.headers()["content-security-policy"]
-            .to_str()
-            .unwrap()
-            .contains("connect-src https://rselbach.github.io")
-    );
+    };
+    let page = public("/").await.unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    assert_eq!(page.headers()["content-type"], "text/html; charset=utf-8");
     assert!(
         page.text()
             .await
             .unwrap()
-            .contains("<script src=\"/site.js\">")
+            .contains(r#"content="0; url=https://rselbach.com/scimtest/""#)
     );
-    let dashboard = app.request(Method::GET, "/site.js").send().await.unwrap();
-    assert_eq!(dashboard.status(), StatusCode::NOT_FOUND);
+    for path in ["/site.js", "/screenshot.webp", "/icon.png"] {
+        assert_eq!(
+            public(path).await.unwrap().status(),
+            StatusCode::NOT_FOUND,
+            "{path}"
+        );
+    }
 }
 
 #[tokio::test]

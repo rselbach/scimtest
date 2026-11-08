@@ -85,9 +85,9 @@ Each tunnel has a stable root path. A public URL such as
 `/scim/v2/Users` at `/human-timeline-club/scim/v2/Users`. The client removes its
 own tunnel prefix before dispatching to the local identity service.
 
-The public host's root serves the scimtest download page. Its download button
-reads the desktop updater's signed feed in the browser to link the latest
-package for the visitor's operating system.
+The public host's root serves a page that redirects to the scimtest download
+page at `https://rselbach.com/scimtest/`. That page lives in `site/`, and
+`deploy/deploy-site.sh` publishes it to the rselbach exe.dev VM.
 
 ### Production
 
