@@ -126,8 +126,8 @@ func TestSyncWaitsForAdmittedMutation(t *testing.T) {
 			}
 			r.Equal(tc.wantStatus, mutation.Code, mutation.Body.String())
 			r.Equal(http.StatusOK, start.Code, start.Body.String())
-			r.Eventually(func() bool { job := svc.currentSyncJob("greendale"); return job != nil && job.Done }, 3*time.Second, 10*time.Millisecond)
-			r.True(svc.currentSyncJob("greendale").Success)
+			r.Eventually(func() bool { job := svc.currentSyncJob("greendale"); return job != nil && job.Done() }, 3*time.Second, 10*time.Millisecond)
+			r.True(svc.currentSyncJob("greendale").Success())
 			r.Equal("Abed Nadir", <-requests)
 			state, err := loadStateForApp("greendale")
 			r.NoError(err)

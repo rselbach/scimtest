@@ -325,11 +325,11 @@ func TestIDPRoutesExcludeAdminEndpoints(t *testing.T) {
 	r.Equal(http.StatusOK, discoveryRec.Code)
 	r.Contains(discoveryRec.Body.String(), "http://idp.greendale.test/oidc/greendale")
 
-	app.tunnel = &activeTunnel{
+	app.tunnel.connect(&activeTunnel{
 		PathPrefix: "/human-timeline-club",
 		PublicURL:  "https://scimtest.rselbach.com/human-timeline-club",
 		ClientIP:   "203.0.113.10",
-	}
+	})
 	tunneled := app.tunneledIDPRoutes()
 	tunneledDiscoveryReq := httptest.NewRequest(
 		http.MethodGet,
@@ -384,9 +384,9 @@ func TestIDPRoutesExcludeAdminEndpoints(t *testing.T) {
 	tunneled.ServeHTTP(missingIPRec, httptest.NewRequest(http.MethodGet, authorizePath, nil))
 	r.Equal(http.StatusForbidden, missingIPRec.Code)
 
-	app.tunnelMu.Lock()
-	app.tunnel.ClientIP = ""
-	app.tunnelMu.Unlock()
+	app.tunnel.mu.Lock()
+	app.tunnel.active.ClientIP = ""
+	app.tunnel.mu.Unlock()
 	emptyAllowedRec := httptest.NewRecorder()
 	emptyAllowedReq := httptest.NewRequest(http.MethodGet, authorizePath, nil)
 	emptyAllowedReq.Header.Set("X-Forwarded-For", "203.0.113.10")
@@ -426,11 +426,11 @@ func TestTunneledAuthorizeIgnoresAllowAnyOIDCRedirect(t *testing.T) {
 	}))
 
 	app := newTestIDPApp(t)
-	app.tunnel = &activeTunnel{
+	app.tunnel.connect(&activeTunnel{
 		PathPrefix: "/human-timeline-club",
 		PublicURL:  "https://scimtest.rselbach.com/human-timeline-club",
 		ClientIP:   "203.0.113.10",
-	}
+	})
 	tunneled := app.tunneledIDPRoutes()
 
 	authorizeValues := url.Values{
@@ -465,13 +465,13 @@ func TestAppFormDisablesAllowAnyRedirectWhileTunneled(t *testing.T) {
 		AllowAnyOIDCRedirect: true,
 	}}}))
 	app := newTestIDPApp(t)
-	app.tunnelMu.Lock()
-	app.tunnel = &activeTunnel{
+	app.tunnel.mu.Lock()
+	app.tunnel.connect(&activeTunnel{
 		PathPrefix: "/study-group",
 		PublicURL:  "https://scimtest.rselbach.com/study-group",
 		ClientIP:   "203.0.113.10",
-	}
-	app.tunnelMu.Unlock()
+	})
+	app.tunnel.mu.Unlock()
 
 	rec := httptest.NewRecorder()
 	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=apps&modal=app&id=app-1", nil))
@@ -1303,7 +1303,7 @@ func TestSyncPersistsRemoteStateAndTraceCookie(t *testing.T) {
 
 	r.Equal(http.StatusSeeOther, rec.Code)
 	job := waitForSyncDone(t, app)
-	r.True(job.Success)
+	r.True(job.Success())
 	r.True(job.TraceAvailable)
 	updated, err := loadState()
 	r.NoError(err)
@@ -1341,7 +1341,7 @@ func TestSyncMarksResourceFailuresAsFailed(t *testing.T) {
 
 	r.Equal(http.StatusSeeOther, rec.Code)
 	job := waitForSyncDone(t, app)
-	r.False(job.Success)
+	r.False(job.Success())
 	r.Contains(job.Error, "1 failed")
 
 	indexRec := httptest.NewRecorder()
@@ -1398,7 +1398,7 @@ func TestReconcileRepairsDriftedSyncedUser(t *testing.T) {
 
 	r.Equal(http.StatusSeeOther, rec.Code)
 	job := waitForSyncDone(t, app)
-	r.True(job.Success)
+	r.True(job.Success())
 	r.Contains(job.Message, "1 updated")
 	r.Equal([]string{
 		"GET /Users/remote-user-1",
@@ -1465,7 +1465,7 @@ func TestSyncStartsAsyncAndReportsStatus(t *testing.T) {
 	r.Equal(http.StatusOK, rec.Code)
 	var startedJob syncJobSnapshot
 	r.NoError(json.NewDecoder(rec.Body).Decode(&startedJob))
-	r.True(startedJob.Running)
+	r.True(startedJob.Running())
 
 	select {
 	case <-started:
@@ -1480,7 +1480,7 @@ func TestSyncStartsAsyncAndReportsStatus(t *testing.T) {
 	r.Equal(http.StatusOK, statusRec.Code)
 	var runningJob syncJobSnapshot
 	r.NoError(json.NewDecoder(statusRec.Body).Decode(&runningJob))
-	r.True(runningJob.Running)
+	r.True(runningJob.Running())
 	r.Equal(1, runningJob.Total)
 	r.Equal(0, runningJob.Processed)
 	r.Equal(1, runningJob.LatestSequence)
@@ -1500,7 +1500,7 @@ func TestSyncStartsAsyncAndReportsStatus(t *testing.T) {
 
 	close(release)
 	finishedJob := waitForSyncDone(t, app)
-	r.True(finishedJob.Success)
+	r.True(finishedJob.Success())
 	r.Equal(100, finishedJob.Percent)
 	r.Equal("create user Shirley Bennett (sbennett)", finishedJob.Current)
 	r.Equal(2, finishedJob.LatestSequence)
@@ -1554,16 +1554,40 @@ func TestSyncCanBeCancelled(t *testing.T) {
 		t.Fatal("SCIM request did not start")
 	}
 
-	cancelReq := httptest.NewRequest(http.MethodPost, "/sync/cancel", strings.NewReader("environment="))
-	cancelReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	cancelReq.Header.Set("Accept", "application/json")
-	cancelRec := httptest.NewRecorder()
-	app.routes().ServeHTTP(cancelRec, cancelReq)
-	r.Equal(http.StatusOK, cancelRec.Code)
-	r.JSONEq(`{"message":"stopping sync"}`, cancelRec.Body.String())
+	func() {
+		app.mu.Lock()
+		defer app.mu.Unlock()
+		cancelReq := httptest.NewRequest(http.MethodPost, "/sync/cancel", strings.NewReader("environment="))
+		cancelReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		cancelReq.Header.Set("Accept", "application/json")
+		cancelRec := httptest.NewRecorder()
+		app.routes().ServeHTTP(cancelRec, cancelReq)
+		r.Equal(http.StatusOK, cancelRec.Code)
+		r.JSONEq(`{"message":"stopping sync"}`, cancelRec.Body.String())
+
+		statusRec := httptest.NewRecorder()
+		app.routes().ServeHTTP(statusRec, httptest.NewRequest(http.MethodGet, "/sync/status", nil))
+		r.Equal(http.StatusOK, statusRec.Code)
+		var status struct {
+			Phase   string `json:"phase"`
+			Running bool   `json:"running"`
+			Done    bool   `json:"done"`
+			Success bool   `json:"success"`
+		}
+		r.NoError(json.Unmarshal(statusRec.Body.Bytes(), &status))
+		r.Equal("stopping", status.Phase)
+		r.True(status.Running)
+		r.False(status.Done)
+		r.False(status.Success)
+		r.True(app.anySyncRunning())
+		_, err := app.startSyncJob("another-app", "Greendale", "sync", "", "")
+		r.ErrorContains(err, "a sync is already running")
+	}()
 
 	job := waitForSyncDone(t, app)
-	r.False(job.Success)
+	r.Equal(syncJobCanceled, job.Phase)
+	r.False(app.anySyncRunning())
+	r.False(job.Success())
 	r.Contains(job.Error, "context canceled")
 	state, err := loadState()
 	r.NoError(err)
@@ -1602,8 +1626,8 @@ func TestCurrentSyncJobAfterDoesNotResendLargeActivityHistory(t *testing.T) {
 			Phase:    "done",
 		}
 	}
-	app := &webApp{syncJobs: map[string]*syncJobSnapshot{
-		"app-greendale": {LatestSequence: len(events), Events: events},
+	app := &webApp{syncJobs: map[string]*syncJob{
+		"app-greendale": {syncJobSnapshot: syncJobSnapshot{LatestSequence: len(events), Events: events}},
 	}}
 
 	job := app.currentSyncJobAfter("app-greendale", 9999)
@@ -1615,7 +1639,7 @@ func TestCurrentSyncJobAfterDoesNotResendLargeActivityHistory(t *testing.T) {
 
 func TestMutationIsRejectedWhileSyncRuns(t *testing.T) {
 	r := require.New(t)
-	app := &webApp{syncJobs: map[string]*syncJobSnapshot{"app-1": {Running: true}}}
+	app := &webApp{syncJobs: map[string]*syncJob{"app-1": {syncJobSnapshot: syncJobSnapshot{Phase: syncJobRunning}}}}
 	called := false
 	handler := app.rejectWhileSyncing(func(w http.ResponseWriter, _ *http.Request) {
 		called = true
@@ -1692,7 +1716,7 @@ func TestDashboardRendersCriticalFlowAffordances(t *testing.T) {
 	state.Apps[0].SCIMBearerToken = "token"
 	initializeAppSync(&state, "app-1")
 	r.NoError(saveState(state))
-	app.syncJobs = map[string]*syncJobSnapshot{"app-1": {Running: true, Percent: 42, Message: "Creating Troy"}}
+	app.syncJobs = map[string]*syncJob{"app-1": {syncJobSnapshot: syncJobSnapshot{Phase: syncJobRunning, Percent: 42, Message: "Creating Troy"}}}
 	rec := httptest.NewRecorder()
 
 	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=apps", nil))
@@ -2137,8 +2161,8 @@ func TestSyncOnlyMutatesSelectedApp(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		job := app.currentSyncJob("app-b")
-		if job != nil && job.Done {
-			r.True(job.Success)
+		if job != nil && job.Done() {
+			r.True(job.Success())
 			break
 		}
 		if time.Now().After(deadline) {
@@ -2200,7 +2224,7 @@ func TestSyncRateLimitRendersReadableError(t *testing.T) {
 
 	r.Equal(http.StatusSeeOther, syncRec.Code)
 	job := waitForSyncDone(t, app)
-	r.False(job.Success)
+	r.False(job.Success())
 	r.True(job.TraceAvailable)
 	updated, err := loadState()
 	r.NoError(err)
@@ -2405,14 +2429,14 @@ func TestConfigRendersAutomaticTunnelStatus(t *testing.T) {
 	r.Contains(rec.Body.String(), "application profile rejected")
 	r.Contains(rec.Body.String(), `formaction="/config/tunnel/retry"`)
 
-	app.tunnelMu.Lock()
-	app.tunnel = &activeTunnel{
+	app.tunnel.mu.Lock()
+	app.tunnel.connect(&activeTunnel{
 		PathPrefix: "/study-group",
 		PublicURL:  "https://scimtest.rselbach.com/study-group",
 		ClientIP:   "203.0.113.10",
 		Tunnel:     &fakeTunnel{},
-	}
-	app.tunnelMu.Unlock()
+	})
+	app.tunnel.mu.Unlock()
 	rec = httptest.NewRecorder()
 	app.routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/?tab=users&modal=config", nil))
 
@@ -2653,7 +2677,8 @@ func TestAutomaticTunnelEnrollmentOpensBrowserAndShowsLink(t *testing.T) {
 		},
 	}
 	value := "https://admin.example.com/enroll?code=study-group"
-	app.handleTunnelEnrollmentRequired(scimtestclient.Enrollment{URL: value, VerificationCode: "study-group"})
+	app.tunnel.start(&automaticTunnelStart{})
+	app.handleTunnelEnrollmentRequired(app.tunnel.starting, scimtestclient.Enrollment{URL: value, VerificationCode: "study-group"})
 	r.Equal(value, <-opened)
 	r.Equal("authorizing", app.tunnelState())
 	r.Equal(value, app.buildConfigFormView(config{}, "users", 1, 15, "").TunnelEnrollmentURL)
@@ -2667,7 +2692,8 @@ func TestAutomaticTunnelEnrollmentOpensBrowserAndShowsLink(t *testing.T) {
 			return nil
 		},
 	}
-	disabled.handleTunnelEnrollmentRequired(scimtestclient.Enrollment{URL: value, VerificationCode: "study-group"})
+	disabled.tunnel.start(&automaticTunnelStart{})
+	disabled.handleTunnelEnrollmentRequired(disabled.tunnel.starting, scimtestclient.Enrollment{URL: value, VerificationCode: "study-group"})
 	r.Equal("authorizing", disabled.tunnelState())
 	r.Equal(value, disabled.tunnelEnrollmentURLValue())
 }
@@ -2751,7 +2777,7 @@ func waitForSyncDone(t *testing.T, app *webApp) syncJobSnapshot {
 			break
 		}
 		app.syncJobMu.Unlock()
-		if job != nil && job.Done {
+		if job != nil && job.Done() {
 			return *job
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -3300,8 +3326,8 @@ func TestSyncRejectedWhileAnotherEnvironmentSyncs(t *testing.T) {
 		{ID: "app-b", Name: "Beta", Slug: "beta", Protocol: "scim", SCIMEnabled: true, SCIMBaseURL: "https://beta.test", SCIMBearerToken: "token"},
 	}}))
 	appService := newTestIDPApp(t)
-	appService.syncJobs = map[string]*syncJobSnapshot{
-		"app-a": {ID: "job-a", EnvironmentName: "Alpha", Running: true},
+	appService.syncJobs = map[string]*syncJob{
+		"app-a": {syncJobSnapshot: syncJobSnapshot{ID: "job-a", EnvironmentName: "Alpha", Phase: syncJobRunning}},
 	}
 	form := url.Values{"tab": {"users"}, "environment": {"app-b"}}
 	req := httptest.NewRequest(http.MethodPost, "/sync", strings.NewReader(form.Encode()))
@@ -3452,7 +3478,7 @@ func TestAdminUIRespondsDuringRunningSync(t *testing.T) {
 
 	releaseSync()
 	job := waitForSyncDone(t, app)
-	r.True(job.Success, job.Error)
+	r.True(job.Success(), job.Error)
 }
 
 func TestStylesheetHidesIsHiddenEverywhere(t *testing.T) {

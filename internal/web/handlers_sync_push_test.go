@@ -53,7 +53,7 @@ func TestPushSyncsOnlyTheTargetResource(t *testing.T) {
 
 	r.Equal(http.StatusSeeOther, rec.Code, rec.Body.String())
 	job := waitForSyncDone(t, svc)
-	r.True(job.Success, job.Error)
+	r.True(job.Success(), job.Error)
 	r.Equal(int32(1), posts.Load(), "only the pushed user may reach the remote")
 
 	updated, err := loadStateForApp("app-1")

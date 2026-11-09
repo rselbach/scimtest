@@ -18,8 +18,8 @@ func TestCurrentSyncJobAfterOwnsFilteredEvents(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := require.New(t)
-			live := &syncJobSnapshot{ID: "troy-sync", Message: "running", LatestSequence: 9, Events: []syncJobEvent{{Sequence: 2}, {Sequence: 9}, {Sequence: 5}}}
-			a := &webApp{syncJobs: map[string]*syncJobSnapshot{"greendale": live}}
+			live := &syncJob{syncJobSnapshot: syncJobSnapshot{ID: "troy-sync", Message: "running", LatestSequence: 9, Events: []syncJobEvent{{Sequence: 2}, {Sequence: 9}, {Sequence: 5}}}}
+			a := &webApp{syncJobs: map[string]*syncJob{"greendale": live}}
 			got := a.currentSyncJobAfter("greendale", tc.sequence)
 			r.Equal(tc.want, got.Events)
 			r.Equal(live.ID, got.ID)
@@ -41,7 +41,7 @@ func BenchmarkCurrentSyncJobAfter(b *testing.B) {
 	for i := range events {
 		events[i].Sequence = i + 1
 	}
-	a := &webApp{syncJobs: map[string]*syncJobSnapshot{"greendale": {Events: events}}}
+	a := &webApp{syncJobs: map[string]*syncJob{"greendale": {syncJobSnapshot: syncJobSnapshot{Events: events}}}}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {

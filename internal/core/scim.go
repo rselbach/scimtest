@@ -578,17 +578,12 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 		}
 
 		u.LastError = ""
-		operation := "update"
-		switch {
-		case u.Deleted:
-			operation = "delete"
-		case u.RemoteID == "":
-			operation = "create"
-		}
+		action := u.syncState().operation()
+		operation := action.progressOperation()
 		progress.startUser(u, operation)
 
 		fail := func(err error) error {
-			u.LastError = err.Error()
+			u.setSyncState(u.syncState().failed(err))
 			counts.failed++
 			nextUsers = append(nextUsers, u)
 			progress.reportUser(u, operation, "Failed")
@@ -601,14 +596,14 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 			return nil
 		}
 
-		switch {
-		case u.Deleted && u.RemoteID == "":
+		switch action {
+		case syncForget:
 			delete(directory.remoteIDs, u.ID)
 			progress.addTotal(pruneUserFromGroups(&state, u.ID))
 			counts.deleted++
 			progress.reportUser(u, operation, "Deleted locally")
 			continue
-		case u.Deleted:
+		case syncDelete:
 			if err := client.deleteUser(u, "delete"); err != nil {
 				if stopped := fail(err); stopped != nil {
 					return state, counts, stopped
@@ -620,7 +615,7 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 			progress.addTotal(pruneUserFromGroups(&state, u.ID))
 			counts.deleted++
 			progress.reportUser(u, operation, "Deleted")
-		case u.RemoteID == "":
+		case syncCreate:
 			remoteID, adopted, err := client.createUser(u, directory)
 			if err != nil {
 				if stopped := fail(err); stopped != nil {
@@ -633,8 +628,7 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 				awaitingManager = append(awaitingManager, len(nextUsers))
 			}
 			directory.remoteIDs[u.ID] = remoteID
-			u.RemoteID = remoteID
-			u.Dirty = false
+			u.setSyncState(u.syncState().succeeded(remoteID))
 			nextUsers = append(nextUsers, u)
 			if adopted {
 				counts.adopted++
@@ -643,7 +637,7 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 			}
 			counts.created++
 			progress.reportUser(u, operation, "Created")
-		default:
+		case syncUpdate:
 			if err := client.replaceUser(u, directory); err != nil {
 				if stopped := fail(err); stopped != nil {
 					return state, counts, stopped
@@ -654,7 +648,7 @@ func syncDirtyUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 			if directory.awaitsManager(u) {
 				awaitingManager = append(awaitingManager, len(nextUsers))
 			}
-			u.Dirty = false
+			u.setSyncState(u.syncState().succeeded(u.RemoteID))
 			counts.updated++
 			nextUsers = append(nextUsers, u)
 			progress.reportUser(u, operation, "Updated")
@@ -685,8 +679,7 @@ func sendAwaitedManagers(client *SCIMClient, users []User, awaiting []int, direc
 		progress.addTotal(1)
 		progress.startUser(u, "update")
 		if err := client.replaceUser(u, directory); err != nil {
-			users[index].LastError = err.Error()
-			users[index].Dirty = true
+			users[index].setSyncState(users[index].syncState().failed(err))
 			counts.failed++
 			progress.reportUser(users[index], "update", "Failed")
 			if isStoppingSCIMError(err) {
@@ -743,17 +736,12 @@ func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressR
 		}
 
 		g.LastError = ""
-		operation := "update"
-		switch {
-		case g.Deleted:
-			operation = "delete"
-		case g.RemoteID == "":
-			operation = "create"
-		}
+		action := g.syncState().operation()
+		operation := action.progressOperation()
 		progress.startGroup(g, operation)
 
 		fail := func(err error) error {
-			g.LastError = err.Error()
+			g.setSyncState(g.syncState().failed(err))
 			counts.failed++
 			nextGroups = append(nextGroups, g)
 			progress.reportGroup(g, operation, "Failed")
@@ -765,12 +753,12 @@ func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressR
 			return nil
 		}
 
-		switch {
-		case g.Deleted && g.RemoteID == "":
+		switch action {
+		case syncForget:
 			counts.deleted++
 			progress.reportGroup(g, operation, "Deleted locally")
 			continue
-		case g.Deleted:
+		case syncDelete:
 			if err := client.deleteGroup(g, "delete"); err != nil {
 				if stopped := fail(err); stopped != nil {
 					return state, counts, stopped
@@ -780,7 +768,7 @@ func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressR
 
 			counts.deleted++
 			progress.reportGroup(g, operation, "Deleted")
-		case g.RemoteID == "":
+		case syncCreate:
 			remoteID, adopted, err := client.createGroup(g, state.Users)
 			if err != nil {
 				if stopped := fail(err); stopped != nil {
@@ -789,8 +777,7 @@ func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressR
 				continue
 			}
 
-			g.RemoteID = remoteID
-			g.Dirty = false
+			g.setSyncState(g.syncState().succeeded(remoteID))
 			nextGroups = append(nextGroups, g)
 			if adopted {
 				counts.adopted++
@@ -799,7 +786,7 @@ func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressR
 			}
 			counts.created++
 			progress.reportGroup(g, operation, "Created")
-		default:
+		case syncUpdate:
 			if err := client.replaceGroup(g, state.Users); err != nil {
 				if stopped := fail(err); stopped != nil {
 					return state, counts, stopped
@@ -807,7 +794,7 @@ func syncDirtyGroups(client *SCIMClient, state AppState, progress *syncProgressR
 				continue
 			}
 
-			g.Dirty = false
+			g.setSyncState(g.syncState().succeeded(g.RemoteID))
 			counts.updated++
 			nextGroups = append(nextGroups, g)
 			progress.reportGroup(g, operation, "Updated")
@@ -828,18 +815,15 @@ func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 
 	for i, u := range state.Users {
 		u.LastError = ""
-		operation := "check"
-		switch {
-		case u.Deleted:
-			operation = "delete"
-		case u.RemoteID == "":
-			operation = "create"
+		action := u.syncState().operation()
+		operation := action.progressOperation()
+		if action == syncUpdate {
+			operation = "check"
 		}
 		progress.startUser(u, operation)
 
 		fail := func(err error) error {
-			u.LastError = err.Error()
-			u.Dirty = true
+			u.setSyncState(u.syncState().failed(err))
 			counts.failed++
 			nextUsers = append(nextUsers, u)
 			progress.reportUser(u, operation, "Failed")
@@ -852,13 +836,13 @@ func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 			return nil
 		}
 
-		switch {
-		case u.Deleted && u.RemoteID == "":
+		switch action {
+		case syncForget:
 			delete(directory.remoteIDs, u.ID)
 			pruneUserFromGroups(&state, u.ID)
 			counts.deleted++
 			progress.reportUser(u, operation, "Deleted locally")
-		case u.Deleted:
+		case syncDelete:
 			if err := client.deleteUser(u, "delete"); err != nil {
 				if stopped := fail(err); stopped != nil {
 					return state, counts, stopped
@@ -870,7 +854,7 @@ func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 			pruneUserFromGroups(&state, u.ID)
 			counts.deleted++
 			progress.reportUser(u, operation, "Deleted")
-		case u.RemoteID == "":
+		case syncCreate:
 			remoteID, adopted, err := client.createUser(u, directory)
 			if err != nil {
 				if stopped := fail(err); stopped != nil {
@@ -883,8 +867,7 @@ func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 				awaitingManager = append(awaitingManager, len(nextUsers))
 			}
 			directory.remoteIDs[u.ID] = remoteID
-			u.RemoteID = remoteID
-			u.Dirty = false
+			u.setSyncState(u.syncState().succeeded(remoteID))
 			nextUsers = append(nextUsers, u)
 			if adopted {
 				counts.adopted++
@@ -893,7 +876,7 @@ func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 			}
 			counts.created++
 			progress.reportUser(u, operation, "Created")
-		default:
+		case syncUpdate:
 			remote, err := client.getUser(u)
 			switch {
 			case errors.Is(err, errSCIMNotFound):
@@ -909,8 +892,7 @@ func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 					awaitingManager = append(awaitingManager, len(nextUsers))
 				}
 				directory.remoteIDs[u.ID] = remoteID
-				u.RemoteID = remoteID
-				u.Dirty = false
+				u.setSyncState(u.syncState().succeeded(remoteID))
 				nextUsers = append(nextUsers, u)
 				if adopted {
 					counts.adopted++
@@ -927,7 +909,7 @@ func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 				if directory.awaitsManager(u) {
 					awaitingManager = append(awaitingManager, len(nextUsers))
 				}
-				u.Dirty = false
+				u.setSyncState(u.syncState().succeeded(u.RemoteID))
 				counts.inSync++
 				nextUsers = append(nextUsers, u)
 				progress.reportUser(u, operation, "In sync")
@@ -942,7 +924,7 @@ func reconcileUsers(client *SCIMClient, state AppState, progress *syncProgressRe
 				if directory.awaitsManager(u) {
 					awaitingManager = append(awaitingManager, len(nextUsers))
 				}
-				u.Dirty = false
+				u.setSyncState(u.syncState().succeeded(u.RemoteID))
 				counts.updated++
 				nextUsers = append(nextUsers, u)
 				progress.reportUser(u, "update", "Updated")
@@ -961,18 +943,15 @@ func reconcileGroups(client *SCIMClient, state AppState, progress *syncProgressR
 
 	for i, g := range state.Groups {
 		g.LastError = ""
-		operation := "check"
-		switch {
-		case g.Deleted:
-			operation = "delete"
-		case g.RemoteID == "":
-			operation = "create"
+		action := g.syncState().operation()
+		operation := action.progressOperation()
+		if action == syncUpdate {
+			operation = "check"
 		}
 		progress.startGroup(g, operation)
 
 		fail := func(err error) error {
-			g.LastError = err.Error()
-			g.Dirty = true
+			g.setSyncState(g.syncState().failed(err))
 			counts.failed++
 			nextGroups = append(nextGroups, g)
 			progress.reportGroup(g, operation, "Failed")
@@ -984,11 +963,11 @@ func reconcileGroups(client *SCIMClient, state AppState, progress *syncProgressR
 			return nil
 		}
 
-		switch {
-		case g.Deleted && g.RemoteID == "":
+		switch action {
+		case syncForget:
 			counts.deleted++
 			progress.reportGroup(g, operation, "Deleted locally")
-		case g.Deleted:
+		case syncDelete:
 			if err := client.deleteGroup(g, "delete"); err != nil {
 				if stopped := fail(err); stopped != nil {
 					return state, counts, stopped
@@ -998,7 +977,7 @@ func reconcileGroups(client *SCIMClient, state AppState, progress *syncProgressR
 
 			counts.deleted++
 			progress.reportGroup(g, operation, "Deleted")
-		case g.RemoteID == "":
+		case syncCreate:
 			remoteID, adopted, err := client.createGroup(g, state.Users)
 			if err != nil {
 				if stopped := fail(err); stopped != nil {
@@ -1007,8 +986,7 @@ func reconcileGroups(client *SCIMClient, state AppState, progress *syncProgressR
 				continue
 			}
 
-			g.RemoteID = remoteID
-			g.Dirty = false
+			g.setSyncState(g.syncState().succeeded(remoteID))
 			nextGroups = append(nextGroups, g)
 			if adopted {
 				counts.adopted++
@@ -1017,7 +995,7 @@ func reconcileGroups(client *SCIMClient, state AppState, progress *syncProgressR
 			}
 			counts.created++
 			progress.reportGroup(g, operation, "Created")
-		default:
+		case syncUpdate:
 			remote, err := client.getGroup(g)
 			var desired SCIMGroupResource
 			if err == nil {
@@ -1033,8 +1011,7 @@ func reconcileGroups(client *SCIMClient, state AppState, progress *syncProgressR
 					continue
 				}
 
-				g.RemoteID = remoteID
-				g.Dirty = false
+				g.setSyncState(g.syncState().succeeded(remoteID))
 				nextGroups = append(nextGroups, g)
 				if adopted {
 					counts.adopted++
@@ -1048,7 +1025,7 @@ func reconcileGroups(client *SCIMClient, state AppState, progress *syncProgressR
 					return state, counts, stopped
 				}
 			case groupMatchesRemote(desired, remote):
-				g.Dirty = false
+				g.setSyncState(g.syncState().succeeded(g.RemoteID))
 				counts.inSync++
 				nextGroups = append(nextGroups, g)
 				progress.reportGroup(g, operation, "In sync")
@@ -1060,7 +1037,7 @@ func reconcileGroups(client *SCIMClient, state AppState, progress *syncProgressR
 					continue
 				}
 
-				g.Dirty = false
+				g.setSyncState(g.syncState().succeeded(g.RemoteID))
 				counts.updated++
 				nextGroups = append(nextGroups, g)
 				progress.reportGroup(g, "update", "Updated")

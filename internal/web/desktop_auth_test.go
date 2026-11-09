@@ -66,7 +66,8 @@ func TestDesktopRendersGitHubEnrollmentInApp(t *testing.T) {
 		opened = value
 		return nil
 	}
-	app.handleTunnelEnrollmentRequired(scimtestclient.Enrollment{
+	app.tunnel.start(&automaticTunnelStart{})
+	app.handleTunnelEnrollmentRequired(app.tunnel.starting, scimtestclient.Enrollment{
 		URL:               "https://admin.example.test/enroll?code=study-group",
 		BrowserHandoffURL: "https://admin.example.test/enroll/browser?handoff=one-use",
 		VerificationCode:  "study-group",
@@ -99,7 +100,8 @@ func TestDesktopGitHubAuthorizationFallsBackForOlderServer(t *testing.T) {
 		opened = value
 		return nil
 	}
-	app.handleTunnelEnrollmentRequired(scimtestclient.Enrollment{
+	app.tunnel.start(&automaticTunnelStart{})
+	app.handleTunnelEnrollmentRequired(app.tunnel.starting, scimtestclient.Enrollment{
 		URL:              "https://admin.example.test/enroll?code=study-group",
 		VerificationCode: "study-group",
 	})
@@ -134,13 +136,13 @@ func TestDesktopServesAppAfterAuthenticatedTunnel(t *testing.T) {
 	}}}))
 	app := newTestIDPApp(t)
 	app.requireGitHubAccount = true
-	app.tunnel = &activeTunnel{
+	app.tunnel.connect(&activeTunnel{
 		PathPrefix:   "/study-group",
 		PublicURL:    "https://scimtest.example.test/study-group",
 		GitHubUserID: 42,
 		GitHubLogin:  "pierce",
 		Tunnel:       &fakeTunnel{},
-	}
+	})
 
 	page := httptest.NewRecorder()
 	app.routes().ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/?tab=apps", nil))
@@ -218,14 +220,14 @@ func TestDesktopLogoutRotatesInstallationIdentityAndReturnsToAccountGate(t *test
 	app := newTestIDPApp(t)
 	app.requireGitHubAccount = true
 	app.tunnelSupported = true
-	app.tunnel = &activeTunnel{
+	app.tunnel.connect(&activeTunnel{
 		PathPrefix:   "/study-group",
 		PublicURL:    "https://scimtest.example.test/study-group",
 		GitHubUserID: 42,
 		GitHubLogin:  "pierce",
 		Tunnel:       oldTunnel,
-	}
-	go app.watchAutomaticTunnel(app.tunnel)
+	})
+	go app.watchAutomaticTunnel(app.tunnel.active)
 	app.tunnelStart = func(ctx context.Context, cfg scimtestclient.Config) (*startedTunnel, error) {
 		started <- cfg
 		<-ctx.Done()
@@ -272,11 +274,11 @@ func TestDesktopLogoutRejectsGetAndCrossOriginPost(t *testing.T) {
 	tunnel := &fakeTunnel{}
 	app := newTestIDPApp(t)
 	app.requireGitHubAccount = true
-	app.tunnel = &activeTunnel{
+	app.tunnel.connect(&activeTunnel{
 		GitHubUserID: 42,
 		GitHubLogin:  "pierce",
 		Tunnel:       tunnel,
-	}
+	})
 
 	getResponse := httptest.NewRecorder()
 	app.routes().ServeHTTP(getResponse, httptest.NewRequest(http.MethodGet, "/desktop/auth/logout", nil))

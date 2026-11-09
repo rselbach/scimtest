@@ -562,7 +562,7 @@ func provisionDirectory(t *testing.T, svc *webApp) {
 	t.Helper()
 	acceptanceRequest(t, svc.routes(), http.MethodPost, "/api/v1/environments/app-1/sync/start", "", http.StatusAccepted)
 	job := waitForSyncDone(t, svc)
-	require.True(t, job.Success, job.Error)
+	require.True(t, job.Success(), job.Error)
 }
 
 // lifecycleOIDCSignIn signs userID in to Greendale with scope and redeems the

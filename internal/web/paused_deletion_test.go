@@ -111,8 +111,8 @@ func TestPausedSCIMDeletionsResume(t *testing.T) {
 				r.NoError(err)
 				r.Equal([]syncPlanEntry{{ResourceType: tc.resource, ResourceID: tc.id, Label: map[string]string{"user": "Troy Barnes", "group": "Study Group"}[tc.resource], Operation: "delete"}}, planSync(projected))
 				acceptanceRequest(t, handler, http.MethodPost, base+"/sync/start", "", http.StatusAccepted)
-				r.Eventually(func() bool { job := svc.currentSyncJob("greendale"); return job != nil && job.Done }, 3*time.Second, 10*time.Millisecond)
-				r.True(svc.currentSyncJob("greendale").Success)
+				r.Eventually(func() bool { job := svc.currentSyncJob("greendale"); return job != nil && job.Done() }, 3*time.Second, 10*time.Millisecond)
+				r.True(svc.currentSyncJob("greendale").Success())
 				remoteMu.Lock()
 				deleted := !resources[tc.remote]
 				remaining := len(resources)

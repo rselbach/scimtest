@@ -1,7 +1,6 @@
 package web
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -45,49 +44,41 @@ func (a *webApp) githubAccountGate(next http.Handler) http.Handler {
 }
 
 func (a *webApp) githubAccountConnected() bool {
-	a.tunnelMu.Lock()
-	defer a.tunnelMu.Unlock()
+	a.tunnel.mu.Lock()
+	defer a.tunnel.mu.Unlock()
 	// Desktop uses the per-installation key flow. A registered tunnel means
 	// the server found the GitHub-enrolled key and accepted its challenge.
-	return a.tunnel != nil
+	return a.tunnel.active != nil
 }
 
 func (a *webApp) githubAccountView() githubAccountView {
 	if !a.requireGitHubAccount {
 		return githubAccountView{}
 	}
-	a.tunnelMu.Lock()
-	defer a.tunnelMu.Unlock()
-	if a.tunnel == nil {
+	a.tunnel.mu.Lock()
+	defer a.tunnel.mu.Unlock()
+	if a.tunnel.active == nil {
 		return githubAccountView{}
 	}
 	view := githubAccountView{Linked: true}
-	if a.tunnel.GitHubUserID > 0 {
-		view.Login = strings.TrimSpace(a.tunnel.GitHubLogin)
+	if a.tunnel.active.GitHubUserID > 0 {
+		view.Login = strings.TrimSpace(a.tunnel.active.GitHubLogin)
 	}
 	return view
 }
 
 func (a *webApp) desktopAuthView() desktopAuthView {
-	a.tunnelMu.Lock()
-	defer a.tunnelMu.Unlock()
-	view := desktopAuthView{}
-	switch {
-	case a.tunnel != nil:
-		view.State = "connected"
-	case a.tunnelEnrollmentURL != "":
-		view.State = "authorizing"
-	case a.tunnelLastError != "":
-		view.State = "failed"
+	a.tunnel.mu.Lock()
+	defer a.tunnel.mu.Unlock()
+	view := desktopAuthView{State: a.tunnel.displayState(a.tunnelSupported)}
+	switch view.State {
+	case "failed":
 		view.Error = strings.ReplaceAll(
-			humanTunnelError(a.tunnelLastError),
+			humanTunnelError(a.tunnel.lastError),
 			"; scimtest keeps working locally",
 			"; sign-in is required before the desktop app can unlock",
 		)
-	case a.tunnelSupported:
-		view.State = "connecting"
-	default:
-		view.State = "unavailable"
+	case "unavailable":
 		view.Error = "This build has no application profile for GitHub sign-in."
 	}
 	return view
@@ -120,9 +111,9 @@ func (a *webApp) handleDesktopAuthStart(w http.ResponseWriter, r *http.Request) 
 		http.NotFound(w, r)
 		return
 	}
-	a.tunnelMu.Lock()
-	enrollmentURL := strings.TrimSpace(a.tunnelEnrollmentURL)
-	a.tunnelMu.Unlock()
+	a.tunnel.mu.Lock()
+	enrollmentURL := strings.TrimSpace(a.tunnel.enrollmentURL)
+	a.tunnel.mu.Unlock()
 	if enrollmentURL == "" {
 		http.Error(w, "GitHub authorization is not ready; try again", http.StatusConflict)
 		return
@@ -165,18 +156,12 @@ func (a *webApp) handleDesktopAuthLogout(w http.ResponseWriter, r *http.Request)
 }
 
 func (a *webApp) logoutGitHubAccount(identity tunnelApplicationIdentity) error {
-	a.tunnelMu.Lock()
-	if a.tunnelClosing {
-		a.tunnelMu.Unlock()
-		return errors.New("scimtest is shutting down")
+	a.tunnel.mu.Lock()
+	attempt, err := a.tunnel.beginReset()
+	a.tunnel.mu.Unlock()
+	if err != nil {
+		return err
 	}
-	if a.tunnelResetting {
-		a.tunnelMu.Unlock()
-		return errors.New("GitHub account sign-out is already in progress")
-	}
-	a.tunnelResetting = true
-	attempt := a.tunnelStarting
-	a.tunnelMu.Unlock()
 
 	if attempt != nil {
 		attempt.cancel()
@@ -186,22 +171,17 @@ func (a *webApp) logoutGitHubAccount(identity tunnelApplicationIdentity) error {
 	a.mu.Lock()
 	if _, _, err := rotateTunnelInstanceIdentity(); err != nil {
 		a.mu.Unlock()
-		a.tunnelMu.Lock()
-		a.tunnelResetting = false
-		a.tunnelMu.Unlock()
+		a.tunnel.mu.Lock()
+		a.tunnel.endReset()
+		a.tunnel.mu.Unlock()
 		return fmt.Errorf("sign out of GitHub: %w", err)
 	}
 	a.mu.Unlock()
 
-	a.tunnelMu.Lock()
-	tunnel := a.tunnel
-	a.tunnel = nil
-	a.tunnelLastError = ""
-	a.tunnelEnrollmentURL = ""
-	a.tunnelEnrollmentCode = ""
-	a.tunnelResetting = false
-	closing := a.tunnelClosing
-	a.tunnelMu.Unlock()
+	a.tunnel.mu.Lock()
+	tunnel := a.tunnel.reset()
+	closing := a.tunnel.mode == tunnelClosed
+	a.tunnel.mu.Unlock()
 
 	if tunnel != nil && tunnel.Tunnel != nil {
 		if err := tunnel.Tunnel.Close(); err != nil {

@@ -386,19 +386,19 @@ func (a *webApp) handleAPIStatus(w http.ResponseWriter, _ *http.Request) {
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	a.tunnelMu.Lock()
+	a.tunnel.mu.Lock()
 	tunnel := map[string]any{
 		"supported": a.tunnelSupported,
-		"starting":  a.tunnelStarting != nil,
-		"error":     a.tunnelLastError,
+		"starting":  a.tunnel.starting != nil,
+		"error":     a.tunnel.lastError,
 	}
-	if a.tunnel != nil {
+	if a.tunnel.active != nil {
 		tunnel["connected"] = true
-		tunnel["public_url"] = a.tunnel.PublicURL
+		tunnel["public_url"] = a.tunnel.active.PublicURL
 	} else {
 		tunnel["connected"] = false
 	}
-	a.tunnelMu.Unlock()
+	a.tunnel.mu.Unlock()
 	writeJSON(w, map[string]any{
 		"ready":        true,
 		"locked":       a.requireGitHubAccount && !a.githubAccountConnected(),

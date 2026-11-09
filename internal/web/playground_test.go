@@ -60,11 +60,11 @@ func TestPlaygroundCompletesFullExchange(t *testing.T) {
 
 			// An active tunnel must not divert the playground: its callback is a
 			// loopback URI that only the loopback authorize endpoint accepts.
-			svc.tunnel = &activeTunnel{
+			svc.tunnel.connect(&activeTunnel{
 				PathPrefix: "study-group",
 				PublicURL:  "https://scimtest.rselbach.com/study-group",
 				Tunnel:     &fakeTunnel{},
-			}
+			})
 
 			client := &http.Client{
 				CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },

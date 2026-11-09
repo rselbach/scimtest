@@ -116,5 +116,5 @@ func TestClosePreventsLaterAutomaticTunnelStart(t *testing.T) {
 	app.startAutomaticTunnel(tunnelApplicationIdentity{profileID: strings.Repeat("a", 32)})
 
 	r.False(started)
-	r.Nil(app.tunnelStarting)
+	r.Nil(app.tunnel.starting)
 }

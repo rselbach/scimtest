@@ -33,7 +33,7 @@ func TestPublicClientTestSignInCompletesPKCEExchange(t *testing.T) {
 			server := httptest.NewServer(svc.routes())
 			defer server.Close()
 			svc.adminHost = strings.TrimPrefix(server.URL, "http://")
-			svc.tunnel = &activeTunnel{PathPrefix: "study-group", PublicURL: "https://scimtest.rselbach.com/study-group", Tunnel: &fakeTunnel{}}
+			svc.tunnel.connect(&activeTunnel{PathPrefix: "study-group", PublicURL: "https://scimtest.rselbach.com/study-group", Tunnel: &fakeTunnel{}})
 			client := &http.Client{
 				CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 				Jar:           newTestCookieJar(t),

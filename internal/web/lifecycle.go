@@ -552,13 +552,13 @@ func (a *webApp) runLifecyclePush(found app, runID string, push lifecyclePush) b
 		switch {
 		case done == nil:
 			step.Status, step.Detail = lifecycleFailed, "A later sync replaced this push's result; see the sync trace"
-		case done.Success:
+		case done.Success():
 			step.Status, step.Detail = lifecycleOK, done.Message
 		default:
 			step.Status, step.Detail = lifecycleFailed, done.Message
 		}
 	})
-	return done != nil && done.Success
+	return done != nil && done.Success()
 }
 
 // awaitSyncJob waits for appID's sync job jobID to finish and returns it, or
@@ -571,7 +571,7 @@ func (a *webApp) awaitSyncJob(appID, jobID string) *syncJobSnapshot {
 		switch {
 		case job == nil || job.ID != jobID:
 			return nil
-		case job.Done:
+		case job.Done():
 			return job
 		}
 		<-ticker.C

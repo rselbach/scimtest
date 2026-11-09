@@ -47,10 +47,8 @@ func StateForApp(state AppState, appID string) (AppState, error) {
 		if !exists {
 			syncState.Dirty = true
 		}
-		projected.Users[i].RemoteID = syncState.RemoteID
-		projected.Users[i].Dirty = syncState.Dirty
-		projected.Users[i].Deleted = projected.Users[i].Deleted || syncState.Deleted
-		projected.Users[i].LastError = syncState.LastError
+		syncState.Deleted = projected.Users[i].Deleted || syncState.Deleted
+		projected.Users[i].setSyncState(syncState)
 		if projected.Users[i].Deleted {
 			deletedUserIDs[projected.Users[i].ID] = true
 		}
@@ -60,10 +58,8 @@ func StateForApp(state AppState, appID string) (AppState, error) {
 		if !exists {
 			syncState.Dirty = true
 		}
-		projected.Groups[i].RemoteID = syncState.RemoteID
-		projected.Groups[i].Dirty = syncState.Dirty
-		projected.Groups[i].Deleted = projected.Groups[i].Deleted || syncState.Deleted
-		projected.Groups[i].LastError = syncState.LastError
+		syncState.Deleted = projected.Groups[i].Deleted || syncState.Deleted
+		projected.Groups[i].setSyncState(syncState)
 		members := make([]string, 0, len(projected.Groups[i].MemberIDs))
 		for _, userID := range projected.Groups[i].MemberIDs {
 			if !deletedUserIDs[userID] {
@@ -162,7 +158,7 @@ func MergeAppSyncState(state *AppState, appID string, synced AppState) {
 	}
 	userSync := make(map[string]ResourceSyncState, len(state.Users))
 	for _, user := range synced.Users {
-		userSync[user.ID] = ResourceSyncState{RemoteID: user.RemoteID, Dirty: user.Dirty, Deleted: user.Deleted, LastError: user.LastError}
+		userSync[user.ID] = user.syncState()
 	}
 	for _, user := range state.Users {
 		if _, ok := userSync[user.ID]; !ok && user.Deleted {
@@ -173,7 +169,7 @@ func MergeAppSyncState(state *AppState, appID string, synced AppState) {
 
 	groupSync := make(map[string]ResourceSyncState, len(state.Groups))
 	for _, group := range synced.Groups {
-		groupSync[group.ID] = ResourceSyncState{RemoteID: group.RemoteID, Dirty: group.Dirty, Deleted: group.Deleted, LastError: group.LastError}
+		groupSync[group.ID] = group.syncState()
 	}
 	for _, group := range state.Groups {
 		if _, ok := groupSync[group.ID]; !ok && group.Deleted {
@@ -260,11 +256,7 @@ func markResourceDirty(syncStates map[string]map[string]ResourceSyncState, appID
 	if syncStates[appID] == nil {
 		syncStates[appID] = make(map[string]ResourceSyncState)
 	}
-	syncState := syncStates[appID][resourceID]
-	syncState.Dirty = true
-	syncState.Deleted = deleted
-	syncState.LastError = ""
-	syncStates[appID][resourceID] = syncState
+	syncStates[appID][resourceID] = syncStates[appID][resourceID].pending(deleted)
 }
 
 // PurgeFullySyncedDeletions removes locally soft-deleted resources once the
@@ -302,24 +294,18 @@ func PurgeFullySyncedDeletions(state *AppState) {
 	state.Groups = keptGroups
 }
 
-// syncDeletionSettled is the terminal sync row after a successful remote
-// delete: tombstoned, not dirty, and no RemoteID left to target.
-func syncDeletionSettled(syncState ResourceSyncState, ok bool) bool {
-	return ok && syncState.Deleted && !syncState.Dirty && syncState.RemoteID == ""
-}
-
 func resourceDeletedEverywhere(apps []App, syncByApp map[string]map[string]ResourceSyncState, resourceID string) bool {
 	for _, app := range apps {
 		syncState, ok := syncByApp[app.ID][resourceID]
 		if app.SCIMEnabled {
-			if !syncDeletionSettled(syncState, ok) {
+			if !ok || !syncState.deletionSettled() {
 				return false
 			}
 			continue
 		}
 		// SCIM paused: no row means this environment never tracked the
 		// resource. Any remaining live or pending remote identity blocks GC.
-		if ok && !syncDeletionSettled(syncState, true) {
+		if ok && !syncState.deletionSettled() {
 			return false
 		}
 	}
@@ -358,7 +344,7 @@ func PlanSync(state AppState) []SyncPlanEntry {
 			ResourceType: "user",
 			ResourceID:   u.ID,
 			Label:        UserLabel(u),
-			Operation:    planOperation(u.Deleted, u.RemoteID),
+			Operation:    string(u.syncState().operation()),
 		})
 	}
 	for _, g := range state.Groups {
@@ -369,23 +355,10 @@ func PlanSync(state AppState) []SyncPlanEntry {
 			ResourceType: "group",
 			ResourceID:   g.ID,
 			Label:        g.DisplayName,
-			Operation:    planOperation(g.Deleted, g.RemoteID),
+			Operation:    string(g.syncState().operation()),
 		})
 	}
 	return plan
-}
-
-func planOperation(deleted bool, remoteID string) string {
-	switch {
-	case deleted && remoteID == "":
-		return "forget"
-	case deleted:
-		return "delete"
-	case remoteID == "":
-		return "create"
-	default:
-		return "update"
-	}
 }
 
 func AppendOperationLogs(state *AppState, appID string, traces []SyncTraceEntry) {

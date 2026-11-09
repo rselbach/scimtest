@@ -351,13 +351,13 @@ func TestAPIAcceptanceSCIMSyncAndImport(t *testing.T) {
 	for {
 		rec := acceptanceRequest(t, handler, http.MethodGet, base+"/sync/status", "", http.StatusOK)
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &job))
-		if job.Done {
+		if job.Done() {
 			break
 		}
 		require.True(t, time.Now().Before(deadline), "sync did not complete")
 		time.Sleep(10 * time.Millisecond)
 	}
-	require.True(t, job.Success, job.Error)
+	require.True(t, job.Success(), job.Error)
 	remoteMu.Lock()
 	require.Equal(t, "troy@greendale.edu", remoteUser["userName"])
 	require.Contains(t, requests, "POST /Users")

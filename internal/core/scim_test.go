@@ -341,18 +341,32 @@ func TestSyncDirtyState(t *testing.T) {
 			{ID: "user-1", GivenName: "Shirley", FamilyName: "Bennett", Username: "shirleyb", Email: "shirley@greendale.edu", Active: true, Dirty: true},
 			{ID: "user-2", GivenName: "Annie", FamilyName: "Edison", Username: "anniee", Email: "annie@greendale.edu", Active: false, RemoteID: "remote-user-updated", Dirty: true},
 			{ID: "user-3", GivenName: "Señor", FamilyName: "Chang", Username: "chang", Email: "chang@greendale.edu", Active: true, RemoteID: "remote-user-deleted", Dirty: true, Deleted: true},
+			{ID: "user-4", GivenName: "Troy", FamilyName: "Barnes", Username: "troyb", Dirty: true, Deleted: true},
 		},
 		Groups: []Group{
 			{ID: "group-1", DisplayName: "Study Group", MemberIDs: []string{"user-1", "user-2"}, Dirty: true},
 			{ID: "group-2", DisplayName: "Spanish Class", MemberIDs: []string{"user-2"}, RemoteID: "remote-group-updated", Dirty: true},
 			{ID: "group-3", DisplayName: "Paintball Squad", RemoteID: "remote-group-deleted", Dirty: true, Deleted: true},
+			{ID: "group-4", DisplayName: "Greendale Glee Club", Dirty: true, Deleted: true},
 		},
 	}
+
+	plan := PlanSync(state)
+	operations := make([]string, 0, len(plan))
+	for _, entry := range plan {
+		operations = append(operations, entry.ResourceType+" "+entry.Operation)
+	}
+	r.Equal([]string{
+		"user create", "user update", "user delete", "user forget",
+		"group create", "group update", "group delete", "group forget",
+	}, operations)
+	r.Equal("pending delete", SyncStatus(state.Users[3]))
+	r.Equal("pending delete", GroupSyncStatus(state.Groups[3]))
 
 	result := SyncDirtyState(state)
 	r.NoError(result.Fatal)
 	r.Equal(
-		"sync finished: users 1 created, 1 updated, 1 deleted, 0 failed; groups 1 created, 1 updated, 1 deleted, 0 failed",
+		"sync finished: users 1 created, 1 updated, 2 deleted, 0 failed; groups 1 created, 1 updated, 2 deleted, 0 failed",
 		result.Status,
 	)
 	r.Equal(
@@ -376,6 +390,13 @@ func TestSyncDirtyState(t *testing.T) {
 	r.Equal("remote-group-created", result.State.Groups[0].RemoteID)
 	r.False(result.State.Groups[0].Dirty)
 	r.False(result.State.Groups[1].Dirty)
+	r.Empty(PlanSync(result.State))
+	for _, user := range result.State.Users {
+		r.Equal("synced", SyncStatus(user))
+	}
+	for _, group := range result.State.Groups {
+		r.Equal("synced", GroupSyncStatus(group))
+	}
 }
 
 func TestSyncDirtyStatePrunesDeletedUsersFromGroups(t *testing.T) {

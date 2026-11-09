@@ -2753,28 +2753,11 @@ func FullName(u User) string {
 }
 
 func SyncStatus(u User) string {
-	return ResourceSyncStatus(u.Deleted, u.Dirty, u.LastError, u.RemoteID)
+	return u.syncState().status()
 }
 
 func GroupSyncStatus(g Group) string {
-	return ResourceSyncStatus(g.Deleted, g.Dirty, g.LastError, g.RemoteID)
-}
-
-func ResourceSyncStatus(deleted bool, dirty bool, lastError string, remoteID string) string {
-	switch {
-	case deleted && dirty:
-		return "pending delete"
-	case deleted:
-		return "deleted"
-	case lastError != "":
-		return "sync error"
-	case dirty && remoteID == "":
-		return "pending create"
-	case dirty:
-		return "pending update"
-	default:
-		return "synced"
-	}
+	return g.syncState().status()
 }
 
 func ActiveStatus(u User) string {

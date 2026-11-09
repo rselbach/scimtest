@@ -752,15 +752,15 @@ func (a *webApp) handleAPIToolAction(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *webApp) handleAPITunnel(w http.ResponseWriter, _ *http.Request) {
-	a.tunnelMu.Lock()
-	defer a.tunnelMu.Unlock()
-	result := map[string]any{"supported": a.tunnelSupported, "starting": a.tunnelStarting != nil, "retry_available": a.tunnelLastError != "", "error": a.tunnelLastError}
-	result["enrollment_url"] = desktopEnrollmentURL(a.tunnelEnrollmentURL)
-	result["enrollment_code"] = a.tunnelEnrollmentCode
-	if a.tunnel != nil {
+	a.tunnel.mu.Lock()
+	defer a.tunnel.mu.Unlock()
+	result := map[string]any{"supported": a.tunnelSupported, "starting": a.tunnel.starting != nil, "retry_available": a.tunnel.retryAvailable(), "error": a.tunnel.lastError}
+	result["enrollment_url"] = desktopEnrollmentURL(a.tunnel.enrollmentURL)
+	result["enrollment_code"] = a.tunnel.enrollmentCode
+	if a.tunnel.active != nil {
 		result["connected"] = true
-		result["public_url"] = a.tunnel.PublicURL
-		result["client_ip"] = a.tunnel.ClientIP
+		result["public_url"] = a.tunnel.active.PublicURL
+		result["client_ip"] = a.tunnel.active.ClientIP
 	} else {
 		result["connected"] = false
 	}
@@ -772,9 +772,9 @@ func (a *webApp) handleAPITunnelRetry(w http.ResponseWriter, _ *http.Request) {
 }
 func (a *webApp) handleAPIAccount(w http.ResponseWriter, _ *http.Request) {
 	view := a.desktopAuthView()
-	a.tunnelMu.Lock()
-	enrollmentURL, enrollmentCode := desktopEnrollmentURL(a.tunnelEnrollmentURL), a.tunnelEnrollmentCode
-	a.tunnelMu.Unlock()
+	a.tunnel.mu.Lock()
+	enrollmentURL, enrollmentCode := desktopEnrollmentURL(a.tunnel.enrollmentURL), a.tunnel.enrollmentCode
+	a.tunnel.mu.Unlock()
 	account := a.githubAccountView()
 	writeJSON(w, map[string]any{"required": a.requireGitHubAccount, "state": view.State, "error": view.Error, "linked": account.Linked, "login": account.Login, "enrollment_url": enrollmentURL, "enrollment_code": enrollmentCode})
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -60,7 +61,7 @@ func (a *webApp) startPushRequest(w http.ResponseWriter, r *http.Request, resour
 		label = found.DisplayName
 	}
 	activeEnvironment, _ := appByID(state.Apps, appID)
-	if job := a.currentSyncJob(appID); job != nil && job.Running {
+	if job := a.currentSyncJob(appID); job != nil && job.Running() {
 		a.respondSyncStartError(w, r, tab, fmt.Errorf("sync already running"))
 		return
 	}
@@ -94,7 +95,7 @@ func (a *webApp) startSyncRequest(w http.ResponseWriter, r *http.Request, kind s
 		return
 	}
 	activeEnvironment, _ := appByID(state.Apps, appID)
-	if job := a.currentSyncJob(appID); job != nil && job.Running {
+	if job := a.currentSyncJob(appID); job != nil && job.Running() {
 		a.respondSyncStartError(w, r, tab, fmt.Errorf("sync already running"))
 		return
 	}
@@ -180,14 +181,16 @@ func (a *webApp) handleSyncCancel(w http.ResponseWriter, r *http.Request) {
 
 	appID := requestSyncAppID(r, state)
 	a.syncJobMu.Lock()
-	cancel := a.syncCancels[appID]
-	a.syncJobMu.Unlock()
-	if cancel == nil {
+	job := a.syncJobs[appID]
+	if job == nil || !job.Running() {
+		a.syncJobMu.Unlock()
 		writeJSONStatus(w, http.StatusConflict, map[string]string{"error": "no sync is running"})
 		return
 	}
-
-	cancel()
+	job.Phase = syncJobStopping
+	job.Message = "stopping sync"
+	job.cancel()
+	a.syncJobMu.Unlock()
 	writeJSON(w, map[string]string{"message": "stopping sync"})
 }
 
@@ -205,7 +208,7 @@ func syncEventSequence(value string) (int, error) {
 
 func (a *webApp) respondSyncStartError(w http.ResponseWriter, r *http.Request, tab string, err error) {
 	if wantsJSON(r) {
-		writeJSONStatus(w, http.StatusConflict, syncJobSnapshot{Done: true, Error: err.Error(), Message: err.Error()})
+		writeJSONStatus(w, http.StatusConflict, syncJobSnapshot{Phase: syncJobFailed, Error: err.Error(), Message: err.Error()})
 		return
 	}
 
@@ -219,13 +222,10 @@ func (a *webApp) startSyncJob(appID string, environmentName string, kind string,
 	defer a.syncJobMu.Unlock()
 
 	if a.syncJobs == nil {
-		a.syncJobs = make(map[string]*syncJobSnapshot)
-	}
-	if a.syncCancels == nil {
-		a.syncCancels = make(map[string]context.CancelFunc)
+		a.syncJobs = make(map[string]*syncJob)
 	}
 	for jobAppID, job := range a.syncJobs {
-		if job == nil || !job.Running {
+		if job == nil || !job.Running() {
 			continue
 		}
 		if jobAppID == appID {
@@ -234,16 +234,15 @@ func (a *webApp) startSyncJob(appID string, environmentName string, kind string,
 		return nil, fmt.Errorf("a sync is already running for %s; wait for it to finish", job.EnvironmentName)
 	}
 
-	job := &syncJobSnapshot{
+	ctx, cancel := context.WithCancel(context.Background())
+	job := &syncJob{cancel: cancel, syncJobSnapshot: syncJobSnapshot{
 		ID:              strconv.FormatInt(time.Now().UnixNano(), 10),
 		EnvironmentName: environmentName,
-		Running:         true,
+		Phase:           syncJobRunning,
 		Message:         "Starting " + kind + " for " + environmentName,
 		StartedAt:       time.Now().UTC().Format(time.RFC3339),
-	}
+	}}
 	a.syncJobs[appID] = job
-	ctx, cancel := context.WithCancel(context.Background())
-	a.syncCancels[appID] = cancel
 	go a.runSyncJob(ctx, job.ID, appID, kind, targetType, targetID)
 
 	return cloneSyncJob(job), nil
@@ -254,19 +253,19 @@ func (a *webApp) runSyncJob(ctx context.Context, id string, appID string, kind s
 	state, err := loadStateForApp(appID)
 	a.mu.Unlock()
 	if err != nil {
-		a.finishSyncJob(appID, id, false, err.Error(), false)
+		a.finishSyncJob(appID, id, syncJobFailed, err.Error(), false)
 		return
 	}
 	projected, err := stateForApp(state, appID)
 	if err != nil {
-		a.finishSyncJob(appID, id, false, err.Error(), false)
+		a.finishSyncJob(appID, id, syncJobFailed, err.Error(), false)
 		return
 	}
 	if kind == "push" {
 		var ok bool
 		projected, ok = restrictDirtyToResource(projected, targetType, targetID)
 		if !ok {
-			a.finishSyncJob(appID, id, false, targetType+" not found", false)
+			a.finishSyncJob(appID, id, syncJobFailed, targetType+" not found", false)
 			return
 		}
 	}
@@ -283,7 +282,7 @@ func (a *webApp) runSyncJob(ctx context.Context, id string, appID string, kind s
 	})
 	a.rememberTrace(appID, result.Traces)
 	if result.Fatal != nil {
-		a.finishSyncJob(appID, id, false, result.Fatal.Error(), len(result.Traces) > 0)
+		a.finishSyncJob(appID, id, syncJobFailed, result.Fatal.Error(), len(result.Traces) > 0)
 		return
 	}
 
@@ -300,12 +299,18 @@ func (a *webApp) runSyncJob(ctx context.Context, id string, appID string, kind s
 	appendOperationLogs(&state, appID, result.Traces)
 	purgeFullySyncedDeletions(&state)
 	if err := a.saveRequestState(state); err != nil {
-		a.finishSyncJob(appID, id, false, err.Error(), len(result.Traces) > 0)
+		a.finishSyncJob(appID, id, syncJobFailed, err.Error(), len(result.Traces) > 0)
 		return
 	}
 
-	success := result.Stopped == nil && !result.Failed
-	a.finishSyncJob(appID, id, success, result.Status, len(result.Traces) > 0)
+	phase := syncJobSucceeded
+	switch {
+	case errors.Is(result.Stopped, context.Canceled):
+		phase = syncJobCanceled
+	case result.Stopped != nil || result.Failed:
+		phase = syncJobFailed
+	}
+	a.finishSyncJob(appID, id, phase, result.Status, len(result.Traces) > 0)
 }
 
 // restrictDirtyToResource narrows a projected state so a sync pushes exactly
@@ -375,7 +380,7 @@ func (a *webApp) updateSyncJobProgress(appID string, id string, progress syncPro
 	defer a.syncJobMu.Unlock()
 
 	job := a.syncJobs[appID]
-	if job == nil || job.ID != id {
+	if job == nil || job.ID != id || !job.Running() {
 		return
 	}
 	job.Total = progress.Total
@@ -398,32 +403,28 @@ func (a *webApp) updateSyncJobProgress(appID string, id string, progress syncPro
 		}
 	}
 	job.RateLimited = progress.RateLimited
-	if progress.Status != "" {
+	if progress.Status != "" && job.Phase != syncJobStopping {
 		job.Message = progress.Status
 	}
 }
 
-func (a *webApp) finishSyncJob(appID string, id string, success bool, message string, traceAvailable bool) {
+func (a *webApp) finishSyncJob(appID string, id string, phase syncJobPhase, message string, traceAvailable bool) {
 	a.syncJobMu.Lock()
 	defer a.syncJobMu.Unlock()
 
 	job := a.syncJobs[appID]
-	if job == nil || job.ID != id {
+	if job == nil || job.ID != id || !job.Running() {
 		return
 	}
-	job.Running = false
-	job.Done = true
-	job.Success = success
+	job.Phase = phase
 	job.TraceAvailable = traceAvailable
 	job.RateLimited = false
 	job.Message = message
 	job.Percent = syncProgressPercent(job.Processed, job.Total, true)
 	job.FinishedAt = time.Now().UTC().Format(time.RFC3339)
-	if cancel := a.syncCancels[appID]; cancel != nil {
-		cancel()
-	}
-	delete(a.syncCancels, appID)
-	if !success {
+	job.cancel()
+	job.cancel = nil
+	if !job.Success() {
 		job.Error = message
 	}
 }
@@ -443,7 +444,7 @@ func (a *webApp) currentSyncJobAfter(appID string, sequence int) *syncJobSnapsho
 	if job == nil || sequence == 0 {
 		return cloneSyncJob(job)
 	}
-	cloned := *job
+	cloned := job.syncJobSnapshot
 	cloned.Events = make([]syncJobEvent, 0)
 	for _, event := range job.Events {
 		if event.Sequence > sequence {
@@ -453,12 +454,12 @@ func (a *webApp) currentSyncJobAfter(appID string, sequence int) *syncJobSnapsho
 	return &cloned
 }
 
-func cloneSyncJob(job *syncJobSnapshot) *syncJobSnapshot {
+func cloneSyncJob(job *syncJob) *syncJobSnapshot {
 	if job == nil {
 		return nil
 	}
 
-	cloned := *job
+	cloned := job.syncJobSnapshot
 	cloned.Events = append([]syncJobEvent(nil), job.Events...)
 	return &cloned
 }
