@@ -27,3 +27,4 @@ scimtest-server.json.tmp
 # verify-scimtest run state and captured proof
 .cursor/skills/verify-scimtest/runs/
 .cursor/skills/verify-scimtest/artifacts/
+packaging/macos/build-notarized-local.sh
