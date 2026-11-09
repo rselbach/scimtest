@@ -11,6 +11,31 @@ mod pushes;
 mod start;
 pub(super) use groups::IssuedGroups;
 
+/// The execution status of a lifecycle run or checklist step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleStatus {
+    Running,
+    Waiting,
+    NeedsBrowser,
+    Ok,
+    Failed,
+    Skipped,
+}
+impl LifecycleStatus {
+    /// Returns the status name used in lifecycle messages and API responses.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Waiting => "waiting",
+            Self::NeedsBrowser => "needs_browser",
+            Self::Ok => "ok",
+            Self::Failed => "failed",
+            Self::Skipped => "skipped",
+        }
+    }
+}
+
 #[derive(Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct JoinerInput {
@@ -33,7 +58,7 @@ pub struct LifecycleRun {
     pub kind: String,
     pub user_id: String,
     pub user: String,
-    pub status: String,
+    pub status: LifecycleStatus,
     pub started_at: String,
     pub steps: Vec<LifecycleStep>,
     #[serde(skip)]
@@ -44,7 +69,7 @@ pub struct LifecycleStep {
     pub id: String,
     pub protocol: String,
     pub title: String,
-    pub status: String,
+    pub status: LifecycleStatus,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub detail: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -75,34 +100,42 @@ impl LifecycleRun {
             kind: kind.into(),
             user_id: user.id.clone(),
             user: label(user),
-            status: "running".into(),
+            status: LifecycleStatus::Running,
             started_at: timestamp(),
             steps: Vec::new(),
             expected_groups: Vec::new(),
         }
     }
     fn settle_status(&mut self) {
-        self.status = if self.steps.iter().any(|step| step.status == "running") {
-            "running"
-        } else if self.steps.iter().any(|step| step.status == "failed") {
-            "failed"
+        self.status = if self
+            .steps
+            .iter()
+            .any(|step| step.status == LifecycleStatus::Running)
+        {
+            LifecycleStatus::Running
         } else if self
             .steps
             .iter()
-            .any(|step| matches!(step.status.as_str(), "waiting" | "needs_browser"))
+            .any(|step| step.status == LifecycleStatus::Failed)
         {
-            "waiting"
+            LifecycleStatus::Failed
+        } else if self.steps.iter().any(|step| {
+            matches!(
+                step.status,
+                LifecycleStatus::Waiting | LifecycleStatus::NeedsBrowser
+            )
+        }) {
+            LifecycleStatus::Waiting
         } else {
-            "ok"
-        }
-        .into();
+            LifecycleStatus::Ok
+        };
     }
     pub fn with_browser_urls(mut self, base: &str, environment: &str) -> Self {
         let query = url::form_urlencoded::Serializer::new(String::new())
             .extend_pairs([("environment", environment), ("tab", "lifecycle")])
             .finish();
         for step in &mut self.steps {
-            if step.status == "needs_browser" {
+            if step.status == LifecycleStatus::NeedsBrowser {
                 step.browser_url = format!("{base}/?{query}#lifecycle-run-{}", self.id);
             }
         }
@@ -114,14 +147,14 @@ impl LifecycleStep {
         id: &str,
         protocol: &str,
         title: impl Into<String>,
-        status: &str,
+        status: LifecycleStatus,
         detail: impl Into<String>,
     ) -> Self {
         Self {
             id: id.into(),
             protocol: protocol.into(),
             title: title.into(),
-            status: status.into(),
+            status,
             detail: detail.into(),
             messages: Vec::new(),
             browser_url: String::new(),
@@ -130,7 +163,7 @@ impl LifecycleStep {
         }
     }
     pub fn can_send_logout(&self) -> bool {
-        self.id.starts_with("saml-logout-") && self.status != "ok"
+        self.id.starts_with("saml-logout-") && self.status != LifecycleStatus::Ok
     }
 }
 fn timestamp() -> String {

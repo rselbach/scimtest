@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use rune::{Color, El, ScrollSpec, col, row};
 use rune_kit::{Button, ButtonVariant};
-use scimtest_core::oidc::{JoinerInput, LifecycleRun, MoverInput};
+use scimtest_core::oidc::{JoinerInput, LifecycleRun, LifecycleStatus, MoverInput};
 
 use super::{
     Editor, Workspace,
@@ -387,12 +387,14 @@ impl Workspace {
     }
 }
 
-fn status_color(status: &str, p: Palette) -> Color {
+fn status_color(status: &LifecycleStatus, p: Palette) -> Color {
     match status {
-        "ok" => p.success,
-        "failed" => p.danger,
-        "running" | "waiting" | "needs_browser" => p.accent,
-        _ => p.muted,
+        LifecycleStatus::Ok => p.success,
+        LifecycleStatus::Failed => p.danger,
+        LifecycleStatus::Running | LifecycleStatus::Waiting | LifecycleStatus::NeedsBrowser => {
+            p.accent
+        }
+        LifecycleStatus::Skipped => p.muted,
     }
 }
 
@@ -404,13 +406,13 @@ fn kind_label(kind: &str) -> &'static str {
     }
 }
 
-fn status_label(status: &str) -> &'static str {
+fn status_label(status: &LifecycleStatus) -> &'static str {
     match status {
-        "ok" => "OK",
-        "failed" => "Failed",
-        "running" => "Running",
-        "waiting" => "Waiting",
-        "needs_browser" => "Needs browser",
-        _ => "Skipped",
+        LifecycleStatus::Ok => "OK",
+        LifecycleStatus::Failed => "Failed",
+        LifecycleStatus::Running => "Running",
+        LifecycleStatus::Waiting => "Waiting",
+        LifecycleStatus::NeedsBrowser => "Needs browser",
+        LifecycleStatus::Skipped => "Skipped",
     }
 }

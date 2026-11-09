@@ -12,23 +12,100 @@ use tokio::task::JoinHandle;
 pub struct Job {
     pub id: String,
     pub environment_name: String,
-    pub running: bool,
-    pub done: bool,
-    pub success: bool,
+    #[serde(flatten)]
+    state: JobState,
     pub trace_available: bool,
     pub total: usize,
     pub processed: usize,
     pub percent: usize,
     pub message: String,
-    pub error: String,
     pub current: String,
-    pub rate_limited: bool,
     pub started_at: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub finished_at: String,
     pub latest_sequence: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<JobEvent>,
+}
+#[derive(Clone, Default, Debug)]
+enum JobState {
+    #[default]
+    Running,
+    RateLimited,
+    Finished {
+        outcome: std::result::Result<(), String>,
+        at: String,
+    },
+}
+impl Job {
+    /// Reports whether the job is still processing or waiting to retry.
+    pub fn is_running(&self) -> bool {
+        matches!(self.state, JobState::Running | JobState::RateLimited)
+    }
+    /// Reports whether the job has finished.
+    pub fn is_done(&self) -> bool {
+        !self.is_running()
+    }
+    /// Reports whether the job finished successfully.
+    pub fn is_success(&self) -> bool {
+        matches!(
+            self.state,
+            JobState::Finished {
+                outcome: Ok(()),
+                ..
+            }
+        )
+    }
+    /// Reports whether the job is waiting after a rate limit response.
+    pub fn is_rate_limited(&self) -> bool {
+        matches!(self.state, JobState::RateLimited)
+    }
+    /// Returns the terminal failure, or an empty string when there is none.
+    pub fn error(&self) -> &str {
+        match &self.state {
+            JobState::Finished {
+                outcome: Err(error),
+                ..
+            } => error,
+            _ => "",
+        }
+    }
+}
+impl Serialize for JobState {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct View<'a> {
+            running: bool,
+            done: bool,
+            success: bool,
+            rate_limited: bool,
+            error: &'a str,
+            #[serde(skip_serializing_if = "str::is_empty")]
+            finished_at: &'a str,
+        }
+        let (done, success, error, finished_at) = match self {
+            Self::Running | Self::RateLimited => (false, false, "", ""),
+            Self::Finished {
+                outcome: Ok(()),
+                at,
+            } => (true, true, "", at.as_str()),
+            Self::Finished {
+                outcome: Err(error),
+                at,
+            } => (true, false, error.as_str(), at.as_str()),
+        };
+        View {
+            running: !done,
+            done,
+            success,
+            rate_limited: matches!(self, Self::RateLimited),
+            error,
+            finished_at,
+        }
+        .serialize(serializer)
+    }
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -107,7 +184,7 @@ impl Service {
         if state.stopping {
             return Err(Error::Conflict("scimtest is shutting down".into()));
         }
-        if let Some(active) = state.jobs.iter().find(|(_, job)| job.running) {
+        if let Some(active) = state.jobs.iter().find(|(_, job)| job.is_running()) {
             return Err(Error::Conflict(if active.0 == id {
                 "sync already running".into()
             } else {
@@ -153,7 +230,6 @@ impl Service {
         let job = Job {
             id: crate::store::new_id("sync"),
             environment_name: directory.environment.name.clone(),
-            running: true,
             message: format!("Starting {kind} for {}", directory.environment.name),
             started_at: timestamp(),
             ..Default::default()
@@ -218,6 +294,9 @@ impl Service {
         let Some(job) = state.jobs.get_mut(id) else {
             return;
         };
+        if job.is_done() {
+            return;
+        }
         job.total = progress.total;
         job.processed = progress.processed;
         job.percent = percent(job.processed, job.total, false);
@@ -245,7 +324,11 @@ impl Service {
                 });
             }
         }
-        job.rate_limited = progress.rate_limited;
+        job.state = if progress.rate_limited {
+            JobState::RateLimited
+        } else {
+            JobState::Running
+        };
         if !progress.status.is_empty() {
             job.message = progress.status;
         }
@@ -290,17 +373,13 @@ impl Service {
         let Some(job) = state.jobs.get_mut(id) else {
             return;
         };
-        job.running = false;
-        job.done = true;
-        job.success = success;
+        job.state = JobState::Finished {
+            outcome: if success { Ok(()) } else { Err(message.into()) },
+            at: timestamp(),
+        };
         job.trace_available = !traces.is_empty();
-        job.rate_limited = false;
         job.message = message.into();
         job.percent = percent(job.processed, job.total, true);
-        job.finished_at = timestamp();
-        if !success {
-            job.error = message.into();
-        }
         state.traces.insert(id.into(), traces);
         state.cancellations.remove(id);
         self.changed();

@@ -7,11 +7,13 @@ pub(crate) fn login_hint_user<'a>(directory: &'a Directory, hint: &str) -> Optio
     chooser::login_user(directory, hint).map(|user| user.id.as_str())
 }
 mod lifecycle;
-pub use lifecycle::{JoinerInput, LifecycleMessage, LifecycleRun, LifecycleStep, MoverInput};
+pub use lifecycle::{
+    JoinerInput, LifecycleMessage, LifecycleRun, LifecycleStatus, LifecycleStep, MoverInput,
+};
 pub(crate) mod faults;
 mod playground;
 mod resilience;
-pub use resilience::{ResiliencePreset, ResilienceRun};
+pub use resilience::{ResiliencePreset, ResilienceRun, ResilienceState};
 mod saml;
 mod saml_logout;
 mod sessions;

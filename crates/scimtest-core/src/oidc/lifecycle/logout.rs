@@ -8,14 +8,17 @@ pub(super) fn session_steps(
     let settings = &environment.settings;
     let (status, detail) = if !settings.supports_oidc() && !settings.supports_saml() {
         (
-            "skipped",
+            LifecycleStatus::Skipped,
             "The environment has no OIDC or SAML configuration".into(),
         )
     } else if sessions.is_empty() {
-        ("skipped", format!("{user} had no live IdP sessions"))
+        (
+            LifecycleStatus::Skipped,
+            format!("{user} had no live IdP sessions"),
+        )
     } else {
         (
-            "ok",
+            LifecycleStatus::Ok,
             format!(
                 "Ended {}",
                 sessions
@@ -55,7 +58,7 @@ pub(super) fn session_steps(
             "backchannel",
             "oidc",
             "Send back-channel logout tokens",
-            "skipped",
+            LifecycleStatus::Skipped,
             reason,
         ));
     } else {
@@ -64,7 +67,7 @@ pub(super) fn session_steps(
                 &format!("backchannel-{}", session.id),
                 "oidc",
                 format!("Back-channel logout for session {}", session.id),
-                "running",
+                LifecycleStatus::Running,
                 "Sending a logout token",
             );
             step.session = Some(session.clone());
@@ -89,7 +92,7 @@ pub(super) fn session_steps(
             "saml-logout",
             "saml",
             "Send SAML LogoutRequests",
-            "skipped",
+            LifecycleStatus::Skipped,
             reason,
         ));
     } else {
@@ -98,7 +101,7 @@ pub(super) fn session_steps(
                 &format!("saml-logout-{}", session.id),
                 "saml",
                 format!("SAML Single Logout for session {}", session.id),
-                "needs_browser",
+                LifecycleStatus::NeedsBrowser,
                 "A LogoutRequest travels through a browser. Send it from the Lifecycle checklist.",
             );
             step.session = Some(session.clone());
@@ -144,13 +147,12 @@ impl Memory {
                     .iter()
                     .any(|message| message.outcome == "failed")
                 {
-                    "failed"
+                    LifecycleStatus::Failed
                 } else if step.messages.iter().any(|message| message.outcome == "ok") {
-                    "ok"
+                    LifecycleStatus::Ok
                 } else {
-                    "skipped"
-                }
-                .into();
+                    LifecycleStatus::Skipped
+                };
                 step.detail = step
                     .messages
                     .last()
@@ -167,16 +169,20 @@ impl Memory {
             {
                 let outcome = result["outcome"].as_str().unwrap_or_default();
                 if outcome == "pending" {
-                    step.status = "waiting".into();
+                    step.status = LifecycleStatus::Waiting;
                     step.detail = "Waiting for the SP's LogoutResponse".into();
                     continue;
                 }
-                step.status = if outcome == "ok" { "ok" } else { "failed" }.into();
+                step.status = if outcome == "ok" {
+                    LifecycleStatus::Ok
+                } else {
+                    LifecycleStatus::Failed
+                };
                 let detail = result["detail"].as_str().unwrap_or_default();
                 step.detail = format!("The SP's LogoutResponse: {detail}");
                 if let Some(message) = step.messages.last_mut() {
                     message.response = format!("LogoutResponse: {detail}");
-                    message.outcome = step.status.clone();
+                    message.outcome = step.status.as_str().into();
                 }
             }
         }
@@ -218,7 +224,7 @@ impl Identity {
         let message = self.start_saml_logout_session(id, session, binding, base)?;
         self.update_lifecycle_step(id, run, step_id, |step| {
             step.request_id = message.id.clone();
-            step.status = "waiting".into();
+            step.status = LifecycleStatus::Waiting;
             step.detail = "Waiting for the SP's LogoutResponse".into();
             step.messages.push(LifecycleMessage {
                 at: timestamp(),

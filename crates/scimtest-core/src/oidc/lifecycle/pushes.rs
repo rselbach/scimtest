@@ -30,7 +30,7 @@ pub(super) fn push_step(group: &Group) -> LifecycleStep {
         &format!("scim-group-{}", group.id),
         "scim",
         format!("Push group {} through SCIM", group.fields.display_name),
-        "running",
+        LifecycleStatus::Running,
         "Waiting to push",
     )
 }
@@ -70,7 +70,7 @@ impl Identity {
         let Some(runtime) = &self.0.runtime else {
             for push in pushes {
                 self.update_lifecycle_step(id, run, &push.step, |step| {
-                    step.status = "failed".into();
+                    step.status = LifecycleStatus::Failed;
                     step.detail =
                         "The push did not start: SCIM jobs require an async runtime".into();
                 })?;
@@ -92,7 +92,7 @@ impl Identity {
             for push in pushes {
                 let result = if !push.dependency.is_empty() && failed.contains(&push.dependency) {
                     identity.update_lifecycle_step(&id, &run, &push.step, |step| {
-                        step.status = "skipped".into();
+                        step.status = LifecycleStatus::Skipped;
                         step.detail = "Skipped because the user was not provisioned".into();
                     })
                 } else {
@@ -141,7 +141,7 @@ impl Identity {
                     _ => unreachable!(),
                 };
                 self.update_lifecycle_step(id, run, &push.step, |step| {
-                    step.status = "failed".into();
+                    step.status = LifecycleStatus::Failed;
                     step.detail = format!("The push did not start: {error}");
                 })?;
                 return Ok(false);
@@ -154,7 +154,7 @@ impl Identity {
                 .await
                 .map_err(|error| ProtocolError::new("server_error", &error.to_string()))??;
             match current {
-                Some(current) if current.id == job.id && current.done => break Some(current),
+                Some(current) if current.id == job.id && current.is_done() => break Some(current),
                 Some(current) if current.id == job.id => {}
                 _ => break None,
             }
@@ -178,10 +178,14 @@ impl Identity {
                 }
             })
             .collect();
-        let success = done.as_ref().is_some_and(|job| job.success);
+        let success = done.as_ref().is_some_and(|job| job.is_success());
         self.update_lifecycle_step(id, run, &push.step, |step| {
             step.messages = messages;
-            step.status = if success { "ok" } else { "failed" }.into();
+            step.status = if success {
+                LifecycleStatus::Ok
+            } else {
+                LifecycleStatus::Failed
+            };
             step.detail = done.map(|job| job.message).unwrap_or_else(|| {
                 "A later sync replaced this push's result; see the sync trace".into()
             });

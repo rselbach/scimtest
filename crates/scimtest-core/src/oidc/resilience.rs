@@ -5,6 +5,29 @@ mod token;
 use presets::presets;
 pub(super) use token::{TokenReservation, token_key};
 
+/// The execution state of an armed fault injection scenario.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResilienceState {
+    Armed,
+    Running,
+    Completed,
+    Disarmed,
+    Expired,
+}
+impl ResilienceState {
+    /// Returns the state name used in API responses and the inspector.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Armed => "armed",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Disarmed => "disarmed",
+            Self::Expired => "expired",
+        }
+    }
+}
+
 #[derive(Clone)]
 enum Action {
     Outage,
@@ -62,7 +85,7 @@ pub struct ResilienceRun {
     pub summary: String,
     pub protocol: String,
     pub phase: String,
-    pub state: String,
+    pub state: ResilienceState,
     pub total: i32,
     pub remaining: i32,
     pub in_flight: i32,
@@ -84,7 +107,10 @@ impl ResilienceRun {
         json!({"ID":self.id,"PresetID":self.preset_id,"Name":self.name,"Summary":self.summary,"Protocol":self.protocol,"Phase":self.phase,"State":self.state,"Action":self.action.api_value(),"Total":self.total,"Remaining":self.remaining,"InFlight":self.in_flight,"ArmedAt":self.armed_at,"ExpiresAt":self.expires_at,"Decisions":if self.decisions.is_empty() { Value::Null } else { json!(self.decisions.iter().map(|decision| json!({"Time":decision.time.to_rfc3339_opts(chrono::SecondsFormat::Secs,true),"Phase":decision.phase,"Outcome":decision.outcome,"Detail":decision.detail})).collect::<Vec<_>>()) }})
     }
     pub fn active(&self) -> bool {
-        matches!(self.state.as_str(), "armed" | "running")
+        matches!(
+            self.state,
+            ResilienceState::Armed | ResilienceState::Running
+        )
     }
     pub fn progress(&self) -> String {
         format!(
@@ -106,7 +132,7 @@ impl ResilienceRun {
     }
     fn expire(&mut self, now: DateTime<Utc>) {
         if self.active() && now >= self.expires_at {
-            self.state = "expired".into();
+            self.state = ResilienceState::Expired;
             self.in_flight = 0;
             self.decision(
                 "scenario",
@@ -174,7 +200,7 @@ impl Identity {
             summary: preset.summary.into(),
             protocol: preset.protocol.into(),
             phase: preset.phase.into(),
-            state: "armed".into(),
+            state: ResilienceState::Armed,
             total: count,
             remaining: count,
             in_flight: 0,
@@ -211,7 +237,7 @@ impl Identity {
         if !run.active() {
             return Ok(false);
         }
-        run.state = "disarmed".into();
+        run.state = ResilienceState::Disarmed;
         run.in_flight = 0;
         run.decision(
             "scenario",
@@ -270,7 +296,7 @@ impl Memory {
                 && run.phase == "flow"
                 && let Action::Flow(faults) = run.action.clone()
             {
-                run.state = "completed".into();
+                run.state = ResilienceState::Completed;
                 run.remaining = 0;
                 run.decision("flow", "injected", &faults.describe(), now);
                 self.resilience_changed();
@@ -290,7 +316,7 @@ impl Memory {
         if !run.active() || run.phase != phase || run.remaining - run.in_flight < 1 {
             return None;
         }
-        run.state = "running".into();
+        run.state = ResilienceState::Running;
         run.in_flight += 1;
         let reserved = (run.id.clone(), run.action.clone());
         self.resilience_changed();
@@ -314,7 +340,7 @@ impl Memory {
         run.remaining -= 1;
         run.decision(phase, "injected", &run.action.describe(), now);
         if run.remaining == 0 && run.in_flight == 0 {
-            run.state = "completed".into();
+            run.state = ResilienceState::Completed;
         }
         self.resilience_changed();
         true
@@ -360,13 +386,13 @@ mod tests {
                 .is_none()
         );
         let expired = identity.resilience_run(&environment.id).unwrap().unwrap();
-        assert_eq!(expired.state, "expired");
+        assert_eq!(expired.state, ResilienceState::Expired);
         assert_eq!(expired.remaining, 1);
         assert_eq!(expired.decisions[0].outcome, "expired");
         let replacement = identity
             .arm_resilience(&environment.id, "token-outage", 2)
             .unwrap();
         assert_ne!(first.id, replacement.id);
-        assert_eq!(replacement.state, "armed");
+        assert_eq!(replacement.state, ResilienceState::Armed);
     }
 }

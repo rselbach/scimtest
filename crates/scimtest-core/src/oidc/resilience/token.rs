@@ -216,7 +216,7 @@ impl Drop for TokenReservation {
             {
                 run.in_flight -= 1;
                 if run.remaining == run.total && run.in_flight == 0 {
-                    run.state = "armed".into();
+                    run.state = ResilienceState::Armed;
                 }
                 run.decision(
                     &self.phase,

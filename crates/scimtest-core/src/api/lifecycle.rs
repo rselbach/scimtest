@@ -1,5 +1,5 @@
 use super::*;
-use crate::oidc::{JoinerInput, LifecycleRun, MoverInput, ProtocolError};
+use crate::oidc::{JoinerInput, LifecycleRun, LifecycleStatus, MoverInput, ProtocolError};
 use axum::{
     body::Bytes,
     extract::{Form, Query},
@@ -169,13 +169,13 @@ async fn browser(
     oidc::protocol(state,move |identity,store| {
         let environment = store.directory(&id)?.environment;
         let runs = identity.lifecycle_runs(&id)?;
-        let refresh = if runs.iter().any(|run| run.status == "running") { "<meta http-equiv=refresh content=1>" } else { "" };
+        let refresh = if runs.iter().any(|run| run.status == LifecycleStatus::Running) { "<meta http-equiv=refresh content=1>" } else { "" };
         let mut html = format!("<!doctype html><html><head><meta charset=utf-8><title>Lifecycle · scimtest</title>{refresh}<style>body{{font:14px system-ui;background:#f3f3f3;color:#252525;max-width:900px;margin:40px auto}}article{{background:white;border:1px solid #ccc;border-radius:8px;padding:20px;margin:16px 0}}section{{padding:12px 0;border-top:1px solid #ddd}}button{{background:#0088ff;color:white;border:0;border-radius:5px;padding:8px}}pre{{white-space:pre-wrap;overflow-wrap:anywhere}}small{{color:#666}}</style></head><body><h1>Lifecycle</h1><p>{}</p>",oidc::escape(&environment.name));
         if let Some(error) = query.get("error") { html.push_str(&format!("<p role=alert>{}</p>",oidc::escape(error))); }
         for run in runs {
-            html.push_str(&format!("<article id=\"lifecycle-run-{}\"><h2>{}: {}</h2><p>{}</p>",run.id,oidc::escape(&run.kind),oidc::escape(&run.user),oidc::escape(&run.status)));
+            html.push_str(&format!("<article id=\"lifecycle-run-{}\"><h2>{}: {}</h2><p>{}</p>",run.id,oidc::escape(&run.kind),oidc::escape(&run.user),oidc::escape(run.status.as_str())));
             for step in run.steps {
-                html.push_str(&format!("<section><strong>{}</strong> <small>{}</small><p>{}</p>",oidc::escape(&step.title),oidc::escape(&step.status.replace('_'," ")),oidc::escape(&step.detail)));
+                html.push_str(&format!("<section><strong>{}</strong> <small>{}</small><p>{}</p>",oidc::escape(&step.title),oidc::escape(&step.status.as_str().replace('_'," ")),oidc::escape(&step.detail)));
                 if step.can_send_logout() {
                     html.push_str(&format!("<form method=post action=\"/inspect/lifecycle/{}/saml-logout\"><input type=hidden name=run_id value=\"{}\"><input type=hidden name=step_id value=\"{}\"><select name=binding aria-label=Binding><option value=redirect>HTTP-Redirect</option><option value=post>HTTP-POST</option></select> <button>Send LogoutRequest</button></form>",oidc::escape(&environment.slug),run.id,oidc::escape(&step.id)));
                 }

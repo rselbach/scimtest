@@ -109,6 +109,11 @@ async fn enrollment_authenticates_the_installation_without_exposing_the_device_s
     let service = service(store.clone(), &server, &local);
     service.start().unwrap();
     let authorizing = wait(&service, |snapshot| snapshot.state() == "authorizing").await;
+    assert!(authorizing.starting);
+    assert!(!authorizing.connected);
+    assert!(!authorizing.retry_available);
+    assert!(authorizing.public_url.is_none());
+    assert!(authorizing.error.is_empty());
     assert!(!service.unlocked().unwrap());
     assert!(
         authorizing
@@ -130,6 +135,10 @@ async fn enrollment_authenticates_the_installation_without_exposing_the_device_s
     );
     server.shared.approved.store(true, Ordering::SeqCst);
     let connected = wait(&service, |snapshot| snapshot.connected).await;
+    assert!(!connected.starting);
+    assert!(connected.enrollment_url.is_empty());
+    assert!(connected.enrollment_code.is_empty());
+    assert!(service.authorization_url().is_err());
     assert_eq!(
         connected.public_url.as_deref(),
         Some("https://scimtest.example/greendale")
@@ -189,7 +198,12 @@ async fn reconnect_preserves_identity_and_updates_registration_then_policy_close
         .commands
         .send(Command::Close(1008, "installation revoked".into()))
         .unwrap();
-    wait(&service, |snapshot| snapshot.retry_available).await;
+    let failed = wait(&service, |snapshot| snapshot.retry_available).await;
+    assert!(!failed.starting);
+    assert!(!failed.connected);
+    assert!(failed.public_url.is_none());
+    assert!(failed.enrollment_url.is_empty());
+    assert!(service.authorization_url().is_err());
     assert!(!service.unlocked().unwrap());
     assert!(service.public_endpoint().unwrap().is_none());
     assert_eq!(

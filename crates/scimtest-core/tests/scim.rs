@@ -317,7 +317,7 @@ impl Fixture {
         tokio::time::timeout(std::time::Duration::from_secs(15), async {
             loop {
                 let job = self.service.status(&self.id, 0).unwrap().unwrap();
-                if job.done {
+                if job.is_done() {
                     return job;
                 }
                 updates.changed().await.unwrap();
@@ -333,7 +333,7 @@ async fn provisioning_tracks_resources_and_reconciles_remote_changes() {
     let server = Server::new().await;
     let f = Fixture::new(&server.url, "generic");
     let job = f.run(Mode::Sync).await;
-    assert!(job.success, "{}", job.message);
+    assert!(job.is_success(), "{}", job.message);
     assert_eq!(job.percent, 100);
     let directory = f.store.directory(&f.id).unwrap();
     assert!(
@@ -367,7 +367,7 @@ async fn provisioning_tracks_resources_and_reconciles_remote_changes() {
             .remove(&format!("/Groups/remote_{}", f.group));
     }
     let job = f.run(Mode::Reconcile).await;
-    assert!(job.success, "{}", job.message);
+    assert!(job.is_success(), "{}", job.message);
     {
         let remote = server.provider.0.lock().unwrap();
         assert_eq!(
@@ -382,7 +382,7 @@ async fn provisioning_tracks_resources_and_reconciles_remote_changes() {
     }
     f.store.delete_user(&f.id, &f.troy).unwrap();
     let job = f.run(Mode::Sync).await;
-    assert!(job.success, "{}", job.message);
+    assert!(job.is_success(), "{}", job.message);
     let directory = f.store.directory(&f.id).unwrap();
     assert!(!directory.users.iter().any(|user| user.id == f.troy));
     assert_eq!(directory.groups[0].fields.member_ids, vec![f.abed.clone()]);
@@ -410,14 +410,14 @@ async fn capabilities_and_per_resource_push_preserve_other_pending_work() {
             resource_id: f.abed.clone(),
         })
         .await;
-    assert!(job.success, "{}", job.message);
+    assert!(job.is_success(), "{}", job.message);
     let directory = f.store.directory(&f.id).unwrap();
     let users = directory.projected_users();
     assert!(users.iter().find(|user| user.id == f.troy).unwrap().dirty);
     assert!(!users.iter().find(|user| user.id == f.abed).unwrap().dirty);
     assert!(directory.projected_groups()[0].dirty);
     let job = f.run(Mode::Sync).await;
-    assert!(job.success, "{}", job.message);
+    assert!(job.is_success(), "{}", job.message);
     f.store
         .update_user(
             &f.id,
@@ -429,7 +429,7 @@ async fn capabilities_and_per_resource_push_preserve_other_pending_work() {
         )
         .unwrap();
     let job = f.run(Mode::Sync).await;
-    assert!(job.success, "{}", job.message);
+    assert!(job.is_success(), "{}", job.message);
     assert!(
         server
             .requests()
@@ -529,7 +529,12 @@ async fn cancellation_interrupts_rate_limit_waits_and_releases_the_write_guard()
     assert!(f.service.start(&f.id, Mode::Sync).is_err());
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            if f.service.status(&f.id, 0).unwrap().unwrap().rate_limited {
+            if f.service
+                .status(&f.id, 0)
+                .unwrap()
+                .unwrap()
+                .is_rate_limited()
+            {
                 break;
             }
             updates.changed().await.unwrap();
@@ -537,10 +542,25 @@ async fn cancellation_interrupts_rate_limit_waits_and_releases_the_write_guard()
     })
     .await
     .unwrap();
+    let waiting = serde_json::to_value(f.service.status(&f.id, 0).unwrap().unwrap()).unwrap();
+    assert_eq!(waiting["running"], true);
+    assert_eq!(waiting["done"], false);
+    assert_eq!(waiting["rateLimited"], true);
     f.service.cancel(&f.id).unwrap();
     let job = f.finish().await;
-    assert!(!job.success);
-    assert!(job.error.contains("cancelled"));
+    assert!(!job.is_success());
+    assert!(job.error().contains("cancelled"));
+    let cancelled = serde_json::to_value(&job).unwrap();
+    assert_eq!(cancelled["running"], false);
+    assert_eq!(cancelled["done"], true);
+    assert_eq!(cancelled["success"], false);
+    assert_eq!(cancelled["rateLimited"], false);
+    assert_eq!(cancelled["error"], job.error());
+    assert!(
+        cancelled["finishedAt"]
+            .as_str()
+            .is_some_and(|at| !at.is_empty())
+    );
     f.store
         .update_user(
             &f.id,
@@ -564,7 +584,7 @@ async fn cancellation_interrupts_rate_limit_waits_and_releases_the_write_guard()
 async fn import_preview_preserves_custom_values_and_rejects_stale_results() {
     let server = Server::new().await;
     let f = Fixture::new(&server.url, "generic");
-    assert!(f.run(Mode::Sync).await.success);
+    assert!(f.run(Mode::Sync).await.is_success());
     f.store
         .update_user(
             &f.id,
@@ -655,7 +675,7 @@ async fn adoption_falls_back_without_filter_support_and_rejects_ambiguous_matche
         }
     }
     let job = f.run(Mode::Sync).await;
-    assert!(job.success, "{}", job.message);
+    assert!(job.is_success(), "{}", job.message);
     assert!(job.message.contains("2 adopted"));
     assert!(
         !server
@@ -671,7 +691,7 @@ async fn adoption_falls_back_without_filter_support_and_rejects_ambiguous_matche
         state.requests.clear();
     }
     let job = f.run(Mode::Sync).await;
-    assert!(!job.success);
+    assert!(!job.is_success());
     assert!(
         f.store
             .directory(&f.id)
@@ -723,9 +743,9 @@ async fn pagination_loops_and_long_rate_limits_stop_without_writing_remote_data(
     let job = tokio::time::timeout(std::time::Duration::from_secs(2), f.run(Mode::Sync))
         .await
         .unwrap();
-    assert!(!job.success);
+    assert!(!job.is_success());
     assert_eq!(server.requests().len(), 1);
-    assert!(job.error.contains("31 seconds"));
+    assert!(job.error().contains("31 seconds"));
 }
 
 #[tokio::test]
@@ -771,8 +791,16 @@ async fn management_api_exposes_scim_jobs_plans_and_import_previews() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let started: Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(started["running"], true);
+    assert_eq!(started["done"], false);
+    assert_eq!(started["success"], false);
+    assert_eq!(started["rateLimited"], false);
+    assert_eq!(started["error"], "");
+    assert!(started.get("finishedAt").is_none());
     let job = f.finish().await;
-    assert!(job.success);
+    assert!(job.is_success());
     let response = app
         .clone()
         .oneshot(request("GET", "/sync/status?after=2"))
@@ -781,6 +809,15 @@ async fn management_api_exposes_scim_jobs_plans_and_import_previews() {
     let value: Value =
         serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
     assert_eq!(value["done"], true);
+    assert_eq!(value["running"], false);
+    assert_eq!(value["success"], true);
+    assert_eq!(value["rateLimited"], false);
+    assert_eq!(value["error"], "");
+    assert!(
+        value["finishedAt"]
+            .as_str()
+            .is_some_and(|at| !at.is_empty())
+    );
     assert_eq!(value["traceAvailable"], true);
     assert!(
         value["events"]
@@ -867,7 +904,7 @@ async fn entra_adoption_uses_path_patches_and_title_case_booleans() {
     seeded.insert(format!("/Groups/remote_{}", f.group), group);
     server.provider.0.lock().unwrap().resources = seeded;
     let job = f.run(Mode::Sync).await;
-    assert!(job.success, "{}", job.message);
+    assert!(job.is_success(), "{}", job.message);
     let requests = server.requests();
     assert!(
         requests

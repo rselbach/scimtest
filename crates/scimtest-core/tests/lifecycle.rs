@@ -224,8 +224,8 @@ impl Fixture {
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
             loop {
                 let job = self.scim.status(&self.id, 0).unwrap().unwrap();
-                if job.done {
-                    assert!(job.success, "{}", job.message);
+                if job.is_done() {
+                    assert!(job.is_success(), "{}", job.message);
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;

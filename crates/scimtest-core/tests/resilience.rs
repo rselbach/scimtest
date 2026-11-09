@@ -12,7 +12,7 @@ use scimtest_core::{
     Store, api,
     configuration::SettingsPatch,
     model::*,
-    oidc::{Faults, Identity},
+    oidc::{Faults, Identity, ResilienceState},
 };
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -240,7 +240,7 @@ async fn token_outages_count_valid_requests_and_recover_without_consuming_grants
     assert_eq!(f.redeem(&refresh).await.0, StatusCode::OK);
     assert_eq!(f.redeem(&refresh).await.0, StatusCode::BAD_REQUEST);
     let run = f.identity.resilience_run(&f.id).unwrap().unwrap();
-    assert_eq!(run.state, "completed");
+    assert_eq!(run.state, ResilienceState::Completed);
     assert_eq!(run.decisions[0].phase, "token (refresh_token)");
 }
 
@@ -271,7 +271,7 @@ async fn canceling_slow_code_or_refresh_requests_releases_the_grant_and_keeps_th
         assert!(task.await.unwrap_err().is_cancelled());
         f.wait_in_flight(0).await;
         let run = f.identity.resilience_run(&f.id).unwrap().unwrap();
-        assert_eq!(run.state, "armed");
+        assert_eq!(run.state, ResilienceState::Armed);
         assert_eq!(run.remaining, 1);
         assert_eq!(run.decisions[0].outcome, "canceled");
         f.identity.disarm_resilience(&f.id).unwrap();
@@ -319,11 +319,11 @@ async fn slow_redemption_rechecks_user_changes_and_disarming_preserves_progress(
             if deactivate {
                 assert_eq!(status, StatusCode::BAD_REQUEST);
                 assert_eq!(body["error"], "invalid_grant");
-                assert_eq!(run.state, "completed");
+                assert_eq!(run.state, ResilienceState::Completed);
             } else {
                 assert_eq!(status, StatusCode::OK);
                 assert_eq!(claims(&body)["email"], "troy.barnes@greendale.edu");
-                assert_eq!(run.state, "disarmed");
+                assert_eq!(run.state, ResilienceState::Disarmed);
                 assert_eq!(run.remaining, 1);
             }
         })
@@ -412,7 +412,7 @@ async fn flow_presets_apply_once_after_explicit_and_manually_armed_faults() {
     assert!(claims["exp"].as_i64() < claims["iat"].as_i64());
     assert_eq!(
         f.identity.resilience_run(&f.id).unwrap().unwrap().state,
-        "completed"
+        ResilienceState::Completed
     );
     let code = f.code().await;
     let (_, _, body) = f.redeem(&f.form("authorization_code", &code)).await;
@@ -639,7 +639,7 @@ async fn an_actual_client_timeout_releases_the_delayed_token_reservation() {
     assert!(result.unwrap_err().is_timeout());
     f.wait_in_flight(0).await;
     let run = f.identity.resilience_run(&f.id).unwrap().unwrap();
-    assert_eq!(run.state, "armed");
+    assert_eq!(run.state, ResilienceState::Armed);
     assert_eq!(run.remaining, 1);
     assert_eq!(run.decisions[0].outcome, "canceled");
     server.abort();

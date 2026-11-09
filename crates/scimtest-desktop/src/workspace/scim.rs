@@ -33,7 +33,10 @@ fn card(key: impl Into<String>, label: String, ui: &Ui) -> El {
 
 impl Workspace {
     pub(super) fn scim_running(&self) -> bool {
-        self.scim_view.job.as_ref().is_some_and(|job| job.running)
+        self.scim_view
+            .job
+            .as_ref()
+            .is_some_and(|job| job.is_running())
     }
 
     pub(super) fn refresh_scim(&mut self) {
@@ -72,15 +75,13 @@ impl Workspace {
                     match result {
                         Ok(snapshot) => {
                             if let Some(job) = &snapshot.job
-                                && job.done
-                                && view
-                                    .scim_view
-                                    .job
-                                    .as_ref()
-                                    .is_none_or(|previous| previous.id != job.id || !previous.done)
+                                && job.is_done()
+                                && view.scim_view.job.as_ref().is_none_or(|previous| {
+                                    previous.id != job.id || !previous.is_done()
+                                })
                             {
                                 view.message = job.message.clone();
-                                view.failed = !job.success;
+                                view.failed = !job.is_success();
                             }
                             view.scim_view = snapshot;
                         }
@@ -243,9 +244,9 @@ impl Workspace {
                     .center_y()
                     .child(
                         font_text(
-                            if job.running {
+                            if job.is_running() {
                                 "Sync running"
-                            } else if job.success {
+                            } else if job.is_success() {
                                 "Sync completed"
                             } else {
                                 "Sync stopped"
@@ -279,7 +280,7 @@ impl Workspace {
                     .child(
                         el().h_full()
                             .w_frac(job.percent.min(100) as f32 / 100.0)
-                            .fill(if job.done && !job.success {
+                            .fill(if job.is_done() && !job.is_success() {
                                 p.danger
                             } else {
                                 p.accent

@@ -117,7 +117,7 @@ impl Workspace {
                 .label(format!(
                     "{}: {}. {}. {} in progress. {}",
                     run.name,
-                    run.state,
+                    run.state.as_str(),
                     run.progress(),
                     run.in_flight,
                     run.summary
@@ -140,7 +140,7 @@ impl Workspace {
                                 .wrap(),
                         )
                         .child(font_text(
-                            run.state.clone(),
+                            run.state.as_str(),
                             13.0,
                             400.0,
                             if run.active() { p.accent } else { p.muted },

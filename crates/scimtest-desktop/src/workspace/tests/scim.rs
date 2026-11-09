@@ -89,7 +89,11 @@ fn provisioning() -> Fixture {
 fn job_done(state: &Workspace) -> bool {
     !state.busy
         && !state.scim_refreshing
-        && state.scim_view.job.as_ref().is_some_and(|job| job.done)
+        && state
+            .scim_view
+            .job
+            .as_ref()
+            .is_some_and(|job| job.is_done())
 }
 
 #[test]
@@ -102,7 +106,7 @@ fn sync_runs_a_job_and_the_page_shows_its_outcome() {
     fixture.click("add-entry");
     fixture.wait("the sync", job_done);
     let job = fixture.state().scim_view.job.clone().expect("a job");
-    assert!(job.success, "{}", job.message);
+    assert!(job.is_success(), "{}", job.message);
     assert_eq!(job.percent, 100);
     assert_eq!(fixture.state().message, job.message);
     assert!(!fixture.state().failed);

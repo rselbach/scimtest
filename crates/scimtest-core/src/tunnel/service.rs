@@ -143,12 +143,54 @@ struct Inner {
 }
 #[derive(Default)]
 struct State {
-    snapshot: Snapshot,
-    authorization_url: String,
+    connection: Connection,
     generation: u64,
     worker: Option<Worker>,
     closing: bool,
     resetting: bool,
+}
+#[derive(Default)]
+enum Connection {
+    #[default]
+    Unavailable,
+    Idle,
+    Connecting,
+    Authorizing {
+        url: String,
+        code: String,
+    },
+    Connected(Registration),
+    Failed(String),
+}
+impl Connection {
+    fn snapshot(&self) -> Snapshot {
+        let mut snapshot = Snapshot {
+            supported: !matches!(self, Self::Unavailable),
+            ..Default::default()
+        };
+        match self {
+            Self::Unavailable | Self::Idle => {}
+            Self::Connecting => snapshot.starting = true,
+            Self::Authorizing { url, code } => {
+                snapshot.starting = true;
+                snapshot.enrollment_url = desktop_url(url);
+                snapshot.enrollment_code = code.clone();
+            }
+            Self::Connected(registration) => {
+                snapshot.connected = true;
+                snapshot.public_url = Some(registration.public_url.clone());
+                snapshot.client_ip = Some(registration.client_ip.clone());
+                snapshot.tunnel_id = registration.tunnel_id.clone();
+                snapshot.github_user_id = registration.github_user_id;
+                snapshot.github_login = registration.github_login.clone();
+            }
+            Self::Failed(error) => {
+                snapshot.error = error.clone();
+                snapshot.retry_available = !error.is_empty();
+            }
+        }
+        snapshot
+    }
 }
 struct Worker {
     cancel: CancellationToken,
@@ -169,7 +211,11 @@ impl Service {
     }
     fn initialize(store: Store, config: Option<Config>, local_port: u16) -> Self {
         let (revision, _) = watch::channel(0);
-        let supported = config.is_some();
+        let connection = if config.is_some() {
+            Connection::Idle
+        } else {
+            Connection::Unavailable
+        };
         Self(Arc::new(Inner {
             store,
             config,
@@ -177,10 +223,7 @@ impl Service {
             runtime: tokio::runtime::Handle::try_current().ok(),
             revision,
             state: Mutex::new(State {
-                snapshot: Snapshot {
-                    supported,
-                    ..Default::default()
-                },
+                connection,
                 ..Default::default()
             }),
         }))
@@ -203,20 +246,20 @@ impl Service {
             .is_some_and(|config| config.require_account)
     }
     pub fn snapshot(&self) -> Result<Snapshot, Error> {
-        Ok(self.state()?.snapshot.clone())
+        Ok(self.state()?.connection.snapshot())
     }
     pub fn unlocked(&self) -> Result<bool, Error> {
-        Ok(!self.required() || self.state()?.snapshot.connected)
+        Ok(!self.required() || matches!(self.state()?.connection, Connection::Connected(_)))
     }
     pub fn public_endpoint(&self) -> Result<Option<PublicEndpoint>, Error> {
         let state = self.state()?;
-        let Some(url) = &state.snapshot.public_url else {
+        let Connection::Connected(registration) = &state.connection else {
             return Ok(None);
         };
         Ok(Some(PublicEndpoint {
-            url: url.clone(),
-            prefix: public_prefix(url)?,
-            client_ip: state.snapshot.client_ip.clone().unwrap_or_default(),
+            url: registration.public_url.clone(),
+            prefix: public_prefix(&registration.public_url)?,
+            client_ip: registration.client_ip.clone(),
         }))
     }
     pub fn effective_base(&self, local: &str) -> Result<String, Error> {
@@ -241,13 +284,13 @@ impl Service {
         if !self.required() {
             return Err(Error::NotFound("account sign-in"));
         }
-        let url = self.state()?.authorization_url.clone();
-        if url.is_empty() {
+        let state = self.state()?;
+        let Connection::Authorizing { url, .. } = &state.connection else {
             return Err(Error::Conflict(
                 "GitHub authorization is not ready; try again".into(),
             ));
-        }
-        Ok(url)
+        };
+        Ok(url.clone())
     }
     pub fn start(&self) -> Result<(), Error> {
         let Some(config) = self.0.config.clone() else {
@@ -262,12 +305,7 @@ impl Service {
         }
         state.generation = state.generation.wrapping_add(1);
         let generation = state.generation;
-        state.snapshot.starting = true;
-        state.snapshot.error.clear();
-        state.snapshot.retry_available = false;
-        state.snapshot.enrollment_url.clear();
-        state.snapshot.enrollment_code.clear();
-        state.authorization_url.clear();
+        state.connection = Connection::Connecting;
         let cancel = CancellationToken::new();
         let task_cancel = cancel.clone();
         let service = self.clone();
@@ -279,7 +317,7 @@ impl Service {
         Ok(())
     }
     pub fn retry(&self) -> Result<(), Error> {
-        if !self.state()?.snapshot.retry_available {
+        if !matches!(&self.state()?.connection, Connection::Failed(error) if !error.is_empty()) {
             return Ok(());
         }
         self.start()
@@ -346,29 +384,20 @@ impl Service {
             }
         }
     }
-    fn registered(&self, generation: u64, registration: Registration) -> Result<(), Error> {
-        let url = registration
+    fn registered(&self, generation: u64, mut registration: Registration) -> Result<(), Error> {
+        registration.public_url = registration
             .public_url
             .trim()
             .trim_end_matches('/')
             .to_owned();
-        public_prefix(&url)?;
+        public_prefix(&registration.public_url)?;
+        registration.client_ip = registration.client_ip.trim().into();
+        registration.github_login = registration.github_login.trim().into();
         let mut state = self.state()?;
         if state.generation != generation || state.closing {
             return Ok(());
         }
-        state.snapshot.connected = true;
-        state.snapshot.starting = false;
-        state.snapshot.retry_available = false;
-        state.snapshot.error.clear();
-        state.snapshot.public_url = Some(url);
-        state.snapshot.client_ip = Some(registration.client_ip.trim().into());
-        state.snapshot.tunnel_id = registration.tunnel_id;
-        state.snapshot.github_user_id = registration.github_user_id;
-        state.snapshot.github_login = registration.github_login.trim().into();
-        state.snapshot.enrollment_url.clear();
-        state.snapshot.enrollment_code.clear();
-        state.authorization_url.clear();
+        state.connection = Connection::Connected(registration);
         self.changed();
         Ok(())
     }
@@ -377,13 +406,15 @@ impl Service {
         if state.generation != generation || state.closing {
             return Ok(());
         }
-        state.authorization_url = if self.required() {
+        let url = if self.required() {
             enrollment.authorization_url()
         } else {
             enrollment.url
         };
-        state.snapshot.enrollment_url = desktop_url(&state.authorization_url);
-        state.snapshot.enrollment_code = enrollment.verification_code;
+        state.connection = Connection::Authorizing {
+            url,
+            code: enrollment.verification_code,
+        };
         self.changed();
         Ok(())
     }
@@ -395,18 +426,7 @@ impl Service {
             return;
         }
         state.worker.take();
-        state.snapshot.connected = false;
-        state.snapshot.starting = false;
-        state.snapshot.public_url = None;
-        state.snapshot.client_ip = None;
-        state.snapshot.tunnel_id.clear();
-        state.snapshot.github_user_id = 0;
-        state.snapshot.github_login.clear();
-        state.snapshot.enrollment_url.clear();
-        state.snapshot.enrollment_code.clear();
-        state.authorization_url.clear();
-        state.snapshot.error = error;
-        state.snapshot.retry_available = !state.snapshot.error.is_empty();
+        state.connection = Connection::Failed(error);
         self.changed();
     }
     pub async fn logout(&self) -> Result<(), Error> {
@@ -432,11 +452,7 @@ impl Service {
             }
             state.generation = state.generation.wrapping_add(1);
             let worker = state.worker.take();
-            state.snapshot = Snapshot {
-                supported: service.0.config.is_some(),
-                ..Default::default()
-            };
-            state.authorization_url.clear();
+            state.connection = Connection::Idle;
             service.changed();
             Ok(worker)
         })
@@ -452,9 +468,11 @@ impl Service {
             let mut state = self.state()?;
             state.closing = true;
             state.generation = state.generation.wrapping_add(1);
-            state.snapshot.connected = false;
-            state.snapshot.public_url = None;
-            state.snapshot.client_ip = None;
+            state.connection = if self.0.config.is_some() {
+                Connection::Idle
+            } else {
+                Connection::Unavailable
+            };
             if let Some(worker) = &state.worker {
                 worker.cancel.cancel();
             }

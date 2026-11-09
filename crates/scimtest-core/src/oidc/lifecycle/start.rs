@@ -38,7 +38,7 @@ impl Identity {
             "create",
             "directory",
             format!("Create {}", run.user),
-            "ok",
+            LifecycleStatus::Ok,
             format!("Created {} <{}> in scimtest", run.user, user.fields.email),
         ));
         let mut changed = Vec::new();
@@ -47,7 +47,7 @@ impl Identity {
                 "groups",
                 "directory",
                 format!("Add {} to groups", run.user),
-                "ok",
+                LifecycleStatus::Ok,
                 "",
             );
             match change_groups(&self.0.store, id, &user.id, &input.group_ids, &[], false) {
@@ -56,7 +56,7 @@ impl Identity {
                     changed = change.added;
                 }
                 Err(error) => {
-                    step.status = "failed".into();
+                    step.status = LifecycleStatus::Failed;
                     step.detail = error.to_string();
                 }
             }
@@ -69,7 +69,7 @@ impl Identity {
                 "scim",
                 "scim",
                 format!("Provision {} through SCIM", run.user),
-                "skipped",
+                LifecycleStatus::Skipped,
                 reason,
             ));
         } else {
@@ -77,7 +77,7 @@ impl Identity {
                 "scim-user",
                 "scim",
                 format!("Provision {} through SCIM", run.user),
-                "running",
+                LifecycleStatus::Running,
                 "Waiting to push",
             ));
             pushes.push(Push::user(&user.id));
@@ -108,7 +108,7 @@ impl Identity {
             "groups",
             "directory",
             format!("Change {}'s groups", run.user),
-            "ok",
+            LifecycleStatus::Ok,
             change.describe(),
         ));
         let mut pushes = Vec::new();
@@ -117,7 +117,7 @@ impl Identity {
                 "scim",
                 "scim",
                 "Push the changed groups through SCIM",
-                "skipped",
+                LifecycleStatus::Skipped,
                 reason,
             ));
         } else {
@@ -174,7 +174,7 @@ impl Identity {
                 "deactivate",
                 "directory",
                 format!("Deactivate {}", run.user),
-                "ok",
+                LifecycleStatus::Ok,
                 "Set active to false in scimtest",
             )
         } else {
@@ -182,7 +182,7 @@ impl Identity {
                 "deactivate",
                 "directory",
                 format!("Deactivate {}", run.user),
-                "skipped",
+                LifecycleStatus::Skipped,
                 format!("{} was already inactive", run.user),
             )
         };
@@ -198,7 +198,7 @@ impl Identity {
             "revoke",
             "oidc",
             format!("Revoke {}'s tokens", run.user),
-            "ok",
+            LifecycleStatus::Ok,
             "",
         );
         if environment.settings.supports_oidc() {
@@ -207,7 +207,7 @@ impl Identity {
             self.memory()?
                 .event(id, "revoke", &run.user, &revoke.detail);
         } else {
-            revoke.status = "skipped".into();
+            revoke.status = LifecycleStatus::Skipped;
             revoke.detail = "OIDC is not enabled for this environment".into();
         }
         run.steps.push(revoke);
@@ -217,7 +217,7 @@ impl Identity {
                 "scim",
                 "scim",
                 "Push active=false through SCIM",
-                "skipped",
+                LifecycleStatus::Skipped,
                 reason,
             ));
         } else {
@@ -225,7 +225,7 @@ impl Identity {
                 "scim-user",
                 "scim",
                 "Push active=false through SCIM",
-                "running",
+                LifecycleStatus::Running,
                 "Waiting to push",
             ));
             pushes.push(Push::user(user_id));

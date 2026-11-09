@@ -146,17 +146,17 @@ pub(super) fn issued_step(
     };
     let (status, detail) = if !enabled {
         (
-            "skipped",
+            LifecycleStatus::Skipped,
             format!("{name} is not enabled for this environment"),
         )
     } else if !settings.include_groups_claim {
         (
-            "skipped",
+            LifecycleStatus::Skipped,
             "The environment does not send groups; turn on the groups claim to check them".into(),
         )
     } else {
         (
-            "waiting",
+            LifecycleStatus::Waiting,
             format!(
                 "Waiting for {waiting}. Expected groups: {}",
                 describe(groups)
@@ -235,11 +235,9 @@ impl Memory {
             if run.kind != "mover" || run.user_id != user_id {
                 continue;
             }
-            let Some(step) = run
-                .steps
-                .iter_mut()
-                .find(|step| step.id == format!("{protocol}-groups") && step.status == "waiting")
-            else {
+            let Some(step) = run.steps.iter_mut().find(|step| {
+                step.id == format!("{protocol}-groups") && step.status == LifecycleStatus::Waiting
+            }) else {
                 continue;
             };
             let mut want = run.expected_groups.clone();
@@ -261,18 +259,18 @@ impl Memory {
                 );
                 "groups overage".into()
             } else if !claims.carried {
-                step.status = "failed".into();
+                step.status = LifecycleStatus::Failed;
                 step.detail = format!("The {issued} carried no groups");
                 "no groups".into()
             } else {
                 if got == want {
-                    step.status = "ok".into();
+                    step.status = LifecycleStatus::Ok;
                     step.detail = format!(
                         "The {issued} carried the new groups: {}",
                         describe(&claims.groups)
                     );
                 } else {
-                    step.status = "failed".into();
+                    step.status = LifecycleStatus::Failed;
                     step.detail = format!(
                         "The {issued} carried {}; expected {}",
                         describe(&claims.groups),
@@ -287,7 +285,7 @@ impl Memory {
                 to: to.into(),
                 body,
                 response: String::new(),
-                outcome: step.status.clone(),
+                outcome: step.status.as_str().into(),
             });
             run.settle_status();
         }
