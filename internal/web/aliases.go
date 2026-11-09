@@ -1,0 +1,134 @@
+package web
+
+import "github.com/rselbach/scimtest/internal/core"
+
+type (
+	config                = core.Config
+	environment           = core.Environment
+	user                  = core.User
+	app                   = core.App
+	appState              = core.AppState
+	operationLog          = core.OperationLog
+	group                 = core.Group
+	syncTraceEntry        = core.SyncTraceEntry
+	syncProgress          = core.SyncProgress
+	resourceSyncState     = core.ResourceSyncState
+	stateBackup           = core.StateBackup
+	syncPlanEntry         = core.SyncPlanEntry
+	oidcClaimMappings     = core.OIDCClaimMappings
+	samlAttributeMappings = core.SAMLAttributeMappings
+	storedSigningKey      = core.SigningKey
+)
+
+var errAppNotFound = core.ErrAppNotFound
+
+var (
+	loadState                        = core.LoadState
+	loadStateForApp                  = core.LoadStateForApp
+	loadStateForAppSlug              = core.LoadStateForAppSlug
+	stateFilePath                    = core.StateFilePath
+	ensureTunnelInstanceID           = core.EnsureTunnelInstanceID
+	ensureTunnelInstanceKey          = core.EnsureTunnelInstanceKey
+	rotateTunnelInstanceIdentity     = core.RotateTunnelInstanceIdentity
+	lastAdminPort                    = core.LastAdminPort
+	rememberAdminPort                = core.RememberAdminPort
+	saveGlobalConfig                 = core.SaveGlobalConfig
+	saveEnvironmentState             = core.SaveEnvironmentState
+	deleteEnvironment                = core.DeleteEnvironment
+	appendOperationLogs              = core.AppendOperationLogs
+	appendLocalOperationLog          = core.AppendLocalOperationLog
+	groupByID                        = core.GroupByID
+	userByID                         = core.UserByID
+	userLabel                        = core.UserLabel
+	newUserID                        = core.NewUserID
+	newGroupID                       = core.NewGroupID
+	newAppID                         = core.NewAppID
+	newID                            = core.NewID
+	randomSecret                     = core.RandomSecret
+	slugify                          = core.Slugify
+	lines                            = core.Lines
+	joinLines                        = core.JoinLines
+	validateUser                     = core.ValidateUser
+	validateUserUnique               = core.ValidateUserUnique
+	validateManager                  = core.ValidateManager
+	validateCustomAttributes         = core.ValidateCustomAttributes
+	parseCustomAttributes            = core.ParseCustomAttributes
+	formatCustomAttributes           = core.FormatCustomAttributes
+	customAttributeNames             = core.CustomAttributeNames
+	isReservedAttributeName          = core.IsReservedAttributeName
+	enterpriseValues                 = core.EnterpriseValues
+	userManager                      = core.UserManager
+	validateGroup                    = core.ValidateGroup
+	validateHTTPBaseURL              = core.ValidateHTTPBaseURL
+	validateApp                      = core.ValidateApp
+	supportsOIDC                     = core.SupportsOIDC
+	supportsSAML                     = core.SupportsSAML
+	oidcSetupStatus                  = core.OIDCSetupStatus
+	parseRetryAfter                  = core.ParseRetryAfter
+	samlSetupStatus                  = core.SAMLSetupStatus
+	parseSAMLRequestCertificate      = core.ParseSAMLRequestCertificate
+	parseSAMLEncryptionCertificate   = core.ParseSAMLEncryptionCertificate
+	scimSetupStatus                  = core.SCIMSetupStatus
+	inferAppProtocol                 = core.InferAppProtocol
+	normalizeSAMLNameIDField         = core.NormalizeSAMLNameIDField
+	samlNameIDFormatForField         = core.SAMLNameIDFormatForField
+	samlNameIDValue                  = core.SAMLNameIDValue
+	normalizeSAMLEncryptionAlgorithm = core.NormalizeSAMLEncryptionAlgorithm
+	normalizeSAMLSigningMode         = core.NormalizeSAMLSigningMode
+	appBySlug                        = core.AppBySlug
+	stateForApp                      = core.StateForApp
+	markUserDirty                    = core.MarkUserDirty
+	markGroupDirty                   = core.MarkGroupDirty
+	initializeAppSync                = core.InitializeAppSync
+	appHasSyncState                  = core.AppHasSyncState
+	mergeAppSyncState                = core.MergeAppSyncState
+	mergeAppImportState              = core.MergeAppImportState
+	purgeFullySyncedDeletions        = core.PurgeFullySyncedDeletions
+	planSync                         = core.PlanSync
+	userGroups                       = core.UserGroups
+	syncStatus                       = core.SyncStatus
+	groupSyncStatus                  = core.GroupSyncStatus
+	activeStatus                     = core.ActiveStatus
+	syncDirtyStateWithContext        = core.SyncDirtyStateWithContext
+	reconcileStateWithContext        = core.ReconcileStateWithContext
+	importStateFromSCIM              = core.ImportStateFromSCIM
+	configuredBaseURL                = core.ConfiguredBaseURL
+	discoverSCIMCapabilities         = core.DiscoverSCIMCapabilities
+	newStateBackup                   = core.NewStateBackup
+	writeSafetyBackup                = core.WriteSafetyBackup
+	defaultOIDCClaimMappings         = core.DefaultOIDCClaimMappings
+	defaultSAMLAttributeMappings     = core.DefaultSAMLAttributeMappings
+	oidcClaimMappingsForApp          = core.OIDCClaimMappingsForApp
+	samlAttributeMappingsForApp      = core.SAMLAttributeMappingsForApp
+	normalizeChooserMode             = core.NormalizeChooserMode
+	normalizePersona                 = core.NormalizePersona
+	groupsOverageThresholdForApp     = core.GroupsOverageThresholdForApp
+)
+
+const (
+	defaultEnvironmentID             = core.DefaultEnvironmentID
+	defaultSAMLEmailAttributeName    = core.DefaultSAMLEmailAttributeName
+	defaultSAMLNameIDField           = core.DefaultSAMLNameIDField
+	defaultSAMLEncryptionAlgorithm   = core.DefaultSAMLEncryptionAlgorithm
+	samlEncryptionAlgorithmAES128GCM = core.SAMLEncryptionAlgorithmAES128GCM
+	samlEncryptionAlgorithmAES192GCM = core.SAMLEncryptionAlgorithmAES192GCM
+	samlEncryptionAlgorithmAES256GCM = core.SAMLEncryptionAlgorithmAES256GCM
+	samlSigningModeAssertion         = core.SAMLSigningModeAssertion
+	samlSigningModeResponse          = core.SAMLSigningModeResponse
+	samlSigningModeBoth              = core.SAMLSigningModeBoth
+	chooserModeList                  = core.ChooserModeList
+	chooserModeIdentifier            = core.ChooserModeIdentifier
+	setupStatusNotSetUp              = core.SetupStatusNotSetUp
+	setupStatusIncomplete            = core.SetupStatusIncomplete
+	setupStatusConfigured            = core.SetupStatusConfigured
+	enterpriseEmployeeNumber         = core.EnterpriseEmployeeNumber
+	enterpriseCostCenter             = core.EnterpriseCostCenter
+	enterpriseOrganization           = core.EnterpriseOrganization
+	enterpriseDivision               = core.EnterpriseDivision
+	enterpriseDepartment             = core.EnterpriseDepartment
+	enterpriseManager                = core.EnterpriseManager
+	personaGeneric                   = core.PersonaGeneric
+	personaEntra                     = core.PersonaEntra
+	personaOkta                      = core.PersonaOkta
+	personaGoogle                    = core.PersonaGoogle
+)

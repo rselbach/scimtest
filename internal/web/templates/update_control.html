@@ -1,0 +1,31 @@
+{{define "update-control"}}
+{{if .Show}}<details class="update-control update-{{.State}}">
+  <summary class="update-pill">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.2"/><path d="M8 4.8v5.4M5.6 8 8 10.4 10.4 8"/></svg>
+    {{if eq .State "ready"}}Update ready{{else if eq .State "available"}}Update available{{else}}Update failed{{end}}
+  </summary>
+  <div class="update-popover" role="dialog" aria-label="Software update">
+    <div class="update-popover-head">
+      <img src="/assets/app-icon.png" alt="">
+      <div>
+        <div class="update-popover-title">{{if eq .State "ready"}}scimtest {{.Version}} is ready{{else if eq .State "available"}}scimtest {{.Version}} is available{{else}}scimtest {{.Version}} couldn't be installed{{end}}</div>
+        <div class="update-popover-sub">You have {{.CurrentVersion}}</div>
+      </div>
+    </div>
+    {{if or .Highlights .HasNotes}}<div class="update-popover-notes">
+      {{if .Highlights}}<div class="update-popover-label">What's new</div>
+      <ul>{{range .Highlights}}<li>{{.}}</li>{{end}}</ul>{{end}}
+      {{if .HasNotes}}<form method="post" action="/desktop/update/open"><input type="hidden" name="target" value="notes"><button class="update-link" type="submit">Full release notes</button></form>{{end}}
+    </div>{{end}}
+    {{with .Callout}}<p class="update-popover-callout{{if $.Warning}} is-warning{{end}}">{{.}}</p>{{end}}
+    <div class="update-popover-actions">
+      <button class="btn btn-ghost btn-sm" type="button" onclick="this.closest('details').open = false">Later</button>
+      {{if eq .State "ready"}}<form method="post" action="/desktop/update/restart"><button class="btn btn-primary btn-sm" type="submit"{{if .SyncRunning}} disabled{{end}}>Restart to Update</button></form>
+      {{else if eq .State "available"}}{{with .DownloadLabel}}<form method="post" action="/desktop/update/open"><input type="hidden" name="target" value="download"><button class="btn btn-primary btn-sm" type="submit">{{.}}</button></form>{{end}}
+      {{else}}{{with .DownloadLabel}}<form method="post" action="/desktop/update/open"><input type="hidden" name="target" value="download"><button class="btn btn-sm" type="submit">{{.}}</button></form>{{end}}
+      <form method="post" action="/desktop/update/check"><button class="btn btn-primary btn-sm" type="submit">Try Again</button></form>{{end}}
+    </div>
+    {{if .InstallsOnQuit}}<p class="update-popover-foot">Not now? It installs the next time you quit.</p>{{end}}
+  </div>
+</details>{{end}}
+{{end}}

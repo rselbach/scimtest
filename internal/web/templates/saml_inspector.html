@@ -1,0 +1,96 @@
+{{define "saml-inspector-panel"}}
+<div class="inspector-dashboard">
+  {{if .Found}}
+  <section class="card inspector-card" aria-labelledby="assertion-heading">
+    <h2 id="assertion-heading">Latest signed response</h2>
+    <dl class="inspector-details">
+      <div><dt>Updated</dt><dd>{{.Inspection.UpdatedAt}}</dd></div>
+      <div><dt>User</dt><dd>{{.Inspection.User}}</dd></div>
+      <div><dt>ACS URL</dt><dd class="mono">{{.Inspection.ACSURL}}</dd></div>
+      <div><dt>InResponseTo</dt><dd class="mono">{{if .Inspection.InResponseTo}}{{.Inspection.InResponseTo}}{{else}}Unsolicited{{end}}</dd></div>
+      {{if .Inspection.Faults}}<div><dt>Faults applied</dt><dd>{{.Inspection.Faults}}</dd></div>{{end}}
+    </dl>
+    <h3>Decoded SAML response</h3>
+    <pre class="inspector-payload">{{.Inspection.ResponseXML}}</pre>
+    {{if .Inspection.PlaintextAssertionXML}}
+    <h3>Assertion before encryption</h3>
+    <pre class="inspector-payload">{{.Inspection.PlaintextAssertionXML}}</pre>
+    {{end}}
+    {{if .Inspection.EncodedResponse}}
+    <h3>Encoded SAMLResponse (base64, as posted)</h3>
+    <pre class="inspector-payload">{{.Inspection.EncodedResponse}}</pre>
+    {{end}}
+  </section>
+  {{if .History}}
+  <section class="card inspector-card">
+    <h2>Previous responses</h2>
+    {{range .History}}
+    <details>
+      <summary>{{.UpdatedAt}} — {{.User}} — {{.ACSURL}}</summary>
+      <pre class="inspector-payload">{{.ResponseXML}}</pre>
+    </details>
+    {{end}}
+  </section>
+  {{end}}
+  {{else}}
+  <section class="card card-empty">
+    <div class="h">No SAML response recorded</div>
+    <p>Run a SAML sign-in for this environment, then return here to inspect the latest signed response.</p>
+  </section>
+  {{end}}
+  {{if .Sessions}}
+  <section class="card inspector-card" aria-labelledby="saml-sessions-heading">
+    <h2 id="saml-sessions-heading">IdP sessions</h2>
+    <p class="hint">Sessions in this environment that signed in over SAML. Assertions carry each session's SessionIndex, and an SP-initiated LogoutRequest to the Single Logout URL ends the session it names. Send LogoutRequest ends the session here, then sends a signed LogoutRequest to the SP through this browser; the SP's LogoutResponse comes back to scimtest.{{if not .App.SAMLSLOURL}} Set the environment's Single Logout URL to send LogoutRequests.{{end}}</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>User</th><th>NameID</th><th>SessionIndex</th><th>Signed in</th><th>Protocols</th><th></th></tr></thead>
+      <tbody>
+        {{range .Sessions}}
+        <tr>
+          <td>{{.User}}</td>
+          <td class="mono">{{.SAMLNameID}}</td>
+          <td class="mono">{{.SAMLSessionIndex}}</td>
+          <td>{{.SignedInAt}} · {{.Method}}</td>
+          <td>{{join .Protocols ", "}}</td>
+          <td>
+            <form method="post" action="/inspect/saml/{{$.App.Slug}}/sessions/logout">
+              <input type="hidden" name="return_tab" value="{{$.ReturnTab}}">
+              <input type="hidden" name="session_id" value="{{.SessionID}}">
+              <select name="binding" aria-label="Binding for {{.User}}'s LogoutRequest" {{if not $.App.SAMLSLOURL}}disabled{{end}}>
+                <option value="redirect">HTTP-Redirect</option>
+                <option value="post">HTTP-POST</option>
+              </select>
+              <button class="btn btn-sm" type="submit" aria-label="Send LogoutRequest for {{.User}}'s session" {{if not $.App.SAMLSLOURL}}disabled{{end}}>Send LogoutRequest</button>
+            </form>
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table></div>
+  </section>
+  {{end}}
+  {{if .Logouts}}
+  <section class="card inspector-card" aria-labelledby="saml-logouts-heading">
+    <h2 id="saml-logouts-heading">Single Logout requests</h2>
+    <p class="hint">LogoutRequests scimtest sent, newest first, and how the SP answered.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Sent</th><th>User</th><th>Binding</th><th>Request ID</th><th>Result</th></tr></thead>
+      <tbody>
+        {{range .Logouts}}
+        <tr>
+          <td class="mono">{{.SentAt}}</td>
+          <td>{{.User}}</td>
+          <td>{{.Binding}}</td>
+          <td class="mono">{{.RequestID}}</td>
+          <td>{{if eq .Outcome "pending"}}Waiting for the SP's LogoutResponse{{else if eq .Outcome "ok"}}{{.Detail}}{{else}}Failed: {{.Detail}}{{end}}</td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table></div>
+  </section>
+  {{end}}
+  {{template "signing-keys" .}}
+  {{template "flow-activity" .Events}}
+  {{template "fault-help" .}}
+</div>
+{{end}}

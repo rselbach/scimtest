@@ -1,0 +1,149 @@
+{{define "lifecycle-panel"}}
+<div class="inspector-dashboard lifecycle-dashboard">
+  {{if .Error}}<div class="inline-error" role="alert">{{.Error}}</div>{{end}}
+
+  <section aria-labelledby="lifecycle-start-heading">
+    <div class="resilience-section-heading">
+      <div>
+        <h2 id="lifecycle-start-heading">Run a scenario</h2>
+        <p>Each scenario changes the directory, sends every message the change calls for, and records how {{.App.Name}} answered. Steps for protocols this environment does not use are skipped.</p>
+      </div>
+    </div>
+    <div class="resilience-presets lifecycle-scenarios">
+      <article class="card resilience-preset">
+        <div class="resilience-preset-protocol">Joiner</div>
+        <h3>Create and provision a user</h3>
+        <p>Creates the user, adds them to groups, and pushes them through SCIM.</p>
+        <form method="post" action="/inspect/lifecycle/{{.App.Slug}}/run" aria-label="Joiner">
+          <input type="hidden" name="kind" value="joiner">
+          <input type="hidden" name="tab" value="lifecycle">
+          <label class="field"><span class="label">Given name</span><input name="given_name" autocomplete="off" required></label>
+          <label class="field"><span class="label">Family name</span><input name="family_name" autocomplete="off"></label>
+          <label class="field"><span class="label">Email</span><input type="email" name="email" autocomplete="off" required></label>
+          <label class="field"><span class="label">Username</span><input name="username" autocomplete="off" placeholder="Defaults to the email"></label>
+          {{if .Groups}}
+          <fieldset class="lifecycle-groups">
+            <legend class="label">Groups</legend>
+            {{range .Groups}}<label class="checkbox-row"><input type="checkbox" name="group_ids" value="{{.ID}}"> {{.DisplayName}}</label>{{end}}
+          </fieldset>
+          {{end}}
+          <button class="btn btn-primary" type="submit">Run joiner</button>
+        </form>
+      </article>
+
+      <article class="card resilience-preset">
+        <div class="resilience-preset-protocol">Mover</div>
+        <h3>Change a user's groups</h3>
+        <p>Pushes each changed group through SCIM, then checks that the next ID token, userinfo response, and SAML assertion carry the new groups.</p>
+        {{if .Groups}}
+        <form method="post" action="/inspect/lifecycle/{{.App.Slug}}/run" aria-label="Mover">
+          <input type="hidden" name="kind" value="mover">
+          <input type="hidden" name="tab" value="lifecycle">
+          <label class="field"><span class="label">User</span>
+            <select name="user_id" required>
+              {{range .Users}}{{if .Active}}<option value="{{.ID}}">{{.GivenName}} {{.FamilyName}} ({{.Email}})</option>{{end}}{{end}}
+            </select>
+          </label>
+          <fieldset class="lifecycle-groups">
+            <legend class="label">Add to groups</legend>
+            {{range .Groups}}<label class="checkbox-row"><input type="checkbox" name="add_group_ids" value="{{.ID}}"> {{.DisplayName}}</label>{{end}}
+          </fieldset>
+          <fieldset class="lifecycle-groups">
+            <legend class="label">Remove from groups</legend>
+            {{range .Groups}}<label class="checkbox-row"><input type="checkbox" name="remove_group_ids" value="{{.ID}}"> {{.DisplayName}}</label>{{end}}
+          </fieldset>
+          <button class="btn btn-primary" type="submit">Run mover</button>
+        </form>
+        {{else}}
+        <p class="hint">Create a group before running a mover.</p>
+        {{end}}
+      </article>
+
+      <article class="card resilience-preset">
+        <div class="resilience-preset-protocol">Leaver</div>
+        <h3>Offboard a user everywhere</h3>
+        <p>Deactivates the user, ends their IdP sessions with back-channel logout and SAML Single Logout, revokes their tokens, and pushes active=false through SCIM.</p>
+        {{if .Users}}
+        <form method="post" action="/inspect/lifecycle/{{.App.Slug}}/run" aria-label="Leaver">
+          <input type="hidden" name="kind" value="leaver">
+          <input type="hidden" name="tab" value="lifecycle">
+          <label class="field"><span class="label">User</span>
+            <select name="user_id" required>
+              {{range .Users}}<option value="{{.ID}}">{{.GivenName}} {{.FamilyName}} ({{.Email}}){{if not .Active}} · inactive{{end}}</option>{{end}}
+            </select>
+          </label>
+          <button class="btn btn-primary" type="submit">Run leaver</button>
+        </form>
+        {{else}}
+        <p class="hint">Create a user before running a leaver.</p>
+        {{end}}
+      </article>
+    </div>
+  </section>
+
+  {{range $run := .Runs}}
+  <section class="card inspector-card lifecycle-run" id="lifecycle-run-{{$run.ID}}" aria-labelledby="lifecycle-run-{{$run.ID}}-heading">
+    <div class="lifecycle-run-heading">
+      <div>
+        <h2 id="lifecycle-run-{{$run.ID}}-heading">{{$run.KindLabel}}: {{$run.User}}</h2>
+        <p class="hint">Started <span class="mono">{{$run.StartedAt}}</span></p>
+      </div>
+      <span class="status {{$run.StatusClass}}">{{$run.StatusLabel}}</span>
+    </div>
+    <div class="table-wrap"><table class="lifecycle-checklist">
+      <thead><tr><th>Step</th><th>Protocol</th><th>Status</th><th>What happened</th></tr></thead>
+      <tbody>
+        {{range $run.Steps}}
+        <tr>
+          <td>{{.Title}}</td>
+          <td class="mono">{{.Protocol}}</td>
+          <td><span class="status {{.StatusClass}}">{{.StatusLabel}}</span></td>
+          <td>
+            {{if .Detail}}<p>{{.Detail}}</p>{{end}}
+            {{if .Messages}}
+            <ol class="lifecycle-messages">
+              {{range .Messages}}
+              <li>
+                <span class="mono">{{.At}}</span> <strong>{{.Sent}}</strong>{{if .To}} to <span class="mono">{{.To}}</span>{{end}}{{if .Response}}: {{.Response}}{{end}}
+                {{if .Body}}<details><summary>Body</summary><pre class="inspector-payload">{{.Body}}</pre></details>{{end}}
+              </li>
+              {{end}}
+            </ol>
+            {{end}}
+            {{if .CanSendLogout}}
+            <form class="lifecycle-action" method="post" action="/inspect/lifecycle/{{$.App.Slug}}/saml-logout">
+              <input type="hidden" name="run_id" value="{{$run.ID}}">
+              <input type="hidden" name="step_id" value="{{.ID}}">
+              <select name="binding" aria-label="Binding for {{.Title}}">
+                <option value="redirect">HTTP-Redirect</option>
+                <option value="post">HTTP-POST</option>
+              </select>
+              <button class="btn btn-sm" type="submit" aria-label="Send LogoutRequest for {{.Title}}">Send LogoutRequest</button>
+            </form>
+            {{end}}
+          </td>
+        </tr>
+        {{end}}
+      </tbody>
+    </table></div>
+  </section>
+  {{else}}
+  <section class="card card-empty">
+    <div class="h">No scenario has run yet</div>
+    <p>Run a joiner, mover, or leaver above. Runs live in memory and reset when scimtest restarts.</p>
+  </section>
+  {{end}}
+</div>
+{{if .Running}}
+<script>
+  setTimeout(function refreshLifecycle() {
+    var active = document.activeElement;
+    if (!document.hidden && !(active && active.closest && active.closest("form"))) {
+      window.location.reload();
+      return;
+    }
+    setTimeout(refreshLifecycle, 1500);
+  }, 1500);
+</script>
+{{end}}
+{{end}}

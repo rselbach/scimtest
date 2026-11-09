@@ -1,0 +1,253 @@
+package core
+
+import (
+	"encoding/json"
+	"strings"
+	"time"
+)
+
+type Environment struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+}
+
+type Config struct {
+	BaseURL               string `json:"base_url"`
+	BearerToken           string `json:"bearer_token"`
+	AutoOpenSyncTrace     bool   `json:"auto_open_sync_trace"`
+	SCIMDisabled          bool   `json:"scim_disabled,omitempty"`
+	IDPBaseURL            string `json:"idp_base_url,omitempty"`
+	TrustForwardedHeaders bool   `json:"trust_forwarded_headers,omitempty"`
+	TunnelInstanceID      string `json:"tunnel_instance_id,omitempty"`
+	SigningPrivateKeyPEM  string `json:"signing_private_key_pem,omitempty"`
+	SigningCertificatePEM string `json:"signing_certificate_pem,omitempty"`
+	FilterSupported       bool   `json:"filter_supported,omitempty"`
+	PatchSupported        bool   `json:"patch_supported,omitempty"`
+	// Persona is the app's provider persona, projected for the SCIM client.
+	Persona string `json:"-"`
+	// SCIMEnterpriseUsed remembers that this environment manages enterprise
+	// values, so clearing its last value still sends the extension.
+	SCIMEnterpriseUsed bool `json:"scim_enterprise_used,omitempty"`
+	// SigningKeys is one environment's signing key ring, oldest first. The
+	// last key signs. An empty ring signs with the shared key above.
+	SigningKeys []SigningKey `json:"signing_keys,omitempty"`
+}
+
+// SigningKey is one RSA key pair in an environment's signing key ring.
+type SigningKey struct {
+	ID             string    `json:"kid"`
+	PrivateKeyPEM  string    `json:"private_key_pem"`
+	CertificatePEM string    `json:"certificate_pem"`
+	CreatedAt      time.Time `json:"created_at,omitzero"`
+	// PublishedUntil is when a retired key leaves the JWKS and SAML
+	// metadata. It is zero for the active key.
+	PublishedUntil time.Time `json:"published_until,omitzero"`
+}
+
+func (c *Config) UnmarshalJSON(data []byte) error {
+	type config Config
+	var value config
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	*c = Config(value)
+	if c.TunnelInstanceID != "" {
+		return nil
+	}
+
+	var legacy struct {
+		TunnelInstanceID string `json:"rgrok_instance_id"`
+	}
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+	c.TunnelInstanceID = legacy.TunnelInstanceID
+	return nil
+}
+
+type User struct {
+	ID         string `json:"id"`
+	GivenName  string `json:"given_name,omitempty"`
+	FamilyName string `json:"family_name,omitempty"`
+	Email      string `json:"email"`
+	Username   string `json:"username"`
+	Active     bool   `json:"active"`
+	// Enterprise fields follow the SCIM enterprise user extension. ManagerID
+	// names another user in the same environment.
+	EmployeeNumber string `json:"employee_number,omitempty"`
+	CostCenter     string `json:"cost_center,omitempty"`
+	Organization   string `json:"organization,omitempty"`
+	Division       string `json:"division,omitempty"`
+	Department     string `json:"department,omitempty"`
+	ManagerID      string `json:"manager_id,omitempty"`
+	// Attributes are free-form values sent as OIDC claims and SAML
+	// attributes under their own names.
+	Attributes map[string]string `json:"attributes,omitempty"`
+	RemoteID   string            `json:"remote_id,omitempty"`
+	Dirty      bool              `json:"dirty"`
+	Deleted    bool              `json:"deleted"`
+	LastError  string            `json:"last_error,omitempty"`
+}
+
+func (u *User) UnmarshalJSON(data []byte) error {
+	type alias User
+	aux := struct {
+		alias
+		LegacyName string `json:"name,omitempty"`
+		Active     *bool  `json:"active"`
+	}{}
+
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	*u = User(aux.alias)
+	if aux.Active != nil {
+		u.Active = *aux.Active
+	}
+
+	if strings.TrimSpace(aux.LegacyName) == "" {
+		if aux.Active == nil {
+			u.Active = true
+		}
+
+		return nil
+	}
+
+	givenName, familyName := SplitName(aux.LegacyName)
+	if strings.TrimSpace(u.GivenName) == "" {
+		u.GivenName = givenName
+	}
+	if strings.TrimSpace(u.FamilyName) == "" {
+		u.FamilyName = familyName
+	}
+	if aux.Active == nil {
+		u.Active = true
+	}
+
+	return nil
+}
+
+type AppState struct {
+	Environment     Environment                             `json:"environment"`
+	Environments    []Environment                           `json:"environments,omitempty"`
+	Config          Config                                  `json:"config"`
+	Users           []User                                  `json:"users"`
+	Groups          []Group                                 `json:"groups"`
+	Apps            []App                                   `json:"apps"`
+	UserOperations  map[string][]OperationLog               `json:"-"`
+	GroupOperations map[string][]OperationLog               `json:"-"`
+	UserSync        map[string]map[string]ResourceSyncState `json:"-"`
+	GroupSync       map[string]map[string]ResourceSyncState `json:"-"`
+}
+
+// ResourceSyncState is one app's remote state for a directory resource.
+type ResourceSyncState struct {
+	RemoteID  string
+	Dirty     bool
+	Deleted   bool
+	LastError string
+}
+
+type OperationLog struct {
+	AppID              string
+	Kind               string
+	Summary            string
+	Operation          string
+	Method             string
+	Path               string
+	RequestBody        string
+	Status             string
+	ResponseRetryAfter string
+	ResponseBody       string
+	Err                string
+	CreatedAt          string
+}
+
+type Group struct {
+	ID          string   `json:"id"`
+	DisplayName string   `json:"display_name"`
+	MemberIDs   []string `json:"member_ids"`
+	RemoteID    string   `json:"remote_id,omitempty"`
+	Dirty       bool     `json:"dirty"`
+	Deleted     bool     `json:"deleted"`
+	LastError   string   `json:"last_error,omitempty"`
+}
+
+type App struct {
+	EnvironmentName         string                `json:"-"`
+	ID                      string                `json:"id"`
+	Name                    string                `json:"name"`
+	Slug                    string                `json:"slug"`
+	Protocol                string                `json:"protocol"`
+	OIDCClientID            string                `json:"oidc_client_id,omitempty"`
+	OIDCClientSecret        string                `json:"oidc_client_secret,omitempty"`
+	OIDCPublicClient        bool                  `json:"oidc_public_client,omitempty"`
+	OIDCRedirectURIs        []string              `json:"oidc_redirect_uris,omitempty"`
+	AllowAnyOIDCRedirect    bool                  `json:"allow_any_oidc_redirect,omitempty"`
+	OIDCJWTAccessTokens     bool                  `json:"oidc_jwt_access_tokens,omitempty"`
+	OIDCAccessTokenAudience string                `json:"oidc_access_token_audience,omitempty"`
+	SAMLEntityID            string                `json:"saml_entity_id,omitempty"`
+	SAMLACSURL              string                `json:"saml_acs_url,omitempty"`
+	SAMLAudience            string                `json:"saml_audience,omitempty"`
+	SAMLNameIDField         string                `json:"saml_name_id_field,omitempty"`
+	SAMLNameIDFormat        string                `json:"saml_name_id_format,omitempty"`
+	SAMLEmailAttributeName  string                `json:"saml_email_attribute_name,omitempty"`
+	SAMLRequestCertPEM      string                `json:"saml_request_certificate_pem,omitempty"`
+	SAMLEncryptionCertPEM   string                `json:"saml_encryption_certificate_pem,omitempty"`
+	SAMLEncryptionAlgorithm string                `json:"saml_encryption_algorithm,omitempty"`
+	SAMLSigningMode         string                `json:"saml_signing_mode,omitempty"`
+	IncludeGroupsClaim      bool                  `json:"include_groups_claim"`
+	OIDCClaimMappings       OIDCClaimMappings     `json:"oidc_claim_mappings,omitempty"`
+	SAMLAttributeMappings   SAMLAttributeMappings `json:"saml_attribute_mappings,omitempty"`
+	ChooserMode             string                `json:"chooser_mode,omitempty"`
+	SCIMEnabled             bool                  `json:"scim_enabled,omitempty"`
+	SCIMBaseURL             string                `json:"scim_base_url,omitempty"`
+	SCIMBearerToken         string                `json:"scim_bearer_token,omitempty"`
+	SCIMAutoOpenTrace       bool                  `json:"scim_auto_open_trace,omitempty"`
+	SCIMCapabilitiesKnown   bool                  `json:"scim_capabilities_known,omitempty"`
+	SCIMPatchSupported      bool                  `json:"scim_patch_supported,omitempty"`
+	SCIMFilterSupported     bool                  `json:"scim_filter_supported,omitempty"`
+	// Persona shapes OIDC claims and SCIM requests like a real provider.
+	Persona string `json:"persona,omitempty"`
+	// GroupsOverageThreshold is the Entra ID group count above which tokens
+	// carry the groups overage form. Zero means Entra ID's default.
+	GroupsOverageThreshold int `json:"groups_overage_threshold,omitempty"`
+
+	// OpenID Connect Back-Channel Logout 1.0 client metadata.
+	OIDCBackchannelLogoutURI             string `json:"oidc_backchannel_logout_uri,omitempty"`
+	OIDCBackchannelLogoutSessionRequired bool   `json:"oidc_backchannel_logout_session_required,omitempty"`
+
+	// SAMLSLOURL is the SP's SingleLogoutService, where scimtest sends
+	// LogoutRequest and LogoutResponse messages.
+	SAMLSLOURL string `json:"saml_slo_url,omitempty"`
+}
+
+const (
+	// SetupStatusNotSetUp means no meaningful protocol settings have been saved.
+	SetupStatusNotSetUp = "not-set-up"
+	// SetupStatusIncomplete means protocol settings exist but are not ready to use.
+	SetupStatusIncomplete = "incomplete"
+	// SetupStatusConfigured means all required protocol settings are valid.
+	SetupStatusConfigured = "configured"
+)
+
+// OIDCClaimMappings maps directory fields to OIDC claim names.
+type OIDCClaimMappings struct {
+	Name       string `json:"name"`
+	GivenName  string `json:"given_name"`
+	FamilyName string `json:"family_name"`
+	Username   string `json:"username"`
+	Email      string `json:"email"`
+	Groups     string `json:"groups"`
+}
+
+// SAMLAttributeMappings maps directory fields to SAML attribute names.
+type SAMLAttributeMappings struct {
+	GivenName  string `json:"given_name"`
+	FamilyName string `json:"family_name"`
+	Username   string `json:"username"`
+	Email      string `json:"email"`
+	Groups     string `json:"groups"`
+}

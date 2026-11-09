@@ -1,0 +1,98 @@
+{{define "resilience-panel"}}
+<div class="resilience-dashboard">
+  {{if .Error}}<div class="inline-error" role="alert">{{.Error}}</div>{{end}}
+
+  {{if .Run}}
+  <section class="card resilience-run{{if .Run.Active}} is-active{{end}}" aria-labelledby="run-heading">
+    <div class="resilience-run-marker" aria-hidden="true"></div>
+    <div class="resilience-run-body">
+      <div class="resilience-run-heading">
+        <div>
+          <div class="resilience-eyebrow">{{if .Run.Active}}Active scenario{{else}}Last scenario{{end}}</div>
+          <h2 id="run-heading">{{.Run.Name}}</h2>
+          <p>{{.Run.Summary}}</p>
+        </div>
+        <span class="status {{.Run.StatusClass}}">{{.Run.State}}</span>
+      </div>
+      <dl class="resilience-run-facts">
+        <div><dt>Behavior</dt><dd>{{.Run.Behavior}}</dd></div>
+        <div><dt>Progress</dt><dd>{{.Run.Progress}}</dd></div>
+        <div><dt>Armed</dt><dd class="mono">{{.Run.ArmedAt}}</dd></div>
+        {{if .Run.Active}}<div><dt>Safety timeout</dt><dd class="mono">{{.Run.ExpiresAt}}</dd></div>{{end}}
+      </dl>
+      {{if .Run.Active}}
+      <div class="resilience-next-step">
+        <div>
+          <strong>Waiting for your application</strong>
+          <span>Start an RP or SP initiated sign-in. This page updates when the fault is applied.</span>
+        </div>
+        <div class="resilience-run-actions">
+          {{if .PlaygroundReady}}<a class="btn btn-primary" href="{{.PlaygroundURL}}">Open built-in RP</a>{{else if .OIDC}}<a class="btn" href="{{.SetupURL}}">Finish OIDC setup</a>{{end}}
+          <form method="post" action="/inspect/resilience/{{.App.Slug}}/disarm">
+            <button class="btn" type="submit">Disarm</button>
+          </form>
+        </div>
+      </div>
+      {{end}}
+      {{if .Run.Decisions}}
+      <div class="resilience-decisions">
+        <h3>Run activity</h3>
+        <ol>
+          {{range .Run.Decisions}}
+          <li><time class="mono">{{.Time}}</time><strong>{{.Outcome}}</strong><span>{{.Phase}} · {{.Detail}}</span></li>
+          {{end}}
+        </ol>
+      </div>
+      {{end}}
+    </div>
+  </section>
+  {{end}}
+
+  {{if .CanChoose}}
+  <section aria-labelledby="scenarios-heading">
+    <div class="resilience-section-heading">
+      <div>
+        <h2 id="scenarios-heading">Choose a failure</h2>
+        <p>Each scenario applies only to the next matching flow or endpoint requests.</p>
+      </div>
+      <span class="status synced">Healthy</span>
+    </div>
+    <div class="resilience-presets">
+      {{range .Presets}}
+      <article class="card resilience-preset">
+        <div class="resilience-preset-protocol">{{.Protocol}}</div>
+        <h3>{{.Name}}</h3>
+        <p>{{.Summary}}</p>
+        <dl>
+          <div><dt>Inject</dt><dd>{{.Behavior}}</dd></div>
+        </dl>
+        <form method="post" action="/inspect/resilience/{{$.App.Slug}}/arm">
+          <input type="hidden" name="preset" value="{{.ID}}">
+          {{if .AllowCount}}
+          <label class="field resilience-count"><span class="label">Failed requests before recovery</span><input type="number" name="count" value="{{.Count}}" min="1" max="20" required></label>
+          {{end}}
+          <button class="btn btn-primary" type="submit">Arm scenario</button>
+        </form>
+      </article>
+      {{end}}
+    </div>
+  </section>
+  {{end}}
+
+  <section class="resilience-inspector-links" aria-label="Protocol debugging">
+    <div><strong>Need individual fault controls?</strong><span>Use a protocol inspector for one-shot clock skew, claim, signature, and error faults.</span></div>
+    <div>
+      {{if .OIDC}}<a class="btn btn-sm" href="{{.OIDCInspector}}">OIDC inspector</a>{{end}}
+      {{if .SAML}}<a class="btn btn-sm" href="{{.SAMLInspector}}">SAML inspector</a>{{end}}
+    </div>
+  </section>
+</div>
+{{if .Run}}{{if .Run.Active}}
+<script>
+  setTimeout(function refreshRun() {
+    if (!document.hidden) window.location.reload();
+    setTimeout(refreshRun, 2500);
+  }, 2500);
+</script>
+{{end}}{{end}}
+{{end}}
