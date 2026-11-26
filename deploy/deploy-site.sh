@@ -47,7 +47,6 @@ restore() {
   fi
 }
 
-trap 'restore' ERR
 trap 'cleanup' EXIT
 
 if ! grep -qF "include ${SNIPPET};" "${SERVER_CONF}"; then
@@ -62,6 +61,7 @@ if [[ -f "${SNIPPET}" ]]; then
   sudo cp -p "${SNIPPET}" "\${backup}/snippet.conf"
 fi
 
+trap 'restore' ERR
 sudo install -m 644 "\${stage_dir}/site-nginx.conf" "${SNIPPET}"
 if ! grep -qF "include ${SNIPPET};" "${SERVER_CONF}"; then
   sudo sed -i '/^ *server_name rselbach.com;/a\\    include ${SNIPPET};' \\

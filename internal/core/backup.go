@@ -105,8 +105,8 @@ func ValidateRestoredState(state *AppState, otherApps []App) error {
 		if err := ValidateCustomAttributes(u.Attributes); err != nil {
 			return err
 		}
-		if err := ValidateManager(state.Users, u.ID, u.ManagerID); err != nil {
-			return err
+		if u.ManagerID != "" && u.ManagerID == u.ID {
+			return fmt.Errorf("user %q cannot manage themselves", u.ID)
 		}
 	}
 

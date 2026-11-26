@@ -27,7 +27,7 @@ const (
 	maxCapturedTrafficBodyBytes = 64 << 10
 )
 
-var hiddenInputRedactPattern = regexp.MustCompile(`(?i)(<input[^>]+name="(?:SAMLResponse|code|access_token|id_token|client_secret)"[^>]+value=")[^"]*(")`)
+var hiddenInputRedactPattern = regexp.MustCompile(`(?i)(<input[^>]+name="(?:SAMLResponse|code|access_token|id_token|client_secret)"[^>]+value=")[^"]*("|$)`)
 
 type debugResponseWriter struct {
 	http.ResponseWriter
@@ -257,18 +257,30 @@ func truncateTrafficText(text string) string {
 	return text[:maxCapturedTrafficBodyBytes] + "\n... [truncated]"
 }
 
+func isJSONContentType(contentType string) bool {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return false
+	}
+	mediaType = strings.ToLower(mediaType)
+	return mediaType == "application/json" || strings.HasSuffix(mediaType, "+json")
+}
+
 func debugResponseBody(contentType string, body string, includeSecrets bool) string {
 	if includeSecrets {
 		return body
 	}
-	if strings.HasPrefix(strings.ToLower(contentType), "application/json") {
+	if isJSONContentType(contentType) {
 		var value any
-		if err := json.Unmarshal([]byte(body), &value); err == nil {
-			redactJSONValue(value)
-			if redacted, err := json.MarshalIndent(value, "", "  "); err == nil {
-				return string(redacted)
-			}
+		if err := json.Unmarshal([]byte(body), &value); err != nil {
+			return "[REDACTED]"
 		}
+		redactJSONValue(value)
+		redacted, err := json.MarshalIndent(value, "", "  ")
+		if err != nil {
+			return "[REDACTED]"
+		}
+		return string(redacted)
 	}
 	return redactHiddenInputs(body)
 }

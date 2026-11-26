@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -244,4 +245,46 @@ func TestValidateHTTPBaseURLRejectsForceQueryAndBareFragment(t *testing.T) {
 			r.Error(ValidateHTTPBaseURL("SCIM base URL", raw, true))
 		})
 	}
+}
+
+func TestValidateRestoredStateAllowsDeletedOrPurgedManagerAndRejectsSelfManager(t *testing.T) {
+	r := require.New(t)
+	validWithMissingManager := AppState{
+		Users: []User{
+			{ID: "dean", GivenName: "Craig", FamilyName: "Pelton", Email: "dean@greendale.edu", Username: "dean", Deleted: true},
+			{ID: "troy", GivenName: "Troy", FamilyName: "Barnes", Email: "troy@greendale.edu", Username: "troy", Active: true, ManagerID: "dean"},
+			{ID: "abed", GivenName: "Abed", FamilyName: "Nadir", Email: "abed@greendale.edu", Username: "abed", Active: true, ManagerID: "purged-manager"},
+		},
+	}
+	r.NoError(ValidateRestoredState(&validWithMissingManager, nil))
+
+	selfManaged := AppState{
+		Users: []User{
+			{ID: "jeff", GivenName: "Jeff", FamilyName: "Winger", Email: "jeff@greendale.edu", Username: "jeff", Active: true, ManagerID: "jeff"},
+		},
+	}
+	r.ErrorContains(ValidateRestoredState(&selfManaged, nil), "cannot manage themselves")
+}
+
+func TestSCIMClientAppendTraceTracksBytesAcrossRingEviction(t *testing.T) {
+	r := require.New(t)
+	client := &SCIMClient{}
+	small := strings.Repeat("a", 64)
+	for range maxSCIMTraceEntries {
+		client.appendTrace(SyncTraceEntry{ResponseBody: small})
+	}
+	r.Len(client.traces, maxSCIMTraceEntries)
+	r.Equal(maxSCIMTraceEntries*len(small), client.traceBytes)
+
+	large := strings.Repeat("b", 128<<10)
+	for range 200 {
+		client.appendTrace(SyncTraceEntry{ResponseBody: large})
+	}
+	r.Len(client.traces, maxSCIMTraceEntries)
+	r.LessOrEqual(client.traceBytes, 16<<20)
+	var actual int
+	for _, tr := range client.traces {
+		actual += len(tr.ResponseBody)
+	}
+	r.Equal(actual, client.traceBytes)
 }

@@ -300,6 +300,8 @@ func (a *webApp) handleAPISCIMDiscover(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusBadRequest, "SCIM-enabled environment not found")
 		return
 	}
+	origBaseURL := strings.TrimRight(strings.TrimSpace(state.Apps[index].SCIMBaseURL), "/")
+	origToken := state.Apps[index].SCIMBearerToken
 	projected, err := stateForApp(state, id)
 	if err != nil {
 		apiError(w, http.StatusBadRequest, err.Error())
@@ -329,7 +331,7 @@ func (a *webApp) handleAPISCIMDiscover(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusConflict, "SCIM configuration changed during discovery")
 		return
 	}
-	if strings.TrimRight(strings.TrimSpace(fresh.Apps[index].SCIMBaseURL), "/") != strings.TrimRight(strings.TrimSpace(state.Apps[index].SCIMBaseURL), "/") || fresh.Apps[index].SCIMBearerToken != state.Apps[index].SCIMBearerToken {
+	if strings.TrimRight(strings.TrimSpace(fresh.Apps[index].SCIMBaseURL), "/") != origBaseURL || fresh.Apps[index].SCIMBearerToken != origToken {
 		apiError(w, http.StatusConflict, "SCIM configuration changed during discovery")
 		return
 	}
@@ -380,7 +382,7 @@ func (a *webApp) handleAPIImportPreview(w http.ResponseWriter, r *http.Request) 
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	result := importStateFromSCIM(projected)
+	result := importStateFromSCIMWithContext(r.Context(), projected)
 	a.rememberTrace(id, result.Traces)
 	if result.Fatal != nil {
 		apiError(w, http.StatusBadRequest, result.Fatal.Error())

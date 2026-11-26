@@ -316,6 +316,8 @@ func (a *webApp) handleAppDiscoverSCIM(w http.ResponseWriter, r *http.Request) {
 		a.redirectError(w, r, "apps", fmt.Errorf("SCIM-enabled environment not found"))
 		return
 	}
+	origBaseURL := strings.TrimRight(strings.TrimSpace(state.Apps[index].SCIMBaseURL), "/")
+	origToken := state.Apps[index].SCIMBearerToken
 	projected, err := stateForApp(state, state.Apps[index].ID)
 	if err != nil {
 		a.redirectError(w, r, "apps", err)
@@ -341,7 +343,9 @@ func (a *webApp) handleAppDiscoverSCIM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	index, ok = appIndexByID(fresh.Apps, id)
-	if !ok || !fresh.Apps[index].SCIMEnabled {
+	if !ok || !fresh.Apps[index].SCIMEnabled ||
+		strings.TrimRight(strings.TrimSpace(fresh.Apps[index].SCIMBaseURL), "/") != origBaseURL ||
+		fresh.Apps[index].SCIMBearerToken != origToken {
 		a.redirectError(w, r, "apps", fmt.Errorf("SCIM configuration changed during discovery"))
 		return
 	}

@@ -114,6 +114,16 @@ func TestDebugBodyRedactionAndTrafficCaps(t *testing.T) {
 	redacted := debugBody("  application/x-www-form-urlencoded; charset=utf-8", []byte("client_secret=supersecret&grant_type=client_credentials"), false)
 	r.NotContains(redacted, "supersecret")
 
+	// Truncated JSON response must fail closed instead of leaking raw tokens.
+	r.Equal("[REDACTED]", debugResponseBody("application/json; charset=utf-8", `{"access_token":"secret-tok","padding":"unterminated`, false))
+	r.Equal("[REDACTED]", debugResponseBody("application/scim+json", `{"access_token":"secret-tok"`, false))
+
+	// Truncated HTML hidden input without closing quote must still be redacted.
+	truncatedSAML := `<form><input type="hidden" name="SAMLResponse" value="PHNhbWw6UmVzcG9uc2U+secret`
+	redactedSAML := debugResponseBody("text/html; charset=utf-8", truncatedSAML, false)
+	r.NotContains(redactedSAML, "PHNhbWw6UmVzcG9uc2U+secret")
+	r.Contains(redactedSAML, "[REDACTED]")
+
 	// Traffic log enforces total byte cap even below maxTrafficEntries.
 	var tl trafficLog
 	big := strings.Repeat("a", 512<<10)

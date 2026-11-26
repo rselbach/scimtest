@@ -702,12 +702,15 @@ func (c *SCIMClient) appendTrace(trace SyncTraceEntry) {
 	if len(trace.ResponseBody) > maxSCIMTraceBodyBytes {
 		trace.ResponseBody = trace.ResponseBody[:maxSCIMTraceBodyBytes] + "\n... [truncated]"
 	}
+	if len(c.traces) >= maxSCIMTraceEntries {
+		c.traceBytes -= len(c.traces[0].ResponseBody)
+		if c.traceBytes < 0 {
+			c.traceBytes = 0
+		}
+		c.traces = c.traces[1:]
+	}
 	if c.traceBytes+len(trace.ResponseBody) > maxSCIMTotalTraceBytes && trace.ResponseBody != "" {
 		trace.ResponseBody = "[omitted: trace buffer limit reached]"
-	}
-	if len(c.traces) >= maxSCIMTraceEntries {
-		c.traces = append(c.traces[1:], trace)
-		return
 	}
 	c.traceBytes += len(trace.ResponseBody)
 	c.traces = append(c.traces, trace)
