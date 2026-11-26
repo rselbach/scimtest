@@ -38,7 +38,10 @@ var backchannelLogoutClient = &http.Client{
 
 // logoutResultRetention is how long a session's logout token results stay
 // readable after delivery, so a lifecycle checklist can show them.
-const logoutResultRetention = 24 * time.Hour
+const (
+	logoutResultRetention   = 24 * time.Hour
+	maxLogoutResultSessions = 1000
+)
 
 // backchannelLogoutResult is one logout token that scimtest sent, or skipped,
 // for an ended session, and how the app answered.
@@ -62,6 +65,20 @@ func (a *webApp) rememberLogoutResult(sessionID string, result backchannelLogout
 	for id, results := range a.logoutResults {
 		if result.At.Sub(results[len(results)-1].At) > logoutResultRetention {
 			delete(a.logoutResults, id)
+		}
+	}
+	if _, exists := a.logoutResults[sessionID]; !exists && len(a.logoutResults) >= maxLogoutResultSessions {
+		oldestID := ""
+		var oldest time.Time
+		for id, results := range a.logoutResults {
+			last := results[len(results)-1].At
+			if oldestID == "" || last.Before(oldest) {
+				oldestID = id
+				oldest = last
+			}
+		}
+		if oldestID != "" {
+			delete(a.logoutResults, oldestID)
 		}
 	}
 	a.logoutResults[sessionID] = append(a.logoutResults[sessionID], result)

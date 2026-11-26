@@ -2482,8 +2482,10 @@ func TestAutomaticTunnelRetry(t *testing.T) {
 
 	r.Equal(http.StatusSeeOther, rec.Code)
 	r.Equal("/?environment=env_default&modal=config&page=2&pageSize=25&q=study+group&tab=groups", rec.Header().Get("Location"))
+	r.Eventually(func() bool {
+		return app.tunnelPublicURL() == "https://scimtest.rselbach.com/study-group"
+	}, 2*time.Second, 10*time.Millisecond)
 	r.Equal(1, attempts)
-	r.Equal("https://scimtest.rselbach.com/study-group", app.tunnelPublicURL())
 	r.Empty(app.tunnelError())
 }
 
@@ -2512,7 +2514,9 @@ func TestAutomaticTunnelRetrySurfacesRegistrationError(t *testing.T) {
 
 	r.Equal(http.StatusSeeOther, rec.Code)
 	r.Equal("/?modal=config&tab=users", rec.Header().Get("Location"))
-	r.Equal("start automatic tunnel: application profile rejected again", app.tunnelError())
+	r.Eventually(func() bool {
+		return app.tunnelError() == "start automatic tunnel: application profile rejected again"
+	}, 2*time.Second, 10*time.Millisecond)
 	r.Empty(app.tunnelPublicURL())
 }
 
@@ -2562,16 +2566,14 @@ func TestAutomaticTunnelRetryAvoidsConcurrentAttempts(t *testing.T) {
 		},
 	}
 	app.setTunnelError("application profile rejected")
-	done := make(chan struct{})
-	go func() {
-		app.retryAutomaticTunnel()
-		close(done)
-	}()
+	app.retryAutomaticTunnel()
 	<-started
 
 	app.retryAutomaticTunnel()
 	close(release)
-	<-done
+	r.Eventually(func() bool {
+		return app.tunnelError() == "start automatic tunnel: registration unavailable"
+	}, 2*time.Second, 10*time.Millisecond)
 
 	r.Equal(1, attempts)
 	r.Equal("start automatic tunnel: registration unavailable", app.tunnelError())

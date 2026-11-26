@@ -29,6 +29,12 @@ func openInstanceFile(path string) (*os.File, error) {
 		}
 		return nil, fmt.Errorf("instance lock is not a private regular file owned by the current user")
 	}
+	if err := unix.Fchmod(fd, 0o600); err != nil {
+		if closeErr := file.Close(); closeErr != nil {
+			return nil, fmt.Errorf("secure instance lock: %w; close instance lock: %v", err, closeErr)
+		}
+		return nil, fmt.Errorf("secure instance lock: %w", err)
+	}
 	return file, nil
 }
 

@@ -283,11 +283,14 @@ func (a *webApp) resilienceRun(slug string, now time.Time) (resilienceRun, bool)
 	return cloneResilienceRun(run), true
 }
 
-func (a *webApp) takeResilienceFlowFaults(slug string, now time.Time) faultOptions {
+func (a *webApp) takeResilienceFlowFaults(slug string, protocol string, now time.Time) faultOptions {
 	a.resilienceMu.Lock()
 	defer a.resilienceMu.Unlock()
 	run, ok := a.resilienceRuns[slug]
 	if !ok || !run.active() || run.Phase != "flow" || !now.Before(run.ExpiresAt) {
+		return faultOptions{}
+	}
+	if protocol != "" && run.Protocol != "both" && run.Protocol != protocol {
 		return faultOptions{}
 	}
 	run.State = resilienceRunCompleted
@@ -333,6 +336,11 @@ func (a *webApp) completeResilienceEndpointAction(slug, phase string, action res
 	defer a.resilienceMu.Unlock()
 	run, ok := a.resilienceRuns[slug]
 	if !ok || !run.active() || run.ID != action.RunID || run.InFlight < 1 || run.Remaining < 1 {
+		return false
+	}
+	if !now.Before(run.ExpiresAt) {
+		run.expire(now)
+		a.resilienceRuns[slug] = run
 		return false
 	}
 	run.InFlight--

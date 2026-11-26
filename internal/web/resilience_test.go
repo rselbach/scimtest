@@ -287,8 +287,8 @@ func TestResilienceFlowFaultAppliesOnce(t *testing.T) {
 
 	_, err := svc.armResilienceRun("greendale", "expired-token", 0, now)
 	r.NoError(err)
-	r.True(svc.takeResilienceFlowFaults("greendale", now).IDTokenTTLSet)
-	r.False(svc.takeResilienceFlowFaults("greendale", now).active())
+	r.True(svc.takeResilienceFlowFaults("greendale", "oidc", now).IDTokenTTLSet)
+	r.False(svc.takeResilienceFlowFaults("greendale", "oidc", now).active())
 }
 
 func TestResilienceRunExpires(t *testing.T) {

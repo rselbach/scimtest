@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -59,6 +60,7 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 	scimBearerToken := strings.TrimSpace(r.FormValue("scim_bearer_token"))
 	existingIndex, appExists := appIndexByID(state.Apps, id)
 	existingProtocol := "none"
+	previousSlug := ""
 	wasSCIMEnabled := false
 	previousSCIMBaseURL := ""
 	scimCapabilitiesKnown := false
@@ -66,6 +68,7 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 	scimFilterSupported := false
 	if appExists {
 		existingProtocol = state.Apps[existingIndex].Protocol
+		previousSlug = state.Apps[existingIndex].Slug
 		wasSCIMEnabled = state.Apps[existingIndex].SCIMEnabled
 		previousSCIMBaseURL = strings.TrimRight(strings.TrimSpace(state.Apps[existingIndex].SCIMBaseURL), "/")
 		scimCapabilitiesKnown = state.Apps[existingIndex].SCIMCapabilitiesKnown
@@ -228,6 +231,9 @@ func (a *webApp) handleAppSave(w http.ResponseWriter, r *http.Request) {
 		a.redirectError(w, r, tab, err)
 		return
 	}
+	if appExists && previousSlug != "" && previousSlug != app.Slug {
+		a.purgeEnvironmentRuntimeState("", previousSlug)
+	}
 	if _, ok := apiEnvironmentRequestFrom(r); ok {
 		status := http.StatusOK
 		if created {
@@ -299,14 +305,13 @@ func protocolWithout(protocol string, removed string) string {
 }
 
 func (a *webApp) handleAppDiscoverSCIM(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	state, err := loadStateForApp(r.PathValue("id"))
+	id := r.PathValue("id")
+	state, err := loadStateForApp(id)
 	if err != nil {
 		a.redirectError(w, r, "apps", err)
 		return
 	}
-	index, ok := appIndexByID(state.Apps, r.PathValue("id"))
+	index, ok := appIndexByID(state.Apps, id)
 	if !ok || !state.Apps[index].SCIMEnabled {
 		a.redirectError(w, r, "apps", fmt.Errorf("SCIM-enabled environment not found"))
 		return
@@ -322,15 +327,33 @@ func (a *webApp) handleAppDiscoverSCIM(w http.ResponseWriter, r *http.Request) {
 		a.redirectError(w, r, "apps", err)
 		return
 	}
-	state.Apps[index].SCIMCapabilitiesKnown = true
-	state.Apps[index].SCIMPatchSupported = capabilities.PatchSupported
-	state.Apps[index].SCIMFilterSupported = capabilities.FilterSupported
-	if err := saveEnvironmentState(state); err != nil {
+	a.syncMutationMu.Lock()
+	defer a.syncMutationMu.Unlock()
+	if a.anySyncRunning() {
+		a.redirectError(w, r, "apps", fmt.Errorf("sync is running; wait for it to finish"))
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	fresh, err := loadStateForApp(id)
+	if err != nil {
+		a.redirectError(w, r, "apps", err)
+		return
+	}
+	index, ok = appIndexByID(fresh.Apps, id)
+	if !ok || !fresh.Apps[index].SCIMEnabled {
+		a.redirectError(w, r, "apps", fmt.Errorf("SCIM configuration changed during discovery"))
+		return
+	}
+	fresh.Apps[index].SCIMCapabilitiesKnown = true
+	fresh.Apps[index].SCIMPatchSupported = capabilities.PatchSupported
+	fresh.Apps[index].SCIMFilterSupported = capabilities.FilterSupported
+	if err := saveEnvironmentState(fresh); err != nil {
 		a.redirectError(w, r, "apps", err)
 		return
 	}
 	message := fmt.Sprintf("SCIM capabilities discovered: PATCH %s; filtering %s", supportedLabel(capabilities.PatchSupported), supportedLabel(capabilities.FilterSupported))
-	redirectWithFlash(w, r, dashboardURL("apps", map[string]string{"modal": "app", "id": state.Apps[index].ID}), flashMessage{Kind: "success", Message: message})
+	redirectWithFlash(w, r, dashboardURL("apps", map[string]string{"modal": "app", "id": fresh.Apps[index].ID}), flashMessage{Kind: "success", Message: message})
 }
 
 func supportedLabel(supported bool) string {
@@ -341,11 +364,17 @@ func supportedLabel(supported bool) string {
 }
 
 func (a *webApp) handleAppTestSCIM(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := r.ParseMultipartForm(1 << 20); err != nil {
 		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
+	}
+	if r.MultipartForm != nil {
+		defer func() {
+			if err := r.MultipartForm.RemoveAll(); err != nil {
+				log.Printf("remove test-scim temporary files: %v", err)
+			}
+		}()
 	}
 	token := strings.TrimSpace(r.FormValue("scim_bearer_token"))
 	if token == "" && strings.TrimSpace(r.FormValue("id")) != "" {
@@ -388,11 +417,13 @@ func (a *webApp) handleAppDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	appID := state.Apps[index].ID
+	appSlug := state.Apps[index].Slug
 	state.Apps = append(state.Apps[:index], state.Apps[index+1:]...)
 	if err := deleteEnvironment(appID); err != nil {
 		a.redirectError(w, r, "apps", err)
 		return
 	}
+	a.purgeEnvironmentRuntimeState(appID, appSlug)
 	location := dashboardURL("apps", nil)
 	if strings.TrimSpace(r.FormValue("environment")) == appID {
 		if len(state.Apps) == 0 {
@@ -404,4 +435,95 @@ func (a *webApp) handleAppDelete(w http.ResponseWriter, r *http.Request) {
 		location = addEnvironmentToURL(location, state.Apps[0].ID)
 	}
 	redirectWithFlash(w, r, location, flashMessage{Kind: "success", Message: "environment deleted"})
+}
+
+// purgeEnvironmentRuntimeState clears in-memory credentials, sessions,
+// inspections, faults, logs, and cached traces associated with an environment
+// when it is deleted or its slug is renamed.
+func (a *webApp) purgeEnvironmentRuntimeState(appID string, slug string) {
+	if slug != "" {
+		a.oidcMu.Lock()
+		for k, v := range a.authCodes {
+			if v.AppSlug == slug {
+				delete(a.authCodes, k)
+			}
+		}
+		for k, v := range a.accessTokens {
+			if v.AppSlug == slug {
+				delete(a.accessTokens, k)
+			}
+		}
+		for k, v := range a.refreshTokens {
+			if v.AppSlug == slug {
+				delete(a.refreshTokens, k)
+			}
+		}
+		a.oidcMu.Unlock()
+
+		a.sessionMu.Lock()
+		var removedSessionIDs []string
+		for k, v := range a.idpSessions {
+			if v.AppSlug == slug {
+				delete(a.idpSessions, k)
+				removedSessionIDs = append(removedSessionIDs, k)
+			}
+		}
+		for k, v := range a.logoutConfirmTokens {
+			if v.AppSlug == slug {
+				delete(a.logoutConfirmTokens, k)
+			}
+		}
+		a.sessionMu.Unlock()
+
+		if len(removedSessionIDs) > 0 {
+			a.logoutResultMu.Lock()
+			for _, id := range removedSessionIDs {
+				delete(a.logoutResults, id)
+			}
+			a.logoutResultMu.Unlock()
+		}
+
+		a.faultMu.Lock()
+		delete(a.armedFaults, slug)
+		a.faultMu.Unlock()
+
+		a.resilienceMu.Lock()
+		delete(a.resilienceRuns, slug)
+		a.resilienceMu.Unlock()
+
+		a.lifecycleMu.Lock()
+		delete(a.lifecycleRuns, slug)
+		a.lifecycleMu.Unlock()
+
+		a.oidcInspectorMu.Lock()
+		delete(a.oidcInspections, slug)
+		a.oidcInspectorMu.Unlock()
+
+		a.samlInspectorMu.Lock()
+		delete(a.samlInspections, slug)
+		a.samlInspectorMu.Unlock()
+
+		a.samlLogoutMu.Lock()
+		delete(a.samlLogoutLog, slug)
+		a.samlLogoutMu.Unlock()
+
+		a.flowLogMu.Lock()
+		delete(a.flowLog, slug)
+		a.flowLogMu.Unlock()
+	}
+
+	if appID != "" {
+		a.traceMu.Lock()
+		delete(a.lastTraces, appID)
+		delete(a.lastTraceContent, appID)
+		a.traceMu.Unlock()
+
+		a.importPreviewMu.Lock()
+		delete(a.importPreviews, appID)
+		a.importPreviewMu.Unlock()
+
+		a.syncJobMu.Lock()
+		delete(a.syncJobs, appID)
+		a.syncJobMu.Unlock()
+	}
 }

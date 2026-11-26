@@ -86,7 +86,11 @@ func (a *webApp) handleSAMLMetadata(w http.ResponseWriter, r *http.Request) {
   </IDPSSODescriptor>
 </EntityDescriptor>`, xmlEscape(entityID), keyDescriptors.String(), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(nameIDFormat), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(baseURL), xmlEscape(app.Slug))
 	if r.URL.Query().Get("download") == "1" {
-		w.Header().Set("Content-Disposition", `attachment; filename="scimtest-`+app.Slug+`-idp-metadata.xml"`)
+		filenameSlug := slugify(app.Slug)
+		if filenameSlug == "" {
+			filenameSlug = "app"
+		}
+		w.Header().Set("Content-Disposition", `attachment; filename="scimtest-`+filenameSlug+`-idp-metadata.xml"`)
 	}
 	w.Header().Set("Content-Type", "application/samlmetadata+xml; charset=utf-8")
 	if _, err := w.Write([]byte(metadata)); err != nil {
@@ -185,7 +189,7 @@ func (a *webApp) completeSAMLSSO(w http.ResponseWriter, r *http.Request, state a
 		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
 		return
 	}
-	faults := a.flowFaults(app.Slug, values)
+	faults := a.flowFaults(app.Slug, "saml", values)
 	if faults.SAMLStatus != "" {
 		posted, err := a.buildSignedSAMLResponse(state, baseURL, app, user, responseContext, encryption, faults)
 		if err != nil {

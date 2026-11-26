@@ -250,7 +250,14 @@ func (a *webApp) redeemPlaygroundTokens(ctx context.Context, foundApp app, token
 		// OAuth Basic credentials are form-encoded before base64 (RFC 6749).
 		tokenReq.SetBasicAuth(url.QueryEscape(foundApp.OIDCClientID), url.QueryEscape(foundApp.OIDCClientSecret))
 	}
-	tokenResp, err := http.DefaultClient.Do(tokenReq)
+	loopbackClient := &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: &http.Transport{Proxy: nil},
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	tokenResp, err := loopbackClient.Do(tokenReq)
 	if err != nil {
 		return fmt.Errorf("token request failed: %w", err)
 	}
@@ -285,7 +292,7 @@ func (a *webApp) redeemPlaygroundTokens(ctx context.Context, foundApp app, token
 		return err
 	}
 	userinfoReq.Header.Set("Authorization", "Bearer "+tokenPayload.AccessToken)
-	userinfoResp, err := http.DefaultClient.Do(userinfoReq)
+	userinfoResp, err := loopbackClient.Do(userinfoReq)
 	if err != nil {
 		return fmt.Errorf("userinfo request failed: %w", err)
 	}

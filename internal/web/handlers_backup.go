@@ -68,6 +68,16 @@ func (a *webApp) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 		a.redirectError(w, r, "apps", fmt.Errorf("backup belongs to a different environment"))
 		return
 	}
+	globalState, err := loadState()
+	if err != nil {
+		a.redirectError(w, r, "apps", err)
+		return
+	}
+	otherApps := otherEnvironmentApps(globalState.Apps, current.Environment.ID)
+	if err := validateRestoredState(&restored, otherApps); err != nil {
+		a.redirectError(w, r, "apps", fmt.Errorf("invalid backup: %w", err))
+		return
+	}
 	safetyPath, err := writeSafetyBackup(current)
 	if err != nil {
 		a.redirectError(w, r, "apps", err)
@@ -78,4 +88,14 @@ func (a *webApp) handleBackupRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	redirectWithFlash(w, r, dashboardURL("apps", nil), flashMessage{Kind: "success", Message: "backup restored; pre-restore copy saved to " + safetyPath})
+}
+
+func otherEnvironmentApps(apps []app, environmentID string) []app {
+	other := make([]app, 0, len(apps))
+	for _, candidate := range apps {
+		if candidate.ID != environmentID {
+			other = append(other, candidate)
+		}
+	}
+	return other
 }

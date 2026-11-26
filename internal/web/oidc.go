@@ -259,8 +259,9 @@ func (a *webApp) issueOIDCCode(w http.ResponseWriter, r *http.Request, app app, 
 		Authn:         session.statement(request.Contexts),
 		SessionID:     sessionID,
 		ExpiresAt:     now.Add(5 * time.Minute),
-		Faults:        a.flowFaults(app.Slug, values),
+		Faults:        a.flowFaults(app.Slug, "oidc", values),
 	}
+	a.evictOldestAuthCodeIfFull()
 	a.authCodes[code] = authCode
 	if err := a.rememberOIDCInspection(app, user, authCode, "Authorization code issued", nil, "", now); err != nil {
 		a.failFlow(w, app, "oidc", "authorize", http.StatusInternalServerError, err.Error())
@@ -514,6 +515,7 @@ func (a *webApp) mintAccessToken(state appState, issuer string, app app, userID 
 			return "", err
 		}
 	}
+	a.evictOldestAccessTokenIfFull()
 	a.accessTokens[value] = token
 	return value, nil
 }
@@ -567,6 +569,7 @@ func (a *webApp) issueRefreshToken(grant refreshToken, now time.Time) (string, e
 	}
 	grant.IssuedAt = now
 	grant.ExpiresAt = now.Add(refreshTokenLifetime)
+	a.evictOldestRefreshTokenIfFull()
 	a.refreshTokens[value] = grant
 	return value, nil
 }
@@ -665,7 +668,7 @@ func (a *webApp) handleOIDCUserinfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token, ok := a.accessTokens[tokenValue]
-	if !ok || token.AppSlug != app.Slug {
+	if !ok || token.AppSlug != app.Slug || token.ClientID != app.OIDCClientID {
 		a.failOAuth(w, app, "userinfo", http.StatusUnauthorized, "invalid_token", "access token is invalid or expired")
 		return
 	}
@@ -785,6 +788,64 @@ func oidcBearerToken(value string) (string, bool) {
 	return token, true
 }
 
+const (
+	maxAuthCodes       = 1000
+	maxAccessTokens    = 4000
+	maxRefreshTokens   = 2000
+	maxOIDCParamLength = 2048
+)
+
+func (a *webApp) evictOldestAuthCodeIfFull() {
+	if len(a.authCodes) < maxAuthCodes {
+		return
+	}
+	oldestKey := ""
+	var oldest time.Time
+	for key, entry := range a.authCodes {
+		if oldestKey == "" || entry.ExpiresAt.Before(oldest) {
+			oldestKey = key
+			oldest = entry.ExpiresAt
+		}
+	}
+	if oldestKey != "" {
+		delete(a.authCodes, oldestKey)
+	}
+}
+
+func (a *webApp) evictOldestAccessTokenIfFull() {
+	if len(a.accessTokens) < maxAccessTokens {
+		return
+	}
+	oldestKey := ""
+	var oldest time.Time
+	for key, entry := range a.accessTokens {
+		if oldestKey == "" || entry.ExpiresAt.Before(oldest) {
+			oldestKey = key
+			oldest = entry.ExpiresAt
+		}
+	}
+	if oldestKey != "" {
+		delete(a.accessTokens, oldestKey)
+	}
+}
+
+func (a *webApp) evictOldestRefreshTokenIfFull() {
+	if len(a.refreshTokens) < maxRefreshTokens {
+		return
+	}
+	oldestKey := ""
+	var oldest time.Time
+	for key, entry := range a.refreshTokens {
+		if oldestKey == "" || entry.ExpiresAt.Before(oldest) {
+			oldestKey = key
+			oldest = entry.ExpiresAt
+		}
+	}
+	if oldestKey != "" {
+		delete(a.refreshTokens, oldestKey)
+	}
+}
+
 func (a *webApp) pruneExpiredOIDCCredentials(now time.Time) {
 	for value, code := range a.authCodes {
 		if !code.ExpiresAt.After(now) {
@@ -808,7 +869,7 @@ func (a *webApp) pruneExpiredOIDCCredentials(now time.Time) {
 // (RFC 6749 section 4.1.2.1). When tunneled is true, AllowAnyOIDCRedirect is
 // ignored so a public tunnel cannot mint codes to an attacker-chosen URI.
 func validateAuthorizeClient(app app, values url.Values, tunneled bool, extraAllowed ...string) error {
-	if values.Get("client_id") != app.OIDCClientID {
+	if app.OIDCClientID == "" || values.Get("client_id") != app.OIDCClientID {
 		return fmt.Errorf("client_id is invalid")
 	}
 	redirectURI := values.Get("redirect_uri")
@@ -848,6 +909,11 @@ func (e *authorizeError) Error() string { return e.description }
 func parseAuthorizeRequest(app app, values url.Values) (authnRequest, error) {
 	if values.Get("response_type") != "code" {
 		return authnRequest{}, &authorizeError{code: "unsupported_response_type", description: "response_type must be code"}
+	}
+	for _, param := range []string{"scope", "nonce", "state", "acr_values"} {
+		if len(values.Get(param)) > maxOIDCParamLength {
+			return authnRequest{}, &authorizeError{code: "invalid_request", description: param + " exceeds maximum length"}
+		}
 	}
 	if !strings.Contains(" "+values.Get("scope")+" ", " openid ") {
 		return authnRequest{}, &authorizeError{code: "invalid_scope", description: "scope must include openid"}
@@ -946,8 +1012,14 @@ func validPKCEVerifier(challenge string, verifier string) bool {
 }
 
 func clientAuthenticated(r *http.Request, app app) bool {
+	if app.OIDCClientID == "" {
+		return false
+	}
 	if app.OIDCPublicClient {
 		return r.FormValue("client_id") == app.OIDCClientID
+	}
+	if app.OIDCClientSecret == "" {
+		return false
 	}
 	clientID, secret, ok := r.BasicAuth()
 	if ok {

@@ -311,6 +311,12 @@ func (a *webApp) handleAPISCIMDiscover(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	a.syncMutationMu.Lock()
+	defer a.syncMutationMu.Unlock()
+	if a.anySyncRunning() {
+		apiError(w, http.StatusConflict, "sync is running; wait for it to finish")
+		return
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	fresh, err := a.loadAPIEnvironment(id)
@@ -467,6 +473,15 @@ func (a *webApp) handleAPIRestore(w http.ResponseWriter, r *http.Request) {
 	current, err := a.loadAPIEnvironment(environmentID)
 	if err != nil {
 		apiError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	globalState, err := loadState()
+	if err != nil {
+		apiError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := validateRestoredState(&restored, otherEnvironmentApps(globalState.Apps, environmentID)); err != nil {
+		apiError(w, http.StatusBadRequest, fmt.Sprintf("invalid backup: %v", err))
 		return
 	}
 	safetyPath, err := writeSafetyBackup(current)

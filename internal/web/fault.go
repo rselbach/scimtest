@@ -291,7 +291,7 @@ func (a *webApp) disarmFaults(slug string) {
 
 // flowFaults resolves the faults for a flow: explicit fault_* parameters
 // win, otherwise armed faults are consumed.
-func (a *webApp) flowFaults(slug string, values url.Values) faultOptions {
+func (a *webApp) flowFaults(slug string, protocol string, values url.Values) faultOptions {
 	faults, _ := parseFaultOptions(values).splitLogout()
 	if faults.active() {
 		return faults
@@ -300,7 +300,7 @@ func (a *webApp) flowFaults(slug string, values url.Values) faultOptions {
 	if faults.active() {
 		return faults
 	}
-	return a.takeResilienceFlowFaults(slug, time.Now())
+	return a.takeResilienceFlowFaults(slug, protocol, time.Now())
 }
 
 func supportsAnyIDP(foundApp app) bool { return supportsOIDC(foundApp) || supportsSAML(foundApp) }

@@ -244,7 +244,7 @@ func (a *webApp) serveSAMLLogoutRequest(w http.ResponseWriter, r *http.Request, 
 		})
 	}
 	if slices.ContainsFunc(ended, func(session idpSession) bool { return session.ID == browserID }) {
-		forgetIdPSession(w, app.Slug)
+		a.forgetIdPSession(w, r, app.Slug)
 	}
 
 	responseXML, err := buildSAMLLogoutResponse(samlIDPEntityID(baseURL, app.Slug), app.SAMLSLOURL, request.ID, status, time.Now())

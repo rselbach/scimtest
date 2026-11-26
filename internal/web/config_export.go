@@ -139,8 +139,12 @@ func (a *webApp) handleSAMLCertificate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	filenameSlug := slugify(foundApp.Slug)
+	if filenameSlug == "" {
+		filenameSlug = "app"
+	}
 	w.Header().Set("Content-Type", "application/x-pem-file")
-	w.Header().Set("Content-Disposition", `attachment; filename="scimtest-`+foundApp.Slug+`.pem"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="scimtest-`+filenameSlug+`.pem"`)
 	if _, err := w.Write([]byte(certificatePEM(key.CertDER))); err != nil {
 		return
 	}

@@ -165,7 +165,7 @@ func (a *webApp) handleEntraMemberObjects(w http.ResponseWriter, r *http.Request
 		return
 	}
 	token, ok := a.accessTokens[tokenValue]
-	if !ok || token.AppSlug != app.Slug {
+	if !ok || token.AppSlug != app.Slug || token.ClientID != app.OIDCClientID {
 		a.failGraph(w, app, http.StatusUnauthorized, "InvalidAuthenticationToken", "Access token is invalid or expired.")
 		return
 	}
