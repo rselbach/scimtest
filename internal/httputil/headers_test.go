@@ -32,3 +32,25 @@ func TestRemoveHopHeadersRemovesConnectionListedHeaders(t *testing.T) {
 		t.Fatalf("Content-Type changed: %q", got)
 	}
 }
+
+func TestCloneHeaderCanonicalizesNonCanonicalKeysForHopRemoval(t *testing.T) {
+	raw := http.Header{
+		"transfer-encoding": {"chunked"},
+		"connection":        {"x-secret-hop"},
+		"x-secret-hop":      {"greendale"},
+		"upgrade":           {"websocket"},
+		"content-type":      {"application/json"},
+	}
+
+	cloned := CloneHeader(raw)
+	RemoveHopHeaders(cloned)
+
+	for _, forbidden := range []string{"Transfer-Encoding", "Connection", "X-Secret-Hop", "Upgrade"} {
+		if got := cloned.Get(forbidden); got != "" {
+			t.Fatalf("%s was not removed: %q", forbidden, got)
+		}
+	}
+	if got := cloned.Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want %q", got, "application/json")
+	}
+}

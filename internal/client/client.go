@@ -273,6 +273,18 @@ func (c *Client) runOnce(ctx context.Context) error {
 		closeConn()
 	}()
 
+	const (
+		handshakeTimeout = 30 * time.Second
+		readTimeout      = 90 * time.Second
+	)
+	setHandshakeDeadlines := func() error {
+		deadline := time.Now().Add(handshakeTimeout)
+		if err := conn.SetWriteDeadline(deadline); err != nil {
+			return err
+		}
+		return conn.SetReadDeadline(deadline)
+	}
+
 	register := protocol.Message{
 		Type:                 protocol.TypeRegisterTunnel,
 		LocalPort:            c.cfg.LocalPort,
@@ -281,6 +293,9 @@ func (c *Client) runOnce(ctx context.Context) error {
 	}
 	if len(c.cfg.InstancePrivateKey) == ed25519.PrivateKeySize {
 		register.InstancePublicKey = base64.StdEncoding.EncodeToString(c.cfg.InstancePrivateKey.Public().(ed25519.PublicKey))
+	}
+	if err := setHandshakeDeadlines(); err != nil {
+		return fmt.Errorf("set handshake deadlines: %w", err)
 	}
 	if err := conn.WriteJSON(register); err != nil {
 		return fmt.Errorf("write tunnel registration: %w", err)
@@ -297,11 +312,17 @@ func (c *Client) runOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if err := setHandshakeDeadlines(); err != nil {
+		return fmt.Errorf("set handshake deadlines: %w", err)
+	}
 	if err := conn.WriteJSON(signed); err != nil {
 		return fmt.Errorf("write application signature: %w", err)
 	}
 	if err := conn.ReadJSON(&registered); err != nil {
 		return fmt.Errorf("read tunnel registration: %w", err)
+	}
+	if err := conn.SetWriteDeadline(time.Time{}); err != nil {
+		return fmt.Errorf("clear write deadline: %w", err)
 	}
 	switch registered.Type {
 	case protocol.TypeEnrollmentRequired:
@@ -353,6 +374,10 @@ func (c *Client) runOnce(ctx context.Context) error {
 		default:
 		}
 
+		if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
+			close(done)
+			return fmt.Errorf("set tunnel read deadline: %w", err)
+		}
 		var msg protocol.Message
 		if err := conn.ReadJSON(&msg); err != nil {
 			close(done)

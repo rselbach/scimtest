@@ -290,6 +290,16 @@ func (s *Store) EnrollApplicationInstance(
 	profileID, instanceID, publicKey string,
 	actor enrollmentActor,
 ) error {
+	return s.EnrollApplicationInstanceWithRetained(profileID, instanceID, publicKey, actor, nil)
+}
+
+// EnrollApplicationInstanceWithRetained records a per-install public key and
+// preserves any active instance IDs in retained while pruning idle records.
+func (s *Store) EnrollApplicationInstanceWithRetained(
+	profileID, instanceID, publicKey string,
+	actor enrollmentActor,
+	retained map[string]bool,
+) error {
 	actor.GitHubLogin = strings.TrimSpace(actor.GitHubLogin)
 	if actor.GitHubUserID <= 0 || actor.GitHubLogin == "" {
 		return errors.New("github enrollment identity is required")
@@ -316,7 +326,7 @@ func (s *Store) EnrollApplicationInstance(
 	}
 	now := time.Now().UTC()
 	for id, instance := range profile.Instances {
-		if id != instanceID && !instance.Revoked && now.Sub(instance.LastUsedAt) > applicationInstanceMaxIdle {
+		if id != instanceID && !retained[id] && !instance.Revoked && now.Sub(instance.LastUsedAt) > applicationInstanceMaxIdle {
 			delete(profile.Instances, id)
 		}
 	}
@@ -328,7 +338,7 @@ func (s *Store) EnrollApplicationInstance(
 	instance.GitHubUserID = actor.GitHubUserID
 	instance.GitHubLogin = actor.GitHubLogin
 	instance.LastUsedAt = now
-	if _, exists := previous.Instances[instanceID]; !exists && len(profile.Instances) >= applicationInstancesMax {
+	if _, exists := previous.Instances[instanceID]; !exists && countActiveApplicationInstances(profile.Instances) >= applicationInstancesMax {
 		return errors.New("application has too many remembered instances")
 	}
 	profile.Instances[instanceID] = instance
@@ -338,6 +348,16 @@ func (s *Store) EnrollApplicationInstance(
 		return err
 	}
 	return nil
+}
+
+func countActiveApplicationInstances(instances map[string]StoredApplicationInstance) int {
+	count := 0
+	for _, instance := range instances {
+		if !instance.Revoked {
+			count++
+		}
+	}
+	return count
 }
 
 // CountApplicationInstancesByGitHubUserID returns the number of non-revoked
@@ -443,16 +463,22 @@ func (s *Store) ApplicationTunnelID(profileID, instanceID string) string {
 }
 
 func (s *Store) RememberApplicationTunnel(profileID, instanceID, tunnelID string) error {
-	return s.rememberApplicationTunnel(profileID, instanceID, tunnelID, false)
+	return s.rememberApplicationTunnel(profileID, instanceID, tunnelID, false, nil)
 }
 
 // RememberAuthenticatedApplicationTunnel updates a tunnel reservation only if
 // the authenticated identity still exists and remains allowed.
 func (s *Store) RememberAuthenticatedApplicationTunnel(profileID, instanceID, tunnelID string) error {
-	return s.rememberApplicationTunnel(profileID, instanceID, tunnelID, true)
+	return s.rememberApplicationTunnel(profileID, instanceID, tunnelID, true, nil)
 }
 
-func (s *Store) rememberApplicationTunnel(profileID, instanceID, tunnelID string, requireExisting bool) error {
+// RememberAuthenticatedApplicationTunnelWithRetained updates a tunnel
+// reservation while preserving active instance IDs in retained from idle pruning.
+func (s *Store) RememberAuthenticatedApplicationTunnelWithRetained(profileID, instanceID, tunnelID string, retained map[string]bool) error {
+	return s.rememberApplicationTunnel(profileID, instanceID, tunnelID, true, retained)
+}
+
+func (s *Store) rememberApplicationTunnel(profileID, instanceID, tunnelID string, requireExisting bool, retained map[string]bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	profile, ok := s.data.ApplicationProfiles[profileID]
@@ -466,7 +492,7 @@ func (s *Store) rememberApplicationTunnel(profileID, instanceID, tunnelID string
 	}
 	now := time.Now().UTC()
 	for id, instance := range profile.Instances {
-		if id != instanceID && !instance.Revoked && now.Sub(instance.LastUsedAt) > applicationInstanceMaxIdle {
+		if id != instanceID && !retained[id] && !instance.Revoked && now.Sub(instance.LastUsedAt) > applicationInstanceMaxIdle {
 			delete(profile.Instances, id)
 		}
 	}
@@ -474,7 +500,7 @@ func (s *Store) rememberApplicationTunnel(profileID, instanceID, tunnelID string
 	if requireExisting && !exists {
 		return errors.New("application instance authorization no longer exists")
 	}
-	if !exists && len(profile.Instances) >= applicationInstancesMax {
+	if !exists && countActiveApplicationInstances(profile.Instances) >= applicationInstancesMax {
 		return errors.New("application has too many remembered instances")
 	}
 	if instance.Enrolled() && instance.Revoked {

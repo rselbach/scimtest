@@ -172,6 +172,9 @@ func TestAllowedDashboardMutation(t *testing.T) {
 		"loopback origin against dashboard host": {
 			host: "admin.example.com", origin: "http://127.0.0.1:7000", want: false,
 		},
+		"plaintext http origin against https dashboard host": {
+			host: "admin.example.com", origin: "http://admin.example.com", site: "same-site", want: false,
+		},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -639,4 +642,100 @@ func TestTrustedProxyIP(t *testing.T) {
 	s := &Server{trustedProxyNets: []*net.IPNet{network}}
 	r.True(s.trustedProxyIP(net.ParseIP("192.0.2.10")))
 	r.False(s.trustedProxyIP(net.ParseIP("198.51.100.10")))
+}
+
+func TestDashboardTunnelsSetsNoStoreAndCSP(t *testing.T) {
+	r := require.New(t)
+	store, err := OpenStore(t.TempDir() + "/test.json")
+	r.NoError(err)
+	session, err := store.CreateSession("rselbach", true)
+	r.NoError(err)
+	s := &Server{
+		cfg: Config{
+			Domain:       "localhost:7000",
+			PublicScheme: "http",
+			Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		},
+		store:   store,
+		tunnels: make(map[string]*tunnel),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/dashboard/tunnels", nil)
+	req.AddCookie(&http.Cookie{Name: s.cookieName(sessionCookieName), Value: session.ID})
+	rec := httptest.NewRecorder()
+	s.handleDashboardTunnels(rec, req)
+
+	r.Equal(http.StatusOK, rec.Code)
+	r.Equal("no-store", rec.Header().Get("Cache-Control"))
+	r.Contains(rec.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'")
+}
+
+func TestStripTunnelSetCookieDomains(t *testing.T) {
+	r := require.New(t)
+	h := http.Header{
+		"Set-Cookie": {
+			"sid=abc; Path=/; Domain=scimtest.rselbach.com; HttpOnly; SameSite=Lax",
+			"plain=1; Path=/greendale",
+		},
+	}
+	stripTunnelSetCookieDomains(h)
+	r.Equal([]string{
+		"sid=abc; Path=/; HttpOnly; SameSite=Lax",
+		"plain=1; Path=/greendale",
+	}, h["Set-Cookie"])
+}
+
+func TestHandlePublicClampsInterimStatusAndStripsBadHeaders(t *testing.T) {
+	r := require.New(t)
+	s := &Server{
+		cfg: Config{
+			Domain:                   "tunnels.example.com",
+			PublicScheme:             "https",
+			MaxBodyBytes:             1 << 20,
+			MaxTunnelsPerApplication: 10,
+			Logger:                   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		},
+		tunnels: make(map[string]*tunnel),
+	}
+	tun := &tunnel{
+		id:                   "greendale-study-room",
+		rootPath:             "/greendale-study-room",
+		applicationProfileID: "profile-1",
+		instanceID:           "instance-1",
+		routes:               []StoredApplicationRoute{{Methods: []string{http.MethodGet}, Path: "/ok"}},
+		rateLimiter:          newApplicationRateLimiter(60, 10),
+		send:                 make(chan protocol.Message, 4),
+		done:                 make(chan struct{}),
+		requestSlots:         make(chan struct{}, 2),
+		pending:              make(map[uint64]chan protocol.Message),
+	}
+	r.NoError(s.registerTunnel(tun))
+	defer s.unregisterTunnel(tun)
+
+	go func() {
+		req := <-tun.send
+		tun.dispatch(protocol.Message{
+			Type:       protocol.TypeResponse,
+			StreamID:   req.StreamID,
+			StatusCode: http.StatusSwitchingProtocols,
+			Header: http.Header{
+				"transfer-encoding": {"chunked"},
+				"upgrade":           {"websocket"},
+				"Content-Length":    {"999"},
+				"Set-Cookie":        {"sid=troy; Path=/; Domain=tunnels.example.com; HttpOnly"},
+			},
+			Body: []byte("hi"),
+		})
+	}()
+
+	req := httptest.NewRequest(http.MethodGet, "https://tunnels.example.com/greendale-study-room/ok", nil)
+	req.Host = "tunnels.example.com"
+	rec := httptest.NewRecorder()
+	s.handlePublic(rec, req)
+
+	r.Equal(http.StatusBadGateway, rec.Code)
+	r.Empty(rec.Header().Get("Transfer-Encoding"))
+	r.Empty(rec.Header().Get("Upgrade"))
+	r.Empty(rec.Header().Get("Content-Length"))
+	r.Equal("sid=troy; Path=/; HttpOnly", rec.Header().Get("Set-Cookie"))
 }

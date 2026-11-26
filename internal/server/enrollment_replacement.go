@@ -412,6 +412,9 @@ func (s *Server) replaceEnrollment(intent enrollmentReplacementIntent, instanceI
 	if !exists || !pending.approvedAt.IsZero() {
 		return "", false, errEnrollmentReplacementExpired
 	}
+	if len(s.pruneUserEnrollmentsLocked(intent.githubUserID, now)) >= enrollmentsPerUserLimit {
+		return "", false, errors.New(userEnrollmentThrottledMessage)
+	}
 	if err := s.pruneIdleApplicationInstances(pending.profileID, now); err != nil {
 		return "", false, err
 	}
