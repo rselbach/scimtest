@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	webview "github.com/webview/webview_go"
 
@@ -44,7 +45,7 @@ func run() error {
 	if err != nil {
 		log.Printf("updates are off: %v", err)
 	}
-	setDesktopUpdater(updater)
+	var updaterOwned atomic.Bool
 	serverResult := make(chan error, 1)
 	go func() {
 		serverResult <- web.Run(web.RunOptions{
@@ -52,11 +53,16 @@ func run() error {
 			OpenURL:              desktopOpener(urls, stopped, web.OpenBrowser),
 			RequireGitHubAccount: true,
 			Updater:              updater,
+			OnPrimaryInstance: func() {
+				if updater == nil {
+					return
+				}
+				updaterOwned.Store(true)
+				setDesktopUpdater(updater)
+				updater.Start(ctx)
+			},
 		})
 	}()
-	if updater != nil {
-		updater.Start(ctx)
-	}
 
 	initialURL, err := waitForAdminURL(urls, serverResult)
 	if err != nil {
@@ -89,7 +95,9 @@ func run() error {
 		}
 	}()
 
+	terminateDone := make(chan struct{})
 	go func() {
+		defer close(terminateDone)
 		select {
 		case <-terminateRequests:
 			window.Terminate()
@@ -110,10 +118,11 @@ func run() error {
 	close(stopped)
 	cancel()
 	<-navigationDone
+	<-terminateDone
 	err = <-observedResult
 	<-observerDone
 	window.Destroy()
-	if updater != nil {
+	if updater != nil && updaterOwned.Load() {
 		updater.InstallOnQuit()
 	}
 	return err

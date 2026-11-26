@@ -172,7 +172,7 @@ func checkRelease(release Release) error {
 		return fmt.Errorf("update feed has version %q", release.Version)
 	case release.Build == 0:
 		return errors.New("update feed has build 0")
-	case release.NotesURL != "" && !strings.HasPrefix(release.NotesURL, notesPrefix):
+	case release.NotesURL != "" && !allowedNotesURL(release.NotesURL):
 		return fmt.Errorf("update feed has notes URL %q", release.NotesURL)
 	case len(release.Highlights) > maxHighlights:
 		return fmt.Errorf("update feed has %d highlights", len(release.Highlights))
@@ -225,17 +225,29 @@ func isSHA256(text string) bool {
 }
 
 func allowedArtifactURL(raw string) bool {
+	return allowedPrefixedHTTPSURL(raw, artifactPrefix)
+}
+
+func allowedNotesURL(raw string) bool {
+	return allowedPrefixedHTTPSURL(raw, notesPrefix)
+}
+
+func allowedPrefixedHTTPSURL(raw string, prefix string) bool {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.String() != raw || parsed.Scheme != "https" || parsed.User != nil ||
-		parsed.RawQuery != "" || parsed.Fragment != "" {
+		parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || strings.Contains(raw, "#") {
 		return false
 	}
-	rest, ok := strings.CutPrefix(raw, artifactPrefix)
+	rest, ok := strings.CutPrefix(raw, prefix)
 	if !ok || rest == "" {
 		return false
 	}
 	for _, segment := range strings.Split(rest, "/") {
-		if segment == ".." || segment == "." {
+		unescaped, err := url.PathUnescape(segment)
+		if err != nil {
+			return false
+		}
+		if segment == ".." || segment == "." || unescaped == ".." || unescaped == "." || strings.ContainsAny(unescaped, `/\`) {
 			return false
 		}
 	}

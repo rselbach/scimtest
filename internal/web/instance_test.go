@@ -269,3 +269,29 @@ func TestSigtermShutsDownGracefully(t *testing.T) {
 	stopped = true
 	r.Contains(output.String(), "shutting down")
 }
+
+func TestOnPrimaryInstanceSkippedOnHandoff(t *testing.T) {
+	r := require.New(t)
+	statePath := filepath.Join(t.TempDir(), "state.db")
+	t.Setenv("SCIMTEST_STATE_FILE", statePath)
+
+	app := &webApp{instanceToken: "greendale-primary-token"}
+	server := httptest.NewServer(app.adminRoutes())
+	t.Cleanup(server.Close)
+
+	owner, acquired, err := acquireInstanceLease(statePath)
+	r.NoError(err)
+	r.True(acquired)
+	t.Cleanup(func() { r.NoError(owner.Close()) })
+	r.NoError(owner.Publish(instanceMetadata{URL: server.URL, Token: app.instanceToken}))
+
+	called := false
+	err = Run(RunOptions{
+		NoOpen: true,
+		OnPrimaryInstance: func() {
+			called = true
+		},
+	})
+	r.NoError(err)
+	r.False(called)
+}

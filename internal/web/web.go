@@ -507,8 +507,12 @@ type RunOptions struct {
 	OpenURL              func(string) error
 	RequireGitHubAccount bool
 	// Updater offers desktop updates; nil disables them.
-	Updater     *update.Updater
-	browserOpen browserOpener
+	Updater *update.Updater
+	// OnPrimaryInstance runs once after this process acquires the primary
+	// instance lease, and is skipped when handing off to an already-running
+	// instance.
+	OnPrimaryInstance func()
+	browserOpen       browserOpener
 }
 
 // ignoredHandoffFlags lists the flags a second launch cannot apply because
@@ -656,6 +660,9 @@ func Run(options ...RunOptions) error {
 	}
 	if app.updater != nil {
 		app.updater.SetRestartGuard(app.restartGuard)
+	}
+	if opts.OnPrimaryInstance != nil {
+		opts.OnPrimaryInstance()
 	}
 	app.debugRP.Store(opts.Debug)
 	app.debugSecrets.Store(opts.DebugSecrets)

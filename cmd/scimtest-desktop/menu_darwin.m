@@ -222,10 +222,22 @@ static NSAttributedString *SCIMTestRenderedReleaseNotes(NSString *markdown) {
 
 static SCIMTestMenuController *scimtestMenuController;
 
+static NSString *SCIMTestNSStringFromCString(const char *value) {
+  if (value == NULL) {
+    return @"";
+  }
+  NSString *text = [NSString stringWithUTF8String:value];
+  if (text != nil) {
+    return text;
+  }
+  text = [NSString stringWithCString:value encoding:NSISOLatin1StringEncoding];
+  return text ?: @"";
+}
+
 void scimtest_show_update_alert(const char *title, const char *message) {
   @autoreleasepool {
-    NSString *titleText = [NSString stringWithUTF8String:title];
-    NSString *messageText = [NSString stringWithUTF8String:message];
+    NSString *titleText = SCIMTestNSStringFromCString(title);
+    NSString *messageText = SCIMTestNSStringFromCString(message);
     dispatch_async(dispatch_get_main_queue(), ^{
       NSAlert *alert = [[[NSAlert alloc] init] autorelease];
       [alert setMessageText:titleText];

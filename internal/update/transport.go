@@ -54,6 +54,8 @@ func newHTTPClient() *http.Client {
 // and returns the file once its size and SHA-256 match. Other files in dir
 // are removed.
 func download(ctx context.Context, client *http.Client, artifact Artifact, dir string) (string, error) {
+	downloadCtx, cancel := context.WithTimeout(ctx, downloadTimeout)
+	defer cancel()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create download directory: %w", err)
 	}
@@ -64,7 +66,7 @@ func download(ctx context.Context, client *http.Client, artifact Artifact, dir s
 	if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && info.Size() < artifact.Size {
 		offset = info.Size()
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, artifact.URL, nil)
+	request, err := http.NewRequestWithContext(downloadCtx, http.MethodGet, artifact.URL, nil)
 	if err != nil {
 		return "", err
 	}

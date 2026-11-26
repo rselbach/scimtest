@@ -74,6 +74,13 @@ main() {
     "${top_dir}/RPMS" "${top_dir}/SOURCES" "${top_dir}/SPECS" \
     "${top_dir}/SRPMS"
 
+  install -m 0755 "${binary_path}" "${top_dir}/SOURCES/scimtest-desktop"
+  install -m 0644 "${script_dir}/com.rselbach.scimtest.desktop" \
+    "${top_dir}/SOURCES/com.rselbach.scimtest.desktop"
+  install -m 0644 "${project_root}/packaging/macos/AppIcon.png" \
+    "${top_dir}/SOURCES/scimtest.png"
+  install -m 0644 "${project_root}/LICENSE" "${top_dir}/SOURCES/LICENSE"
+
   cat >"${top_dir}/SPECS/scimtest-desktop.spec" <<EOF
 %global debug_package %{nil}
 
@@ -99,13 +106,13 @@ identity provider.
 %build
 
 %install
-install -Dpm0755 "${binary_path}" \
+install -Dpm0755 "%{_sourcedir}/scimtest-desktop" \
   "%{buildroot}/usr/bin/scimtest-desktop"
-install -Dpm0644 "${script_dir}/com.rselbach.scimtest.desktop" \
+install -Dpm0644 "%{_sourcedir}/com.rselbach.scimtest.desktop" \
   "%{buildroot}/usr/share/applications/com.rselbach.scimtest.desktop"
-install -Dpm0644 "${project_root}/packaging/macos/AppIcon.png" \
+install -Dpm0644 "%{_sourcedir}/scimtest.png" \
   "%{buildroot}/usr/share/icons/hicolor/1024x1024/apps/scimtest.png"
-install -Dpm0644 "${project_root}/LICENSE" \
+install -Dpm0644 "%{_sourcedir}/LICENSE" \
   "%{buildroot}/usr/share/licenses/scimtest-desktop/LICENSE"
 
 %files

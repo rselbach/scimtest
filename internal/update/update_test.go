@@ -376,3 +376,43 @@ func TestTakeUpdatedToAfterVersionChange(t *testing.T) {
 	r.NoError(err)
 	r.Empty(again.TakeUpdatedTo())
 }
+
+func TestCheckNowCancelsInFlightRequestWhenCallerContextCancels(t *testing.T) {
+	r := require.New(t)
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	server := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		close(started)
+		<-req.Context().Done()
+		close(canceled)
+	})
+	updater, err := New(Config{
+		FeedURL:     FeedURL,
+		PublicKey:   testKey(1).Public().(ed25519.PublicKey),
+		Current:     Install{Version: "2.5.1", Build: 41, OSVersion: OSVersion{26, 1}},
+		Platform:    macPlatform(),
+		StateDir:    t.TempDir(),
+		Client:      testClient(server),
+		LaunchDelay: time.Hour,
+	})
+	r.NoError(err)
+	runCtx, stopRun := context.WithCancel(context.Background())
+	t.Cleanup(stopRun)
+	updater.Start(runCtx)
+
+	checkCtx, cancelCheck := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- updater.CheckNow(checkCtx)
+	}()
+
+	<-started
+	cancelCheck()
+
+	select {
+	case <-canceled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("in-flight update HTTP request was not canceled when CheckNow context ended")
+	}
+	r.ErrorIs(<-errCh, context.Canceled)
+}

@@ -142,10 +142,20 @@ func (e *StrandedError) Unwrap() error {
 	return e.Err
 }
 
+const (
+	feedFetchTimeout = time.Minute
+	downloadTimeout  = 15 * time.Minute
+)
+
+type checkRequest struct {
+	ctx  context.Context
+	done chan error
+}
+
 // Updater checks for, downloads, and installs updates.
 type Updater struct {
 	cfg     Config
-	checks  chan chan error
+	checks  chan checkRequest
 	updated string
 
 	prefsMu sync.Mutex
@@ -175,7 +185,7 @@ func New(cfg Config) (*Updater, error) {
 	if err := os.MkdirAll(cfg.StateDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create update state directory: %w", err)
 	}
-	u := &Updater{cfg: cfg, checks: make(chan chan error)}
+	u := &Updater{cfg: cfg, checks: make(chan checkRequest)}
 	u.prefs = loadPrefs(u.prefsPath())
 	if u.prefs.LastVersion != "" && u.prefs.LastVersion != cfg.Current.Version {
 		u.updated = cfg.Current.Version
@@ -220,14 +230,17 @@ func (u *Updater) TakeUpdatedTo() string {
 // CheckNow runs a check and waits for it. It returns an error when the check
 // could not reach a verified feed or could not install a newer release.
 func (u *Updater) CheckNow(ctx context.Context) error {
-	done := make(chan error, 1)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req := checkRequest{ctx: ctx, done: make(chan error, 1)}
 	select {
-	case u.checks <- done:
+	case u.checks <- req:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 	select {
-	case err := <-done:
+	case err := <-req.done:
 		return err
 	case <-ctx.Done():
 		return ctx.Err()
@@ -321,8 +334,13 @@ func (u *Updater) run(ctx context.Context) {
 				}
 			}
 			timer.Reset(time.Hour)
-		case done := <-u.checks:
-			done <- u.check(ctx)
+		case req := <-u.checks:
+			checkCtx, cancel := context.WithCancel(ctx)
+			stop := context.AfterFunc(req.ctx, cancel)
+			err := u.check(checkCtx)
+			stop()
+			cancel()
+			req.done <- err
 		}
 	}
 }
@@ -379,7 +397,9 @@ func (u *Updater) check(ctx context.Context) error {
 }
 
 func (u *Updater) fetch(ctx context.Context) (Release, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, u.cfg.FeedURL, nil)
+	fetchCtx, cancel := context.WithTimeout(ctx, feedFetchTimeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(fetchCtx, http.MethodGet, u.cfg.FeedURL, nil)
 	if err != nil {
 		return Release{}, err
 	}
