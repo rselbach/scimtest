@@ -139,6 +139,9 @@ func wrapSignedSAMLResponse(doc *etree.Document, state appState, app app, signed
 		return err
 	}
 	if forgedAssertion := findElementByLocalName(forged, "Assertion"); forgedAssertion != nil {
+		if signature := childElementByLocalName(forgedAssertion, "Signature"); signature != nil {
+			forgedAssertion.RemoveChild(signature)
+		}
 		if err := reassignSAMLID(forgedAssertion, "saml-forged-assertion"); err != nil {
 			return err
 		}

@@ -164,10 +164,25 @@ func (a *webApp) noteIDTokenIssued(sessionID, issuer string) {
 	a.idpSessions[sessionID] = session
 }
 
+// prepareSAMLSessionIndex returns the existing SAML SessionIndex when the
+// browser already has a live session for userID, or generates a fresh one
+// without mutating session state until the signed response builds cleanly.
+func (a *webApp) prepareSAMLSessionIndex(r *http.Request, slug, userID string) (string, error) {
+	current, live := a.browserIdPSession(r, slug)
+	if live && current.SignIn.UserID == userID && current.SAMLSessionIndex != "" {
+		return current.SAMLSessionIndex, nil
+	}
+	return newID("saml-session")
+}
+
 // noteSAMLSignIn records the NameID that a SAML sign-in in sessionID sent,
 // and returns the session's SessionIndex. The session's first SAML sign-in
 // creates it, and later ones reuse it.
 func (a *webApp) noteSAMLSignIn(sessionID, nameID, nameIDFormat string) (string, error) {
+	return a.noteSAMLSignInWithIndex(sessionID, "", nameID, nameIDFormat)
+}
+
+func (a *webApp) noteSAMLSignInWithIndex(sessionID, preparedIndex, nameID, nameIDFormat string) (string, error) {
 	a.sessionMu.Lock()
 	defer a.sessionMu.Unlock()
 	session, ok := a.idpSessions[sessionID]
@@ -175,9 +190,13 @@ func (a *webApp) noteSAMLSignIn(sessionID, nameID, nameIDFormat string) (string,
 		return "", errors.New("the IdP session ended during sign-in")
 	}
 	if session.SAMLSessionIndex == "" {
-		index, err := newID("saml-session")
-		if err != nil {
-			return "", err
+		index := preparedIndex
+		if index == "" {
+			var err error
+			index, err = newID("saml-session")
+			if err != nil {
+				return "", err
+			}
 		}
 		session.SAMLSessionIndex = index
 	}

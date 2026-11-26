@@ -179,6 +179,11 @@ func readSAMLLogoutMessage(r *http.Request) (samlLogoutMessage, error) {
 		values = r.PostForm
 		message.Binding = samlHTTPPostBinding
 	}
+	if message.Binding == samlHTTPRedirectBinding {
+		if len(values["SAMLRequest"]) > 1 || len(values["SAMLResponse"]) > 1 || len(values["RelayState"]) > 1 {
+			return samlLogoutMessage{}, errors.New("SAML Redirect request contains duplicate parameters")
+		}
+	}
 	request, response := values.Get("SAMLRequest"), values.Get("SAMLResponse")
 	switch {
 	case request != "" && response != "":
@@ -291,12 +296,20 @@ func parseSAMLLogoutRequest(root *etree.Element) (samlLogoutRequest, error) {
 	for _, child := range root.ChildElements() {
 		switch elementLocalName(child) {
 		case "NameID":
-			request.NameID = strings.TrimSpace(child.Text())
+			text, err := strictElementText(child)
+			if err != nil {
+				return samlLogoutRequest{}, fmt.Errorf("SAML LogoutRequest NameID: %w", err)
+			}
+			request.NameID = text
 			request.NameIDFormat = strings.TrimSpace(child.SelectAttrValue("Format", ""))
 		case "EncryptedID", "BaseID":
 			return samlLogoutRequest{}, fmt.Errorf("SAML LogoutRequest %s is not supported; send the NameID from the assertion", elementLocalName(child))
 		case "SessionIndex":
-			request.SessionIndexes = append(request.SessionIndexes, strings.TrimSpace(child.Text()))
+			text, err := strictElementText(child)
+			if err != nil {
+				return samlLogoutRequest{}, fmt.Errorf("SAML LogoutRequest SessionIndex: %w", err)
+			}
+			request.SessionIndexes = append(request.SessionIndexes, text)
 		}
 	}
 	if request.NameID == "" {
@@ -311,7 +324,10 @@ func parseSAMLLogoutRequest(root *etree.Element) (samlLogoutRequest, error) {
 // certificate, the message must be signed for its binding, as AuthnRequests
 // must. It reports whether a signature was verified.
 func verifySAMLLogoutSender(r *http.Request, app app, message samlLogoutMessage, kind string) (bool, error) {
-	issuer := childElementTextByLocalName(message.Root, "Issuer")
+	issuer, err := strictChildElementTextByLocalName(message.Root, "Issuer")
+	if err != nil {
+		return false, fmt.Errorf("SAML %s Issuer: %w", kind, err)
+	}
 	expected := strings.TrimSpace(app.SAMLEntityID)
 	switch {
 	case issuer == "":
