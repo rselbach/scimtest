@@ -3,7 +3,6 @@ package core
 import (
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 )
 
@@ -28,7 +27,11 @@ func (c *SCIMClient) patchEntraUser(u User, directory scimUserDirectory, remote 
 	if len(operations) == 0 {
 		return nil
 	}
-	return c.doJSON(http.MethodPatch, "/Users/"+url.PathEscape(remote.ID), newSCIMPathPatchRequest(operations), nil, traceTargetForUser(u, "update"))
+	path, err := scimResourcePath("/Users", remote.ID)
+	if err != nil {
+		return err
+	}
+	return c.doJSON(http.MethodPatch, path, newSCIMPathPatchRequest(operations), nil, traceTargetForUser(u, "update"))
 }
 
 // patchEntraGroup renames remote and adds or removes only the members that
@@ -42,7 +45,11 @@ func (c *SCIMClient) patchEntraGroup(g Group, users []User, remote SCIMGroupReso
 	if len(operations) == 0 {
 		return nil
 	}
-	return c.doJSON(http.MethodPatch, "/Groups/"+url.PathEscape(remote.ID), newSCIMPathPatchRequest(operations), nil, traceTargetForGroup(g, "update"))
+	path, err := scimResourcePath("/Groups", remote.ID)
+	if err != nil {
+		return err
+	}
+	return c.doJSON(http.MethodPatch, path, newSCIMPathPatchRequest(operations), nil, traceTargetForGroup(g, "update"))
 }
 
 func newSCIMPathPatchRequest(operations []scimPatchOperation) scimPatchRequest {

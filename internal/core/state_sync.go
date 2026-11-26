@@ -107,6 +107,19 @@ func MarkUserDirty(state *AppState, userID string, deleted bool) {
 			markResourceDirty(state.UserSync, app.ID, id, deleted && id == userID)
 		}
 	}
+	if deleted {
+		for _, group := range state.Groups {
+			if group.Deleted {
+				continue
+			}
+			for _, memberID := range group.MemberIDs {
+				if memberID == userID {
+					MarkGroupDirty(state, group.ID, false)
+					break
+				}
+			}
+		}
+	}
 }
 
 // MarkGroupDirty schedules a group change for the environment's app under
@@ -218,6 +231,10 @@ func MergeAppImportState(state *AppState, appID string, imported AppState) {
 		user.Dirty = false
 		user.LastError = ""
 		state.Users = append(state.Users, user)
+		if state.UserSync[appID] == nil {
+			state.UserSync[appID] = make(map[string]ResourceSyncState)
+		}
+		state.UserSync[appID][id] = ResourceSyncState{Deleted: true}
 	}
 
 	state.Groups = imported.Groups
@@ -239,6 +256,10 @@ func MergeAppImportState(state *AppState, appID string, imported AppState) {
 		group.Dirty = false
 		group.LastError = ""
 		state.Groups = append(state.Groups, group)
+		if state.GroupSync[appID] == nil {
+			state.GroupSync[appID] = make(map[string]ResourceSyncState)
+		}
+		state.GroupSync[appID][id] = ResourceSyncState{Deleted: true}
 	}
 }
 
@@ -370,6 +391,9 @@ func AppendOperationLogs(state *AppState, appID string, traces []SyncTraceEntry)
 	}
 
 	for _, trace := range traces {
+		if strings.TrimSpace(trace.ResourceID) == "" {
+			continue
+		}
 		entry := OperationLog{
 			AppID:              appID,
 			Kind:               "sync",

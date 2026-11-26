@@ -107,6 +107,11 @@ func importedUserFromSCIM(existingUsers []User, resource SCIMUserResource) (User
 		}
 	}
 
+	remoteID, err := validateSCIMRemoteID(resource.ID)
+	if err != nil {
+		return User{}, fmt.Errorf("imported SCIM user %q has invalid id: %w", username, err)
+	}
+
 	imported := User{
 		ID:         localID,
 		GivenName:  givenName,
@@ -114,7 +119,7 @@ func importedUserFromSCIM(existingUsers []User, resource SCIMUserResource) (User
 		Email:      email,
 		Username:   username,
 		Active:     active,
-		RemoteID:   strings.TrimSpace(resource.ID),
+		RemoteID:   remoteID,
 		Dirty:      false,
 		Deleted:    false,
 		LastError:  "",
@@ -173,11 +178,16 @@ func importedGroupFromSCIM(existingGroups []Group, resource SCIMGroupResource, r
 		memberIDs = append(memberIDs, localUserID)
 	}
 
+	remoteID, err := validateSCIMRemoteID(resource.ID)
+	if err != nil {
+		return Group{}, 0, fmt.Errorf("imported SCIM group %q has invalid id: %w", strings.TrimSpace(resource.DisplayName), err)
+	}
+
 	return Group{
 		ID:          localID,
 		DisplayName: strings.TrimSpace(resource.DisplayName),
 		MemberIDs:   memberIDs,
-		RemoteID:    strings.TrimSpace(resource.ID),
+		RemoteID:    remoteID,
 		Dirty:       false,
 		Deleted:     false,
 		LastError:   "",

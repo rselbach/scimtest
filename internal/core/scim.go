@@ -23,6 +23,7 @@ type SCIMClient struct {
 	client      *http.Client
 	onRateLimit func(TraceTarget, time.Duration, string, int)
 	traces      []SyncTraceEntry
+	traceBytes  int
 	// entra sends requests in Microsoft Entra ID's SCIM dialect.
 	entra bool
 }
@@ -240,6 +241,9 @@ func newSCIMClient(ctx context.Context, cfg Config) (*SCIMClient, error) {
 		entra:   NormalizePersona(cfg.Persona) == PersonaEntra,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		},
 		traces: make([]SyncTraceEntry, 0, 16),
 	}, nil
@@ -300,7 +304,16 @@ func SyncDirtyStateWithContext(ctx context.Context, state AppState, onProgress f
 }
 
 func ImportStateFromSCIM(state AppState) ImportResult {
-	client, err := NewSCIMClient(state.Config)
+	return ImportStateFromSCIMWithContext(context.Background(), state)
+}
+
+// ImportStateFromSCIMWithContext reads users and groups from the configured
+// SCIM endpoint using ctx so callers can cancel slow or stuck imports.
+func ImportStateFromSCIMWithContext(ctx context.Context, state AppState) ImportResult {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	client, err := newSCIMClient(ctx, state.Config)
 	if err != nil {
 		return ImportResult{Fatal: err}
 	}
