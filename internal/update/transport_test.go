@@ -22,8 +22,14 @@ type handlerTransport struct {
 }
 
 func (h handlerTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if err := request.Context().Err(); err != nil {
+		return nil, err
+	}
 	recorder := httptest.NewRecorder()
 	h.handler.ServeHTTP(recorder, request)
+	if err := request.Context().Err(); err != nil {
+		return nil, err
+	}
 	response := recorder.Result()
 	response.Request = request
 	return response, nil
