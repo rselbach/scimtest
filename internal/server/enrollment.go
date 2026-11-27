@@ -479,9 +479,19 @@ func (s *Server) handleEnrollmentBrowserHandoff(w http.ResponseWriter, r *http.R
 		return
 	}
 	handoff := r.URL.Query().Get("handoff")
-	deviceHash, handoffHash, exists := s.takeEnrollmentBrowserHandoff(handoff)
+	pending, deviceHash, handoffHash, exists := s.takeEnrollmentBrowserHandoff(handoff)
 	if !exists {
 		http.Error(w, "installation authorization is invalid or expired", http.StatusGone)
+		return
+	}
+	// Require a direct OS browser navigation from the same network as the
+	// enrolling client before skipping the confirmation page. Cross-site
+	// navigations or mismatched client networks fall back to the interactive
+	// confirmation page showing the verification code.
+	fetchSite := strings.TrimSpace(r.Header.Get("Sec-Fetch-Site"))
+	sameNetwork := pending.clientIP == "" || enrollmentIPKey(s.clientIP(r)) == pending.clientIP
+	if (fetchSite != "" && fetchSite != "none") || !sameNetwork {
+		http.Redirect(w, r, "/enroll?code="+url.QueryEscape(pending.userCode), http.StatusSeeOther)
 		return
 	}
 	if !s.beginGitHubOAuth(w, r, oauthIntent{kind: oauthIntentEnrollment, enrollmentHash: deviceHash}) {
@@ -523,7 +533,7 @@ func (s *Server) renderEnrollmentAuthorization(w http.ResponseWriter, r *http.Re
 		CSRFToken:            csrfToken,
 		ApplicationName:      profile.Name,
 		InstanceFingerprint:  pending.instanceID,
-		ShowVerificationCode: r.URL.Query().Get("presentation") != "desktop",
+		ShowVerificationCode: true,
 	}); err != nil {
 		s.logger().Error("enrollment page render failed", "err", err)
 	}
@@ -623,9 +633,9 @@ func (s *Server) beginGitHubOAuth(w http.ResponseWriter, r *http.Request, intent
 	return true
 }
 
-func (s *Server) takeEnrollmentBrowserHandoff(handoff string) ([32]byte, [32]byte, bool) {
+func (s *Server) takeEnrollmentBrowserHandoff(handoff string) (pendingEnrollment, [32]byte, [32]byte, bool) {
 	if !validHexToken(handoff, 64) {
-		return [32]byte{}, [32]byte{}, false
+		return pendingEnrollment{}, [32]byte{}, [32]byte{}, false
 	}
 	handoffHash := sha256.Sum256([]byte(handoff))
 	s.enrollMu.Lock()
@@ -634,15 +644,15 @@ func (s *Server) takeEnrollmentBrowserHandoff(handoff string) ([32]byte, [32]byt
 	s.pruneEnrollmentStateLocked(time.Now().UTC())
 	deviceHash, exists := s.pendingByHandoff[handoffHash]
 	if !exists {
-		return [32]byte{}, [32]byte{}, false
+		return pendingEnrollment{}, [32]byte{}, [32]byte{}, false
 	}
 	pending, exists := s.pendingEnrollments[deviceHash]
 	if !exists || !pending.approvedAt.IsZero() {
 		delete(s.pendingByHandoff, handoffHash)
-		return [32]byte{}, [32]byte{}, false
+		return pendingEnrollment{}, [32]byte{}, [32]byte{}, false
 	}
 	delete(s.pendingByHandoff, handoffHash)
-	return deviceHash, handoffHash, true
+	return pending, deviceHash, handoffHash, true
 }
 
 func (s *Server) restoreEnrollmentBrowserHandoff(handoffHash, deviceHash [32]byte) {
@@ -687,6 +697,9 @@ func (s *Server) approveEnrollment(deviceHash [32]byte, user auth.GitHubUser) er
 	if !pending.approvedAt.IsZero() {
 		return errors.New("installation authorization was already used")
 	}
+	if len(s.pruneUserEnrollmentsLocked(user.ID, now)) >= enrollmentsPerUserLimit {
+		return errors.New(userEnrollmentThrottledMessage)
+	}
 	if err := s.pruneIdleApplicationInstances(pending.profileID, now); err != nil {
 		return fmt.Errorf("prune idle installations: %w", err)
 	}
@@ -719,6 +732,7 @@ func (s *Server) approvePendingEnrollmentLocked(deviceHash [32]byte, pending pen
 	delete(s.pendingByHandoff, pending.browserHandoffHash)
 	s.deleteReplacementIntentsForEnrollmentLocked(deviceHash)
 	s.enrollments[pending.clientIP] = append(s.pruneEnrollmentsLocked(pending.clientIP, now), now)
+	s.userEnrollments[user.ID] = append(s.pruneUserEnrollmentsLocked(user.ID, now), now)
 }
 
 func (s *Server) consumeEnrollmentGrant(grant, profileID, instanceID, instancePublicKey, legacyInstanceID string) error {
@@ -738,7 +752,7 @@ func (s *Server) consumeEnrollmentGrant(grant, profileID, instanceID, instancePu
 	if pending.profileID != profileID || pending.instanceID != instanceID || pending.instancePublicKey != instancePublicKey || pending.legacyInstanceID != legacyInstanceID {
 		return errors.New("installation grant does not match this installation")
 	}
-	if err := s.store.EnrollApplicationInstance(profileID, instanceID, instancePublicKey, pending.actor); err != nil {
+	if err := s.store.EnrollApplicationInstanceWithRetained(profileID, instanceID, instancePublicKey, pending.actor, s.activeApplicationInstanceIDs(profileID)); err != nil {
 		return err
 	}
 	s.deletePendingEnrollmentLocked(deviceHash, pending)
@@ -777,6 +791,9 @@ func (s *Server) pendingEnrollmentAndHashByUserCode(userCode string) (pendingEnr
 func (s *Server) initializeEnrollmentStateLocked() {
 	if s.enrollments == nil {
 		s.enrollments = make(map[string][]time.Time)
+	}
+	if s.userEnrollments == nil {
+		s.userEnrollments = make(map[int64][]time.Time)
 	}
 	if s.pendingEnrollments == nil {
 		s.pendingEnrollments = make(map[[32]byte]pendingEnrollment)
@@ -817,6 +834,25 @@ func (s *Server) pruneEnrollmentStateLocked(now time.Time) {
 	for clientIP := range s.enrollments {
 		s.pruneEnrollmentsLocked(clientIP, now)
 	}
+	for userID := range s.userEnrollments {
+		s.pruneUserEnrollmentsLocked(userID, now)
+	}
+}
+
+func (s *Server) pruneUserEnrollmentsLocked(userID int64, now time.Time) []time.Time {
+	cutoff := now.Add(-enrollmentWindow)
+	recent := s.userEnrollments[userID][:0]
+	for _, at := range s.userEnrollments[userID] {
+		if at.After(cutoff) {
+			recent = append(recent, at)
+		}
+	}
+	if len(recent) == 0 {
+		delete(s.userEnrollments, userID)
+		return nil
+	}
+	s.userEnrollments[userID] = recent
+	return recent
 }
 
 func (s *Server) pruneEnrollmentsLocked(clientIP string, now time.Time) []time.Time {
@@ -898,6 +934,9 @@ func (s *Server) allowedDashboardMutation(r *http.Request) bool {
 	}
 	if originValue == "" {
 		return r.Header.Get("Sec-Fetch-Site") == "same-origin"
+	}
+	if !isLoopbackHost(r.Host) {
+		return false
 	}
 	if strings.EqualFold(originValue, "null") {
 		return false

@@ -300,6 +300,8 @@ func (a *webApp) handleAPISCIMDiscover(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusBadRequest, "SCIM-enabled environment not found")
 		return
 	}
+	origBaseURL := strings.TrimRight(strings.TrimSpace(state.Apps[index].SCIMBaseURL), "/")
+	origToken := state.Apps[index].SCIMBearerToken
 	projected, err := stateForApp(state, id)
 	if err != nil {
 		apiError(w, http.StatusBadRequest, err.Error())
@@ -309,6 +311,12 @@ func (a *webApp) handleAPISCIMDiscover(w http.ResponseWriter, r *http.Request) {
 	a.rememberTrace(id, capabilities.Traces)
 	if err != nil {
 		apiError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	a.syncMutationMu.Lock()
+	defer a.syncMutationMu.Unlock()
+	if a.anySyncRunning() {
+		apiError(w, http.StatusConflict, "sync is running; wait for it to finish")
 		return
 	}
 	a.mu.Lock()
@@ -323,7 +331,7 @@ func (a *webApp) handleAPISCIMDiscover(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusConflict, "SCIM configuration changed during discovery")
 		return
 	}
-	if strings.TrimRight(strings.TrimSpace(fresh.Apps[index].SCIMBaseURL), "/") != strings.TrimRight(strings.TrimSpace(state.Apps[index].SCIMBaseURL), "/") || fresh.Apps[index].SCIMBearerToken != state.Apps[index].SCIMBearerToken {
+	if strings.TrimRight(strings.TrimSpace(fresh.Apps[index].SCIMBaseURL), "/") != origBaseURL || fresh.Apps[index].SCIMBearerToken != origToken {
 		apiError(w, http.StatusConflict, "SCIM configuration changed during discovery")
 		return
 	}
@@ -374,7 +382,7 @@ func (a *webApp) handleAPIImportPreview(w http.ResponseWriter, r *http.Request) 
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	result := importStateFromSCIM(projected)
+	result := importStateFromSCIMWithContext(r.Context(), projected)
 	a.rememberTrace(id, result.Traces)
 	if result.Fatal != nil {
 		apiError(w, http.StatusBadRequest, result.Fatal.Error())
@@ -467,6 +475,15 @@ func (a *webApp) handleAPIRestore(w http.ResponseWriter, r *http.Request) {
 	current, err := a.loadAPIEnvironment(environmentID)
 	if err != nil {
 		apiError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	globalState, err := loadState()
+	if err != nil {
+		apiError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := validateRestoredState(&restored, otherEnvironmentApps(globalState.Apps, environmentID)); err != nil {
+		apiError(w, http.StatusBadRequest, fmt.Sprintf("invalid backup: %v", err))
 		return
 	}
 	safetyPath, err := writeSafetyBackup(current)

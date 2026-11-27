@@ -60,15 +60,22 @@ func (a *webApp) handleOIDCLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	ownSession := request.Hinted && browserLive && target.ID == browser.ID &&
 		(request.HintSession != "" || request.HintSubject == browser.SignIn.UserID)
-	confirmed := r.Method == http.MethodPost && values.Get("confirm") == "1"
+	confirmed := r.Method == http.MethodPost && values.Get("confirm") == "1" &&
+		a.consumeLogoutConfirmToken(values.Get("confirm_token"), app.Slug, target.ID, browser.ID)
 	if live && !ownSession && !confirmed {
+		token, err := a.issueLogoutConfirmToken(app.Slug, target.ID, browser.ID)
+		if err != nil {
+			a.failFlow(w, app, "oidc", "logout", http.StatusInternalServerError, err.Error())
+			return
+		}
 		action, _, _ := strings.Cut(publicRequestURI(r), "?")
 		hidden := url.Values{}
 		for key, value := range values {
-			if key != "confirm" {
+			if key != "confirm" && key != "confirm_token" {
 				hidden[key] = value
 			}
 		}
+		hidden.Set("confirm_token", token)
 		renderLogoutPage(w, logoutPage{AppName: app.Name, User: target.User, Action: action, Hidden: hidden, Confirm: true})
 		return
 	}
@@ -81,7 +88,7 @@ func (a *webApp) handleOIDCLogout(w http.ResponseWriter, r *http.Request) {
 		signedOut = target.User
 	}
 	if browserLive && target.ID == browser.ID {
-		forgetIdPSession(w, app.Slug)
+		a.forgetIdPSession(w, r, app.Slug)
 	}
 	if request.RedirectURI == nil {
 		a.recordFlowEvent(app.Slug, "oidc", "logout", "ok", signedOut, detail)
@@ -220,9 +227,84 @@ type logoutPage struct {
 	Detail  string // shown under the signed-out message
 }
 
+const (
+	logoutConfirmTokenLifetime = 10 * time.Minute
+	maxLogoutConfirmTokens     = 1000
+)
+
+type logoutConfirmToken struct {
+	AppSlug   string
+	TargetID  string
+	BrowserID string
+	ExpiresAt time.Time
+}
+
+func (a *webApp) issueLogoutConfirmToken(slug, targetID, browserID string) (string, error) {
+	token, err := randomSecret(24)
+	if err != nil {
+		return "", err
+	}
+	now := time.Now()
+	a.sessionMu.Lock()
+	defer a.sessionMu.Unlock()
+	if a.logoutConfirmTokens == nil {
+		a.logoutConfirmTokens = make(map[string]logoutConfirmToken)
+	}
+	for key, entry := range a.logoutConfirmTokens {
+		if !entry.ExpiresAt.After(now) {
+			delete(a.logoutConfirmTokens, key)
+		}
+	}
+	if len(a.logoutConfirmTokens) >= maxLogoutConfirmTokens {
+		oldestKey := ""
+		var oldest time.Time
+		for key, entry := range a.logoutConfirmTokens {
+			if oldestKey == "" || entry.ExpiresAt.Before(oldest) {
+				oldestKey = key
+				oldest = entry.ExpiresAt
+			}
+		}
+		if oldestKey != "" {
+			delete(a.logoutConfirmTokens, oldestKey)
+		}
+	}
+	a.logoutConfirmTokens[token] = logoutConfirmToken{
+		AppSlug:   slug,
+		TargetID:  targetID,
+		BrowserID: browserID,
+		ExpiresAt: now.Add(logoutConfirmTokenLifetime),
+	}
+	return token, nil
+}
+
+func (a *webApp) consumeLogoutConfirmToken(token, slug, targetID, browserID string) bool {
+	if token == "" {
+		return false
+	}
+	now := time.Now()
+	a.sessionMu.Lock()
+	defer a.sessionMu.Unlock()
+	entry, ok := a.logoutConfirmTokens[token]
+	if !ok {
+		return false
+	}
+	if !entry.ExpiresAt.After(now) {
+		delete(a.logoutConfirmTokens, token)
+		return false
+	}
+	if entry.AppSlug != slug || entry.TargetID != targetID || entry.BrowserID != browserID {
+		return false
+	}
+	delete(a.logoutConfirmTokens, token)
+	return true
+}
+
 func renderLogoutPage(w http.ResponseWriter, page logoutPage) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if err := logoutTemplate.Execute(w, page); err != nil {
 		log.Printf("render logout page: %v", err)
 	}

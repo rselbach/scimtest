@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"strings"
 )
 
@@ -85,17 +84,7 @@ func (a *webApp) desktopAuthView() desktopAuthView {
 }
 
 func desktopEnrollmentURL(value string) string {
-	if strings.TrimSpace(value) == "" {
-		return ""
-	}
-	enrollmentURL, err := url.Parse(value)
-	if err != nil {
-		return value
-	}
-	query := enrollmentURL.Query()
-	query.Set("presentation", "desktop")
-	enrollmentURL.RawQuery = query.Encode()
-	return enrollmentURL.String()
+	return strings.TrimSpace(value)
 }
 
 func (a *webApp) renderDesktopAuth(w http.ResponseWriter) {

@@ -6,21 +6,30 @@ import (
 	"time"
 )
 
-const maxTrafficEntries = 100
+const (
+	maxTrafficEntries    = 100
+	maxTrafficTotalBytes = 4 << 20
+)
 
 // trafficLog is a bounded ring of rendered RP interaction transcripts backing
 // the in-app Traffic view.
 type trafficLog struct {
-	mu      sync.Mutex
-	entries []string
+	mu         sync.Mutex
+	entries    []string
+	totalBytes int
 }
 
 func (t *trafficLog) add(entry string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if len(entry) > maxTrafficTotalBytes {
+		entry = entry[:maxTrafficTotalBytes] + "\n... [truncated]"
+	}
 	t.entries = append(t.entries, entry)
-	if len(t.entries) > maxTrafficEntries {
-		t.entries = t.entries[len(t.entries)-maxTrafficEntries:]
+	t.totalBytes += len(entry)
+	for len(t.entries) > maxTrafficEntries || (len(t.entries) > 1 && t.totalBytes > maxTrafficTotalBytes) {
+		t.totalBytes -= len(t.entries[0])
+		t.entries = t.entries[1:]
 	}
 }
 
@@ -39,6 +48,7 @@ func (t *trafficLog) clear() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.entries = nil
+	t.totalBytes = 0
 }
 
 func (a *webApp) handleTraffic(w http.ResponseWriter, r *http.Request) {

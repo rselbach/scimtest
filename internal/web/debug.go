@@ -9,6 +9,7 @@ import (
 	"html"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -21,12 +22,18 @@ import (
 
 var rpDebugLogMu sync.Mutex
 
-const maxRPDebugBodyBytes = 10 << 20
+const (
+	maxRPDebugBodyBytes         = 10 << 20
+	maxCapturedTrafficBodyBytes = 64 << 10
+)
+
+var hiddenInputRedactPattern = regexp.MustCompile(`(?i)(<input[^>]+name="(?:SAMLResponse|code|access_token|id_token|client_secret)"[^>]+value=")[^"]*("|$)`)
 
 type debugResponseWriter struct {
 	http.ResponseWriter
-	status int
-	body   bytes.Buffer
+	status    int
+	body      bytes.Buffer
+	truncated bool
 }
 
 func (w *debugResponseWriter) WriteHeader(status int) {
@@ -38,7 +45,16 @@ func (w *debugResponseWriter) Write(data []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
 	}
-	w.body.Write(data)
+	if remaining := maxCapturedTrafficBodyBytes - w.body.Len(); remaining > 0 {
+		if len(data) > remaining {
+			w.body.Write(data[:remaining])
+			w.truncated = true
+		} else {
+			w.body.Write(data)
+		}
+	} else if len(data) > 0 {
+		w.truncated = true
+	}
 	return w.ResponseWriter.Write(data)
 }
 
@@ -161,7 +177,11 @@ func (a *webApp) writeDebugHTTPResponse(w io.Writer, response *debugResponseWrit
 	writeDebugHeaders(w, response.Header(), a.debugSecretsEnabled())
 	if body != "" {
 		writeDebugln(w)
-		writeDebugln(w, debugResponseBody(response.Header().Get("Content-Type"), body, a.debugSecretsEnabled()))
+		rendered := debugResponseBody(response.Header().Get("Content-Type"), body, a.debugSecretsEnabled())
+		if response.truncated {
+			rendered += "\n... [truncated]"
+		}
+		writeDebugln(w, rendered)
 	}
 	if a.debugSecretsEnabled() {
 		writeDebugSAMLResponse(w, body)
@@ -220,28 +240,47 @@ func isSensitiveHeader(key string) bool {
 
 func debugBody(contentType string, body []byte, includeSecrets bool) string {
 	if includeSecrets || !isFormEncoded(contentType) {
-		return string(body)
+		return truncateTrafficText(string(body))
 	}
 	values, err := url.ParseQuery(string(body))
 	if err != nil {
-		return string(body)
+		return "[REDACTED]"
 	}
 	redactDebugValues(values)
-	return values.Encode()
+	return truncateTrafficText(values.Encode())
+}
+
+func truncateTrafficText(text string) string {
+	if len(text) <= maxCapturedTrafficBodyBytes {
+		return text
+	}
+	return text[:maxCapturedTrafficBodyBytes] + "\n... [truncated]"
+}
+
+func isJSONContentType(contentType string) bool {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return false
+	}
+	mediaType = strings.ToLower(mediaType)
+	return mediaType == "application/json" || strings.HasSuffix(mediaType, "+json")
 }
 
 func debugResponseBody(contentType string, body string, includeSecrets bool) string {
 	if includeSecrets {
 		return body
 	}
-	if strings.HasPrefix(strings.ToLower(contentType), "application/json") {
+	if isJSONContentType(contentType) {
 		var value any
-		if err := json.Unmarshal([]byte(body), &value); err == nil {
-			redactJSONValue(value)
-			if redacted, err := json.MarshalIndent(value, "", "  "); err == nil {
-				return string(redacted)
-			}
+		if err := json.Unmarshal([]byte(body), &value); err != nil {
+			return "[REDACTED]"
 		}
+		redactJSONValue(value)
+		redacted, err := json.MarshalIndent(value, "", "  ")
+		if err != nil {
+			return "[REDACTED]"
+		}
+		return string(redacted)
 	}
 	return redactHiddenInputs(body)
 }
@@ -284,8 +323,7 @@ func isSensitiveDebugKey(key string) bool {
 }
 
 func redactHiddenInputs(body string) string {
-	pattern := regexp.MustCompile(`(?i)(<input[^>]+name="(?:SAMLResponse|code|access_token|id_token|client_secret)"[^>]+value=")[^"]*(")`)
-	return pattern.ReplaceAllString(body, `${1}[REDACTED]${2}`)
+	return hiddenInputRedactPattern.ReplaceAllString(body, `${1}[REDACTED]${2}`)
 }
 
 func writeDebugSAMLRequest(w io.Writer, source string, encodedRequest string) {
@@ -338,6 +376,9 @@ func hiddenInputValue(body string, name string) string {
 }
 
 func isFormEncoded(contentType string) bool {
-	contentType = strings.ToLower(contentType)
-	return strings.HasPrefix(contentType, "application/x-www-form-urlencoded")
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "application/x-www-form-urlencoded")
+	}
+	return mediaType == "application/x-www-form-urlencoded"
 }

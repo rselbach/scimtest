@@ -14,6 +14,17 @@ import (
 
 const playgroundStateCookie = "scimtest_playground"
 
+var playgroundHTTPClient = &http.Client{
+	Timeout: 10 * time.Second,
+	Transport: &http.Transport{
+		Proxy:           nil,
+		IdleConnTimeout: 30 * time.Second,
+	},
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
 func (a *webApp) playgroundCallbackURI(slug string) string {
 	if a.adminHost == "" {
 		return ""
@@ -250,7 +261,7 @@ func (a *webApp) redeemPlaygroundTokens(ctx context.Context, foundApp app, token
 		// OAuth Basic credentials are form-encoded before base64 (RFC 6749).
 		tokenReq.SetBasicAuth(url.QueryEscape(foundApp.OIDCClientID), url.QueryEscape(foundApp.OIDCClientSecret))
 	}
-	tokenResp, err := http.DefaultClient.Do(tokenReq)
+	tokenResp, err := playgroundHTTPClient.Do(tokenReq)
 	if err != nil {
 		return fmt.Errorf("token request failed: %w", err)
 	}
@@ -285,7 +296,7 @@ func (a *webApp) redeemPlaygroundTokens(ctx context.Context, foundApp app, token
 		return err
 	}
 	userinfoReq.Header.Set("Authorization", "Bearer "+tokenPayload.AccessToken)
-	userinfoResp, err := http.DefaultClient.Do(userinfoReq)
+	userinfoResp, err := playgroundHTTPClient.Do(userinfoReq)
 	if err != nil {
 		return fmt.Errorf("userinfo request failed: %w", err)
 	}

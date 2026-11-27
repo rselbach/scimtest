@@ -16,18 +16,30 @@ die() {
 }
 
 # runs on the VM: installs the snippet, includes it in the rselbach.com server
-# block once, and rolls both files back if nginx rejects the result
+# block once, and rolls both files back if nginx rejects or fails to reload
 configure_nginx() {
+  local stage_dir="$1"
   # shellcheck disable=SC2087 # expand the constants locally on purpose
   ssh "${HOST}" bash -s <<REMOTE
 set -euo pipefail
-backup="\$(mktemp -d)"
-sudo cp -p "${SERVER_CONF}" "\${backup}/server.conf"
-if [[ -f "${SNIPPET}" ]]; then
-  sudo cp -p "${SNIPPET}" "\${backup}/snippet.conf"
-fi
+stage_dir="${stage_dir}"
+backup="\$(mktemp -d /tmp/scimtest-site-backup.XXXXXX)"
+chmod 700 "\${backup}"
+restored=0
+
+cleanup() {
+  sudo rm -rf "\${backup}"
+  rm -rf "\${stage_dir}"
+}
+
 restore() {
-  sudo cp -p "\${backup}/server.conf" "${SERVER_CONF}"
+  if (( restored == 1 )); then
+    return
+  fi
+  restored=1
+  if [[ -f "\${backup}/server.conf" ]]; then
+    sudo cp -p "\${backup}/server.conf" "${SERVER_CONF}"
+  fi
   if [[ -f "\${backup}/snippet.conf" ]]; then
     sudo cp -p "\${backup}/snippet.conf" "${SNIPPET}"
   else
@@ -35,13 +47,23 @@ restore() {
   fi
 }
 
-sudo install -m 644 /tmp/scimtest-site-nginx.conf "${SNIPPET}"
-rm -f /tmp/scimtest-site-nginx.conf
+trap 'cleanup' EXIT
+
 if ! grep -qF "include ${SNIPPET};" "${SERVER_CONF}"; then
   if (( \$(grep -c '^ *server_name rselbach.com;' "${SERVER_CONF}") != 1 )); then
     echo "expected one 'server_name rselbach.com;' in ${SERVER_CONF}" >&2
     exit 1
   fi
+fi
+
+sudo cp -p "${SERVER_CONF}" "\${backup}/server.conf"
+if [[ -f "${SNIPPET}" ]]; then
+  sudo cp -p "${SNIPPET}" "\${backup}/snippet.conf"
+fi
+
+trap 'restore' ERR
+sudo install -m 644 "\${stage_dir}/site-nginx.conf" "${SNIPPET}"
+if ! grep -qF "include ${SNIPPET};" "${SERVER_CONF}"; then
   sudo sed -i '/^ *server_name rselbach.com;/a\\    include ${SNIPPET};' \\
     "${SERVER_CONF}"
 fi
@@ -53,7 +75,6 @@ if ! sudo nginx -t 2>"\${backup}/nginx-t.log"; then
   exit 1
 fi
 sudo systemctl reload nginx
-sudo rm -rf "\${backup}"
 REMOTE
 }
 
@@ -86,8 +107,10 @@ main() {
   rsync -rlt --delete --delay-updates "${repo}/site/" "${HOST}:${WEB_DIR}/"
   # shellcheck disable=SC2029 # WEB_DIR is a local constant
   ssh "${HOST}" "chmod -R u=rwX,go=rX '${WEB_DIR}'"
-  scp -q "${repo}/deploy/site-nginx.conf" "${HOST}:/tmp/scimtest-site-nginx.conf"
-  configure_nginx
+  local stage_dir
+  stage_dir="$(ssh "${HOST}" 'd=$(mktemp -d /tmp/scimtest-site-deploy.XXXXXX) && chmod 700 "$d" && printf %s "$d"')"
+  scp -q "${repo}/deploy/site-nginx.conf" "${HOST}:${stage_dir}/site-nginx.conf"
+  configure_nginx "${stage_dir}"
   verify
 }
 

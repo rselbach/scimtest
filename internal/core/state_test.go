@@ -1020,8 +1020,11 @@ func TestMergeAppImportReplacesDirectoryAndTombstonesMissing(t *testing.T) {
 	r.True(state.Users[1].Deleted, "a user absent from the import is tombstoned")
 	r.Equal("a-troy", state.UserSync["app-a"]["troy"].RemoteID)
 	r.False(state.UserSync["app-a"]["troy"].Dirty)
+	r.Equal(ResourceSyncState{Deleted: true}, state.UserSync["app-a"]["abed"], "missing user gets a settled deletion row so purge cleans it up")
+	PurgeFullySyncedDeletions(&state)
+	r.Len(state.Users, 1)
 	_, abedTracked := state.UserSync["app-a"]["abed"]
-	r.False(abedTracked, "the import replaces this app's sync rows entirely")
+	r.False(abedTracked, "purge removes the settled deletion row")
 }
 
 func TestMergeAppImportRetainsOperationHistory(t *testing.T) {

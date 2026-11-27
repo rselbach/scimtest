@@ -47,6 +47,10 @@ func (a *webApp) issueClientCredentialsToken(w http.ResponseWriter, r *http.Requ
 
 	now := time.Now()
 	scope := r.FormValue("scope")
+	if len(scope) > maxOIDCParamLength {
+		a.failOAuth(w, app, "token", http.StatusBadRequest, "invalid_scope", "scope exceeds maximum length")
+		return
+	}
 	issuer := oidcIssuer(a.effectiveIDPBaseURL(r, state), app)
 	access, err := a.mintAccessToken(state, issuer, app, "", authCode{ClientID: app.OIDCClientID, Scope: scope}, now)
 	if err != nil {
@@ -93,7 +97,7 @@ func (a *webApp) introspectToken(r *http.Request, state appState, app app, value
 	refresh, isRefresh := a.refreshTokens[value]
 	userID, kind := "", ""
 	switch {
-	case isAccess && access.AppSlug == app.Slug:
+	case isAccess && access.AppSlug == app.Slug && access.ClientID == app.OIDCClientID && (access.UserID != "" || !app.OIDCPublicClient):
 		userID, kind = access.UserID, "Access token"
 		response["token_type"] = "Bearer"
 		response["client_id"] = access.ClientID
@@ -146,7 +150,7 @@ func (a *webApp) handleOIDCRevoke(w http.ResponseWriter, r *http.Request) {
 // its grant. It returns a flow log detail and the token's user. The caller
 // holds oidcMu.
 func (a *webApp) revokeClientToken(app app, value string) (string, string) {
-	if token, ok := a.accessTokens[value]; ok && token.AppSlug == app.Slug {
+	if token, ok := a.accessTokens[value]; ok && token.AppSlug == app.Slug && token.ClientID == app.OIDCClientID {
 		delete(a.accessTokens, value)
 		return "Client revoked an access token", token.UserID
 	}

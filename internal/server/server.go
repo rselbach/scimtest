@@ -41,13 +41,15 @@ const (
 	registrationLimit     = 128
 	registrationsPerIP    = 8
 
-	enrollmentsPerIPLimit = 10
-	enrollmentWindow      = time.Hour
+	enrollmentsPerIPLimit   = 10
+	enrollmentsPerUserLimit = 20
+	enrollmentWindow        = time.Hour
 )
 
 const (
-	revokedInstanceMessage     = "installation revoked"
-	enrollmentThrottledMessage = "too many new installations from this network; try again later"
+	revokedInstanceMessage         = "installation revoked"
+	enrollmentThrottledMessage     = "too many new installations from this network; try again later"
+	userEnrollmentThrottledMessage = "too many installation authorizations for this GitHub account; try again later"
 )
 
 var errEnrollmentRequired = errors.New("installation authorization required")
@@ -85,6 +87,7 @@ type Server struct {
 
 	enrollMu           sync.Mutex
 	enrollments        map[string][]time.Time
+	userEnrollments    map[int64][]time.Time
 	pendingEnrollments map[[32]byte]pendingEnrollment
 	pendingByUserCode  map[string][32]byte
 	pendingByBinding   map[string][32]byte
@@ -490,12 +493,27 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		pending:              make(map[uint64]chan protocol.Message),
 	}
 
+	registered := protocol.Message{
+		Type:      protocol.TypeTunnelRegistered,
+		TunnelID:  t.id,
+		PublicURL: t.publicURL,
+		ClientIP:  s.clientIP(r),
+	}
+	if instance, ok := s.store.ApplicationInstance(profile.ID, instanceID); ok && instance.Enrolled() {
+		registered.GitHubUserID = instance.GitHubUserID
+		registered.GitHubLogin = instance.GitHubLogin
+	}
+	// Enqueue the registration confirmation before exposing t in s.tunnels so
+	// concurrent public requests can never deliver TypeRequest ahead of it and
+	// this send can never block on a full channel.
+	t.send <- registered
+
 	if err := s.registerTunnel(t); err != nil {
 		s.profileMu.RUnlock()
 		s.writeClose(conn, websocket.ClosePolicyViolation, err.Error())
 		return
 	}
-	if err := s.store.RememberAuthenticatedApplicationTunnel(profile.ID, instanceID, id); err != nil {
+	if err := s.store.RememberAuthenticatedApplicationTunnelWithRetained(profile.ID, instanceID, id, s.activeApplicationInstanceIDs(profile.ID)); err != nil {
 		s.unregisterTunnel(t)
 		s.profileMu.RUnlock()
 		s.logger().Error("remember application tunnel failed",
@@ -513,18 +531,6 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		defer close(writerDone)
 		t.writeLoop()
 	}()
-
-	registered := protocol.Message{
-		Type:      protocol.TypeTunnelRegistered,
-		TunnelID:  t.id,
-		PublicURL: t.publicURL,
-		ClientIP:  s.clientIP(r),
-	}
-	if instance, ok := s.store.ApplicationInstance(profile.ID, instanceID); ok && instance.Enrolled() {
-		registered.GitHubUserID = instance.GitHubUserID
-		registered.GitHubLogin = instance.GitHubLogin
-	}
-	t.send <- registered
 
 	// The client answers every ping, so a healthy tunnel delivers a message
 	// at least once per ping interval; refreshing the read deadline on each
@@ -646,6 +652,8 @@ func (s *Server) handlePublic(w http.ResponseWriter, r *http.Request) {
 
 	respHeaders := httputil.CloneHeader(resp.Header)
 	httputil.RemoveHopHeaders(respHeaders)
+	respHeaders.Del("Content-Length")
+	stripTunnelSetCookieDomains(respHeaders)
 	for key, values := range respHeaders {
 		for _, value := range values {
 			w.Header().Add(key, value)
@@ -655,8 +663,9 @@ func (s *Server) handlePublic(w http.ResponseWriter, r *http.Request) {
 	if status == 0 {
 		status = http.StatusOK
 	}
-	// The status comes from client JSON; WriteHeader panics outside 1xx-9xx.
-	if status < 100 || status > 999 {
+	// Reject interim 1xx (e.g., 101 Switching Protocols) and out-of-range
+	// status codes supplied by tunnel clients.
+	if status < 200 || status > 599 {
 		status = http.StatusBadGateway
 	}
 	w.WriteHeader(status)
@@ -1063,9 +1072,36 @@ func randomChoice(values []string) string {
 }
 
 func (s *Server) writeClose(conn *websocket.Conn, code int, text string) {
+	if err := conn.SetWriteDeadline(time.Now().Add(closeWriteTimeout)); err != nil {
+		s.logger().Warn("set tunnel close deadline failed", "code", code, "err", err)
+		return
+	}
 	if err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(code, text)); err != nil {
 		s.logger().Warn("tunnel close write failed", "code", code, "err", err)
 	}
+}
+
+func stripTunnelSetCookieDomains(h http.Header) {
+	values := h.Values("Set-Cookie")
+	if len(values) == 0 {
+		return
+	}
+	cleaned := make([]string, 0, len(values))
+	for _, raw := range values {
+		parts := strings.Split(raw, ";")
+		kept := make([]string, 0, len(parts))
+		for i, part := range parts {
+			if i > 0 {
+				name, _, _ := strings.Cut(strings.TrimSpace(part), "=")
+				if strings.EqualFold(name, "Domain") {
+					continue
+				}
+			}
+			kept = append(kept, part)
+		}
+		cleaned = append(cleaned, strings.Join(kept, ";"))
+	}
+	h["Set-Cookie"] = cleaned
 }
 
 func (s *Server) acquireRegistrationSlot(clientIP string) bool {
@@ -1224,6 +1260,10 @@ func sameHostOrLoopback(host, configured string) bool {
 	if sameHost(host, configured) {
 		return true
 	}
+	return isLoopbackHost(host)
+}
+
+func isLoopbackHost(host string) bool {
 	host = normalizedHostname(host)
 	if host == "localhost" {
 		return true

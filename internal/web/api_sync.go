@@ -16,36 +16,67 @@ func apiInternalRequest(r *http.Request, environmentID string) *http.Request {
 }
 
 func (a *webApp) handleAPISyncPlan(w http.ResponseWriter, r *http.Request) {
-	a.handleSyncPlan(w, apiInternalRequest(r, r.PathValue("environment_id")))
-}
-func (a *webApp) handleAPISyncStatus(w http.ResponseWriter, r *http.Request) {
-	a.handleSyncStatus(w, apiInternalRequest(r, r.PathValue("environment_id")))
-}
-func (a *webApp) handleAPISyncStart(w http.ResponseWriter, r *http.Request) {
-	if _, err := a.loadAPIEnvironment(r.PathValue("environment_id")); err != nil {
+	id := r.PathValue("environment_id")
+	if _, err := a.loadAPIEnvironment(id); err != nil {
 		apiError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	request := apiInternalRequest(r, r.PathValue("environment_id"))
+	a.handleSyncPlan(w, apiInternalRequest(r, id))
+}
+func (a *webApp) handleAPISyncStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("environment_id")
+	if _, err := a.loadAPIEnvironment(id); err != nil {
+		apiError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	a.handleSyncStatus(w, apiInternalRequest(r, id))
+}
+func (a *webApp) handleAPISyncStart(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("environment_id")
+	if _, err := a.loadAPIEnvironment(id); err != nil {
+		apiError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	request := apiInternalRequest(r, id)
 	request = request.WithContext(withAPIProtocolResponse(request.Context()))
 	a.handleSync(w, request)
 }
 func (a *webApp) handleAPISyncCancel(w http.ResponseWriter, r *http.Request) {
-	a.handleSyncCancel(w, apiInternalRequest(r, r.PathValue("environment_id")))
+	id := r.PathValue("environment_id")
+	if _, err := a.loadAPIEnvironment(id); err != nil {
+		apiError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	a.handleSyncCancel(w, apiInternalRequest(r, id))
 }
 func (a *webApp) handleAPIReconcile(w http.ResponseWriter, r *http.Request) {
-	request := apiInternalRequest(r, r.PathValue("environment_id"))
+	id := r.PathValue("environment_id")
+	if _, err := a.loadAPIEnvironment(id); err != nil {
+		apiError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	request := apiInternalRequest(r, id)
 	request = request.WithContext(withAPIProtocolResponse(request.Context()))
 	a.handleReconcile(w, request)
 }
 func (a *webApp) handleAPIUserPush(w http.ResponseWriter, r *http.Request) {
-	request := apiInternalRequest(r, r.PathValue("environment_id"))
+	id := r.PathValue("environment_id")
+	if _, err := a.loadAPIEnvironment(id); err != nil {
+		apiError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	request := apiInternalRequest(r, id)
 	request = request.WithContext(withAPIProtocolResponse(request.Context()))
 	request.SetPathValue("id", r.PathValue("user_id"))
 	a.handleUserPush(w, request)
 }
 func (a *webApp) handleAPIGroupPush(w http.ResponseWriter, r *http.Request) {
-	request := apiInternalRequest(r, r.PathValue("environment_id"))
+	id := r.PathValue("environment_id")
+	if _, err := a.loadAPIEnvironment(id); err != nil {
+		apiError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	request := apiInternalRequest(r, id)
 	request = request.WithContext(withAPIProtocolResponse(request.Context()))
 	request.SetPathValue("id", r.PathValue("group_id"))
 	a.handleGroupPush(w, request)

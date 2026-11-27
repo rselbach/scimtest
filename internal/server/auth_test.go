@@ -3,6 +3,7 @@ package server
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -194,8 +195,8 @@ func TestGitHubEnrollmentAuthorizesNonAdminWithoutDashboardSession(t *testing.T)
 	s.handleEnrollmentAuthorization(desktopPageResponse, desktopPageRequest)
 	r.Equal(http.StatusOK, desktopPageResponse.Code)
 	r.Contains(desktopPageResponse.Body.String(), instanceID)
-	r.NotContains(desktopPageResponse.Body.String(), `class="verification-code"`)
-	r.NotContains(desktopPageResponse.Body.String(), "If the codes do not match")
+	r.Contains(desktopPageResponse.Body.String(), `class="verification-code"`)
+	r.Contains(desktopPageResponse.Body.String(), "If the codes do not match")
 
 	form := url.Values{"code": {userCode}, "csrf_token": {confirmCookie.Value}}
 	wrongOriginRequest := httptest.NewRequest(http.MethodPost, "/enroll", strings.NewReader(form.Encode()))
@@ -261,11 +262,11 @@ func TestEnrollmentBrowserHandoffStartsGitHubOAuthOnce(t *testing.T) {
 	r.Equal(http.StatusMethodNotAllowed, methodResponse.Code)
 	r.Equal(http.MethodGet, methodResponse.Header().Get("Allow"))
 
+	handoffReq := httptest.NewRequest(http.MethodGet, handoffURL.RequestURI(), nil)
+	handoffReq.RemoteAddr = "192.0.2.20:1234"
+	handoffReq.Header.Set("Sec-Fetch-Site", "none")
 	response := httptest.NewRecorder()
-	s.handleEnrollmentBrowserHandoff(
-		response,
-		httptest.NewRequest(http.MethodGet, handoffURL.RequestURI(), nil),
-	)
+	s.handleEnrollmentBrowserHandoff(response, handoffReq)
 	r.Equal(http.StatusFound, response.Code)
 	r.Contains(response.Header().Get("Location"), auth.GitHubAuthorizeURL)
 	r.Equal("no-store", response.Header().Get("Cache-Control"))
@@ -280,12 +281,54 @@ func TestEnrollmentBrowserHandoffStartsGitHubOAuthOnce(t *testing.T) {
 	r.Equal(oauthIntentEnrollment, intent.kind)
 	r.Equal(sha256.Sum256([]byte(required.EnrollmentDeviceCode)), intent.enrollmentHash)
 
+	replayReq := httptest.NewRequest(http.MethodGet, handoffURL.RequestURI(), nil)
+	replayReq.RemoteAddr = "192.0.2.20:1234"
 	replayResponse := httptest.NewRecorder()
-	s.handleEnrollmentBrowserHandoff(
-		replayResponse,
-		httptest.NewRequest(http.MethodGet, handoffURL.RequestURI(), nil),
-	)
+	s.handleEnrollmentBrowserHandoff(replayResponse, replayReq)
 	r.Equal(http.StatusGone, replayResponse.Code)
+}
+
+func TestEnrollmentBrowserHandoffFallsBackToConfirmationOnCrossSiteOrIPMismatch(t *testing.T) {
+	tests := map[string]struct {
+		remoteAddr string
+		fetchSite  string
+	}{
+		"cross-site navigation from same network": {
+			remoteAddr: "192.0.2.20:1234",
+			fetchSite:  "cross-site",
+		},
+		"same-site navigation from another tunnel": {
+			remoteAddr: "192.0.2.20:1234",
+			fetchSite:  "same-site",
+		},
+		"different client network": {
+			remoteAddr: "198.51.100.44:1234",
+			fetchSite:  "none",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := require.New(t)
+			store, profile, _ := newEnrollmentProfile(t)
+			s, _ := newEnrollmentTestServer(t, store)
+			_, publicKey, instanceID := testInstanceKey(t)
+			required, err := s.beginEnrollment(profile.ID, instanceID, publicKey, "", "192.0.2.20")
+			r.NoError(err)
+			handoffURL, err := url.Parse(required.EnrollmentBrowserHandoffURL)
+			r.NoError(err)
+
+			req := httptest.NewRequest(http.MethodGet, handoffURL.RequestURI(), nil)
+			req.RemoteAddr = tc.remoteAddr
+			req.Header.Set("Sec-Fetch-Site", tc.fetchSite)
+			rec := httptest.NewRecorder()
+			s.handleEnrollmentBrowserHandoff(rec, req)
+
+			r.Equal(http.StatusSeeOther, rec.Code)
+			r.Equal("/enroll?code="+url.QueryEscape(required.EnrollmentVerificationCode), rec.Header().Get("Location"))
+			r.Empty(rec.Result().Cookies())
+		})
+	}
 }
 
 func TestEnrollmentBrowserHandoffCanRetryTransientOAuthFailure(t *testing.T) {
@@ -300,20 +343,62 @@ func TestEnrollmentBrowserHandoffCanRetryTransientOAuthFailure(t *testing.T) {
 
 	github := s.github
 	s.github = auth.GitHubClient{}
+	failureReq := httptest.NewRequest(http.MethodGet, handoffURL.RequestURI(), nil)
+	failureReq.RemoteAddr = "192.0.2.21:1234"
 	failureResponse := httptest.NewRecorder()
-	s.handleEnrollmentBrowserHandoff(
-		failureResponse,
-		httptest.NewRequest(http.MethodGet, handoffURL.RequestURI(), nil),
-	)
+	s.handleEnrollmentBrowserHandoff(failureResponse, failureReq)
 	r.Equal(http.StatusServiceUnavailable, failureResponse.Code)
 
 	s.github = github
+	retryReq := httptest.NewRequest(http.MethodGet, handoffURL.RequestURI(), nil)
+	retryReq.RemoteAddr = "192.0.2.21:1234"
 	retryResponse := httptest.NewRecorder()
-	s.handleEnrollmentBrowserHandoff(
-		retryResponse,
-		httptest.NewRequest(http.MethodGet, handoffURL.RequestURI(), nil),
-	)
+	s.handleEnrollmentBrowserHandoff(retryResponse, retryReq)
 	r.Equal(http.StatusFound, retryResponse.Code)
+}
+
+func TestRevokedInstancesDoNotExhaustActiveEnrollmentLimitAndRetainedActiveNotPruned(t *testing.T) {
+	r := require.New(t)
+	store, profile, _ := newEnrollmentProfile(t)
+
+	// Fill profile with applicationInstancesMax revoked deny records plus one
+	// active instance older than 90 days.
+	staleActiveID := "greendale-active-long-lived"
+	store.mu.Lock()
+	p := store.data.ApplicationProfiles[profile.ID]
+	p.Instances = make(map[string]StoredApplicationInstance, applicationInstancesMax+1)
+	for i := range applicationInstancesMax {
+		p.Instances[fmt.Sprintf("revoked-%d", i)] = StoredApplicationInstance{
+			PublicKey:    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA",
+			GitHubUserID: 7,
+			GitHubLogin:  "troy",
+			Revoked:      true,
+			CreatedAt:    time.Now().UTC().Add(-time.Hour),
+			LastUsedAt:   time.Now().UTC().Add(-time.Hour),
+		}
+	}
+	p.Instances[staleActiveID] = StoredApplicationInstance{
+		PublicKey:    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA",
+		GitHubUserID: 9,
+		GitHubLogin:  "abed",
+		TunnelID:     "study-table-club",
+		CreatedAt:    time.Now().UTC().Add(-200 * 24 * time.Hour),
+		LastUsedAt:   time.Now().UTC().Add(-200 * 24 * time.Hour),
+	}
+	store.data.ApplicationProfiles[profile.ID] = p
+	store.mu.Unlock()
+
+	err := store.EnrollApplicationInstanceWithRetained(
+		profile.ID,
+		"greendale-fresh-install",
+		"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA",
+		enrollmentActor{GitHubUserID: 11, GitHubLogin: "annie"},
+		map[string]bool{staleActiveID: true},
+	)
+	r.NoError(err)
+
+	_, stillPresent := store.ApplicationInstance(profile.ID, staleActiveID)
+	r.True(stillPresent, "connected installation must not be age-pruned")
 }
 
 func TestGitHubEnrollmentLimitOffersInstallationReplacement(t *testing.T) {

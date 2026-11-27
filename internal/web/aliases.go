@@ -92,9 +92,11 @@ var (
 	syncDirtyStateWithContext        = core.SyncDirtyStateWithContext
 	reconcileStateWithContext        = core.ReconcileStateWithContext
 	importStateFromSCIM              = core.ImportStateFromSCIM
+	importStateFromSCIMWithContext   = core.ImportStateFromSCIMWithContext
 	configuredBaseURL                = core.ConfiguredBaseURL
 	discoverSCIMCapabilities         = core.DiscoverSCIMCapabilities
 	newStateBackup                   = core.NewStateBackup
+	validateRestoredState            = core.ValidateRestoredState
 	writeSafetyBackup                = core.WriteSafetyBackup
 	defaultOIDCClaimMappings         = core.DefaultOIDCClaimMappings
 	defaultSAMLAttributeMappings     = core.DefaultSAMLAttributeMappings

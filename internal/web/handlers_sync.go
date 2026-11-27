@@ -490,7 +490,9 @@ func wantsJSON(r *http.Request) bool {
 func (a *webApp) handleImport(w http.ResponseWriter, r *http.Request) {
 	tab := normalizedTab(r.FormValue("tab"))
 	if r.FormValue("apply") == "on" {
-		a.applyImport(w, r, tab)
+		a.rejectWhileSyncing(func(w http.ResponseWriter, r *http.Request) {
+			a.applyImport(w, r, tab)
+		})(w, r)
 		return
 	}
 	a.previewImport(w, r, tab)
@@ -520,7 +522,7 @@ func (a *webApp) previewImport(w http.ResponseWriter, r *http.Request, tab strin
 		a.redirectError(w, r, tab, err)
 		return
 	}
-	result := importStateFromSCIM(projected)
+	result := importStateFromSCIMWithContext(r.Context(), projected)
 	a.rememberTrace(appID, result.Traces)
 	if result.Fatal != nil {
 		if len(result.Traces) > 0 && projected.Config.AutoOpenSyncTrace {

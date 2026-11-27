@@ -16,7 +16,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
+	"unicode"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/rselbach/scimtest/internal/update"
@@ -32,8 +35,8 @@ const (
 
 const menuCheckTimeout = 5 * time.Minute
 
-// desktopUpdater is set before the menu is installed and never changes.
-var desktopUpdater *update.Updater
+// desktopUpdater is populated once the primary instance lease is acquired.
+var desktopUpdater atomic.Pointer[update.Updater]
 
 // newDesktopUpdater updates the running scimtest.app in place.
 func newDesktopUpdater(terminate func()) (*update.Updater, error) {
@@ -85,29 +88,30 @@ func updateMenuState(updater *update.Updater) int {
 
 //export scimtestUpdateMenuState
 func scimtestUpdateMenuState() C.int {
-	return C.int(updateMenuState(desktopUpdater))
+	return C.int(updateMenuState(desktopUpdater.Load()))
 }
 
 // scimtestUpdateMenuVersion returns the offered version; the caller frees it.
 //
 //export scimtestUpdateMenuVersion
 func scimtestUpdateMenuVersion() *C.char {
-	if desktopUpdater == nil {
+	updater := desktopUpdater.Load()
+	if updater == nil {
 		return C.CString("")
 	}
-	return C.CString(desktopUpdater.Snapshot().Version)
+	return C.CString(updater.Snapshot().Version)
 }
 
 //export scimtestInstallUpdateOnQuit
 func scimtestInstallUpdateOnQuit() {
-	if desktopUpdater != nil {
-		desktopUpdater.InstallOnQuit()
+	if updater := desktopUpdater.Load(); updater != nil {
+		updater.InstallOnQuit()
 	}
 }
 
 //export scimtestUpdateMenuAction
 func scimtestUpdateMenuAction() {
-	go runUpdateMenuAction(desktopUpdater)
+	go runUpdateMenuAction(desktopUpdater.Load())
 }
 
 // runUpdateMenuAction restarts into a ready update, or checks and reports
@@ -152,7 +156,11 @@ func sentence(err error) string {
 	if text == "" {
 		return text
 	}
-	return strings.ToUpper(text[:1]) + text[1:] + "."
+	first, size := utf8.DecodeRuneInString(text)
+	if first == utf8.RuneError && size <= 1 {
+		return text + "."
+	}
+	return string(unicode.ToUpper(first)) + text[size:] + "."
 }
 
 func showUpdateAlert(title, message string) {
@@ -164,5 +172,5 @@ func showUpdateAlert(title, message string) {
 }
 
 func setDesktopUpdater(updater *update.Updater) {
-	desktopUpdater = updater
+	desktopUpdater.Store(updater)
 }

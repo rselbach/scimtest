@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/subtle"
 	_ "embed"
 	"errors"
 	"fmt"
@@ -427,7 +428,7 @@ func (s *Server) requireCSRF(w http.ResponseWriter, r *http.Request, session Sto
 		http.Error(w, errorsForInvalidForm(err).Error(), http.StatusBadRequest)
 		return false
 	}
-	if session.CSRFToken == "" || r.PostForm.Get("csrf_token") != session.CSRFToken {
+	if session.CSRFToken == "" || subtle.ConstantTimeCompare([]byte(r.PostForm.Get("csrf_token")), []byte(session.CSRFToken)) != 1 {
 		http.Error(w, "invalid csrf token", http.StatusForbidden)
 		return false
 	}
@@ -625,6 +626,8 @@ func (s *Server) handleDashboardTunnels(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'")
 	if err := tunnelTablePartial.Execute(w, data); err != nil {
 		s.cfg.Logger.Error("tunnel table partial render failed", "err", err)
 	}

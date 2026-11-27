@@ -129,11 +129,11 @@ func TestOIDCUserinfoRequiresBearerScheme(t *testing.T) {
 			ID: "troy", GivenName: "Troy", FamilyName: "Barnes",
 			Email: "troy@greendale.edu", Username: "troy", Active: true,
 		}},
-		Apps: []app{{ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "oidc"}},
+		Apps: []app{{ID: "app-1", Name: "Greendale", Slug: "greendale", Protocol: "oidc", OIDCClientID: "greendale-client"}},
 	}))
 	svc := newTestIDPApp(t)
 	svc.accessTokens["paintball-token"] = accessToken{
-		AppSlug: "greendale", UserID: "troy", Scope: "openid profile",
+		AppSlug: "greendale", ClientID: "greendale-client", UserID: "troy", Scope: "openid profile",
 		ExpiresAt: time.Now().Add(time.Minute),
 	}
 

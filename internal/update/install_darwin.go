@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -183,15 +184,19 @@ func (m *MacInstaller) Discard(update Staged) {
 	if !ok {
 		return
 	}
+	defer func() {
+		if staged.receipt != nil {
+			if err := staged.receipt.Close(); err != nil {
+				fmt.Fprintf(os.Stderr, "close staged update receipt: %v\n", err)
+			}
+		}
+	}()
 	if err := checkOwned(staged); err != nil {
 		fmt.Fprintf(os.Stderr, "leave staged update %s: %v\n", staged.folder, err)
 		return
 	}
 	if err := removeStagingFolder(staged.folder); err != nil {
 		fmt.Fprintf(os.Stderr, "remove staged update: %v\n", err)
-	}
-	if err := staged.receipt.Close(); err != nil {
-		fmt.Fprintf(os.Stderr, "close staged update receipt: %v\n", err)
 	}
 }
 
@@ -265,17 +270,26 @@ func claimFolder(parent, installed string, build uint64) (string, *os.File, erro
 // ownedAndFree opens and locks folder's receipt and returns it if it names
 // installed: the folder belongs to this install and no process holds it.
 func ownedAndFree(folder, installed string) *os.File {
-	path := filepath.Join(folder, receiptName)
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() {
+	uid := uint32(os.Getuid())
+	var dirStat unix.Stat_t
+	if err := unix.Lstat(folder, &dirStat); err != nil || dirStat.Mode&unix.S_IFMT != unix.S_IFDIR || dirStat.Uid != uid {
 		return nil
 	}
-	file, err := os.Open(path)
+	path := filepath.Join(folder, receiptName)
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return nil
 	}
+	file := os.NewFile(uintptr(fd), path)
+	var fileStat unix.Stat_t
+	if err := unix.Fstat(fd, &fileStat); err != nil || fileStat.Mode&unix.S_IFMT != unix.S_IFREG || fileStat.Uid != uid {
+		if err := file.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "close update receipt: %v\n", err)
+		}
+		return nil
+	}
 	var found receipt
-	if !tryLock(file) || json.NewDecoder(file).Decode(&found) != nil || found.Installed != installed {
+	if !tryLock(file) || json.NewDecoder(io.LimitReader(file, 4096)).Decode(&found) != nil || found.Installed != installed {
 		if err := file.Close(); err != nil {
 			fmt.Fprintf(os.Stderr, "close update receipt: %v\n", err)
 		}

@@ -6,12 +6,44 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 )
+
+const (
+	maxSCIMListPages      = 1000
+	maxSCIMListResources  = 100000
+	maxSCIMTraceBodyBytes = 1 << 20
+	maxSCIMTraceEntries   = 2000
+)
+
+func validateSCIMRemoteID(raw string) (string, error) {
+	id := strings.TrimSpace(raw)
+	if id == "" {
+		return "", fmt.Errorf("SCIM resource id is empty")
+	}
+	if id == "." || id == ".." {
+		return "", fmt.Errorf("SCIM resource id %q is not allowed", id)
+	}
+	for _, ch := range id {
+		if ch == '/' || ch == '\\' || ch < 0x20 || ch == 0x7f {
+			return "", fmt.Errorf("SCIM resource id %q contains invalid characters", id)
+		}
+	}
+	return id, nil
+}
+
+func scimResourcePath(collection string, remoteID string) (string, error) {
+	id, err := validateSCIMRemoteID(remoteID)
+	if err != nil {
+		return "", err
+	}
+	return collection + "/" + url.PathEscape(id), nil
+}
 
 func isRateLimitError(err error) bool {
 	var rateLimitErr *RateLimitError
@@ -48,8 +80,14 @@ func (c *SCIMClient) createUser(u User, directory scimUserDirectory) (string, bo
 		c.setLastTraceError(err)
 		return "", false, err
 	}
+	remoteID, err := validateSCIMRemoteID(response.ID)
+	if err != nil {
+		err = fmt.Errorf("SCIM create response invalid id: %w", err)
+		c.setLastTraceError(err)
+		return "", false, err
+	}
 
-	return response.ID, false, nil
+	return remoteID, false, nil
 }
 
 func (c *SCIMClient) findUserByExternalID(u User) (SCIMUserResource, bool, error) {
@@ -83,7 +121,10 @@ func listResources[T any](c *SCIMClient, resourceType string, resourcePath strin
 	startIndex := 1
 	count := 100
 
-	for {
+	for page := 0; ; page++ {
+		if page >= maxSCIMListPages {
+			return nil, fmt.Errorf("SCIM %s pagination exceeded %d pages", resourcePath, maxSCIMListPages)
+		}
 		path := fmt.Sprintf("%s?startIndex=%d&count=%d", resourcePath, startIndex, count)
 		var response SCIMListResponse[T]
 		if err := c.doJSON(http.MethodGet, path, nil, &response, TraceTarget{
@@ -93,7 +134,13 @@ func listResources[T any](c *SCIMClient, resourceType string, resourcePath strin
 		}); err != nil {
 			return nil, err
 		}
+		if response.TotalResults < 0 || response.ItemsPerPage < 0 {
+			return nil, fmt.Errorf("SCIM %s pagination returned negative counts", resourcePath)
+		}
 
+		if len(resources)+len(response.Resources) > maxSCIMListResources {
+			return nil, fmt.Errorf("SCIM %s pagination exceeded %d resources", resourcePath, maxSCIMListResources)
+		}
 		resources = append(resources, response.Resources...)
 		if len(response.Resources) == 0 {
 			return resources, nil
@@ -122,13 +169,21 @@ func listResources[T any](c *SCIMClient, resourceType string, resourcePath strin
 
 func (c *SCIMClient) getUser(u User) (SCIMUserResource, error) {
 	var resource SCIMUserResource
-	err := c.doJSON(http.MethodGet, "/Users/"+url.PathEscape(u.RemoteID), nil, &resource, traceTargetForUser(u, "check"))
+	path, err := scimResourcePath("/Users", u.RemoteID)
+	if err != nil {
+		return resource, err
+	}
+	err = c.doJSON(http.MethodGet, path, nil, &resource, traceTargetForUser(u, "check"))
 	return resource, err
 }
 
 func (c *SCIMClient) getGroup(g Group) (SCIMGroupResource, error) {
 	var resource SCIMGroupResource
-	err := c.doJSON(http.MethodGet, "/Groups/"+url.PathEscape(g.RemoteID), nil, &resource, traceTargetForGroup(g, "check"))
+	path, err := scimResourcePath("/Groups", g.RemoteID)
+	if err != nil {
+		return resource, err
+	}
+	err = c.doJSON(http.MethodGet, path, nil, &resource, traceTargetForGroup(g, "check"))
 	return resource, err
 }
 
@@ -143,8 +198,12 @@ func (c *SCIMClient) replaceUser(u User, directory scimUserDirectory) error {
 		}
 		return c.patchEntraUser(u, directory, remote)
 	}
+	path, err := scimResourcePath("/Users", u.RemoteID)
+	if err != nil {
+		return err
+	}
 	resource := newSCIMUserResource(u, directory)
-	resource.ID = u.RemoteID
+	resource.ID = strings.TrimSpace(u.RemoteID)
 	method := http.MethodPut
 	body := any(resource)
 	if c.patch {
@@ -154,7 +213,7 @@ func (c *SCIMClient) replaceUser(u User, directory scimUserDirectory) error {
 		body = newSCIMPatchRequest(resource)
 	}
 
-	return c.doJSON(method, "/Users/"+url.PathEscape(u.RemoteID), body, nil, traceTargetForUser(u, "update"))
+	return c.doJSON(method, path, body, nil, traceTargetForUser(u, "update"))
 }
 
 // scimUserDirectory holds what a user payload needs from the rest of the
@@ -231,7 +290,11 @@ func newSCIMUserResource(u User, directory scimUserDirectory) SCIMUserResource {
 }
 
 func (c *SCIMClient) deleteUser(u User, operation string) error {
-	return c.doJSON(http.MethodDelete, "/Users/"+url.PathEscape(u.RemoteID), nil, nil, traceTargetForUser(u, operation))
+	path, err := scimResourcePath("/Users", u.RemoteID)
+	if err != nil {
+		return err
+	}
+	return c.doJSON(http.MethodDelete, path, nil, nil, traceTargetForUser(u, operation))
 }
 
 func (c *SCIMClient) createGroup(g Group, users []User) (string, bool, error) {
@@ -267,8 +330,14 @@ func (c *SCIMClient) createGroup(g Group, users []User) (string, bool, error) {
 		c.setLastTraceError(err)
 		return "", false, err
 	}
+	remoteID, err := validateSCIMRemoteID(response.ID)
+	if err != nil {
+		err = fmt.Errorf("SCIM create group response invalid id: %w", err)
+		c.setLastTraceError(err)
+		return "", false, err
+	}
 
-	return response.ID, false, nil
+	return remoteID, false, nil
 }
 
 func (c *SCIMClient) findGroupByExternalID(g Group) (SCIMGroupResource, bool, error) {
@@ -309,8 +378,8 @@ func findByExternalID[T any](c *SCIMClient, resourceType string, resourcePath st
 		c.setLastTraceError(err)
 		return none, false, err
 	}
-	if strings.TrimSpace(idOf(resource)) == "" {
-		err := fmt.Errorf("SCIM %s matched by externalId %q is missing id", resourceType, externalID)
+	if _, err := validateSCIMRemoteID(idOf(resource)); err != nil {
+		err := fmt.Errorf("SCIM %s matched by externalId %q has invalid id: %w", resourceType, externalID, err)
 		c.setLastTraceError(err)
 		return none, false, err
 	}
@@ -334,8 +403,8 @@ func findByExternalIDWithoutFilter[T any](c *SCIMClient, resourceType string, re
 			c.setLastTraceError(err)
 			return match, false, err
 		}
-		if strings.TrimSpace(idOf(resource)) == "" {
-			err := fmt.Errorf("SCIM %s matched by externalId %q is missing id", resourceType, externalID)
+		if _, err := validateSCIMRemoteID(idOf(resource)); err != nil {
+			err := fmt.Errorf("SCIM %s matched by externalId %q has invalid id: %w", resourceType, externalID, err)
 			c.setLastTraceError(err)
 			return match, false, err
 		}
@@ -379,11 +448,15 @@ func (c *SCIMClient) replaceGroup(g Group, users []User) error {
 		}
 		return c.patchEntraGroup(g, users, remote)
 	}
+	path, err := scimResourcePath("/Groups", g.RemoteID)
+	if err != nil {
+		return err
+	}
 	resource, err := newSCIMGroupResource(g, users)
 	if err != nil {
 		return err
 	}
-	resource.ID = g.RemoteID
+	resource.ID = strings.TrimSpace(g.RemoteID)
 	method := http.MethodPut
 	body := any(resource)
 	if c.patch {
@@ -393,7 +466,7 @@ func (c *SCIMClient) replaceGroup(g Group, users []User) error {
 		body = newSCIMPatchRequest(resource)
 	}
 
-	return c.doJSON(method, "/Groups/"+url.PathEscape(g.RemoteID), body, nil, traceTargetForGroup(g, "update"))
+	return c.doJSON(method, path, body, nil, traceTargetForGroup(g, "update"))
 }
 
 type scimPatchRequest struct {
@@ -418,7 +491,11 @@ func newSCIMPatchRequest(value any) scimPatchRequest {
 }
 
 func (c *SCIMClient) deleteGroup(g Group, operation string) error {
-	return c.doJSON(http.MethodDelete, "/Groups/"+url.PathEscape(g.RemoteID), nil, nil, traceTargetForGroup(g, operation))
+	path, err := scimResourcePath("/Groups", g.RemoteID)
+	if err != nil {
+		return err
+	}
+	return c.doJSON(http.MethodDelete, path, nil, nil, traceTargetForGroup(g, operation))
 }
 
 func newSCIMGroupResource(g Group, users []User) (SCIMGroupResource, error) {
@@ -527,7 +604,7 @@ func (c *SCIMClient) doJSONOnce(method string, path string, payload []byte, requ
 	resp, err := c.client.Do(req)
 	if err != nil {
 		trace.Err = err.Error()
-		c.traces = append(c.traces, trace)
+		c.appendTrace(trace)
 		return fmt.Errorf("run SCIM %s %s request: %w", method, path, err)
 	}
 	trace.ResponseRetryAfter = strings.TrimSpace(resp.Header.Get("Retry-After"))
@@ -537,12 +614,12 @@ func (c *SCIMClient) doJSONOnce(method string, path string, payload []byte, requ
 		trace.Status = resp.Status
 		if closeErr := resp.Body.Close(); closeErr != nil {
 			trace.Err = fmt.Sprintf("%v (close body: %v)", err, closeErr)
-			c.traces = append(c.traces, trace)
+			c.appendTrace(trace)
 			return fmt.Errorf("read SCIM %s %s response: %w (close body: %v)", method, path, err, closeErr)
 		}
 
 		trace.Err = err.Error()
-		c.traces = append(c.traces, trace)
+		c.appendTrace(trace)
 		return fmt.Errorf("read SCIM %s %s response: %w", method, path, err)
 	}
 	trace.Status = resp.Status
@@ -550,20 +627,20 @@ func (c *SCIMClient) doJSONOnce(method string, path string, payload []byte, requ
 
 	if err := resp.Body.Close(); err != nil {
 		trace.Err = err.Error()
-		c.traces = append(c.traces, trace)
+		c.appendTrace(trace)
 		return fmt.Errorf("close SCIM %s %s response body: %w", method, path, err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if method == http.MethodDelete && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone) {
-			c.traces = append(c.traces, trace)
+			c.appendTrace(trace)
 			return nil
 		}
 
 		if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
 			responseErr := fmt.Errorf("SCIM %s %s returned %s: %w", method, path, resp.Status, errSCIMNotFound)
 			trace.Err = responseErr.Error()
-			c.traces = append(c.traces, trace)
+			c.appendTrace(trace)
 			return responseErr
 		}
 
@@ -577,7 +654,7 @@ func (c *SCIMClient) doJSONOnce(method string, path string, payload []byte, requ
 				ResponseBody:     strings.TrimSpace(string(data)),
 			}
 			trace.Err = err.Error()
-			c.traces = append(c.traces, trace)
+			c.appendTrace(trace)
 			return err
 		}
 
@@ -588,23 +665,23 @@ func (c *SCIMClient) doJSONOnce(method string, path string, payload []byte, requ
 			responseErr = fmt.Errorf("SCIM %s %s returned %s: %s | request body: %s", method, path, resp.Status, strings.TrimSpace(string(data)), requestBody)
 		}
 		trace.Err = responseErr.Error()
-		c.traces = append(c.traces, trace)
+		c.appendTrace(trace)
 		return responseErr
 	}
 
 	if out == nil || len(data) == 0 {
-		c.traces = append(c.traces, trace)
+		c.appendTrace(trace)
 		return nil
 	}
 
 	if err := json.Unmarshal(data, out); err != nil {
 		responseErr := fmt.Errorf("decode SCIM %s %s response: %w", method, path, err)
 		trace.Err = responseErr.Error()
-		c.traces = append(c.traces, trace)
+		c.appendTrace(trace)
 		return responseErr
 	}
 
-	c.traces = append(c.traces, trace)
+	c.appendTrace(trace)
 	return nil
 }
 
@@ -618,6 +695,25 @@ func readSCIMResponseBody(body io.Reader) ([]byte, error) {
 		return nil, fmt.Errorf("SCIM response body exceeds %d bytes", maxSCIMResponseBodyBytes)
 	}
 	return data, nil
+}
+
+func (c *SCIMClient) appendTrace(trace SyncTraceEntry) {
+	const maxSCIMTotalTraceBytes = 16 << 20
+	if len(trace.ResponseBody) > maxSCIMTraceBodyBytes {
+		trace.ResponseBody = trace.ResponseBody[:maxSCIMTraceBodyBytes] + "\n... [truncated]"
+	}
+	if len(c.traces) >= maxSCIMTraceEntries {
+		c.traceBytes -= len(c.traces[0].ResponseBody)
+		if c.traceBytes < 0 {
+			c.traceBytes = 0
+		}
+		c.traces = c.traces[1:]
+	}
+	if c.traceBytes+len(trace.ResponseBody) > maxSCIMTotalTraceBytes && trace.ResponseBody != "" {
+		trace.ResponseBody = "[omitted: trace buffer limit reached]"
+	}
+	c.traceBytes += len(trace.ResponseBody)
+	c.traces = append(c.traces, trace)
 }
 
 func (c *SCIMClient) setLastTraceError(err error) {
@@ -656,7 +752,14 @@ func ParseRetryAfter(value string, now time.Time) string {
 // retryAfterDelay converts delta-seconds and HTTP-date Retry-After values to
 // a delay; ok is false for every other format.
 func retryAfterDelay(value string, now time.Time) (time.Duration, bool) {
-	if seconds, err := strconv.Atoi(value); err == nil {
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil {
+		const maxSeconds = math.MaxInt64 / int64(time.Second)
+		if seconds > maxSeconds {
+			return time.Duration(math.MaxInt64), true
+		}
+		if seconds < -maxSeconds {
+			return time.Duration(math.MinInt64), true
+		}
 		return time.Duration(seconds) * time.Second, true
 	}
 	if retryAt, err := http.ParseTime(value); err == nil {
@@ -687,7 +790,10 @@ func fallbackRateLimitDelay(attempt int) time.Duration {
 }
 
 func humanRetryAfter(delay time.Duration) string {
-	seconds := int64((delay + time.Second - 1) / time.Second)
+	seconds := int64(delay / time.Second)
+	if delay%time.Second != 0 && seconds < math.MaxInt64 {
+		seconds++
+	}
 	switch {
 	case seconds <= 1:
 		return "1 second"
@@ -708,7 +814,10 @@ func humanRetryAfter(delay time.Duration) string {
 
 		return fmt.Sprintf("%d hours", hours)
 	default:
-		days := (seconds + 86399) / 86400
+		days := seconds / 86400
+		if seconds%86400 != 0 && days < math.MaxInt64 {
+			days++
+		}
 		if days == 1 {
 			return "1 day"
 		}

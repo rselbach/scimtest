@@ -232,6 +232,10 @@ func hiddenValues(values url.Values) map[string][]string {
 
 func renderChooser(w http.ResponseWriter, data chooserData) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if err := chooserTemplate.Execute(w, data); err != nil {
 		log.Printf("render login chooser: %v", err)
 	}

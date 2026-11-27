@@ -109,7 +109,7 @@ func TestDesktopGitHubAuthorizationFallsBackForOlderServer(t *testing.T) {
 	response := httptest.NewRecorder()
 	app.routes().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/desktop/auth/start", nil))
 	r.Equal(http.StatusSeeOther, response.Code)
-	r.Equal("https://admin.example.test/enroll?code=study-group&presentation=desktop", opened)
+	r.Equal("https://admin.example.test/enroll?code=study-group", opened)
 }
 
 func TestDesktopGitHubAuthorizationRequiresPendingEnrollment(t *testing.T) {

@@ -115,11 +115,28 @@ func (a *webApp) liveIdPSessions(slug string) []idpSessionView {
 // by the session's own user updates the session, so reusing it or signing in
 // again keeps the sid. A sign-in by another user ends the browser's session
 // and starts a new one.
+const maxIdPSessions = 1000
+
+func (a *webApp) idpSessionCookiePath(r *http.Request) string {
+	if isTunneledRequest(r) {
+		if prefix := a.tunnelPathPrefix(); prefix != "" {
+			return prefix + "/"
+		}
+	}
+	return "/"
+}
+
+func idpSessionCookieSecure(r *http.Request) bool {
+	return r != nil && (r.TLS != nil || isTunneledRequest(r))
+}
+
 func (a *webApp) joinIdPSession(w http.ResponseWriter, r *http.Request, slug string, user user, signIn signIn, protocol string) (string, error) {
 	current, live := a.browserIdPSession(r, slug)
 	if live && current.SignIn.UserID != user.ID {
 		a.endAppIdPSessions(slug, current.ID, "replaced by a sign-in as "+userLabel(user))
 	}
+	now := time.Now()
+	a.expireIdPSessions(now)
 	a.sessionMu.Lock()
 	session, ok := a.idpSessions[current.ID]
 	if !ok || session.SignIn.UserID != user.ID {
@@ -128,7 +145,7 @@ func (a *webApp) joinIdPSession(w http.ResponseWriter, r *http.Request, slug str
 			a.sessionMu.Unlock()
 			return "", err
 		}
-		session = idpSession{ID: id, AppSlug: slug, Started: time.Now()}
+		session = idpSession{ID: id, AppSlug: slug, Started: now}
 	}
 	session.User = userLabel(user)
 	session.SignIn = signIn
@@ -138,15 +155,29 @@ func (a *webApp) joinIdPSession(w http.ResponseWriter, r *http.Request, slug str
 	if a.idpSessions == nil {
 		a.idpSessions = make(map[string]idpSession)
 	}
+	if _, exists := a.idpSessions[session.ID]; !exists && len(a.idpSessions) >= maxIdPSessions {
+		oldestID := ""
+		var oldestTime time.Time
+		for id, existing := range a.idpSessions {
+			if oldestID == "" || existing.Started.Before(oldestTime) {
+				oldestID = id
+				oldestTime = existing.Started
+			}
+		}
+		if oldestID != "" {
+			delete(a.idpSessions, oldestID)
+		}
+	}
 	a.idpSessions[session.ID] = session
 	a.sessionMu.Unlock()
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     signInCookieName(slug),
 		Value:    session.ID,
-		Path:     "/",
+		Path:     a.idpSessionCookiePath(r),
 		MaxAge:   int(idpSessionLifetime / time.Second),
 		HttpOnly: true,
+		Secure:   idpSessionCookieSecure(r),
 		SameSite: http.SameSiteLaxMode,
 	})
 	return session.ID, nil
@@ -164,10 +195,25 @@ func (a *webApp) noteIDTokenIssued(sessionID, issuer string) {
 	a.idpSessions[sessionID] = session
 }
 
+// prepareSAMLSessionIndex returns the existing SAML SessionIndex when the
+// browser already has a live session for userID, or generates a fresh one
+// without mutating session state until the signed response builds cleanly.
+func (a *webApp) prepareSAMLSessionIndex(r *http.Request, slug, userID string) (string, error) {
+	current, live := a.browserIdPSession(r, slug)
+	if live && current.SignIn.UserID == userID && current.SAMLSessionIndex != "" {
+		return current.SAMLSessionIndex, nil
+	}
+	return newID("saml-session")
+}
+
 // noteSAMLSignIn records the NameID that a SAML sign-in in sessionID sent,
 // and returns the session's SessionIndex. The session's first SAML sign-in
 // creates it, and later ones reuse it.
 func (a *webApp) noteSAMLSignIn(sessionID, nameID, nameIDFormat string) (string, error) {
+	return a.noteSAMLSignInWithIndex(sessionID, "", nameID, nameIDFormat)
+}
+
+func (a *webApp) noteSAMLSignInWithIndex(sessionID, preparedIndex, nameID, nameIDFormat string) (string, error) {
 	a.sessionMu.Lock()
 	defer a.sessionMu.Unlock()
 	session, ok := a.idpSessions[sessionID]
@@ -175,9 +221,13 @@ func (a *webApp) noteSAMLSignIn(sessionID, nameID, nameIDFormat string) (string,
 		return "", errors.New("the IdP session ended during sign-in")
 	}
 	if session.SAMLSessionIndex == "" {
-		index, err := newID("saml-session")
-		if err != nil {
-			return "", err
+		index := preparedIndex
+		if index == "" {
+			var err error
+			index, err = newID("saml-session")
+			if err != nil {
+				return "", err
+			}
 		}
 		session.SAMLSessionIndex = index
 	}
@@ -203,12 +253,13 @@ func (a *webApp) handleOIDCSessionEnd(w http.ResponseWriter, r *http.Request) {
 }
 
 // forgetIdPSession deletes the browser's cookie for slug's session.
-func forgetIdPSession(w http.ResponseWriter, slug string) {
+func (a *webApp) forgetIdPSession(w http.ResponseWriter, r *http.Request, slug string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     signInCookieName(slug),
-		Path:     "/",
+		Path:     a.idpSessionCookiePath(r),
 		MaxAge:   -1,
 		HttpOnly: true,
+		Secure:   idpSessionCookieSecure(r),
 		SameSite: http.SameSiteLaxMode,
 	})
 }

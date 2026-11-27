@@ -86,7 +86,11 @@ func (a *webApp) handleSAMLMetadata(w http.ResponseWriter, r *http.Request) {
   </IDPSSODescriptor>
 </EntityDescriptor>`, xmlEscape(entityID), keyDescriptors.String(), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(nameIDFormat), xmlEscape(baseURL), xmlEscape(app.Slug), xmlEscape(baseURL), xmlEscape(app.Slug))
 	if r.URL.Query().Get("download") == "1" {
-		w.Header().Set("Content-Disposition", `attachment; filename="scimtest-`+app.Slug+`-idp-metadata.xml"`)
+		filenameSlug := slugify(app.Slug)
+		if filenameSlug == "" {
+			filenameSlug = "app"
+		}
+		w.Header().Set("Content-Disposition", `attachment; filename="scimtest-`+filenameSlug+`-idp-metadata.xml"`)
 	}
 	w.Header().Set("Content-Type", "application/samlmetadata+xml; charset=utf-8")
 	if _, err := w.Write([]byte(metadata)); err != nil {
@@ -124,12 +128,29 @@ func (a *webApp) serveSAMLSSO(w http.ResponseWriter, r *http.Request, post bool)
 		// A chooser POST retains the original Redirect-binding query. Do not
 		// allow hidden or attacker-supplied body fields to replace signed input.
 		query := r.URL.Query()
-		if query.Get("SAMLRequest") != "" {
+		if query.Has("SAMLRequest") {
+			if _, _, err := uniqueRawQueryValue(r.URL.RawQuery, "SAMLRequest", true); err != nil {
+				a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
+				return
+			}
+			if _, _, err := uniqueRawQueryValue(r.URL.RawQuery, "RelayState", false); err != nil {
+				a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
+				return
+			}
 			values.Set("SAMLRequest", query.Get("SAMLRequest"))
 			values.Del("RelayState")
 			if query.Has("RelayState") {
 				values.Set("RelayState", query.Get("RelayState"))
 			}
+		}
+	} else if values.Has("SAMLRequest") {
+		if _, _, err := uniqueRawQueryValue(r.URL.RawQuery, "SAMLRequest", true); err != nil {
+			a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
+			return
+		}
+		if _, _, err := uniqueRawQueryValue(r.URL.RawQuery, "RelayState", false); err != nil {
+			a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
+			return
 		}
 	}
 	baseURL := a.effectiveIDPBaseURL(r, state)
@@ -168,10 +189,41 @@ func (a *webApp) completeSAMLSSO(w http.ResponseWriter, r *http.Request, state a
 		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
 		return
 	}
-	faults := a.flowFaults(app.Slug, values)
+	faults := a.flowFaults(app.Slug, "saml", values)
+	if faults.SAMLStatus != "" {
+		posted, err := a.buildSignedSAMLResponse(state, baseURL, app, user, responseContext, encryption, faults)
+		if err != nil {
+			a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
+			return
+		}
+		encodedResponse := base64.StdEncoding.EncodeToString([]byte(posted.XML))
+		a.rememberSAMLInspection(app, user, responseContext, posted, encodedResponse, faults, time.Now())
+		ssoDetail := "Response posted to " + responseContext.ACSURL + " (faults injected)"
+		a.recordFlowEvent(app.Slug, "saml", "sso", "ok", userLabel(user), ssoDetail)
+		if wantsAPIProtocolResponse(r) {
+			writeJSON(w, map[string]string{"acs_url": responseContext.ACSURL, "saml_response": encodedResponse, "relay_state": values.Get("RelayState")})
+			return
+		}
+		renderPostBack(w, responseContext.ACSURL, map[string]string{
+			"SAMLResponse": encodedResponse,
+			"RelayState":   values.Get("RelayState"),
+		})
+		return
+	}
 	responseContext.AssertionID, err = a.samlAssertionID(app.Slug, faults)
 	if err != nil {
 		a.failFlow(w, app, "saml", "sso", http.StatusBadRequest, err.Error())
+		return
+	}
+	sessionIndex, err := a.prepareSAMLSessionIndex(r, app.Slug, user.ID)
+	if err != nil {
+		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
+		return
+	}
+	responseContext.SessionIndex = sessionIndex
+	posted, err := a.buildSignedSAMLResponse(state, baseURL, app, user, responseContext, encryption, faults)
+	if err != nil {
+		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
 		return
 	}
 	sessionID, err := a.joinIdPSession(w, r, app.Slug, user, session, "saml")
@@ -179,13 +231,7 @@ func (a *webApp) completeSAMLSSO(w http.ResponseWriter, r *http.Request, state a
 		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
 		return
 	}
-	responseContext.SessionIndex, err = a.noteSAMLSignIn(sessionID, samlNameIDValue(app, user), samlNameIDFormatForApp(app))
-	if err != nil {
-		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
-		return
-	}
-	posted, err := a.buildSignedSAMLResponse(state, baseURL, app, user, responseContext, encryption, faults)
-	if err != nil {
+	if _, err := a.noteSAMLSignInWithIndex(sessionID, sessionIndex, samlNameIDValue(app, user), samlNameIDFormatForApp(app)); err != nil {
 		a.failFlow(w, app, "saml", "sso", http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -276,6 +322,9 @@ func resolveSAMLResponseContext(r *http.Request, values url.Values, app app, bas
 			return samlResponseContext{}, fmt.Errorf("SAML AuthnRequest issuer does not match the configured app")
 		}
 		expectedDestination := strings.TrimRight(baseURL, "/") + "/saml/" + app.Slug + "/sso"
+		if requestCertificate != nil && request.Destination == "" {
+			return samlResponseContext{}, fmt.Errorf("signed SAML AuthnRequest must carry Destination %s", expectedDestination)
+		}
 		if request.Destination != "" && request.Destination != expectedDestination {
 			return samlResponseContext{}, fmt.Errorf("SAML AuthnRequest destination does not match this IDP")
 		}
@@ -308,15 +357,25 @@ func parseSAMLAuthnRequest(encodedRequest string) (samlAuthnRequest, error) {
 	// preselects its strength.
 	if requested := childElementByLocalName(root, "RequestedAuthnContext"); requested != nil {
 		for _, child := range requested.ChildElements() {
-			text := strings.TrimSpace(child.Text())
-			if elementLocalName(child) == "AuthnContextClassRef" && text != "" {
+			if elementLocalName(child) != "AuthnContextClassRef" {
+				continue
+			}
+			text, err := strictElementText(child)
+			if err != nil {
+				return samlAuthnRequest{}, fmt.Errorf("SAML AuthnRequest AuthnContextClassRef: %w", err)
+			}
+			if text != "" {
 				authn.Contexts = append(authn.Contexts, text)
 			}
 		}
 	}
+	issuer, err := strictChildElementTextByLocalName(root, "Issuer")
+	if err != nil {
+		return samlAuthnRequest{}, fmt.Errorf("SAML AuthnRequest Issuer: %w", err)
+	}
 	return samlAuthnRequest{
 		ID:              strings.TrimSpace(root.SelectAttrValue("ID", "")),
-		Issuer:          childElementTextByLocalName(root, "Issuer"),
+		Issuer:          issuer,
 		Destination:     strings.TrimSpace(root.SelectAttrValue("Destination", "")),
 		ACSURL:          strings.TrimSpace(root.SelectAttrValue("AssertionConsumerServiceURL", "")),
 		ProtocolBinding: strings.TrimSpace(root.SelectAttrValue("ProtocolBinding", "")),
@@ -324,10 +383,52 @@ func parseSAMLAuthnRequest(encodedRequest string) (samlAuthnRequest, error) {
 	}, nil
 }
 
-func childElementTextByLocalName(parent *etree.Element, localName string) string {
+// elementFullText concatenates every CharData child so XML comments cannot
+// split and truncate a signed element's value.
+func elementFullText(el *etree.Element) string {
+	if el == nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, token := range el.Child {
+		if cd, ok := token.(*etree.CharData); ok {
+			b.WriteString(cd.Data)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// strictElementText reads all CharData children and rejects unexpected child
+// elements inside text-only SAML elements.
+func strictElementText(el *etree.Element) (string, error) {
+	if el == nil {
+		return "", nil
+	}
+	if len(el.ChildElements()) > 0 {
+		return "", fmt.Errorf("unexpected child element inside %s", elementLocalName(el))
+	}
+	return elementFullText(el), nil
+}
+
+func strictChildElementTextByLocalName(parent *etree.Element, localName string) (string, error) {
+	if parent == nil {
+		return "", nil
+	}
 	for _, child := range parent.ChildElements() {
 		if elementLocalName(child) == localName {
-			return strings.TrimSpace(child.Text())
+			return strictElementText(child)
+		}
+	}
+	return "", nil
+}
+
+func childElementTextByLocalName(parent *etree.Element, localName string) string {
+	if parent == nil {
+		return ""
+	}
+	for _, child := range parent.ChildElements() {
+		if elementLocalName(child) == localName {
+			return elementFullText(child)
 		}
 	}
 	return ""
@@ -398,7 +499,7 @@ func firstElementTextByLocalName(el *etree.Element, localName string) string {
 		return ""
 	}
 	if elementLocalName(el) == localName {
-		if text := strings.TrimSpace(el.Text()); text != "" {
+		if text := elementFullText(el); text != "" {
 			return text
 		}
 	}

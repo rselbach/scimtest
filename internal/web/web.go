@@ -76,8 +76,9 @@ type webApp struct {
 	authCodes        map[string]authCode
 	accessTokens     map[string]accessToken
 	refreshTokens    map[string]refreshToken
-	sessionMu        sync.Mutex            // guards idpSessions
-	idpSessions      map[string]idpSession // by session ID
+	sessionMu           sync.Mutex                    // guards idpSessions and logoutConfirmTokens
+	idpSessions         map[string]idpSession         // by session ID
+	logoutConfirmTokens map[string]logoutConfirmToken // single-use logout confirmation tokens
 	logoutDeliveries sync.WaitGroup        // in-flight back-channel logout requests
 	logoutResultMu   sync.Mutex
 	logoutResults    map[string][]backchannelLogoutResult // by session ID
@@ -506,8 +507,12 @@ type RunOptions struct {
 	OpenURL              func(string) error
 	RequireGitHubAccount bool
 	// Updater offers desktop updates; nil disables them.
-	Updater     *update.Updater
-	browserOpen browserOpener
+	Updater *update.Updater
+	// OnPrimaryInstance runs once after this process acquires the primary
+	// instance lease, and is skipped when handing off to an already-running
+	// instance.
+	OnPrimaryInstance func()
+	browserOpen       browserOpener
 }
 
 // ignoredHandoffFlags lists the flags a second launch cannot apply because
@@ -655,6 +660,9 @@ func Run(options ...RunOptions) error {
 	}
 	if app.updater != nil {
 		app.updater.SetRestartGuard(app.restartGuard)
+	}
+	if opts.OnPrimaryInstance != nil {
+		opts.OnPrimaryInstance()
 	}
 	app.debugRP.Store(opts.Debug)
 	app.debugSecrets.Store(opts.DebugSecrets)
@@ -921,6 +929,10 @@ func (a *webApp) adminRoutes() http.Handler {
 		http.Error(w, "cross-origin request rejected", http.StatusForbidden)
 	}))
 	handler := crossOrigin.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Cache-Control", "no-store")
 		if isAPIRequest(r) {
 			api.ServeHTTP(w, r)
 			return
@@ -996,8 +1008,8 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /apps/save", a.rejectWhileSyncing(a.handleAppSave))
 	mux.HandleFunc("GET /apps/{id}/config.json", a.handleAppConfigJSON)
 	mux.HandleFunc("POST /apps/{id}/delete", a.rejectWhileSyncing(a.handleAppDelete))
-	mux.HandleFunc("POST /apps/{id}/discover-scim", a.rejectWhileSyncing(a.handleAppDiscoverSCIM))
-	mux.HandleFunc("POST /apps/test-scim", a.rejectWhileSyncing(a.handleAppTestSCIM))
+	mux.HandleFunc("POST /apps/{id}/discover-scim", a.handleAppDiscoverSCIM)
+	mux.HandleFunc("POST /apps/test-scim", a.handleAppTestSCIM)
 	mux.HandleFunc("POST /config/save", a.rejectWhileSyncing(a.handleConfigSave))
 	mux.HandleFunc("POST /config/tunnel/retry", a.handleAutomaticTunnelRetry)
 	mux.HandleFunc("GET /config/tunnel/retry", func(w http.ResponseWriter, _ *http.Request) {
@@ -1049,7 +1061,7 @@ func (a *webApp) registerAdminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /users/{id}/sync", a.handleUserPush)
 	mux.HandleFunc("POST /groups/{id}/sync", a.handleGroupPush)
 	mux.HandleFunc("POST /reconcile", a.handleReconcile)
-	mux.HandleFunc("POST /import", a.rejectWhileSyncing(a.handleImport))
+	mux.HandleFunc("POST /import", a.handleImport)
 	mux.HandleFunc("POST /reset", a.rejectWhileSyncing(a.handleReset))
 }
 
@@ -1380,10 +1392,17 @@ func (a *webApp) retryAutomaticTunnel() {
 		return
 	}
 
-	if !a.tunnelRetryAvailable() {
+	ctx, cancel := context.WithCancel(context.Background())
+	attempt := &automaticTunnelStart{cancel: cancel, done: make(chan struct{})}
+	a.tunnel.mu.Lock()
+	if !a.tunnel.start(attempt) {
+		a.tunnel.mu.Unlock()
+		cancel()
+		close(attempt.done)
 		return
 	}
-	a.startAutomaticTunnel(*identity)
+	a.tunnel.mu.Unlock()
+	go a.runAutomaticTunnelAttempt(ctx, attempt, *identity)
 }
 
 func (a *webApp) startAutomaticTunnel(identity tunnelApplicationIdentity) {
@@ -1397,6 +1416,10 @@ func (a *webApp) startAutomaticTunnel(identity tunnelApplicationIdentity) {
 		return
 	}
 	a.tunnel.mu.Unlock()
+	a.runAutomaticTunnelAttempt(ctx, attempt, identity)
+}
+
+func (a *webApp) runAutomaticTunnelAttempt(ctx context.Context, attempt *automaticTunnelStart, identity tunnelApplicationIdentity) {
 	defer func() {
 		a.tunnel.mu.Lock()
 		a.tunnel.finishStart(attempt)

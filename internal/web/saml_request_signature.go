@@ -94,10 +94,10 @@ func uniqueRawQueryValue(rawQuery string, name string, required bool) (string, b
 	var value string
 	found := false
 	for _, part := range strings.Split(rawQuery, "&") {
-		rawKey, candidate, ok := strings.Cut(part, "=")
-		if !ok {
+		if part == "" {
 			continue
 		}
+		rawKey, candidate, _ := strings.Cut(part, "=")
 		key, err := url.QueryUnescape(rawKey)
 		if err != nil {
 			return "", false, fmt.Errorf("decode SAML Redirect parameter name: %w", err)

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"testing"
 )
@@ -48,5 +49,24 @@ func TestInstallApplicationMenuAddsStandardMenus(t *testing.T) {
 func TestNativeQuitInstallsStagedUpdate(t *testing.T) {
 	if !applicationDelegateInstallsOnQuit() {
 		t.Fatal("the application delegate does not install a staged update on quit")
+	}
+}
+
+func TestSentenceHandlesMultibyteAndInvalidUTF8(t *testing.T) {
+	tests := map[string]struct {
+		in   string
+		want string
+	}{
+		"ascii":        {in: "network unreachable", want: "Network unreachable."},
+		"multibyte":    {in: "érror from Greendale", want: "Érror from Greendale."},
+		"empty":        {in: "", want: ""},
+		"invalid utf8": {in: "\xffbad", want: "\xffbad."},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := sentence(errors.New(tc.in)); got != tc.want {
+				t.Fatalf("sentence(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
 	}
 }

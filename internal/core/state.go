@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
@@ -452,13 +453,17 @@ func SaveGlobalConfig(config Config) error {
 	entries := map[string]string{
 		"idp_base_url":            config.IDPBaseURL,
 		"trust_forwarded_headers": BoolString(config.TrustForwardedHeaders),
-		"tunnel_instance_id":      config.TunnelInstanceID,
 		"signing_private_key_pem": config.SigningPrivateKeyPEM,
 		"signing_certificate_pem": config.SigningCertificatePEM,
 	}
 	for key, value := range entries {
 		if _, err := tx.Exec(`INSERT INTO config(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value); err != nil {
 			return fmt.Errorf("save global config %s: %w", key, err)
+		}
+	}
+	if config.TunnelInstanceID != "" {
+		if _, err := tx.Exec(`INSERT INTO config(key, value) VALUES('tunnel_instance_id', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE TRIM(config.value) = ''`, config.TunnelInstanceID); err != nil {
+			return fmt.Errorf("save global config tunnel_instance_id: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -483,6 +488,9 @@ func SaveEnvironmentState(state AppState) error {
 		state.Environment.Slug = state.Apps[0].Slug
 	default:
 		return fmt.Errorf("environment %q state must contain exactly its own app", state.Environment.ID)
+	}
+	if err := validateEnvironmentSyncScope(state); err != nil {
+		return err
 	}
 	for i := range state.Users {
 		state.Users[i].RemoteID = ""
@@ -702,13 +710,19 @@ func writePreMigrationCopy(db *sql.DB, path string, fromVersion int) error {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return fmt.Errorf("create backup directory: %w", err)
 	}
+	if err := os.Chmod(directory, 0o700); err != nil {
+		return fmt.Errorf("secure backup directory: %w", err)
+	}
 	name := fmt.Sprintf("pre-migrate-v%03d-%s.db", fromVersion, currentTime().UTC().Format("20060102T150405"))
 	target := filepath.Join(directory, name)
 	if _, err := os.Stat(target); err == nil {
 		return nil
 	}
-	if _, err := db.Exec(`VACUUM INTO '` + strings.ReplaceAll(target, "'", "''") + `'`); err != nil {
+	if _, err := db.Exec(`VACUUM INTO ?`, target); err != nil {
 		return fmt.Errorf("write pre-migration copy: %w", err)
+	}
+	if err := os.Chmod(target, 0o600); err != nil {
+		return fmt.Errorf("secure pre-migration copy: %w", err)
 	}
 	log.Printf("state schema is moving from version %d to %d; wrote a copy to %s", fromVersion, currentSchemaVersion, target)
 	prunePreMigrationCopies(directory)
@@ -1294,12 +1308,26 @@ func distributeDirectoryRowsToApps(db *sql.DB, markMigrated bool) error {
 	return nil
 }
 
+type dbQueryer interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
 func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
+	tx, err := db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return AppState{}, fmt.Errorf("begin read sqlite state transaction: %w", err)
+	}
+	committed := false
+	defer rollbackTx(tx, &committed)
+	return loadStateFromQueryer(tx, environmentID)
+}
+
+func loadStateFromQueryer(db dbQueryer, environmentID string) (AppState, error) {
 	state := AppState{}
 	state.UserOperations = make(map[string][]OperationLog)
 	state.GroupOperations = make(map[string][]OperationLog)
 	var err error
-	state.Environments, err = loadEnvironmentsFromDB(db)
+	state.Environments, err = loadEnvironmentsFromQueryer(db)
 	if err != nil {
 		return AppState{}, err
 	}
@@ -1598,6 +1626,10 @@ func loadStateFromDB(db *sql.DB, environmentID string) (AppState, error) {
 }
 
 func loadEnvironmentsFromDB(db *sql.DB) ([]Environment, error) {
+	return loadEnvironmentsFromQueryer(db)
+}
+
+func loadEnvironmentsFromQueryer(db dbQueryer) ([]Environment, error) {
 	rows, err := db.Query(`SELECT id, name, slug FROM environments ORDER BY rowid`)
 	if err != nil {
 		return nil, fmt.Errorf("load environments from sqlite: %w", err)
@@ -1618,7 +1650,14 @@ func loadEnvironmentsFromDB(db *sql.DB) ([]Environment, error) {
 }
 
 func loadGlobalStateFromDB(db *sql.DB) (AppState, error) {
-	environments, err := loadEnvironmentsFromDB(db)
+	tx, err := db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return AppState{}, fmt.Errorf("begin read sqlite global state transaction: %w", err)
+	}
+	committed := false
+	defer rollbackTx(tx, &committed)
+
+	environments, err := loadEnvironmentsFromQueryer(tx)
 	if err != nil {
 		return AppState{}, err
 	}
@@ -1631,7 +1670,7 @@ func loadGlobalStateFromDB(db *sql.DB) (AppState, error) {
 	}
 	directoryLoaded := false
 	for _, environment := range environments {
-		environmentState, err := loadStateFromDB(db, environment.ID)
+		environmentState, err := loadStateFromQueryer(tx, environment.ID)
 		if err != nil {
 			return AppState{}, err
 		}
@@ -1683,6 +1722,11 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 	committed := false
 	defer rollbackTx(tx, &committed)
 	if !global {
+		if environmentID != DefaultEnvironmentID && state.Environment.Slug == "default" {
+			if _, err := tx.Exec(`UPDATE environments SET slug = '__directory__' WHERE id = ? AND slug = ?`, DefaultEnvironmentID, "default"); err != nil {
+				return fmt.Errorf("release default environment slug: %w", err)
+			}
+		}
 		if _, err := tx.Exec(`INSERT INTO environments(id, name, slug) VALUES(?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET name = excluded.name, slug = excluded.slug`, environmentID, state.Environment.Name, state.Environment.Slug); err != nil {
 			return fmt.Errorf("save environment record: %w", err)
@@ -1926,16 +1970,40 @@ func saveStateToDB(db *sql.DB, state AppState, global bool) error {
 	return nil
 }
 
+func validateEnvironmentSyncScope(state AppState) error {
+	allowedAppID := ""
+	if len(state.Apps) == 1 {
+		allowedAppID = state.Apps[0].ID
+	}
+	for appID, entries := range state.UserSync {
+		if len(entries) == 0 {
+			continue
+		}
+		if allowedAppID == "" || appID != allowedAppID {
+			return fmt.Errorf("user sync state for app %q does not belong to environment %q", appID, state.Environment.ID)
+		}
+	}
+	for appID, entries := range state.GroupSync {
+		if len(entries) == 0 {
+			continue
+		}
+		if allowedAppID == "" || appID != allowedAppID {
+			return fmt.Errorf("group sync state for app %q does not belong to environment %q", appID, state.Environment.ID)
+		}
+	}
+	return nil
+}
+
 func deleteMissingRows(tx *sql.Tx, table string, key string, environmentID string, ids []string) error {
 	query := `DELETE FROM ` + table + ` WHERE environment_id = ?`
 	args := []any{environmentID}
 	if len(ids) > 0 {
-		placeholders := make([]string, len(ids))
-		for i, id := range ids {
-			placeholders[i] = "?"
-			args = append(args, id)
+		encoded, err := json.Marshal(ids)
+		if err != nil {
+			return fmt.Errorf("encode sqlite %s ids: %w", table, err)
 		}
-		query += ` AND ` + key + ` NOT IN (` + strings.Join(placeholders, ",") + `)`
+		query += ` AND ` + key + ` NOT IN (SELECT value FROM json_each(?))`
+		args = append(args, string(encoded))
 	}
 	if _, err := tx.Exec(query, args...); err != nil {
 		return fmt.Errorf("delete missing sqlite %s: %w", table, err)
@@ -2285,13 +2353,13 @@ func ValidateHTTPBaseURL(label string, rawURL string, required bool) error {
 		return fmt.Errorf("%s must be an absolute URL", label)
 	case parsed.Scheme != "http" && parsed.Scheme != "https":
 		return fmt.Errorf("%s must use HTTP or HTTPS", label)
-	case !parsed.IsAbs() || parsed.Host == "":
+	case !parsed.IsAbs() || parsed.Host == "" || parsed.Hostname() == "":
 		return fmt.Errorf("%s must be an absolute URL", label)
 	case parsed.User != nil:
 		return fmt.Errorf("%s must not contain credentials", label)
-	case parsed.RawQuery != "":
+	case parsed.RawQuery != "" || parsed.ForceQuery:
 		return fmt.Errorf("%s must not contain a query string", label)
-	case parsed.Fragment != "":
+	case parsed.Fragment != "" || strings.Contains(rawURL, "#"):
 		return fmt.Errorf("%s must not contain a fragment", label)
 	default:
 		return nil
@@ -2544,7 +2612,7 @@ func validateOIDCRedirectURI(rawURI string) error {
 	if err != nil {
 		return fmt.Errorf("OIDC redirect URI %q is invalid: %w", rawURI, err)
 	}
-	if !redirectURI.IsAbs() || redirectURI.Host == "" || (redirectURI.Scheme != "http" && redirectURI.Scheme != "https") || redirectURI.Fragment != "" {
+	if !redirectURI.IsAbs() || redirectURI.Host == "" || redirectURI.Hostname() == "" || (redirectURI.Scheme != "http" && redirectURI.Scheme != "https") || redirectURI.Fragment != "" || strings.Contains(rawURI, "#") {
 		return fmt.Errorf("OIDC redirect URI %q must be an absolute HTTP(S) URL without a fragment", rawURI)
 	}
 	return nil
@@ -2557,7 +2625,7 @@ func validateBackchannelLogoutURI(rawURI string) error {
 	if err != nil {
 		return fmt.Errorf("back-channel logout URI %q is invalid: %w", rawURI, err)
 	}
-	if !logoutURI.IsAbs() || logoutURI.Host == "" || (logoutURI.Scheme != "http" && logoutURI.Scheme != "https") || logoutURI.Fragment != "" {
+	if !logoutURI.IsAbs() || logoutURI.Host == "" || logoutURI.Hostname() == "" || (logoutURI.Scheme != "http" && logoutURI.Scheme != "https") || logoutURI.Fragment != "" || strings.Contains(rawURI, "#") {
 		return fmt.Errorf("back-channel logout URI %q must be an absolute HTTP(S) URL without a fragment", rawURI)
 	}
 	return nil
@@ -2571,7 +2639,7 @@ func validateSAMLACSURL(rawURL string) error {
 	if err != nil {
 		return fmt.Errorf("SAML ACS URL %q is invalid: %w", rawURL, err)
 	}
-	if !acsURL.IsAbs() || acsURL.Host == "" || (acsURL.Scheme != "http" && acsURL.Scheme != "https") || acsURL.Fragment != "" {
+	if !acsURL.IsAbs() || acsURL.Host == "" || acsURL.Hostname() == "" || (acsURL.Scheme != "http" && acsURL.Scheme != "https") || acsURL.Fragment != "" || strings.Contains(rawURL, "#") {
 		return fmt.Errorf("SAML ACS URL must be an absolute HTTP(S) URL without a fragment")
 	}
 	return nil
@@ -2584,7 +2652,7 @@ func validateSAMLSLOURL(rawURL string) error {
 	if err != nil {
 		return fmt.Errorf("SAML Single Logout URL %q is invalid: %w", rawURL, err)
 	}
-	if !sloURL.IsAbs() || sloURL.Host == "" || (sloURL.Scheme != "http" && sloURL.Scheme != "https") || sloURL.Fragment != "" {
+	if !sloURL.IsAbs() || sloURL.Host == "" || sloURL.Hostname() == "" || (sloURL.Scheme != "http" && sloURL.Scheme != "https") || sloURL.Fragment != "" || strings.Contains(rawURL, "#") {
 		return fmt.Errorf("SAML Single Logout URL %q must be an absolute HTTP(S) URL without a fragment", rawURL)
 	}
 	return nil

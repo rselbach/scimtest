@@ -19,9 +19,9 @@ var HopHeaders = map[string]struct{}{
 func CloneHeader(h http.Header) http.Header {
 	out := make(http.Header, len(h))
 	for key, values := range h {
-		cp := make([]string, len(values))
-		copy(cp, values)
-		out[key] = cp
+		for _, value := range values {
+			out.Add(key, value)
+		}
 	}
 	return out
 }

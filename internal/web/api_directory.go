@@ -53,14 +53,21 @@ func (a *webApp) handleAPIEnvironmentPatch(w http.ResponseWriter, r *http.Reques
 func (a *webApp) handleAPIEnvironmentDelete(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if _, err := loadStateForApp(r.PathValue("environment_id")); err != nil {
+	id := r.PathValue("environment_id")
+	state, err := loadStateForApp(id)
+	if err != nil {
 		apiError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	if err := deleteEnvironment(r.PathValue("environment_id")); err != nil {
+	slug := state.Environment.Slug
+	if idx, ok := appIndexByID(state.Apps, id); ok {
+		slug = state.Apps[idx].Slug
+	}
+	if err := deleteEnvironment(id); err != nil {
 		apiError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	a.purgeEnvironmentRuntimeState(id, slug)
 	writeJSON(w, map[string]string{"message": "environment deleted"})
 }
 
